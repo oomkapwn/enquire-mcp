@@ -19,7 +19,6 @@
 // useful matcher from a tautology. It also does not resolve whether
 // `expect`/`assert` identifiers are shadowed.
 
-import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
@@ -30,7 +29,6 @@ import { releaseMutationIdentityAuditProblems } from "./release-mutation-identit
 
 const repoRoot = path.resolve(__dirname, "..");
 const RELEASE_MUTATION_IDENTITY_FIXTURE_SHA256 = "85f72df96fcb11a9a856e2b88fc1c16e662570afbd50611575423f1a06875b36";
-const releaseMutationIdentityGeneratorPath = path.join(repoRoot, "scripts/generate-release-mutation-identity.mjs");
 const releaseMutationIdentityFixturePath = path.join(repoRoot, "tests/fixtures/release-mutation-identity.v2.json");
 const releaseIntegritySourcePath = path.join(repoRoot, "tests/release-integrity.test.ts");
 
@@ -45,10 +43,12 @@ interface MutableIdentityControlManifest {
     }>;
   }>;
   readonly mutations: Array<{
+    readonly id: string;
     readonly expressions: {
       readonly needle: { raw: string; resolved: string };
       readonly source: { resolved: string };
     };
+    replacementDependency: string | null;
   }>;
   readonly sources: Array<{
     contentSha256: string;
@@ -85,20 +85,6 @@ function firstIdentityEntry<T>(values: readonly T[], label: string): T {
   const value = values[0];
   if (value === undefined) throw new Error(`release identity fixture has no ${label}`);
   return value;
-}
-
-function runReleaseMutationIdentityGenerator(): string {
-  const result = spawnSync(process.execPath, [releaseMutationIdentityGeneratorPath], {
-    cwd: repoRoot,
-    encoding: "utf8",
-    maxBuffer: 16 * 1024 * 1024,
-    timeout: 30_000
-  });
-  if (result.error !== undefined) throw result.error;
-  expect(result.signal).toBeNull();
-  expect(result.status, result.stderr).toBe(0);
-  expect(result.stderr).toBe("");
-  return result.stdout;
 }
 
 // Freeze the convention-named side too: a one-for-one delete/add swap must not
@@ -879,21 +865,329 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
     ]);
     expect(sha256Text(fixtureBefore)).toBe(RELEASE_MUTATION_IDENTITY_FIXTURE_SHA256);
 
-    const firstGeneration = runReleaseMutationIdentityGenerator();
-    const secondGeneration = runReleaseMutationIdentityGenerator();
-    expect(secondGeneration).toBe(firstGeneration);
-    expect(firstGeneration).toBe(fixtureBefore);
+    // The immutable fixture remains historical authority after the current source deliberately
+    // adopts a mixed legacy/declarative representation; it is never regenerated or rewritten here.
     expect(await fs.readFile(releaseMutationIdentityFixturePath, "utf8")).toBe(fixtureBefore);
-    // The reviewed baseline itself is the positive control for static property paths,
-    // template expressions, and mutation calls evaluated once in for-of iterables.
+    // The reviewed mixed baseline is the positive control for the exact partition, descriptor,
+    // case, detector and remaining-legacy identities.
     expect(releaseMutationIdentityAuditProblems(matrixSource, fixtureBefore)).toEqual([]);
+
+    const outsideSliceDetectorDrift = replaceExactly(
+      matrixSource,
+      "            const folded = envKey.toLowerCase();",
+      "            const folded = envKey;"
+    );
+    expect(releaseMutationIdentityAuditProblems(outsideSliceDetectorDrift, fixtureBefore)).toEqual([
+      expect.stringMatching(/release mutation hybrid current source must retain exact SHA-256/)
+    ]);
+
+    const mcpbSpreadOverride = replaceExactly(
+      matrixSource,
+      [
+        '      integrity: readFileSync(new URL("../scripts/check-release-integrity.mjs", import.meta.url), "utf8"),',
+        '      packageLock: readFileSync(new URL("../package-lock.json", import.meta.url), "utf8"),'
+      ].join("\n"),
+      [
+        '      integrity: readFileSync(new URL("../scripts/check-release-integrity.mjs", import.meta.url), "utf8"),',
+        '      ...[{ integrity: "alternate release integrity source" }][0],',
+        '      packageLock: readFileSync(new URL("../package-lock.json", import.meta.url), "utf8"),'
+      ].join("\n")
+    );
+    expect(releaseMutationIdentityAuditProblems(mcpbSpreadOverride, fixtureBefore)).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/release mutation hybrid current source must retain exact SHA-256/),
+        expect.stringMatching(/release mutation hybrid current matrix slice must retain exact SHA-256/),
+        expect.stringMatching(
+          /release mutation hybrid mcpbInputs must be one exact frozen source object with 14 direct reviewed properties/
+        )
+      ])
+    );
+
+    const missingDeclarativeIdentity = replaceExactly(
+      matrixSource,
+      [
+        '    const releaseMutationM002 = releaseMutationPlan.registerMutation("release.m002", {',
+        '      mode: "first",',
+        "      source: releaseIntegritySource"
+      ].join("\n"),
+      [
+        '    const releaseMutationM002 = releaseMutationPlan.registerMutation("release.m999", {',
+        '      mode: "first",',
+        "      source: releaseIntegritySource"
+      ].join("\n")
+    );
+    expect(releaseMutationIdentityAuditProblems(missingDeclarativeIdentity, fixtureBefore)).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(
+          /release mutation hybrid frozen ID release\.m002 must exist in exactly one legacy XOR declarative representation; found 0\/0/
+        ),
+        expect.stringMatching(/release mutation hybrid descriptor release\.m999 has no frozen identity/)
+      ])
+    );
+
+    const overlappingLegacyIdentity = replaceExactly(
+      matrixSource,
+      [
+        "    const releaseIntegrityText = mcpbInputs.integrity;",
+        "    const releaseMutationPlan = new ReleaseMutationPlan({"
+      ].join("\n"),
+      [
+        "    void replaceExactly(",
+        "        mcpbInputs.integrity,",
+        '        \'import { isDeepStrictEqual } from "node:util";\',',
+        '        "const isDeepStrictEqual = () => true;"',
+        "      );",
+        "    const releaseIntegrityText = mcpbInputs.integrity;",
+        "    const releaseMutationPlan = new ReleaseMutationPlan({"
+      ].join("\n")
+    );
+    expect(releaseMutationIdentityAuditProblems(overlappingLegacyIdentity, fixtureBefore)).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(
+          /release mutation hybrid frozen ID release\.m002 must exist in exactly one legacy XOR declarative representation; found 1\/1/
+        )
+      ])
+    );
+
+    const declarativeDescriptorDrift = replaceExactly(
+      matrixSource,
+      [
+        '    const releaseMutationM002 = releaseMutationPlan.registerMutation("release.m002", {',
+        '      mode: "first",',
+        "      source: releaseIntegritySource"
+      ].join("\n"),
+      [
+        '    const releaseMutationM002 = releaseMutationPlan.registerMutation("release.m002", {',
+        '      mode: "all",',
+        "      source: releaseIntegritySource"
+      ].join("\n")
+    );
+    expect(releaseMutationIdentityAuditProblems(declarativeDescriptorDrift, fixtureBefore)).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/release mutation hybrid descriptor release\.m002 mode disagrees with frozen identity/)
+      ])
+    );
+
+    const semanticSwapFirst = replaceExactly(
+      matrixSource,
+      [
+        '    const releaseMutationM002 = releaseMutationPlan.registerMutation("release.m002", {',
+        '      mode: "first",',
+        "      source: releaseIntegritySource"
+      ].join("\n"),
+      [
+        '    const releaseMutationM002 = releaseMutationPlan.registerMutation("release.swap", {',
+        '      mode: "first",',
+        "      source: releaseIntegritySource"
+      ].join("\n")
+    );
+    const semanticSwapSecond = replaceExactly(
+      semanticSwapFirst,
+      [
+        '    const releaseMutationM003 = releaseMutationPlan.registerMutation("release.m003", {',
+        '      mode: "first",',
+        "      source: releaseIntegritySource"
+      ].join("\n"),
+      [
+        '    const releaseMutationM003 = releaseMutationPlan.registerMutation("release.m002", {',
+        '      mode: "first",',
+        "      source: releaseIntegritySource"
+      ].join("\n")
+    );
+    const declarativeSemanticSwap = replaceExactly(
+      semanticSwapSecond,
+      [
+        '    const releaseMutationM002 = releaseMutationPlan.registerMutation("release.swap", {',
+        '      mode: "first",',
+        "      source: releaseIntegritySource"
+      ].join("\n"),
+      [
+        '    const releaseMutationM002 = releaseMutationPlan.registerMutation("release.m003", {',
+        '      mode: "first",',
+        "      source: releaseIntegritySource"
+      ].join("\n")
+    );
+    expect(releaseMutationIdentityAuditProblems(declarativeSemanticSwap, fixtureBefore)).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(
+          /release mutation hybrid descriptor release\.m002 disagrees with its exact frozen semantics/
+        ),
+        expect.stringMatching(
+          /release mutation hybrid descriptor release\.m003 disagrees with its exact frozen semantics/
+        )
+      ])
+    );
+
+    const declarativeRootTransplant = replaceExactly(
+      matrixSource,
+      [
+        "    releaseMutationPlan.registerCase({",
+        '      id: "release.case.m002",',
+        "      root: releaseMutationM002,"
+      ].join("\n"),
+      [
+        "    releaseMutationPlan.registerCase({",
+        '      id: "release.case.m002",',
+        "      root: releaseMutationM004,"
+      ].join("\n")
+    );
+    expect(releaseMutationIdentityAuditProblems(declarativeRootTransplant, fixtureBefore)).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(
+          /release mutation hybrid case release\.case\.m002 invocation must retain the exact registry\.evaluator adapter/
+        ),
+        expect.stringMatching(
+          /release mutation hybrid case release\.case\.m002 disagrees with its exact frozen identity/
+        )
+      ])
+    );
+
+    const declarativeInvocationDrift = replaceExactly(
+      matrixSource,
+      [
+        "          invoke: {",
+        '            kind: "registry.evaluator",',
+        "            baseline: releaseIntegritySource,",
+        "            mutant: releaseMutationM002"
+      ].join("\n"),
+      [
+        "          invoke: {",
+        '            kind: "registry.evaluator",',
+        "            baseline: releaseMutationM002,",
+        "            mutant: releaseMutationM002"
+      ].join("\n")
+    );
+    expect(releaseMutationIdentityAuditProblems(declarativeInvocationDrift, fixtureBefore)).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(
+          /release mutation hybrid case release\.case\.m002 invocation must retain the exact registry\.evaluator adapter/
+        )
+      ])
+    );
+
+    const declarativeAliasDrift = replaceExactly(
+      matrixSource,
+      [
+        "    const releaseIntegrityText = mcpbInputs.integrity;",
+        "    const releaseMutationPlan = new ReleaseMutationPlan({"
+      ].join("\n"),
+      [
+        "    const releaseIntegrityText = mcpbInputs.release;",
+        "    const releaseMutationPlan = new ReleaseMutationPlan({"
+      ].join("\n")
+    );
+    const declarativeSourceDrift = replaceExactly(
+      declarativeAliasDrift,
+      [
+        '    const releaseIntegritySource = releaseMutationPlan.registerSource("script.release-integrity", releaseIntegrityText);',
+        '    const releaseMutationM002 = releaseMutationPlan.registerMutation("release.m002", {'
+      ].join("\n"),
+      [
+        '    const releaseIntegritySource = releaseMutationPlan.registerSource("script.release-integrity", mcpbInputs.release);',
+        '    const releaseMutationM002 = releaseMutationPlan.registerMutation("release.m002", {'
+      ].join("\n")
+    );
+    const declarativeExecuteAdapterDrift = replaceExactly(
+      declarativeSourceDrift,
+      [
+        "    releaseMutationPlan.execute({ registryEvaluatorProblems: mcpRegistryEvaluatorProblems });",
+        '    expect(releaseMutationPlan.phase).toBe("executed");'
+      ].join("\n"),
+      [
+        "    releaseMutationPlan.execute({ registryEvaluatorProblems: mcpRegistryContractProblems });",
+        '    expect(releaseMutationPlan.phase).toBe("executed");'
+      ].join("\n")
+    );
+    const registryDetectorBodyDrift = replaceExactly(
+      declarativeExecuteAdapterDrift,
+      "function mcpRegistryEvaluatorProblems(integrity: string): string[] {",
+      "function mcpRegistryEvaluatorProblems(source: string): string[] {"
+    );
+    const registryProblemPreludeDrift = replaceExactly(
+      registryDetectorBodyDrift,
+      [
+        "const MCP_REGISTRY_EVALUATOR_CONTRACT_PROBLEM =",
+        '  "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics";'
+      ].join("\n"),
+      [
+        "const MCP_REGISTRY_EVALUATOR_CONTRACT_PROBLEM =",
+        '  "MCP Registry reconciliation must retain approximate identity, lifecycle, absence, and convergence semantics";'
+      ].join("\n")
+    );
+    const registryDetectorAliasDrift = `${registryProblemPreludeDrift}\nconst registryEvaluatorAlias = mcpRegistryEvaluatorProblems;\n`;
+    expect(releaseMutationIdentityAuditProblems(registryDetectorAliasDrift, fixtureBefore)).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(
+          /release mutation hybrid alias must be exact const releaseIntegrityText = mcpbInputs\.integrity/
+        ),
+        expect.stringMatching(
+          /release mutation hybrid source must bind releaseIntegritySource to exact script\.release-integrity bytes/
+        ),
+        expect.stringMatching(
+          /release mutation hybrid execute adapter must bind registryEvaluatorProblems exactly to mcpRegistryEvaluatorProblems/
+        ),
+        expect.stringMatching(
+          /release mutation hybrid pinned mcpRegistryEvaluatorProblems AST node must retain exact SHA-256/
+        ),
+        expect.stringMatching(/release mutation hybrid pinned registry problem AST node must retain exact SHA-256/),
+        expect.stringMatching(
+          /release mutation hybrid registry evaluator binding must have no aliases, writes, or indirect references/
+        )
+      ])
+    );
+
+    const mutationMatchCountBodyDrift = replaceExactly(
+      matrixSource,
+      "    count++;\n    offset = match + needle.length;",
+      "    count += 2;\n    offset = match + needle.length;"
+    );
+    expect(releaseMutationIdentityAuditProblems(mutationMatchCountBodyDrift, fixtureBefore)).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/release mutation hybrid current source must retain exact SHA-256/),
+        expect.stringMatching(/release mutation hybrid pinned mutationMatchCount AST node must retain exact SHA-256/)
+      ])
+    );
+
+    const mutationMatchCountShadow = `${matrixSource}\nfunction mutationMatchCountShadow(): void {\n  const mutationMatchCount = () => 0;\n  void mutationMatchCount;\n}\n`;
+    expect(releaseMutationIdentityAuditProblems(mutationMatchCountShadow, fixtureBefore)).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(
+          /release mutation hybrid mutationMatchCount binding must have one top-level declaration and no runtime shadows; found 1\/1/
+        )
+      ])
+    );
+
+    const mutationMatchCountAlias = `${matrixSource}\nconst mutationCounterAlias = mutationMatchCount;\nvoid mutationCounterAlias;\n`;
+    expect(releaseMutationIdentityAuditProblems(mutationMatchCountAlias, fixtureBefore)).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/release mutation hybrid mutationMatchCount must have no aliases; found 1 alias initializer/)
+      ])
+    );
+
+    const mutationMatchCountWrite = `${matrixSource}\nmutationMatchCount = (_source: string, _needle: string) => 0;\n`;
+    expect(releaseMutationIdentityAuditProblems(mutationMatchCountWrite, fixtureBefore)).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(
+          /release mutation hybrid mutationMatchCount binding must never be reassigned; found 1 write/
+        )
+      ])
+    );
+
+    const mutationMatchCountIndirect = `${matrixSource}\nvoid [mutationMatchCount];\n`;
+    expect(releaseMutationIdentityAuditProblems(mutationMatchCountIndirect, fixtureBefore)).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(
+          /release mutation hybrid mutationMatchCount may only be called directly with two arguments; found 1 other reference/
+        )
+      ])
+    );
 
     const loopBodyMutation = replaceExactly(
       matrixSource,
-      "    ]) {\n      expect(mcpRegistryEvaluatorProblems(weakenedMcpRegistryEvaluator)).toContain(",
+      "    ]) {\n      expect(npmProvenanceEvaluatorProblems(weakenedProvenanceEvaluator)).toContain(",
       '    ]) {\n      void replaceExactly(mcpbInputs.integrity, "loop-body", "mutant");\n' +
         '      ["mapped"].map(() => replaceExactly(mcpbInputs.integrity, "mapped", "mutant"));\n' +
-        "      expect(mcpRegistryEvaluatorProblems(weakenedMcpRegistryEvaluator)).toContain("
+        "      expect(npmProvenanceEvaluatorProblems(weakenedProvenanceEvaluator)).toContain("
     );
     expect(releaseMutationIdentityAuditProblems(loopBodyMutation, fixtureBefore)).toEqual(
       expect.arrayContaining([
@@ -903,8 +1197,8 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
 
     const unsupportedExpressionMutation = replaceExactly(
       matrixSource,
-      'replaceExactly(mcpbInputs.integrity, \'transport.type !== "stdio"\', "false")',
-      'replaceExactly(mcpbInputs["integrity"], true ? \'transport.type !== "stdio"\' : "x", ["false"][0])'
+      'replaceExactly(registryRun, \'mcp-registry-state "$phase"\', \'mcp-registry-read "$phase"\')',
+      'replaceExactly(true ? registryRun : "", true ? \'mcp-registry-state "$phase"\' : "x", [\'mcp-registry-read "$phase"\'][0])'
     );
     expect(releaseMutationIdentityAuditProblems(unsupportedExpressionMutation, fixtureBefore)).toEqual(
       expect.arrayContaining([
@@ -930,7 +1224,6 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
     );
     expect(releaseMutationIdentityAuditProblems(referencedDeclarationDrift, fixtureBefore)).toEqual(
       expect.arrayContaining([
-        expect.stringMatching(/release-integrity source must remain exact reviewed SHA-256/),
         expect.stringMatching(/manifest source row 6 disagrees with the exact reviewed catalogue identity/)
       ])
     );
@@ -940,6 +1233,8 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
     const unrelatedSource = tampered.sources[1];
     if (unrelatedSource === undefined) throw new Error("release identity fixture has no unrelated source identity");
     const firstMutation = firstIdentityEntry(tampered.mutations, "mutation identities");
+    const dependencySplitMutation = tampered.mutations.find((mutation) => mutation.id === "release.m038");
+    if (dependencySplitMutation === undefined) throw new Error("release identity fixture has no release.m038");
     const firstCase = firstIdentityEntry(tampered.cases, "case identities");
     const firstCheck = firstIdentityEntry(firstCase.checks, "case checks");
     firstSource.contentSha256 = "0".repeat(64);
@@ -947,12 +1242,15 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
     firstMutation.expressions.needle.raw += " /* manifest raw-expression drift */";
     firstMutation.expressions.needle.resolved += "\n# resolved-needle drift";
     firstMutation.expressions.source.resolved = unrelatedSource.id;
+    dependencySplitMutation.replacementDependency = "release.m037";
     firstCheck.invoke.kind = "release.poll";
     firstCheck.invoke.inputs.callee = "unreviewedDetector";
     firstCheck.expectation.regex = "workflow.schema.unreviewed-regex";
     const tamperProblems = releaseMutationIdentityAuditProblems(matrixSource, JSON.stringify(tampered));
     expect(tamperProblems).toEqual(
       expect.arrayContaining([
+        expect.stringMatching(/release mutation identity fixture must remain byte-exact SHA-256/),
+        expect.stringMatching(/release mutation hybrid dependency edge release\.m037->release\.m038 crosses/),
         expect.stringMatching(/contentSha256 must identify exact materialized bytes/),
         expect.stringMatching(/needle raw expression disagrees with exact AST identity/),
         expect.stringMatching(/resolved source must equal/),

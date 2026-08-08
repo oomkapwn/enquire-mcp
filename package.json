@@ -239,7 +239,7 @@
     "@napi-rs/canvas": "^1.0.1",
     "better-sqlite3": "^12.11.1",
     "hnswlib-node": "^3.0.0",
-    "pdfjs-dist": "^6.1.200",
+    "pdfjs-dist": "^6.2.108",
     "tesseract.js": "^7.0.0"
   },
   "overrides": {

@@ -28,7 +28,7 @@ import { replaceAllExactly, replaceExactly, replaceIntegerAllExactly } from "./h
 import { releaseMutationIdentityAuditProblems } from "./release-mutation-identity-audit.js";
 
 const repoRoot = path.resolve(__dirname, "..");
-const RELEASE_MUTATION_IDENTITY_FIXTURE_SHA256 = "85f72df96fcb11a9a856e2b88fc1c16e662570afbd50611575423f1a06875b36";
+const RELEASE_MUTATION_IDENTITY_FIXTURE_SHA256 = "b1bef74ea285f53f8acf3c78d942db4880f06648c50b051351e0e004c73253d3";
 const releaseMutationIdentityFixturePath = path.join(repoRoot, "tests/fixtures/release-mutation-identity.v2.json");
 const releaseIntegritySourcePath = path.join(repoRoot, "tests/release-integrity.test.ts");
 
@@ -955,6 +955,9 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       "2523c1c577061ab48258e780f02ccda0cba9ca0ac209d9cf3362a2e7680fc9b1"
     );
     const sameHashRemainingProblems = releaseMutationIdentityAuditProblems(matrixSource, sameHashRemainingFixture);
+    expect(sameHashRemainingProblems).toContainEqual(
+      expect.stringMatching(/release mutation identity fixture must remain byte-exact SHA-256/)
+    );
     expect(
       sameHashRemainingProblems.filter((problem) =>
         problem.includes("release mutation hybrid frozen ID release.m002 must exist in exactly one legacy XOR")
@@ -1254,7 +1257,8 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       '"schemaVersion": 2,\n  "schemaVersion": 2,'
     );
     expect(releaseMutationIdentityAuditProblems(matrixSource, duplicateTopLevelKey)).toEqual([
-      expect.stringMatching(/duplicate JSON key schemaVersion/)
+      expect.stringMatching(/duplicate JSON key schemaVersion/),
+      expect.stringMatching(/release mutation identity fixture must remain byte-exact SHA-256/)
     ]);
 
     const referencedDeclarationDrift = replaceExactly(

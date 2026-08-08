@@ -121,7 +121,7 @@ async function loadPdfjs(): Promise<typeof import("pdfjs-dist")> {
     // rc.55 (OPTDEP-MODULE-PATH-LEAK-02) — code only; err.message embeds the importing file's abs path.
     throw new Error(
       "enquire: pdfjs-dist (optional dependency) is not available. PDF OCR requires it. " +
-        `Install with: npm install pdfjs-dist@^6.0.227 (${optionalDepDetail(err)})`
+        `Install with: npm install pdfjs-dist@^6.2.108 (${optionalDepDetail(err)})`
     );
   }
 }

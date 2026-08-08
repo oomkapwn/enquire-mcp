@@ -941,6 +941,9 @@ const RELEASE_MUTATION_PROJECT_TOTAL_COUNT = RELEASE_MUTATION_PROJECT_FIRST_COUN
 const RELEASE_MUTATION_PROJECT_ROOT_COUNT = 536;
 const RELEASE_MUTATION_PROJECT_EXPECTATION_COUNT = 541;
 const RELEASE_MUTATION_PROJECT_DEPENDENCY_ONLY_COUNT = 24;
+const RELEASE_MUTATION_REGISTRY_ADAPTER_PROPERTY = "registryEvaluatorProblems";
+const RELEASE_MUTATION_REGISTRY_PROBLEM =
+  "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics";
 const RELEASE_MUTATION_DECLARATIVE_METHODS: ReadonlySet<string> = new Set([
   "execute",
   "registerCase",
@@ -1452,12 +1455,18 @@ function releaseMutationInventoryProblems(source: string): string[] {
   let otherVitestImportDeclarations = 0;
   let exactReleasePlanImportDeclarations = 0;
   let otherReleasePlanImportDeclarations = 0;
+  let directRegistryEvaluatorDeclarations = 0;
+  let otherRegistryEvaluatorBindings = 0;
+  let registryEvaluatorAliasInitializers = 0;
+  let registryEvaluatorWrites = 0;
+  let otherRegistryEvaluatorReferences = 0;
   const recordOtherBinding = (name: ts.BindingName | ts.Identifier): void => {
     if (ts.isIdentifier(name)) {
       if (name.text === "describe") otherDescribeBindings++;
       if (name.text === "expect") otherExpectBindings++;
       if (name.text === "it") otherItBindings++;
       if (name.text === "ReleaseMutationPlan") otherReleaseMutationPlanBindings++;
+      if (name.text === "mcpRegistryEvaluatorProblems") otherRegistryEvaluatorBindings++;
       return;
     }
     for (const element of name.elements) {
@@ -1479,6 +1488,85 @@ function releaseMutationInventoryProblems(source: string): string[] {
           !element.isTypeOnly && element.propertyName === undefined && element.name.text === names[index]
       )
     );
+  };
+  const exactRegistryAdapterObject = (value: ts.Expression | undefined): value is ts.ObjectLiteralExpression => {
+    if (value === undefined || !ts.isObjectLiteralExpression(value) || value.properties.length !== 1) return false;
+    const property = value.properties[0];
+    return (
+      property !== undefined &&
+      ts.isPropertyAssignment(property) &&
+      ts.isIdentifier(property.name) &&
+      property.name.text === RELEASE_MUTATION_REGISTRY_ADAPTER_PROPERTY &&
+      ts.isIdentifier(property.initializer) &&
+      property.initializer.text === "mcpRegistryEvaluatorProblems"
+    );
+  };
+  const isExactRegistryAdapterInitializer = (node: ts.Identifier): boolean => {
+    const property = node.parent;
+    if (!ts.isPropertyAssignment(property) || property.initializer !== node) return false;
+    const object = property.parent;
+    if (!exactRegistryAdapterObject(object)) return false;
+    const call = object.parent;
+    return (
+      ts.isCallExpression(call) &&
+      call.arguments.length === 1 &&
+      call.arguments[0] === object &&
+      ts.isPropertyAccessExpression(call.expression) &&
+      call.expression.questionDotToken === undefined &&
+      ts.isIdentifier(call.expression.expression) &&
+      call.expression.expression.text === "releaseMutationPlan" &&
+      call.expression.name.text === "execute"
+    );
+  };
+  const assignmentOperatorKinds: ReadonlySet<ts.SyntaxKind> = new Set([
+    ts.SyntaxKind.EqualsToken,
+    ts.SyntaxKind.PlusEqualsToken,
+    ts.SyntaxKind.MinusEqualsToken,
+    ts.SyntaxKind.AsteriskEqualsToken,
+    ts.SyntaxKind.AsteriskAsteriskEqualsToken,
+    ts.SyntaxKind.SlashEqualsToken,
+    ts.SyntaxKind.PercentEqualsToken,
+    ts.SyntaxKind.LessThanLessThanEqualsToken,
+    ts.SyntaxKind.GreaterThanGreaterThanEqualsToken,
+    ts.SyntaxKind.GreaterThanGreaterThanGreaterThanEqualsToken,
+    ts.SyntaxKind.AmpersandEqualsToken,
+    ts.SyntaxKind.BarEqualsToken,
+    ts.SyntaxKind.CaretEqualsToken,
+    ts.SyntaxKind.BarBarEqualsToken,
+    ts.SyntaxKind.AmpersandAmpersandEqualsToken,
+    ts.SyntaxKind.QuestionQuestionEqualsToken
+  ]);
+  const assignmentTargetContainsRegistryEvaluator = (value: ts.Expression): boolean => {
+    if (ts.isIdentifier(value)) return value.text === "mcpRegistryEvaluatorProblems";
+    if (
+      ts.isParenthesizedExpression(value) ||
+      ts.isAsExpression(value) ||
+      ts.isTypeAssertionExpression(value) ||
+      ts.isNonNullExpression(value)
+    ) {
+      return assignmentTargetContainsRegistryEvaluator(value.expression);
+    }
+    if (ts.isArrayLiteralExpression(value)) {
+      return value.elements.some(
+        (element) => !ts.isOmittedExpression(element) && assignmentTargetContainsRegistryEvaluator(element)
+      );
+    }
+    if (ts.isObjectLiteralExpression(value)) {
+      return value.properties.some((property) => {
+        if (ts.isShorthandPropertyAssignment(property)) {
+          return property.name.text === "mcpRegistryEvaluatorProblems";
+        }
+        if (ts.isPropertyAssignment(property)) {
+          return assignmentTargetContainsRegistryEvaluator(property.initializer);
+        }
+        return ts.isSpreadAssignment(property) && assignmentTargetContainsRegistryEvaluator(property.expression);
+      });
+    }
+    if (ts.isSpreadElement(value)) return assignmentTargetContainsRegistryEvaluator(value.expression);
+    if (ts.isBinaryExpression(value) && value.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
+      return assignmentTargetContainsRegistryEvaluator(value.left);
+    }
+    return false;
   };
   for (const statement of sourceFile.statements) {
     if (!ts.isImportDeclaration(statement)) continue;
@@ -1532,7 +1620,10 @@ function releaseMutationInventoryProblems(source: string): string[] {
   }
   const visitRuntimeBindings = (node: ts.Node): void => {
     if (ts.isImportDeclaration(node)) return;
-    if (ts.isVariableDeclaration(node) || ts.isParameter(node)) {
+    if (ts.isFunctionDeclaration(node) && node.name?.text === "mcpRegistryEvaluatorProblems") {
+      if (node.parent === sourceFile) directRegistryEvaluatorDeclarations++;
+      else otherRegistryEvaluatorBindings++;
+    } else if (ts.isVariableDeclaration(node) || ts.isParameter(node)) {
       recordOtherBinding(node.name);
     } else if (
       ts.isFunctionDeclaration(node) ||
@@ -1545,6 +1636,35 @@ function releaseMutationInventoryProblems(source: string): string[] {
     ) {
       if (node.name !== undefined && ts.isIdentifier(node.name)) recordOtherBinding(node.name);
     }
+    if (
+      ts.isVariableDeclaration(node) &&
+      node.initializer !== undefined &&
+      ts.isIdentifier(node.initializer) &&
+      node.initializer.text === "mcpRegistryEvaluatorProblems"
+    ) {
+      registryEvaluatorAliasInitializers++;
+    }
+    if (
+      ts.isBinaryExpression(node) &&
+      assignmentOperatorKinds.has(node.operatorToken.kind) &&
+      assignmentTargetContainsRegistryEvaluator(node.left)
+    ) {
+      registryEvaluatorWrites++;
+    }
+    if (
+      (ts.isPrefixUnaryExpression(node) || ts.isPostfixUnaryExpression(node)) &&
+      (node.operator === ts.SyntaxKind.PlusPlusToken || node.operator === ts.SyntaxKind.MinusMinusToken) &&
+      assignmentTargetContainsRegistryEvaluator(node.operand)
+    ) {
+      registryEvaluatorWrites++;
+    }
+    if (
+      (ts.isForOfStatement(node) || ts.isForInStatement(node)) &&
+      !ts.isVariableDeclarationList(node.initializer) &&
+      assignmentTargetContainsRegistryEvaluator(node.initializer)
+    ) {
+      registryEvaluatorWrites++;
+    }
     if (ts.isIdentifier(node) && node.text === "ReleaseMutationPlan") {
       const parent = node.parent;
       const exactConstructor = ts.isNewExpression(parent) && parent.expression === node;
@@ -1554,6 +1674,19 @@ function releaseMutationInventoryProblems(source: string): string[] {
         problems.push(
           `release mutation ReleaseMutationPlan may only be one direct constructor or a type reference at ${position.line + 1}:${position.character + 1}`
         );
+      }
+    }
+    if (ts.isIdentifier(node) && node.text === "mcpRegistryEvaluatorProblems") {
+      const parent = node.parent;
+      const exactDeclaration = ts.isFunctionDeclaration(parent) && parent.name === node && parent.parent === sourceFile;
+      const exactDirectCall =
+        ts.isCallExpression(parent) &&
+        parent.expression === node &&
+        parent.questionDotToken === undefined &&
+        parent.typeArguments === undefined &&
+        parent.arguments.length === 1;
+      if (!exactDeclaration && !exactDirectCall && !isExactRegistryAdapterInitializer(node)) {
+        otherRegistryEvaluatorReferences++;
       }
     }
     ts.forEachChild(node, visitRuntimeBindings);
@@ -1584,6 +1717,26 @@ function releaseMutationInventoryProblems(source: string): string[] {
   if (exactReleasePlanImportDeclarations !== 1 || otherReleasePlanImportDeclarations !== 0) {
     problems.push(
       `release mutation matrix requires one exact ReleaseMutationPlan import declaration and no other release-plan imports; found exact ${exactReleasePlanImportDeclarations}, other ${otherReleasePlanImportDeclarations}`
+    );
+  }
+  if (directRegistryEvaluatorDeclarations !== 1 || otherRegistryEvaluatorBindings !== 0) {
+    problems.push(
+      `release mutation registry evaluator must have one top-level function declaration and no other runtime bindings; found direct ${directRegistryEvaluatorDeclarations}, other ${otherRegistryEvaluatorBindings}`
+    );
+  }
+  if (registryEvaluatorAliasInitializers !== 0) {
+    problems.push(
+      `release mutation registry evaluator must not have alias initializers; found ${registryEvaluatorAliasInitializers}`
+    );
+  }
+  if (registryEvaluatorWrites !== 0) {
+    problems.push(
+      `release mutation registry evaluator binding must never be reassigned; found ${registryEvaluatorWrites} write(s)`
+    );
+  }
+  if (otherRegistryEvaluatorReferences !== 0) {
+    problems.push(
+      `release mutation registry evaluator may only be called directly or occupy the exact execute adapter slot; found ${otherRegistryEvaluatorReferences} other reference(s)`
     );
   }
   const matrixStartCount = mutationMatchCount(source, RELEASE_MUTATION_MATRIX_START);
@@ -1684,6 +1837,8 @@ function releaseMutationInventoryProblems(source: string): string[] {
   let declarativeSources = 0;
   let declarativeCases = 0;
   let declarativePlanBindings = 0;
+  let releaseIntegrityAliasBindings = 0;
+  let exactReleaseIntegrityAliasBindings = 0;
   const declarativePlanInventories: Array<{
     readonly total: number | null;
     readonly first: number | null;
@@ -1899,6 +2054,35 @@ function releaseMutationInventoryProblems(source: string): string[] {
         ? node.getStart(sourceFile)
         : -1;
     const inProjectMatrix = start >= matrixStart && start < callbackEnd;
+    const nodeStart = node.getStart(sourceFile);
+    if (
+      nodeStart >= matrixStart &&
+      nodeStart < callbackEnd &&
+      ts.isVariableDeclaration(node) &&
+      ts.isIdentifier(node.name) &&
+      node.name.text === "releaseIntegrityText"
+    ) {
+      releaseIntegrityAliasBindings++;
+      const declarationList = ts.isVariableDeclarationList(node.parent) ? node.parent : null;
+      const statement =
+        declarationList !== null && ts.isVariableStatement(declarationList.parent) ? declarationList.parent : null;
+      const initializer = node.initializer;
+      if (
+        declarationList !== null &&
+        (declarationList.flags & ts.NodeFlags.Const) !== 0 &&
+        statement !== null &&
+        matrixCallback !== null &&
+        statement.parent === matrixCallback.body &&
+        initializer !== undefined &&
+        ts.isPropertyAccessExpression(initializer) &&
+        initializer.questionDotToken === undefined &&
+        ts.isIdentifier(initializer.expression) &&
+        initializer.expression.text === "mcpbInputs" &&
+        initializer.name.text === "integrity"
+      ) {
+        exactReleaseIntegrityAliasBindings++;
+      }
+    }
     if (
       inProjectMatrix &&
       ts.isVariableDeclaration(node) &&
@@ -1969,10 +2153,19 @@ function releaseMutationInventoryProblems(source: string): string[] {
           );
         }
         if (declarativeMethod === "seal" || declarativeMethod === "execute") {
-          if (parent.arguments.length !== 0) {
+          if (declarativeMethod === "seal" && parent.arguments.length !== 0) {
             const position = sourceFile.getLineAndCharacterOfPosition(start);
             problems.push(
-              `release mutation declarative ${declarativeMethod} requires zero arguments at ${position.line + 1}:${position.character + 1}`
+              `release mutation declarative seal requires zero arguments at ${position.line + 1}:${position.character + 1}`
+            );
+          }
+          if (
+            declarativeMethod === "execute" &&
+            (parent.arguments.length !== 1 || !exactRegistryAdapterObject(parent.arguments[0]))
+          ) {
+            const position = sourceFile.getLineAndCharacterOfPosition(start);
+            problems.push(
+              `release mutation declarative execute requires one exact literal registryEvaluatorProblems adapter at ${position.line + 1}:${position.character + 1}`
             );
           }
           if (declarativeMethod === "seal") declarativeSealCalls.push(parent);
@@ -1996,6 +2189,15 @@ function releaseMutationInventoryProblems(source: string): string[] {
               `release mutation declarative registerSource requires one top-level const handle, literal id and passive identifier/string source value at ${position.line + 1}:${position.character + 1}`
             );
           } else {
+            if (
+              id.text === "script.release-integrity" &&
+              (handle !== "releaseIntegritySource" || !ts.isIdentifier(value) || value.text !== "releaseIntegrityText")
+            ) {
+              const position = sourceFile.getLineAndCharacterOfPosition(start);
+              problems.push(
+                `release mutation declarative script.release-integrity source requires the exact releaseIntegritySource/releaseIntegrityText binding at ${position.line + 1}:${position.character + 1}`
+              );
+            }
             if (declarativeSourceHandles.has(handle) || declarativeMutationHandles.has(handle)) {
               problems.push(`release mutation declarative duplicate handle binding ${handle}`);
             }
@@ -2340,7 +2542,7 @@ function releaseMutationInventoryProblems(source: string): string[] {
       }
       const invoke = checkProperty("invoke")[0]?.initializer;
       const expectation = checkProperty("expectation")[0]?.initializer;
-      let invocationKind: "fixture.text" | "fixture.throw" | null = null;
+      let invocationKind: "fixture.text" | "fixture.throw" | "registry.evaluator" | null = null;
       let invocationIdentity: string | null = null;
       if (checkProperty("invoke").length !== 1 || invoke === undefined || !ts.isObjectLiteralExpression(invoke)) {
         const position = sourceFile.getLineAndCharacterOfPosition(check.getStart(sourceFile));
@@ -2368,7 +2570,11 @@ function releaseMutationInventoryProblems(source: string): string[] {
           problems.push(
             `release mutation declarative case invocation requires one literal kind at ${position.line + 1}:${position.character + 1}`
           );
-        } else if (kind.text === "fixture.text" || kind.text === "fixture.throw") {
+        } else if (
+          kind.text === "fixture.text" ||
+          kind.text === "fixture.throw" ||
+          kind.text === "registry.evaluator"
+        ) {
           invocationKind = kind.text;
         } else {
           const position = sourceFile.getLineAndCharacterOfPosition(kind.getStart(sourceFile));
@@ -2377,7 +2583,7 @@ function releaseMutationInventoryProblems(source: string): string[] {
           );
         }
         const expectedInvocationProperties =
-          invocationKind === "fixture.text"
+          invocationKind === "fixture.text" || invocationKind === "registry.evaluator"
             ? ["kind", "baseline", "mutant"]
             : invocationKind === "fixture.throw"
               ? ["kind", "baseline", "mutant", "message"]
@@ -2440,6 +2646,7 @@ function releaseMutationInventoryProblems(source: string): string[] {
           mutant !== undefined &&
           ts.isIdentifier(mutant) &&
           (invocationKind === "fixture.text" ||
+            invocationKind === "registry.evaluator" ||
             (invocationMessage !== undefined &&
               ts.isStringLiteral(invocationMessage) &&
               invocationMessage.text.length > 0))
@@ -2525,11 +2732,18 @@ function releaseMutationInventoryProblems(source: string): string[] {
         }
         if (kind.text === "problem") {
           const problem = expectationProperty("problem")[0]?.initializer;
+          const exactProblemIdentity =
+            invocationKind === "registry.evaluator"
+              ? RELEASE_MUTATION_REGISTRY_PROBLEM
+              : invocationKind === "fixture.throw"
+                ? "fixture.mutant-threw"
+                : null;
           if (
             expectationProperty("problem").length !== 1 ||
             problem === undefined ||
             !ts.isStringLiteral(problem) ||
-            problem.text !== "fixture.mutant-threw"
+            exactProblemIdentity === null ||
+            problem.text !== exactProblemIdentity
           ) {
             const position = sourceFile.getLineAndCharacterOfPosition(expectation.getStart(sourceFile));
             problems.push(
@@ -2567,7 +2781,7 @@ function releaseMutationInventoryProblems(source: string): string[] {
         }
         if (
           (invocationKind === "fixture.text" && kind.text === "problem") ||
-          (invocationKind === "fixture.throw" && kind.text !== "problem")
+          ((invocationKind === "fixture.throw" || invocationKind === "registry.evaluator") && kind.text !== "problem")
         ) {
           const position = sourceFile.getLineAndCharacterOfPosition(expectation.getStart(sourceFile));
           problems.push(
@@ -2610,6 +2824,14 @@ function releaseMutationInventoryProblems(source: string): string[] {
   if (declarativeRegistrations > 0 && (declarativePlanBindings !== 1 || exactPlanInventories !== 1)) {
     problems.push(
       `release mutation declarative registrations require one top-level const releaseMutationPlan whose literal mutation/topology inventory matches the declarative subset ${declarativeFirst + declarativeAll}/${declarativeFirst}/${declarativeAll}/${declarativeCases}/${declarativeExpectationIds.size}/${declarativeCaseRoots.size}/${declarativeMutationHandles.size - declarativeCaseRoots.size}; found ${declarativePlanBindings} binding(s), ${exactPlanInventories} exact`
+    );
+  }
+  if (
+    declarativeRegistrations > 0 &&
+    (releaseIntegrityAliasBindings !== 1 || exactReleaseIntegrityAliasBindings !== 1)
+  ) {
+    problems.push(
+      `release mutation declarative script.release-integrity alias must be one top-level const releaseIntegrityText = mcpbInputs.integrity; found ${releaseIntegrityAliasBindings} binding(s), ${exactReleaseIntegrityAliasBindings} exact`
     );
   }
   if (declarativeRegistrations > 0) {
@@ -2709,6 +2931,8 @@ function releaseMutationInventoryProblems(source: string): string[] {
         executeStatement !== null &&
         executeStatement === expectedExecuteStatement &&
         execute.getStart(sourceFile) > seal.end &&
+        execute.arguments.length === 1 &&
+        exactRegistryAdapterObject(execute.arguments[0]) &&
         declarativePhaseReads.length === 1 &&
         exactStatusAssertion(expectedPhaseStatement, declarativePhaseReads[0], "executed") &&
         declarativeCaseExecutionReads.length === 1 &&
@@ -2722,7 +2946,7 @@ function releaseMutationInventoryProblems(source: string): string[] {
     } else exactSealAndExecute = false;
     if (!exactSealAndExecute) {
       problems.push(
-        "release mutation declarative plan requires one top-level clean seal assertion, one direct execute, then exact executed phase, case-count and expectation-count assertions after all registrations"
+        "release mutation declarative plan requires one top-level clean seal assertion, one direct exact-adapter execute, then exact executed phase, case-count and expectation-count assertions after all registrations"
       );
     }
   } else if (
@@ -7781,7 +8005,7 @@ describe("release identity and exact required-job gate", () => {
       oracleSource.slice(matrixBodyOffset)
     ].join("");
     expect(releaseMutationInventoryProblems(extraProjectMutation)).toContain(
-      "release mutation hybrid inventory expected 538 first / 22 all, found 539 first / 22 all (legacy 539/22; declarative 0/0; cases 0)"
+      "release mutation hybrid inventory expected 538 first / 22 all, found 539 first / 22 all (legacy 506/19; declarative 33/3; cases 36)"
     );
     const outsideMutation = `${oracleSource}\nvoid replaceAllExactly("inventory", "inventory", "mutant");\n`;
     expect(releaseMutationInventoryProblems(outsideMutation)).toContain(
@@ -7795,79 +8019,37 @@ describe("release identity and exact required-job gate", () => {
       oracleSource.slice(firstProjectCallOffset + "replaceExactly(".length)
     ].join("");
     expect(releaseMutationInventoryProblems(projectModeDrift)).toContain(
-      "release mutation hybrid inventory expected 538 first / 22 all, found 537 first / 23 all (legacy 537/23; declarative 0/0; cases 0)"
+      "release mutation hybrid inventory expected 538 first / 22 all, found 537 first / 23 all (legacy 504/20; declarative 33/3; cases 36)"
     );
-    const hybridLegacyRemoval = [
-      oracleSource.slice(0, firstProjectCallOffset),
-      "legacyMigratedExactly(",
-      oracleSource.slice(firstProjectCallOffset + "replaceExactly(".length)
-    ].join("");
-    const hybridDeclarativePrelude = `
-    const releaseMutationPlan = new ReleaseMutationPlan({
-      total: 1,
-      first: 1,
-      all: 0,
-      cases: 1,
-      expectations: 2,
-      roots: 1,
-      dependencyOnly: 0
-    });
-    const hybridSourceHandle = releaseMutationPlan.registerSource("fixture.hybrid", "inventory");
-    const hybridMutationHandle = releaseMutationPlan.registerMutation("mutation.hybrid", {
-      mode: "first",
-      source: hybridSourceHandle,
-      needle: "inventory",
-      replacement: "mutant",
-      expectedOccurrences: 1,
-      witness: { kind: "token", anchor: "inventory", before: 1, after: 0 }
-    });
-    releaseMutationPlan.registerCase({
-      id: "case.hybrid",
-      root: hybridMutationHandle,
-      checks: [
-        {
-          invoke: { kind: "fixture.text", baseline: hybridSourceHandle, mutant: hybridMutationHandle },
-          expectation: { id: "expectation.hybrid-text", kind: "equal", value: "mutant" }
-        },
-        {
-          invoke: {
-            kind: "fixture.throw",
-            baseline: hybridSourceHandle,
-            mutant: hybridMutationHandle,
-            message: "synthetic paired probe"
-          },
-          expectation: {
-            id: "expectation.hybrid-throw",
-            kind: "problem",
-            problem: "fixture.mutant-threw"
-          }
-        }
-      ]
-    });
-    const releaseMutationProblems = releaseMutationPlan.seal();
-    expect(releaseMutationProblems).toEqual([]);
-    releaseMutationPlan.execute();
-    expect(releaseMutationPlan.phase).toBe("executed");
-    expect(releaseMutationPlan.caseExecutions).toBe(1);
-    expect(releaseMutationPlan.expectationExecutions).toBe(2);`;
-    const hybridDeclarativeMutation = [
-      hybridLegacyRemoval.slice(0, matrixBodyOffset),
-      hybridDeclarativePrelude,
-      hybridLegacyRemoval.slice(matrixBodyOffset)
-    ].join("");
+    const hybridDeclarativeMutation = oracleSource;
+    const declarativeBatchStartToken = "    const releaseIntegrityText = mcpbInputs.integrity;";
+    const declarativeBatchEndToken = "    const registryReleaseDocument = yamlRecord(load(mcpbInputs.release));";
+    const declarativeBatchStart = hybridDeclarativeMutation.indexOf(declarativeBatchStartToken, matrixBodyOffset);
+    expect(declarativeBatchStart).toBeGreaterThan(matrixBodyOffset);
+    const declarativeBatchEnd = hybridDeclarativeMutation.indexOf(declarativeBatchEndToken, declarativeBatchStart);
+    expect(declarativeBatchEnd).toBeGreaterThan(declarativeBatchStart);
     expect(releaseMutationInventoryProblems(hybridDeclarativeMutation)).toEqual([]);
-    const hybridPreludeEnd = matrixBodyOffset + hybridDeclarativePrelude.length;
-    const hybridPreludeOffset = (token: string): number => {
-      const fixture = hybridDeclarativeMutation.slice(matrixBodyOffset, hybridPreludeEnd);
+    const declarativeBatchOffset = (token: string): number => {
+      const fixture = hybridDeclarativeMutation.slice(declarativeBatchStart, declarativeBatchEnd);
       expect(mutationMatchCount(fixture, token)).toBe(1);
       const relativeOffset = fixture.indexOf(token);
       expect(relativeOffset).toBeGreaterThanOrEqual(0);
-      return matrixBodyOffset + relativeOffset;
+      return declarativeBatchStart + relativeOffset;
     };
-    const boundHandlePrefix = "const hybridMutationHandle = ";
-    expect(hybridDeclarativeMutation.indexOf(boundHandlePrefix)).toBeLessThan(matrixBodyOffset);
-    const boundHandleOffset = hybridPreludeOffset(boundHandlePrefix);
-    expect(boundHandleOffset).toBeGreaterThanOrEqual(matrixBodyOffset);
+    const firstCaseStart = declarativeBatchOffset('id: "release.case.m002"');
+    const secondDescriptorStart = declarativeBatchOffset(
+      'const releaseMutationM003 = releaseMutationPlan.registerMutation("release.m003", {'
+    );
+    expect(secondDescriptorStart).toBeGreaterThan(firstCaseStart);
+    const firstCaseOffset = (token: string): number => {
+      const fixture = hybridDeclarativeMutation.slice(firstCaseStart, secondDescriptorStart);
+      expect(mutationMatchCount(fixture, token)).toBe(1);
+      const relativeOffset = fixture.indexOf(token);
+      expect(relativeOffset).toBeGreaterThanOrEqual(0);
+      return firstCaseStart + relativeOffset;
+    };
+    const boundHandlePrefix = "const releaseMutationM002 = ";
+    const boundHandleOffset = declarativeBatchOffset(boundHandlePrefix);
     const discardedDeclarativeHandle = [
       hybridDeclarativeMutation.slice(0, boundHandleOffset),
       "void ",
@@ -7876,39 +8058,59 @@ describe("release identity and exact required-job gate", () => {
     expect(releaseMutationInventoryProblems(discardedDeclarativeHandle)).toContainEqual(
       expect.stringMatching(/registerMutation requires one top-level const handle/)
     );
-    const sourceValueToken = 'registerSource("fixture.hybrid", "inventory")';
-    const sourceValueOffset = hybridPreludeOffset(sourceValueToken);
+    const sourceValueToken = 'registerSource("script.release-integrity", releaseIntegrityText)';
+    const sourceValueOffset = declarativeBatchOffset(sourceValueToken);
     const evaluatedDeclarativeSource = [
       hybridDeclarativeMutation.slice(0, sourceValueOffset),
-      'registerSource("fixture.hybrid", String("inventory"))',
+      'registerSource("script.release-integrity", String(releaseIntegrityText))',
       hybridDeclarativeMutation.slice(sourceValueOffset + sourceValueToken.length)
     ].join("");
     expect(releaseMutationInventoryProblems(evaluatedDeclarativeSource)).toContainEqual(
       expect.stringMatching(/passive identifier\/string source value/)
     );
-    const descriptorModeToken = 'mode: "first",\n      source: hybridSourceHandle';
-    const descriptorModeOffset = hybridPreludeOffset(descriptorModeToken);
+    const releaseIntegrityAliasToken = "const releaseIntegrityText = mcpbInputs.integrity;";
+    const releaseIntegrityAliasOffset = declarativeBatchOffset(releaseIntegrityAliasToken);
+    const evaluatedReleaseIntegrityAlias = [
+      hybridDeclarativeMutation.slice(0, releaseIntegrityAliasOffset),
+      "const releaseIntegrityText = String(mcpbInputs.integrity);",
+      hybridDeclarativeMutation.slice(releaseIntegrityAliasOffset + releaseIntegrityAliasToken.length)
+    ].join("");
+    expect(releaseMutationInventoryProblems(evaluatedReleaseIntegrityAlias)).toContainEqual(
+      expect.stringMatching(/script\.release-integrity alias must be one top-level const/)
+    );
+    const descriptorModeToken = [
+      'const releaseMutationM002 = releaseMutationPlan.registerMutation("release.m002", {',
+      '      mode: "first",',
+      "      source: releaseIntegritySource"
+    ].join("\n");
+    const descriptorModeOffset = declarativeBatchOffset(descriptorModeToken);
     const spreadDeclarativeDescriptor = [
       hybridDeclarativeMutation.slice(0, descriptorModeOffset),
-      '...dynamicDescriptor,\n      mode: "first",\n      source: hybridSourceHandle',
+      [
+        'const releaseMutationM002 = releaseMutationPlan.registerMutation("release.m002", {',
+        "      ...dynamicDescriptor,",
+        '      mode: "first",',
+        "      source: releaseIntegritySource"
+      ].join("\n"),
       hybridDeclarativeMutation.slice(descriptorModeOffset + descriptorModeToken.length)
     ].join("");
     expect(releaseMutationInventoryProblems(spreadDeclarativeDescriptor)).toContainEqual(
       expect.stringMatching(/descriptor requires exact passive/)
     );
-    const caseRootToken = "root: hybridMutationHandle";
-    const caseRootOffset = hybridPreludeOffset(caseRootToken);
+    const caseRootToken = 'id: "release.case.m002",\n      root: releaseMutationM002';
+    const caseRootOffset = firstCaseOffset(caseRootToken);
     const sourceRootDeclarativeCase = [
       hybridDeclarativeMutation.slice(0, caseRootOffset),
-      "root: hybridSourceHandle",
+      'id: "release.case.m002",\n      root: releaseIntegritySource',
       hybridDeclarativeMutation.slice(caseRootOffset + caseRootToken.length)
     ].join("");
     expect(releaseMutationInventoryProblems(sourceRootDeclarativeCase)).toContainEqual(
       expect.stringMatching(/source handle cannot be a case root/)
     );
     const checksStartToken = "checks: [";
-    const checksStartOffset = hybridPreludeOffset(checksStartToken);
-    const checksEndOffset = checksStartOffset + hybridDeclarativeMutation.slice(checksStartOffset).indexOf("]") + 1;
+    const checksStartOffset = firstCaseOffset(checksStartToken);
+    const checksEndToken = "      ]\n    });";
+    const checksEndOffset = firstCaseOffset(checksEndToken) + "      ]".length;
     const emptyDeclarativeChecks = [
       hybridDeclarativeMutation.slice(0, checksStartOffset),
       "checks: []",
@@ -7917,100 +8119,96 @@ describe("release identity and exact required-job gate", () => {
     expect(releaseMutationInventoryProblems(emptyDeclarativeChecks)).toContainEqual(
       expect.stringMatching(/requires one non-empty literal checks array/)
     );
-    const invocationKindToken = 'invoke: { kind: "fixture.text"';
-    const invocationKindOffset = hybridPreludeOffset(invocationKindToken);
+    const invocationKindToken = 'kind: "registry.evaluator"';
+    const invocationKindOffset = firstCaseOffset(invocationKindToken);
     const unknownDeclarativeInvocation = [
       hybridDeclarativeMutation.slice(0, invocationKindOffset),
-      'invoke: { kind: "fixture.dynamic"',
+      'kind: "fixture.dynamic"',
       hybridDeclarativeMutation.slice(invocationKindOffset + invocationKindToken.length)
     ].join("");
     expect(releaseMutationInventoryProblems(unknownDeclarativeInvocation)).toContainEqual(
       expect.stringMatching(/case invocation kind must be one closed literal/)
     );
-    const namedRegexToken = 'expectation: { id: "expectation.hybrid-text", kind: "equal", value: "mutant" }';
-    const namedRegexOffset = hybridPreludeOffset(namedRegexToken);
+    const firstProblemToken =
+      'problem:\n              "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"';
+    const firstProblemOffset = firstCaseOffset(firstProblemToken);
+    const wrongRegistryProblemIdentity = [
+      hybridDeclarativeMutation.slice(0, firstProblemOffset),
+      'problem: "fixture.mutant-threw"',
+      hybridDeclarativeMutation.slice(firstProblemOffset + firstProblemToken.length)
+    ].join("");
+    expect(releaseMutationInventoryProblems(wrongRegistryProblemIdentity)).toContainEqual(
+      expect.stringMatching(/requires one exact problem identity/)
+    );
+    const firstProblemExpectationToken = [
+      'id: "release.expectation.m002.primary",',
+      '            kind: "problem",',
+      `            ${firstProblemToken}`
+    ].join("\n");
+    const firstProblemExpectationOffset = firstCaseOffset(firstProblemExpectationToken);
     const unknownNamedRegexExpectation = [
-      hybridDeclarativeMutation.slice(0, namedRegexOffset),
-      'expectation: { id: "expectation.hybrid-text", kind: "regex", regex: "fixture.dynamic" }',
-      hybridDeclarativeMutation.slice(namedRegexOffset + namedRegexToken.length)
+      hybridDeclarativeMutation.slice(0, firstProblemExpectationOffset),
+      [
+        'id: "release.expectation.m002.primary",',
+        '            kind: "regex",',
+        '            regex: "fixture.dynamic"'
+      ].join("\n"),
+      hybridDeclarativeMutation.slice(firstProblemExpectationOffset + firstProblemExpectationToken.length)
     ].join("");
     expect(releaseMutationInventoryProblems(unknownNamedRegexExpectation)).toContainEqual(
       expect.stringMatching(/requires one named regex identity/)
     );
-    const firstTextCheck = [
-      "{",
-      '          invoke: { kind: "fixture.text", baseline: hybridSourceHandle, mutant: hybridMutationHandle },',
-      '          expectation: { id: "expectation.hybrid-text", kind: "equal", value: "mutant" }',
-      "        }"
-    ].join("\n");
-    const duplicateTextCheck = [
-      "{",
-      '          invoke: { kind: "fixture.text", baseline: hybridSourceHandle, mutant: hybridMutationHandle },',
-      '          expectation: { id: "expectation.hybrid-padding", kind: "equal", value: "mutant" }',
-      "        }"
-    ].join("\n");
-    const firstTextCheckOffset = hybridPreludeOffset(firstTextCheck);
+    const firstCheckStartToken = "        {\n          invoke: {";
+    const firstCheckStart = firstCaseOffset(firstCheckStartToken);
+    const firstCheckEndToken = "        }\n      ]";
+    const firstCheckEnd = firstCaseOffset(firstCheckEndToken) + "        }".length;
+    const firstRegistryCheck = hybridDeclarativeMutation.slice(firstCheckStart, firstCheckEnd);
+    const firstRegistryExpectationId = 'id: "release.expectation.m002.primary"';
+    expect(mutationMatchCount(firstRegistryCheck, firstRegistryExpectationId)).toBe(1);
+    const firstRegistryExpectationIdOffset = firstRegistryCheck.indexOf(firstRegistryExpectationId);
+    expect(firstRegistryExpectationIdOffset).toBeGreaterThanOrEqual(0);
+    const duplicateRegistryCheck = [
+      firstRegistryCheck.slice(0, firstRegistryExpectationIdOffset),
+      'id: "release.expectation.m002.duplicate"',
+      firstRegistryCheck.slice(firstRegistryExpectationIdOffset + firstRegistryExpectationId.length)
+    ].join("");
     const duplicateSemanticExpectations = [
-      hybridDeclarativeMutation.slice(0, firstTextCheckOffset),
-      `${firstTextCheck},\n        ${duplicateTextCheck}`,
-      hybridDeclarativeMutation.slice(firstTextCheckOffset + firstTextCheck.length)
+      hybridDeclarativeMutation.slice(0, firstCheckStart),
+      `${firstRegistryCheck},\n${duplicateRegistryCheck}`,
+      hybridDeclarativeMutation.slice(firstCheckEnd)
     ].join("");
     expect(releaseMutationInventoryProblems(duplicateSemanticExpectations)).toContainEqual(
       expect.stringMatching(/duplicates one case semantic check/)
     );
-    const firstExpectationToken = 'expectation: { id: "expectation.hybrid-text", kind: "equal", value: "mutant" }';
-    const firstExpectationOffset = hybridPreludeOffset(firstExpectationToken);
+    const expectationPairToken = "expectation: {";
+    const expectationPairOffset = firstCaseOffset(expectationPairToken);
     const missingInvocationExpectationPair = [
-      hybridDeclarativeMutation.slice(0, firstExpectationOffset),
-      'expectations: [{ id: "expectation.hybrid-text", kind: "equal", value: "mutant" }]',
-      hybridDeclarativeMutation.slice(firstExpectationOffset + firstExpectationToken.length)
+      hybridDeclarativeMutation.slice(0, expectationPairOffset),
+      "expectations: {",
+      hybridDeclarativeMutation.slice(expectationPairOffset + expectationPairToken.length)
     ].join("");
     expect(releaseMutationInventoryProblems(missingInvocationExpectationPair)).toContainEqual(
       expect.stringMatching(/check requires exact invoke\/expectation pairing properties/)
     );
-    const secondExpectationToken = [
-      "expectation: {",
-      '            id: "expectation.hybrid-throw",',
-      '            kind: "problem",',
-      '            problem: "fixture.mutant-threw"',
-      "          }"
-    ].join("\n");
-    const secondExpectationOffset = hybridPreludeOffset(secondExpectationToken);
-    const reorderedPairing = [
-      hybridDeclarativeMutation.slice(0, firstExpectationOffset),
-      secondExpectationToken,
-      hybridDeclarativeMutation.slice(firstExpectationOffset + firstExpectationToken.length, secondExpectationOffset),
-      firstExpectationToken,
-      hybridDeclarativeMutation.slice(secondExpectationOffset + secondExpectationToken.length)
+    const incompatibleRegistryInvocation = [
+      hybridDeclarativeMutation.slice(0, invocationKindOffset),
+      'kind: "fixture.text"',
+      hybridDeclarativeMutation.slice(invocationKindOffset + invocationKindToken.length)
     ].join("");
-    expect(
-      releaseMutationInventoryProblems(reorderedPairing).filter((problem) => problem.includes("is incompatible with"))
-    ).toHaveLength(2);
-    const collapsedDistinctProbes = [
-      hybridDeclarativeMutation.slice(0, checksStartOffset),
-      [
-        "checks: [{",
-        '        invoke: { kind: "fixture.text", baseline: hybridSourceHandle, mutant: hybridMutationHandle },',
-        "        expectations: [",
-        '          { id: "expectation.hybrid-text", kind: "equal", value: "mutant" },',
-        '          { id: "expectation.hybrid-throw", kind: "problem", problem: "fixture.mutant-threw" }',
-        "        ]",
-        "      }]"
-      ].join("\n"),
-      hybridDeclarativeMutation.slice(checksEndOffset)
-    ].join("");
-    expect(releaseMutationInventoryProblems(collapsedDistinctProbes)).toContainEqual(
-      expect.stringMatching(/check requires exact invoke\/expectation pairing properties/)
+    expect(releaseMutationInventoryProblems(incompatibleRegistryInvocation)).toContainEqual(
+      expect.stringMatching(/is incompatible with fixture\.text/)
     );
     const sealSequence = [
       "const releaseMutationProblems = releaseMutationPlan.seal();",
       "expect(releaseMutationProblems).toEqual([]);",
-      "releaseMutationPlan.execute();",
+      "releaseMutationPlan.execute({ registryEvaluatorProblems: mcpRegistryEvaluatorProblems });",
       'expect(releaseMutationPlan.phase).toBe("executed");',
-      "expect(releaseMutationPlan.caseExecutions).toBe(1);",
-      "expect(releaseMutationPlan.expectationExecutions).toBe(2);"
+      "expect(releaseMutationPlan.caseExecutions).toBe(36);",
+      "expect(releaseMutationPlan.expectationExecutions).toBe(36);"
     ].join("\n    ");
-    const sealSequenceOffset = hybridPreludeOffset(sealSequence);
+    const sealSequenceOffset = declarativeBatchOffset(sealSequence);
+    const declarativeLifecycleProblem =
+      "release mutation declarative plan requires one top-level clean seal assertion, one direct exact-adapter execute, then exact executed phase, case-count and expectation-count assertions after all registrations";
     const outerDynamicCodeMutation = [
       oracleSource.slice(0, suiteStartOffset),
       [
@@ -8036,51 +8234,132 @@ describe("release identity and exact required-job gate", () => {
       hybridDeclarativeMutation.slice(0, sealSequenceOffset),
       hybridDeclarativeMutation.slice(sealSequenceOffset + sealSequence.length)
     ].join("");
-    expect(releaseMutationInventoryProblems(missingDeclarativeExecution)).toContain(
-      "release mutation declarative plan requires one top-level clean seal assertion, one direct execute, then exact executed phase, case-count and expectation-count assertions after all registrations"
-    );
-    const caseExecutionAssertion = "expect(releaseMutationPlan.caseExecutions).toBe(1);";
-    const caseExecutionAssertionOffset = hybridPreludeOffset(caseExecutionAssertion);
+    expect(releaseMutationInventoryProblems(missingDeclarativeExecution)).toContain(declarativeLifecycleProblem);
+    const caseExecutionAssertion = "expect(releaseMutationPlan.caseExecutions).toBe(36);";
+    const caseExecutionAssertionOffset = declarativeBatchOffset(caseExecutionAssertion);
     const wrongDeclarativeCaseExecutionCount = [
       hybridDeclarativeMutation.slice(0, caseExecutionAssertionOffset),
-      "expect(releaseMutationPlan.caseExecutions).toBe(0);",
+      "expect(releaseMutationPlan.caseExecutions).toBe(35);",
       hybridDeclarativeMutation.slice(caseExecutionAssertionOffset + caseExecutionAssertion.length)
     ].join("");
-    expect(releaseMutationInventoryProblems(wrongDeclarativeCaseExecutionCount)).toContain(
-      "release mutation declarative plan requires one top-level clean seal assertion, one direct execute, then exact executed phase, case-count and expectation-count assertions after all registrations"
-    );
-    const expectationExecutionAssertion = "expect(releaseMutationPlan.expectationExecutions).toBe(2);";
-    const expectationExecutionAssertionOffset = hybridPreludeOffset(expectationExecutionAssertion);
+    expect(releaseMutationInventoryProblems(wrongDeclarativeCaseExecutionCount)).toContain(declarativeLifecycleProblem);
+    const expectationExecutionAssertion = "expect(releaseMutationPlan.expectationExecutions).toBe(36);";
+    const expectationExecutionAssertionOffset = declarativeBatchOffset(expectationExecutionAssertion);
     const wrongDeclarativeExpectationExecutionCount = [
       hybridDeclarativeMutation.slice(0, expectationExecutionAssertionOffset),
-      "expect(releaseMutationPlan.expectationExecutions).toBe(1);",
+      "expect(releaseMutationPlan.expectationExecutions).toBe(35);",
       hybridDeclarativeMutation.slice(expectationExecutionAssertionOffset + expectationExecutionAssertion.length)
     ].join("");
     expect(releaseMutationInventoryProblems(wrongDeclarativeExpectationExecutionCount)).toContain(
-      "release mutation declarative plan requires one top-level clean seal assertion, one direct execute, then exact executed phase, case-count and expectation-count assertions after all registrations"
+      declarativeLifecycleProblem
     );
     const phaseAssertion = 'expect(releaseMutationPlan.phase).toBe("executed");';
-    const phaseAssertionOffset = hybridPreludeOffset(phaseAssertion);
+    const phaseAssertionOffset = declarativeBatchOffset(phaseAssertion);
     const optionalDeclarativePhaseAssertion = [
       hybridDeclarativeMutation.slice(0, phaseAssertionOffset),
       'expect(releaseMutationPlan.phase)?.toBe("executed");',
       hybridDeclarativeMutation.slice(phaseAssertionOffset + phaseAssertion.length)
     ].join("");
-    expect(releaseMutationInventoryProblems(optionalDeclarativePhaseAssertion)).toContain(
-      "release mutation declarative plan requires one top-level clean seal assertion, one direct execute, then exact executed phase, case-count and expectation-count assertions after all registrations"
-    );
-    const sourceOnlyDeclarativeMutation = [
-      oracleSource.slice(0, matrixBodyOffset),
-      [
-        "",
-        "    const releaseMutationPlan = new ReleaseMutationPlan({ total: 0, first: 0, all: 0 });",
-        '    const sourceOnlyHandle = releaseMutationPlan.registerSource("fixture.source-only", "inventory");',
-        "    void sourceOnlyHandle;"
-      ].join("\n"),
-      oracleSource.slice(matrixBodyOffset)
+    expect(releaseMutationInventoryProblems(optionalDeclarativePhaseAssertion)).toContain(declarativeLifecycleProblem);
+    const executeToken = "releaseMutationPlan.execute({ registryEvaluatorProblems: mcpRegistryEvaluatorProblems });";
+    const executeOffset = declarativeBatchOffset(executeToken);
+    const missingRegistryAdapter = [
+      hybridDeclarativeMutation.slice(0, executeOffset),
+      "releaseMutationPlan.execute();",
+      hybridDeclarativeMutation.slice(executeOffset + executeToken.length)
     ].join("");
-    expect(releaseMutationInventoryProblems(sourceOnlyDeclarativeMutation)).toContain(
-      "release mutation declarative plan requires one top-level clean seal assertion, one direct execute, then exact executed phase, case-count and expectation-count assertions after all registrations"
+    expect(releaseMutationInventoryProblems(missingRegistryAdapter)).toContainEqual(
+      expect.stringMatching(/execute requires one exact literal registryEvaluatorProblems adapter/)
+    );
+    expect(releaseMutationInventoryProblems(missingRegistryAdapter)).toContain(declarativeLifecycleProblem);
+    const extraRegistryAdapterProperty = [
+      hybridDeclarativeMutation.slice(0, executeOffset),
+      "releaseMutationPlan.execute({ registryEvaluatorProblems: mcpRegistryEvaluatorProblems, extra: true });",
+      hybridDeclarativeMutation.slice(executeOffset + executeToken.length)
+    ].join("");
+    expect(releaseMutationInventoryProblems(extraRegistryAdapterProperty)).toContainEqual(
+      expect.stringMatching(/execute requires one exact literal registryEvaluatorProblems adapter/)
+    );
+    const computedRegistryAdapterProperty = [
+      hybridDeclarativeMutation.slice(0, executeOffset),
+      'releaseMutationPlan.execute({ ["registryEvaluatorProblems"]: mcpRegistryEvaluatorProblems });',
+      hybridDeclarativeMutation.slice(executeOffset + executeToken.length)
+    ].join("");
+    expect(releaseMutationInventoryProblems(computedRegistryAdapterProperty)).toContainEqual(
+      expect.stringMatching(/execute requires one exact literal registryEvaluatorProblems adapter/)
+    );
+    expect(releaseMutationInventoryProblems(computedRegistryAdapterProperty)).toContainEqual(
+      expect.stringMatching(/may only be called directly or occupy the exact execute adapter slot/)
+    );
+    const getterRegistryAdapter = [
+      hybridDeclarativeMutation.slice(0, executeOffset),
+      [
+        "releaseMutationPlan.execute({",
+        "      get registryEvaluatorProblems() {",
+        "        return mcpRegistryEvaluatorProblems;",
+        "      }",
+        "    });"
+      ].join("\n    "),
+      hybridDeclarativeMutation.slice(executeOffset + executeToken.length)
+    ].join("");
+    expect(releaseMutationInventoryProblems(getterRegistryAdapter)).toContainEqual(
+      expect.stringMatching(/execute requires one exact literal registryEvaluatorProblems adapter/)
+    );
+    expect(releaseMutationInventoryProblems(getterRegistryAdapter)).toContainEqual(
+      expect.stringMatching(/may only be called directly or occupy the exact execute adapter slot/)
+    );
+    const spreadRegistryAdapter = [
+      hybridDeclarativeMutation.slice(0, executeOffset),
+      "releaseMutationPlan.execute({ ...{ registryEvaluatorProblems: mcpRegistryEvaluatorProblems } });",
+      hybridDeclarativeMutation.slice(executeOffset + executeToken.length)
+    ].join("");
+    expect(releaseMutationInventoryProblems(spreadRegistryAdapter)).toContainEqual(
+      expect.stringMatching(/execute requires one exact literal registryEvaluatorProblems adapter/)
+    );
+    const wrappedRegistryAdapter = [
+      hybridDeclarativeMutation.slice(0, executeOffset),
+      [
+        "releaseMutationPlan.execute({",
+        "      registryEvaluatorProblems: (source) => mcpRegistryEvaluatorProblems(source)",
+        "    });"
+      ].join("\n    "),
+      hybridDeclarativeMutation.slice(executeOffset + executeToken.length)
+    ].join("");
+    expect(releaseMutationInventoryProblems(wrappedRegistryAdapter)).toContainEqual(
+      expect.stringMatching(/execute requires one exact literal registryEvaluatorProblems adapter/)
+    );
+    const aliasedRegistryAdapter = [
+      hybridDeclarativeMutation.slice(0, executeOffset),
+      [
+        "const registryEvaluatorAlias = mcpRegistryEvaluatorProblems;",
+        "    releaseMutationPlan.execute({ registryEvaluatorProblems: registryEvaluatorAlias });"
+      ].join("\n    "),
+      hybridDeclarativeMutation.slice(executeOffset + executeToken.length)
+    ].join("");
+    const aliasedRegistryAdapterProblems = releaseMutationInventoryProblems(aliasedRegistryAdapter);
+    expect(aliasedRegistryAdapterProblems).toContain(
+      "release mutation registry evaluator must not have alias initializers; found 1"
+    );
+    expect(aliasedRegistryAdapterProblems).toContainEqual(
+      expect.stringMatching(/execute requires one exact literal registryEvaluatorProblems adapter/)
+    );
+    const shadowedRegistryEvaluator = [
+      hybridDeclarativeMutation.slice(0, matrixBodyOffset),
+      "\n    const mcpRegistryEvaluatorProblems = (_source: string): string[] => [];",
+      hybridDeclarativeMutation.slice(matrixBodyOffset)
+    ].join("");
+    expect(releaseMutationInventoryProblems(shadowedRegistryEvaluator)).toContainEqual(
+      expect.stringMatching(
+        /registry evaluator must have one top-level function declaration and no other runtime bindings/
+      )
+    );
+    const reassignedRegistryEvaluator = [
+      hybridDeclarativeMutation.slice(0, matrixBodyOffset),
+      "\n    mcpRegistryEvaluatorProblems = (_source: string): string[] => [];",
+      hybridDeclarativeMutation.slice(matrixBodyOffset)
+    ].join("");
+    expect(releaseMutationInventoryProblems(reassignedRegistryEvaluator)).toContain(
+      "release mutation registry evaluator binding must never be reassigned; found 1 write(s)"
     );
     const legacyFreeMatrix = [
       oracleSource.slice(0, matrixBodyOffset),
@@ -8092,7 +8371,7 @@ describe("release identity and exact required-job gate", () => {
         .join("legacyMigratedExactly(")
     ].join("");
     expect(releaseMutationInventoryProblems(legacyFreeMatrix)).toContain(
-      "release mutation final closed graph expected 560 unique descriptors / 536 cases and roots / 541 expectations / 24 dependency-only, found 0 descriptors / 0 cases / 0 roots / 0 expectations / 0 dependency-only"
+      "release mutation final closed graph expected 560 unique descriptors / 536 cases and roots / 541 expectations / 24 dependency-only, found 36 descriptors / 36 cases / 36 roots / 36 expectations / 0 dependency-only"
     );
     const loopGeneratedDeclarative = [
       oracleSource.slice(0, matrixBodyOffset),
@@ -8128,21 +8407,21 @@ describe("release identity and exact required-job gate", () => {
     expect(releaseMutationInventoryProblems(wrongReceiverDeclarative)).toContainEqual(
       expect.stringMatching(/registerMutation must be one direct property call on releaseMutationPlan/)
     );
-    const mutationIdToken = '"mutation.hybrid"';
-    const mutationIdOffset = hybridPreludeOffset(mutationIdToken);
+    const mutationIdToken = '"release.m002"';
+    const mutationIdOffset = declarativeBatchOffset(mutationIdToken);
     const templateIdDeclarative = [
       hybridDeclarativeMutation.slice(0, mutationIdOffset),
-      "`mutation.hybrid`",
+      "`release.m002`",
       hybridDeclarativeMutation.slice(mutationIdOffset + mutationIdToken.length)
     ].join("");
     expect(releaseMutationInventoryProblems(templateIdDeclarative)).toContainEqual(
       expect.stringMatching(/registerMutation requires one top-level const handle, literal id and object descriptor/)
     );
-    const caseRegistrationToken = "releaseMutationPlan.registerCase({";
-    const caseRegistrationOffset = hybridPreludeOffset(caseRegistrationToken);
+    const caseRegistrationToken = 'releaseMutationPlan.registerCase({\n      id: "release.case.m002",';
+    const caseRegistrationOffset = declarativeBatchOffset(caseRegistrationToken);
     const identifierComputedDeclarativeCase = [
       hybridDeclarativeMutation.slice(0, caseRegistrationOffset),
-      'const caseMethod = "registerCase" as const;\n    releaseMutationPlan[caseMethod]({',
+      'const caseMethod = "registerCase" as const;\n    releaseMutationPlan[caseMethod]({\n      id: "release.case.m002",',
       hybridDeclarativeMutation.slice(caseRegistrationOffset + caseRegistrationToken.length)
     ].join("");
     expect(releaseMutationInventoryProblems(identifierComputedDeclarativeCase)).toContainEqual(
@@ -8150,7 +8429,7 @@ describe("release identity and exact required-job gate", () => {
     );
     const destructuredDeclarativeCase = [
       hybridDeclarativeMutation.slice(0, caseRegistrationOffset),
-      "const { registerCase } = releaseMutationPlan;\n    registerCase({",
+      'const { registerCase } = releaseMutationPlan;\n    registerCase({\n      id: "release.case.m002",',
       hybridDeclarativeMutation.slice(caseRegistrationOffset + caseRegistrationToken.length)
     ].join("");
     expect(releaseMutationInventoryProblems(destructuredDeclarativeCase)).toContainEqual(
@@ -8237,7 +8516,7 @@ describe("release identity and exact required-job gate", () => {
       expect.stringMatching(/must be one explicit straight-line case/)
     );
     expect(iterableLiteralProblems).toContain(
-      "release mutation hybrid inventory expected 538 first / 22 all, found 539 first / 22 all (legacy 539/22; declarative 0/0; cases 0)"
+      "release mutation hybrid inventory expected 538 first / 22 all, found 539 first / 22 all (legacy 506/19; declarative 33/3; cases 36)"
     );
     const nestedStraightLineMutation = [
       oracleSource.slice(0, matrixBodyOffset),
@@ -8249,7 +8528,7 @@ describe("release identity and exact required-job gate", () => {
       expect.stringMatching(/must be one explicit straight-line case/)
     );
     expect(nestedStraightLineProblems).toContain(
-      "release mutation hybrid inventory expected 538 first / 22 all, found 540 first / 22 all (legacy 540/22; declarative 0/0; cases 0)"
+      "release mutation hybrid inventory expected 538 first / 22 all, found 540 first / 22 all (legacy 507/19; declarative 33/3; cases 36)"
     );
     const earlyReturnMutation = [
       oracleSource.slice(0, matrixBodyOffset),
@@ -8716,6 +8995,324 @@ describe("release identity and exact required-job gate", () => {
     expect(cleanPlan.caseExecutions).toBe(6);
     expect(cleanPlan.expectationExecutions).toBe(10);
     expect(() => cleanPlan.execute()).toThrow(/requires sealed state; found executed/);
+
+    type RegistryFixtureExpectation = Parameters<
+      ReleaseMutationPlan["registerCase"]
+    >[0]["checks"][number]["expectation"];
+    const createRegistryEvaluatorPlan = (
+      expectation: RegistryFixtureExpectation = {
+        id: "expectation.registry-evaluator",
+        kind: "problem",
+        problem: RELEASE_MUTATION_REGISTRY_PROBLEM
+      },
+      invocationKind: "registry.evaluator" | "fixture.throw" = "registry.evaluator"
+    ): ReleaseMutationPlan => {
+      const registryFixturePlan = new ReleaseMutationPlan({
+        total: 1,
+        first: 1,
+        all: 0,
+        cases: 1,
+        expectations: 1,
+        roots: 1,
+        dependencyOnly: 0
+      });
+      const registryFixtureSource = registryFixturePlan.registerSource("fixture.registry-evaluator", "registry-clean");
+      const registryFixtureRoot = registerFixtureMutation(registryFixturePlan, "mutation.registry-evaluator", {
+        mode: "first",
+        source: registryFixtureSource,
+        needle: "clean",
+        replacement: "mutant",
+        expectedOccurrences: 1,
+        witness: { kind: "token", anchor: "clean", before: 1, after: 0 }
+      });
+      if (invocationKind === "registry.evaluator") {
+        registryFixturePlan.registerCase({
+          id: "case.registry-evaluator",
+          root: registryFixtureRoot,
+          checks: [
+            {
+              invoke: {
+                kind: "registry.evaluator",
+                baseline: registryFixtureSource,
+                mutant: registryFixtureRoot
+              },
+              expectation
+            }
+          ]
+        });
+      } else {
+        registryFixturePlan.registerCase({
+          id: "case.registry-evaluator",
+          root: registryFixtureRoot,
+          checks: [
+            {
+              invoke: {
+                kind: "fixture.throw",
+                baseline: registryFixtureSource,
+                mutant: registryFixtureRoot,
+                message: "registry cross-pair fixture"
+              },
+              expectation
+            }
+          ]
+        });
+      }
+      return registryFixturePlan;
+    };
+
+    const registryIncludesDriftPlan = createRegistryEvaluatorPlan();
+    expect(registryIncludesDriftPlan.seal()).toEqual([]);
+    const ambientStringIncludesDescriptor = Object.getOwnPropertyDescriptor(String.prototype, "includes");
+    if (
+      ambientStringIncludesDescriptor === undefined ||
+      !("value" in ambientStringIncludesDescriptor) ||
+      typeof ambientStringIncludesDescriptor.value !== "function"
+    ) {
+      throw new ambientErrorConstructor("missing String.prototype.includes descriptor control");
+    }
+    const ambientStringIncludes = ambientStringIncludesDescriptor.value as (
+      this: string,
+      searchString: string,
+      position?: number
+    ) => boolean;
+    let registryIncludesDriftCalls = 0;
+    let registryIncludesDriftMessage = "";
+    let registryIncludesDriftRestored = false;
+    try {
+      Object.defineProperty(String.prototype, "includes", {
+        configurable: ambientStringIncludesDescriptor.configurable,
+        enumerable: ambientStringIncludesDescriptor.enumerable,
+        value: function (this: string, searchString: string, position?: number): boolean {
+          return Reflect.apply(ambientStringIncludes, this, [searchString, position]) as boolean;
+        },
+        writable: ambientStringIncludesDescriptor.writable
+      });
+      try {
+        registryIncludesDriftPlan.execute({
+          registryEvaluatorProblems: () => {
+            registryIncludesDriftCalls++;
+            return [];
+          }
+        });
+      } catch (error) {
+        registryIncludesDriftMessage = error instanceof ambientErrorConstructor ? error.message : String(error);
+      }
+    } finally {
+      Object.defineProperty(String.prototype, "includes", ambientStringIncludesDescriptor);
+      registryIncludesDriftRestored = true;
+    }
+    expect(registryIncludesDriftMessage).toBe("release mutation ambient intrinsic drift");
+    expect(registryIncludesDriftRestored).toBe(true);
+    expect(registryIncludesDriftCalls).toBe(0);
+    expect(registryIncludesDriftPlan.phase).toBe("sealed");
+    expect(registryIncludesDriftPlan.caseExecutions).toBe(0);
+    expect(registryIncludesDriftPlan.expectationExecutions).toBe(0);
+
+    const registryPositivePlan = createRegistryEvaluatorPlan();
+    expect(registryPositivePlan.seal()).toEqual([]);
+    const registryPositiveCalls: string[] = [];
+    registryPositivePlan.execute({
+      registryEvaluatorProblems: (source) => {
+        registryPositiveCalls.push(source);
+        return source === "registry-clean" ? [] : [RELEASE_MUTATION_REGISTRY_PROBLEM];
+      }
+    });
+    expect(registryPositiveCalls).toEqual(["registry-clean", "registry-mutant"]);
+    expect(registryPositivePlan.phase).toBe("executed");
+    expect(registryPositivePlan.caseExecutions).toBe(1);
+    expect(registryPositivePlan.expectationExecutions).toBe(1);
+
+    const registryMissingAdapterPlan = createRegistryEvaluatorPlan();
+    expect(registryMissingAdapterPlan.seal()).toEqual([]);
+    expect(() => registryMissingAdapterPlan.execute()).toThrow(
+      "registry.evaluator cases require exact release oracle adapters at execute"
+    );
+    expect(registryMissingAdapterPlan.phase).toBe("failed");
+    expect(registryMissingAdapterPlan.caseExecutions).toBe(0);
+    expect(registryMissingAdapterPlan.expectationExecutions).toBe(0);
+
+    const registryExtraAdapterPlan = createRegistryEvaluatorPlan();
+    expect(registryExtraAdapterPlan.seal()).toEqual([]);
+    expect(() =>
+      registryExtraAdapterPlan.execute({
+        registryEvaluatorProblems: () => [],
+        extra: true
+      } as never)
+    ).toThrow("release oracle adapters must contain only an enumerable registryEvaluatorProblems data function");
+    expect(registryExtraAdapterPlan.phase).toBe("failed");
+    expect(registryExtraAdapterPlan.caseExecutions).toBe(0);
+    expect(registryExtraAdapterPlan.expectationExecutions).toBe(0);
+
+    let registryAdapterGetterCalls = 0;
+    const registryAccessorAdapter = {};
+    Object.defineProperty(registryAccessorAdapter, "registryEvaluatorProblems", {
+      enumerable: true,
+      get: () => {
+        registryAdapterGetterCalls++;
+        return () => [];
+      }
+    });
+    const registryAccessorAdapterPlan = createRegistryEvaluatorPlan();
+    expect(registryAccessorAdapterPlan.seal()).toEqual([]);
+    expect(() => registryAccessorAdapterPlan.execute(registryAccessorAdapter as never)).toThrow(
+      "release oracle adapters must contain only an enumerable registryEvaluatorProblems data function"
+    );
+    expect(registryAdapterGetterCalls).toBe(0);
+    expect(registryAccessorAdapterPlan.phase).toBe("failed");
+    expect(registryAccessorAdapterPlan.caseExecutions).toBe(0);
+    expect(registryAccessorAdapterPlan.expectationExecutions).toBe(0);
+
+    const registryDirtyBaselinePlan = createRegistryEvaluatorPlan();
+    expect(registryDirtyBaselinePlan.seal()).toEqual([]);
+    const registryDirtyBaselineCalls: string[] = [];
+    expect(() =>
+      registryDirtyBaselinePlan.execute({
+        registryEvaluatorProblems: (source) => {
+          registryDirtyBaselineCalls.push(source);
+          return [RELEASE_MUTATION_REGISTRY_PROBLEM];
+        }
+      })
+    ).toThrow(/found a problem in the clean baseline/);
+    expect(registryDirtyBaselineCalls).toEqual(["registry-clean", "registry-mutant"]);
+    expect(registryDirtyBaselinePlan.phase).toBe("failed");
+    expect(registryDirtyBaselinePlan.caseExecutions).toBe(1);
+    expect(registryDirtyBaselinePlan.expectationExecutions).toBe(1);
+
+    const registryMissingMutantProblemPlan = createRegistryEvaluatorPlan();
+    expect(registryMissingMutantProblemPlan.seal()).toEqual([]);
+    const registryMissingMutantProblemCalls: string[] = [];
+    expect(() =>
+      registryMissingMutantProblemPlan.execute({
+        registryEvaluatorProblems: (source) => {
+          registryMissingMutantProblemCalls.push(source);
+          return [];
+        }
+      })
+    ).toThrow(/missed the exact mutant problem/);
+    expect(registryMissingMutantProblemCalls).toEqual(["registry-clean", "registry-mutant"]);
+    expect(registryMissingMutantProblemPlan.phase).toBe("failed");
+    expect(registryMissingMutantProblemPlan.caseExecutions).toBe(1);
+    expect(registryMissingMutantProblemPlan.expectationExecutions).toBe(1);
+
+    const registryUnknownProblemPlan = createRegistryEvaluatorPlan();
+    expect(registryUnknownProblemPlan.seal()).toEqual([]);
+    const registryUnknownProblemCalls: string[] = [];
+    expect(() =>
+      registryUnknownProblemPlan.execute({
+        registryEvaluatorProblems: (source) => {
+          registryUnknownProblemCalls.push(source);
+          return ["unknown.registry-problem"];
+        }
+      })
+    ).toThrow("registry.evaluator baseline result contains an unknown problem identity");
+    expect(registryUnknownProblemCalls).toEqual(["registry-clean"]);
+    expect(registryUnknownProblemPlan.phase).toBe("failed");
+    expect(registryUnknownProblemPlan.caseExecutions).toBe(1);
+    expect(registryUnknownProblemPlan.expectationExecutions).toBe(0);
+
+    const registryDuplicateProblemPlan = createRegistryEvaluatorPlan();
+    expect(registryDuplicateProblemPlan.seal()).toEqual([]);
+    expect(() =>
+      registryDuplicateProblemPlan.execute({
+        registryEvaluatorProblems: (source) =>
+          source === "registry-clean" ? [] : [RELEASE_MUTATION_REGISTRY_PROBLEM, RELEASE_MUTATION_REGISTRY_PROBLEM]
+      })
+    ).toThrow("registry.evaluator mutant result contains a duplicate problem identity");
+    expect(registryDuplicateProblemPlan.phase).toBe("failed");
+    expect(registryDuplicateProblemPlan.caseExecutions).toBe(1);
+    expect(registryDuplicateProblemPlan.expectationExecutions).toBe(0);
+
+    const sparseRegistryResult = Array<string>(1);
+    const registrySparseResultPlan = createRegistryEvaluatorPlan();
+    expect(registrySparseResultPlan.seal()).toEqual([]);
+    expect(() =>
+      registrySparseResultPlan.execute({
+        registryEvaluatorProblems: (source) => (source === "registry-clean" ? [] : sparseRegistryResult)
+      })
+    ).toThrow(/registry\.evaluator mutant result must be a dense built-in string array/);
+    expect(registrySparseResultPlan.phase).toBe("failed");
+    expect(registrySparseResultPlan.caseExecutions).toBe(1);
+    expect(registrySparseResultPlan.expectationExecutions).toBe(0);
+
+    let registryResultGetterCalls = 0;
+    const accessorRegistryResult: string[] = [];
+    Object.defineProperty(accessorRegistryResult, "0", {
+      enumerable: true,
+      get: () => {
+        registryResultGetterCalls++;
+        return RELEASE_MUTATION_REGISTRY_PROBLEM;
+      }
+    });
+    const registryAccessorResultPlan = createRegistryEvaluatorPlan();
+    expect(registryAccessorResultPlan.seal()).toEqual([]);
+    expect(() =>
+      registryAccessorResultPlan.execute({
+        registryEvaluatorProblems: (source) => (source === "registry-clean" ? [] : accessorRegistryResult)
+      })
+    ).toThrow(/registry\.evaluator mutant result must be a dense built-in string array/);
+    expect(registryResultGetterCalls).toBe(0);
+    expect(registryAccessorResultPlan.phase).toBe("failed");
+    expect(registryAccessorResultPlan.caseExecutions).toBe(1);
+    expect(registryAccessorResultPlan.expectationExecutions).toBe(0);
+
+    const customRegistryResult: string[] = [];
+    Object.defineProperty(customRegistryResult, "custom", { enumerable: true, value: true });
+    const registryCustomResultPlan = createRegistryEvaluatorPlan();
+    expect(registryCustomResultPlan.seal()).toEqual([]);
+    expect(() =>
+      registryCustomResultPlan.execute({
+        registryEvaluatorProblems: (source) => (source === "registry-clean" ? [] : customRegistryResult)
+      })
+    ).toThrow(/registry\.evaluator mutant result must be a dense built-in string array/);
+    expect(registryCustomResultPlan.phase).toBe("failed");
+    expect(registryCustomResultPlan.caseExecutions).toBe(1);
+    expect(registryCustomResultPlan.expectationExecutions).toBe(0);
+
+    const registryThenableResultPlan = createRegistryEvaluatorPlan();
+    const registryThenProperty = ["th", "en"].join("");
+    expect(registryThenableResultPlan.seal()).toEqual([]);
+    expect(() =>
+      registryThenableResultPlan.execute({
+        registryEvaluatorProblems: (source) =>
+          (source === "registry-clean" ? [] : { [registryThenProperty]: () => undefined }) as never
+      })
+    ).toThrow(/registry\.evaluator mutant result must be a dense built-in string array/);
+    expect(registryThenableResultPlan.phase).toBe("failed");
+    expect(registryThenableResultPlan.caseExecutions).toBe(1);
+    expect(registryThenableResultPlan.expectationExecutions).toBe(0);
+
+    const registryFixtureProblemPlan = createRegistryEvaluatorPlan({
+      id: "expectation.registry-fixture-problem",
+      kind: "problem",
+      problem: "fixture.mutant-threw"
+    });
+    const registryFixtureProblemDiagnostics = registryFixtureProblemPlan.seal();
+    expect(registryFixtureProblemDiagnostics.filter((problem) => problem.startsWith("[expectation."))).toEqual([
+      "[expectation.problem] case.registry-evaluator: registry.evaluator requires its exact MCP Registry problem identity"
+    ]);
+
+    const registryValueExpectationPlan = createRegistryEvaluatorPlan({
+      id: "expectation.registry-value",
+      kind: "equal",
+      value: "registry-mutant"
+    });
+    const registryValueExpectationDiagnostics = registryValueExpectationPlan.seal();
+    expect(registryValueExpectationDiagnostics.filter((problem) => problem.startsWith("[expectation."))).toEqual([
+      "[expectation.type] case.registry-evaluator: registry.evaluator requires exact problem expectations"
+    ]);
+
+    const fixtureRegistryProblemPlan = createRegistryEvaluatorPlan(
+      {
+        id: "expectation.fixture-registry-problem",
+        kind: "problem",
+        problem: RELEASE_MUTATION_REGISTRY_PROBLEM
+      },
+      "fixture.throw"
+    );
+    const fixtureRegistryProblemDiagnostics = fixtureRegistryProblemPlan.seal();
+    expect(fixtureRegistryProblemDiagnostics.filter((problem) => problem.startsWith("[expectation."))).toEqual([
+      "[expectation.problem] case.registry-evaluator: fixture.throw requires its exact fixture problem identity"
+    ]);
 
     const topologyPlan = new ReleaseMutationPlan({
       total: 2,
@@ -9484,7 +10081,7 @@ describe("release identity and exact required-job gate", () => {
     const packageJson = readFileSync(new URL("../package.json", import.meta.url), "utf8");
     const mcpRegistryManifest = readFileSync(new URL("../server.json", import.meta.url), "utf8");
     assertMcpRegistryTrackedManifestContract(mcpRegistryManifest, packageJson);
-    const mcpbInputs = {
+    const mcpbInputs = Object.freeze({
       manifest: readFileSync(new URL("../mcpb/manifest.json", import.meta.url), "utf8"),
       cli: readFileSync(new URL("../src/cli.ts", import.meta.url), "utf8"),
       cliHelp: readFileSync(new URL("../src/cli-help.ts", import.meta.url), "utf8"),
@@ -9499,7 +10096,7 @@ describe("release identity and exact required-job gate", () => {
       releaseTransaction,
       versionCheck: readFileSync(new URL("../scripts/check-version-consistency.mjs", import.meta.url), "utf8"),
       versionSync: readFileSync(new URL("../scripts/sync-version.mjs", import.meta.url), "utf8")
-    };
+    });
     const pkg = JSON.parse(packageJson) as {
       engines?: { node?: unknown };
     };
@@ -9511,116 +10108,1175 @@ describe("release identity and exact required-job gate", () => {
     expect(npmProvenanceContractProblems(mcpbInputs.release, mcpbInputs.integrity)).toEqual([]);
     expect(mcpRegistryEvaluatorProblems(mcpbInputs.integrity)).toEqual([]);
 
-    for (const weakenedMcpRegistryEvaluator of [
-      replaceExactly(
-        mcpbInputs.integrity,
-        'import { isDeepStrictEqual } from "node:util";',
-        "const isDeepStrictEqual = () => true;"
-      ),
-      replaceExactly(
-        mcpbInputs.integrity,
-        'apiBase: "https://registry.modelcontextprotocol.io/v0.1/servers"',
-        'apiBase: "https://registry.modelcontextprotocol.io/v0/servers"'
-      ),
-      replaceExactly(
-        mcpbInputs.integrity,
-        'schema: "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json"',
-        'schema: "https://example.invalid/server.schema.json"'
-      ),
-      replaceExactly(
-        mcpbInputs.integrity,
-        "export function evaluateMcpRegistryState(input, phase)",
-        "function evaluateMcpRegistryState(input, phase)"
-      ),
-      replaceExactly(
-        mcpbInputs.integrity,
-        'phase !== "preflight" && phase !== "convergence"',
-        'phase !== "preflight" || phase !== "convergence"'
-      ),
-      replaceExactly(
-        mcpbInputs.integrity,
-        "const match = /^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)$/u.exec(value);",
-        "const match = /^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-rc\\.\\d+)?$/u.exec(value);"
-      ),
-      replaceExactly(
-        mcpbInputs.integrity,
-        "Array.from(server.description).length > 100",
-        "Array.from(server.description).length > 1000"
-      ),
-      replaceAllExactly(mcpbInputs.integrity, "server.$schema !== MCP_REGISTRY_IDENTITY.schema", "false", 2),
-      replaceExactly(mcpbInputs.integrity, 'transport.type !== "stdio"', "false"),
-      replaceExactly(
-        mcpbInputs.integrity,
-        "const server = assertObservedMcpRegistryServerSchema(",
-        "const server = assertMcpRegistryServerShape("
-      ),
-      replaceExactly(
-        mcpbInputs.integrity,
-        'assertCanonicalExpectedMcpRegistryManifest(server, "expected local server manifest")',
-        "void server"
-      ),
-      replaceExactly(
-        mcpbInputs.integrity,
-        "packageEntry.runtimeArguments.length !== 2",
-        "packageEntry.runtimeArguments.length < 1"
-      ),
-      replaceExactly(
-        mcpbInputs.integrity,
-        '["type", "valueHint", "value", "description", "isRequired", "format"]',
-        '["type", "valueHint", "value"]'
-      ),
-      replaceExactly(
-        mcpbInputs.integrity,
-        'assertExactRecord(input, ["expected", "exact", "latest"]',
-        'assertExactRecord(input, ["expected", "exact"]'
-      ),
-      replaceExactly(
-        mcpbInputs.integrity,
-        '["requestUrl", "curlExit", "httpStatus", "contentType", "body"]',
-        '["requestUrl", "httpStatus", "contentType", "body"]'
-      ),
-      replaceExactly(mcpbInputs.integrity, "encodeURIComponent(expected.package.mcpName)", "expected.package.mcpName"),
-      replaceAllExactly(mcpbInputs.integrity, "?include_deleted=true", "?include_deleted=false", 2),
-      replaceExactly(mcpbInputs.integrity, 'envelope.contentType !== "application/json"', "false"),
-      replaceExactly(mcpbInputs.integrity, 'envelope.contentType !== "application/problem+json"', "false"),
-      replaceExactly(mcpbInputs.integrity, '["detail", "status", "title"]', '["detail", "title"]'),
-      replaceExactly(mcpbInputs.integrity, 'problem.detail !== "Server not found"', "false"),
-      replaceExactly(mcpbInputs.integrity, 'problem.status !== 404 || problem.title !== "Not Found"', "false"),
-      replaceExactly(mcpbInputs.integrity, '["isLatest", "publishedAt", "status", "statusChangedAt"]', '["status"]'),
-      replaceExactly(mcpbInputs.integrity, '["active", "deprecated", "deleted"]', '["active"]'),
-      replaceExactly(mcpbInputs.integrity, 'typeof metadata.isLatest !== "boolean"', "false"),
-      replaceExactly(mcpbInputs.integrity, "assertRfc3339Timestamp(metadata.publishedAt", "void("),
-      replaceExactly(mcpbInputs.integrity, "assertRfc3339Timestamp(metadata.statusChangedAt", "void("),
-      replaceExactly(
-        mcpbInputs.integrity,
-        "Array.from(metadata.statusMessage).length > 500",
-        "Array.from(metadata.statusMessage).length > 5000"
-      ),
-      replaceExactly(mcpbInputs.integrity, 'observation.official.status === "deleted"', "false"),
-      replaceExactly(mcpbInputs.integrity, 'observation.official.status === "deprecated"', "false"),
-      replaceExactly(mcpbInputs.integrity, "!isDeepStrictEqual(exact.server, expected.server)", "false"),
-      replaceExactly(mcpbInputs.integrity, "!isDeepStrictEqual(latest.server, expected.server)", "false"),
-      replaceAllExactly(mcpbInputs.integrity, "!isDeepStrictEqual(exact.response, latest.response)", "false", 2),
-      replaceExactly(
-        mcpbInputs.integrity,
-        'phase === "convergence" && (status === 429 || status >= 500)',
-        'phase === "convergence"'
-      ),
-      replaceExactly(
-        mcpbInputs.integrity,
-        '} else if (mode === "mcp-registry-state")',
-        '} else if (mode === "mcp-registry-read")'
-      ),
-      replaceExactly(
-        mcpbInputs.integrity,
-        "evaluateMcpRegistryState(payload, first)",
-        "evaluateMcpRegistryState(payload, second)"
-      )
-    ]) {
-      expect(mcpRegistryEvaluatorProblems(weakenedMcpRegistryEvaluator)).toContain(
-        MCP_REGISTRY_EVALUATOR_CONTRACT_PROBLEM
-      );
-    }
+    const releaseIntegrityText = mcpbInputs.integrity;
+    const releaseMutationPlan = new ReleaseMutationPlan({
+      total: 36,
+      first: 33,
+      all: 3,
+      cases: 36,
+      expectations: 36,
+      roots: 36,
+      dependencyOnly: 0
+    });
+    const releaseIntegritySource = releaseMutationPlan.registerSource("script.release-integrity", releaseIntegrityText);
+    const releaseMutationM002 = releaseMutationPlan.registerMutation("release.m002", {
+      mode: "first",
+      source: releaseIntegritySource,
+      needle: 'import { isDeepStrictEqual } from "node:util";',
+      replacement: "const isDeepStrictEqual = () => true;",
+      expectedOccurrences: 1,
+      witness: {
+        kind: "token",
+        anchor: 'import { isDeepStrictEqual } from "node:util";',
+        before: 1,
+        after: 0
+      }
+    });
+    releaseMutationPlan.registerCase({
+      id: "release.case.m002",
+      root: releaseMutationM002,
+      checks: [
+        {
+          invoke: {
+            kind: "registry.evaluator",
+            baseline: releaseIntegritySource,
+            mutant: releaseMutationM002
+          },
+          expectation: {
+            id: "release.expectation.m002.primary",
+            kind: "problem",
+            problem:
+              "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
+          }
+        }
+      ]
+    });
+    const releaseMutationM003 = releaseMutationPlan.registerMutation("release.m003", {
+      mode: "first",
+      source: releaseIntegritySource,
+      needle: 'apiBase: "https://registry.modelcontextprotocol.io/v0.1/servers"',
+      replacement: 'apiBase: "https://registry.modelcontextprotocol.io/v0/servers"',
+      expectedOccurrences: 1,
+      witness: {
+        kind: "token",
+        anchor: 'apiBase: "https://registry.modelcontextprotocol.io/v0.1/servers"',
+        before: 1,
+        after: 0
+      }
+    });
+    releaseMutationPlan.registerCase({
+      id: "release.case.m003",
+      root: releaseMutationM003,
+      checks: [
+        {
+          invoke: {
+            kind: "registry.evaluator",
+            baseline: releaseIntegritySource,
+            mutant: releaseMutationM003
+          },
+          expectation: {
+            id: "release.expectation.m003.primary",
+            kind: "problem",
+            problem:
+              "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
+          }
+        }
+      ]
+    });
+    const releaseMutationM004 = releaseMutationPlan.registerMutation("release.m004", {
+      mode: "first",
+      source: releaseIntegritySource,
+      needle: 'schema: "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json"',
+      replacement: 'schema: "https://example.invalid/server.schema.json"',
+      expectedOccurrences: 1,
+      witness: {
+        kind: "token",
+        anchor: 'schema: "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json"',
+        before: 1,
+        after: 0
+      }
+    });
+    releaseMutationPlan.registerCase({
+      id: "release.case.m004",
+      root: releaseMutationM004,
+      checks: [
+        {
+          invoke: {
+            kind: "registry.evaluator",
+            baseline: releaseIntegritySource,
+            mutant: releaseMutationM004
+          },
+          expectation: {
+            id: "release.expectation.m004.primary",
+            kind: "problem",
+            problem:
+              "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
+          }
+        }
+      ]
+    });
+    const releaseMutationM005 = releaseMutationPlan.registerMutation("release.m005", {
+      mode: "first",
+      source: releaseIntegritySource,
+      needle: "export function evaluateMcpRegistryState(input, phase)",
+      replacement: "function evaluateMcpRegistryState(input, phase)",
+      expectedOccurrences: 1,
+      witness: {
+        kind: "token",
+        anchor: "export function evaluateMcpRegistryState(input, phase)",
+        before: 1,
+        after: 0
+      }
+    });
+    releaseMutationPlan.registerCase({
+      id: "release.case.m005",
+      root: releaseMutationM005,
+      checks: [
+        {
+          invoke: {
+            kind: "registry.evaluator",
+            baseline: releaseIntegritySource,
+            mutant: releaseMutationM005
+          },
+          expectation: {
+            id: "release.expectation.m005.primary",
+            kind: "problem",
+            problem:
+              "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
+          }
+        }
+      ]
+    });
+    const releaseMutationM006 = releaseMutationPlan.registerMutation("release.m006", {
+      mode: "first",
+      source: releaseIntegritySource,
+      needle: 'phase !== "preflight" && phase !== "convergence"',
+      replacement: 'phase !== "preflight" || phase !== "convergence"',
+      expectedOccurrences: 1,
+      witness: {
+        kind: "token",
+        anchor: 'phase !== "preflight" && phase !== "convergence"',
+        before: 1,
+        after: 0
+      }
+    });
+    releaseMutationPlan.registerCase({
+      id: "release.case.m006",
+      root: releaseMutationM006,
+      checks: [
+        {
+          invoke: {
+            kind: "registry.evaluator",
+            baseline: releaseIntegritySource,
+            mutant: releaseMutationM006
+          },
+          expectation: {
+            id: "release.expectation.m006.primary",
+            kind: "problem",
+            problem:
+              "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
+          }
+        }
+      ]
+    });
+    const releaseMutationM007 = releaseMutationPlan.registerMutation("release.m007", {
+      mode: "first",
+      source: releaseIntegritySource,
+      needle: "const match = /^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)$/u.exec(value);",
+      replacement: "const match = /^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-rc\\.\\d+)?$/u.exec(value);",
+      expectedOccurrences: 1,
+      witness: {
+        kind: "token",
+        anchor: "const match = /^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)$/u.exec(value);",
+        before: 1,
+        after: 0
+      }
+    });
+    releaseMutationPlan.registerCase({
+      id: "release.case.m007",
+      root: releaseMutationM007,
+      checks: [
+        {
+          invoke: {
+            kind: "registry.evaluator",
+            baseline: releaseIntegritySource,
+            mutant: releaseMutationM007
+          },
+          expectation: {
+            id: "release.expectation.m007.primary",
+            kind: "problem",
+            problem:
+              "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
+          }
+        }
+      ]
+    });
+    const releaseMutationM008 = releaseMutationPlan.registerMutation("release.m008", {
+      mode: "first",
+      source: releaseIntegritySource,
+      needle: "Array.from(server.description).length > 100",
+      replacement: "Array.from(server.description).length > 1000",
+      expectedOccurrences: 1,
+      witness: {
+        kind: "token",
+        anchor: "Array.from(server.description).length > 100",
+        before: 1,
+        after: 0
+      }
+    });
+    releaseMutationPlan.registerCase({
+      id: "release.case.m008",
+      root: releaseMutationM008,
+      checks: [
+        {
+          invoke: {
+            kind: "registry.evaluator",
+            baseline: releaseIntegritySource,
+            mutant: releaseMutationM008
+          },
+          expectation: {
+            id: "release.expectation.m008.primary",
+            kind: "problem",
+            problem:
+              "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
+          }
+        }
+      ]
+    });
+    const releaseMutationM009 = releaseMutationPlan.registerMutation("release.m009", {
+      mode: "all",
+      source: releaseIntegritySource,
+      needle: "server.$schema !== MCP_REGISTRY_IDENTITY.schema",
+      replacement: "false",
+      expectedOccurrences: 2,
+      witness: {
+        kind: "token",
+        anchor: "server.$schema !== MCP_REGISTRY_IDENTITY.schema",
+        before: 2,
+        after: 0
+      }
+    });
+    releaseMutationPlan.registerCase({
+      id: "release.case.m009",
+      root: releaseMutationM009,
+      checks: [
+        {
+          invoke: {
+            kind: "registry.evaluator",
+            baseline: releaseIntegritySource,
+            mutant: releaseMutationM009
+          },
+          expectation: {
+            id: "release.expectation.m009.primary",
+            kind: "problem",
+            problem:
+              "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
+          }
+        }
+      ]
+    });
+    const releaseMutationM010 = releaseMutationPlan.registerMutation("release.m010", {
+      mode: "first",
+      source: releaseIntegritySource,
+      needle: 'transport.type !== "stdio"',
+      replacement: "false",
+      expectedOccurrences: 1,
+      witness: {
+        kind: "token",
+        anchor: 'transport.type !== "stdio"',
+        before: 1,
+        after: 0
+      }
+    });
+    releaseMutationPlan.registerCase({
+      id: "release.case.m010",
+      root: releaseMutationM010,
+      checks: [
+        {
+          invoke: {
+            kind: "registry.evaluator",
+            baseline: releaseIntegritySource,
+            mutant: releaseMutationM010
+          },
+          expectation: {
+            id: "release.expectation.m010.primary",
+            kind: "problem",
+            problem:
+              "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
+          }
+        }
+      ]
+    });
+    const releaseMutationM011 = releaseMutationPlan.registerMutation("release.m011", {
+      mode: "first",
+      source: releaseIntegritySource,
+      needle: "const server = assertObservedMcpRegistryServerSchema(",
+      replacement: "const server = assertMcpRegistryServerShape(",
+      expectedOccurrences: 1,
+      witness: {
+        kind: "token",
+        anchor: "const server = assertObservedMcpRegistryServerSchema(",
+        before: 1,
+        after: 0
+      }
+    });
+    releaseMutationPlan.registerCase({
+      id: "release.case.m011",
+      root: releaseMutationM011,
+      checks: [
+        {
+          invoke: {
+            kind: "registry.evaluator",
+            baseline: releaseIntegritySource,
+            mutant: releaseMutationM011
+          },
+          expectation: {
+            id: "release.expectation.m011.primary",
+            kind: "problem",
+            problem:
+              "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
+          }
+        }
+      ]
+    });
+    const releaseMutationM012 = releaseMutationPlan.registerMutation("release.m012", {
+      mode: "first",
+      source: releaseIntegritySource,
+      needle: 'assertCanonicalExpectedMcpRegistryManifest(server, "expected local server manifest")',
+      replacement: "void server",
+      expectedOccurrences: 1,
+      witness: {
+        kind: "token",
+        anchor: 'assertCanonicalExpectedMcpRegistryManifest(server, "expected local server manifest")',
+        before: 1,
+        after: 0
+      }
+    });
+    releaseMutationPlan.registerCase({
+      id: "release.case.m012",
+      root: releaseMutationM012,
+      checks: [
+        {
+          invoke: {
+            kind: "registry.evaluator",
+            baseline: releaseIntegritySource,
+            mutant: releaseMutationM012
+          },
+          expectation: {
+            id: "release.expectation.m012.primary",
+            kind: "problem",
+            problem:
+              "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
+          }
+        }
+      ]
+    });
+    const releaseMutationM013 = releaseMutationPlan.registerMutation("release.m013", {
+      mode: "first",
+      source: releaseIntegritySource,
+      needle: "packageEntry.runtimeArguments.length !== 2",
+      replacement: "packageEntry.runtimeArguments.length < 1",
+      expectedOccurrences: 1,
+      witness: {
+        kind: "token",
+        anchor: "packageEntry.runtimeArguments.length !== 2",
+        before: 1,
+        after: 0
+      }
+    });
+    releaseMutationPlan.registerCase({
+      id: "release.case.m013",
+      root: releaseMutationM013,
+      checks: [
+        {
+          invoke: {
+            kind: "registry.evaluator",
+            baseline: releaseIntegritySource,
+            mutant: releaseMutationM013
+          },
+          expectation: {
+            id: "release.expectation.m013.primary",
+            kind: "problem",
+            problem:
+              "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
+          }
+        }
+      ]
+    });
+    const releaseMutationM014 = releaseMutationPlan.registerMutation("release.m014", {
+      mode: "first",
+      source: releaseIntegritySource,
+      needle: '["type", "valueHint", "value", "description", "isRequired", "format"]',
+      replacement: '["type", "valueHint", "value"]',
+      expectedOccurrences: 1,
+      witness: {
+        kind: "token",
+        anchor: '["type", "valueHint", "value", "description", "isRequired", "format"]',
+        before: 1,
+        after: 0
+      }
+    });
+    releaseMutationPlan.registerCase({
+      id: "release.case.m014",
+      root: releaseMutationM014,
+      checks: [
+        {
+          invoke: {
+            kind: "registry.evaluator",
+            baseline: releaseIntegritySource,
+            mutant: releaseMutationM014
+          },
+          expectation: {
+            id: "release.expectation.m014.primary",
+            kind: "problem",
+            problem:
+              "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
+          }
+        }
+      ]
+    });
+    const releaseMutationM015 = releaseMutationPlan.registerMutation("release.m015", {
+      mode: "first",
+      source: releaseIntegritySource,
+      needle: 'assertExactRecord(input, ["expected", "exact", "latest"]',
+      replacement: 'assertExactRecord(input, ["expected", "exact"]',
+      expectedOccurrences: 1,
+      witness: {
+        kind: "token",
+        anchor: 'assertExactRecord(input, ["expected", "exact", "latest"]',
+        before: 1,
+        after: 0
+      }
+    });
+    releaseMutationPlan.registerCase({
+      id: "release.case.m015",
+      root: releaseMutationM015,
+      checks: [
+        {
+          invoke: {
+            kind: "registry.evaluator",
+            baseline: releaseIntegritySource,
+            mutant: releaseMutationM015
+          },
+          expectation: {
+            id: "release.expectation.m015.primary",
+            kind: "problem",
+            problem:
+              "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
+          }
+        }
+      ]
+    });
+    const releaseMutationM016 = releaseMutationPlan.registerMutation("release.m016", {
+      mode: "first",
+      source: releaseIntegritySource,
+      needle: '["requestUrl", "curlExit", "httpStatus", "contentType", "body"]',
+      replacement: '["requestUrl", "httpStatus", "contentType", "body"]',
+      expectedOccurrences: 1,
+      witness: {
+        kind: "token",
+        anchor: '["requestUrl", "curlExit", "httpStatus", "contentType", "body"]',
+        before: 1,
+        after: 0
+      }
+    });
+    releaseMutationPlan.registerCase({
+      id: "release.case.m016",
+      root: releaseMutationM016,
+      checks: [
+        {
+          invoke: {
+            kind: "registry.evaluator",
+            baseline: releaseIntegritySource,
+            mutant: releaseMutationM016
+          },
+          expectation: {
+            id: "release.expectation.m016.primary",
+            kind: "problem",
+            problem:
+              "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
+          }
+        }
+      ]
+    });
+    const releaseMutationM017 = releaseMutationPlan.registerMutation("release.m017", {
+      mode: "first",
+      source: releaseIntegritySource,
+      needle: "encodeURIComponent(expected.package.mcpName)",
+      replacement: "expected.package.mcpName",
+      expectedOccurrences: 1,
+      witness: {
+        kind: "token",
+        anchor: "encodeURIComponent(expected.package.mcpName)",
+        before: 1,
+        after: 0
+      }
+    });
+    releaseMutationPlan.registerCase({
+      id: "release.case.m017",
+      root: releaseMutationM017,
+      checks: [
+        {
+          invoke: {
+            kind: "registry.evaluator",
+            baseline: releaseIntegritySource,
+            mutant: releaseMutationM017
+          },
+          expectation: {
+            id: "release.expectation.m017.primary",
+            kind: "problem",
+            problem:
+              "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
+          }
+        }
+      ]
+    });
+    const releaseMutationM018 = releaseMutationPlan.registerMutation("release.m018", {
+      mode: "all",
+      source: releaseIntegritySource,
+      needle: "?include_deleted=true",
+      replacement: "?include_deleted=false",
+      expectedOccurrences: 2,
+      witness: {
+        kind: "token",
+        anchor: "?include_deleted=true",
+        before: 2,
+        after: 0
+      }
+    });
+    releaseMutationPlan.registerCase({
+      id: "release.case.m018",
+      root: releaseMutationM018,
+      checks: [
+        {
+          invoke: {
+            kind: "registry.evaluator",
+            baseline: releaseIntegritySource,
+            mutant: releaseMutationM018
+          },
+          expectation: {
+            id: "release.expectation.m018.primary",
+            kind: "problem",
+            problem:
+              "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
+          }
+        }
+      ]
+    });
+    const releaseMutationM019 = releaseMutationPlan.registerMutation("release.m019", {
+      mode: "first",
+      source: releaseIntegritySource,
+      needle: 'envelope.contentType !== "application/json"',
+      replacement: "false",
+      expectedOccurrences: 1,
+      witness: {
+        kind: "token",
+        anchor: 'envelope.contentType !== "application/json"',
+        before: 1,
+        after: 0
+      }
+    });
+    releaseMutationPlan.registerCase({
+      id: "release.case.m019",
+      root: releaseMutationM019,
+      checks: [
+        {
+          invoke: {
+            kind: "registry.evaluator",
+            baseline: releaseIntegritySource,
+            mutant: releaseMutationM019
+          },
+          expectation: {
+            id: "release.expectation.m019.primary",
+            kind: "problem",
+            problem:
+              "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
+          }
+        }
+      ]
+    });
+    const releaseMutationM020 = releaseMutationPlan.registerMutation("release.m020", {
+      mode: "first",
+      source: releaseIntegritySource,
+      needle: 'envelope.contentType !== "application/problem+json"',
+      replacement: "false",
+      expectedOccurrences: 1,
+      witness: {
+        kind: "token",
+        anchor: 'envelope.contentType !== "application/problem+json"',
+        before: 1,
+        after: 0
+      }
+    });
+    releaseMutationPlan.registerCase({
+      id: "release.case.m020",
+      root: releaseMutationM020,
+      checks: [
+        {
+          invoke: {
+            kind: "registry.evaluator",
+            baseline: releaseIntegritySource,
+            mutant: releaseMutationM020
+          },
+          expectation: {
+            id: "release.expectation.m020.primary",
+            kind: "problem",
+            problem:
+              "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
+          }
+        }
+      ]
+    });
+    const releaseMutationM021 = releaseMutationPlan.registerMutation("release.m021", {
+      mode: "first",
+      source: releaseIntegritySource,
+      needle: '["detail", "status", "title"]',
+      replacement: '["detail", "title"]',
+      expectedOccurrences: 1,
+      witness: {
+        kind: "token",
+        anchor: '["detail", "status", "title"]',
+        before: 1,
+        after: 0
+      }
+    });
+    releaseMutationPlan.registerCase({
+      id: "release.case.m021",
+      root: releaseMutationM021,
+      checks: [
+        {
+          invoke: {
+            kind: "registry.evaluator",
+            baseline: releaseIntegritySource,
+            mutant: releaseMutationM021
+          },
+          expectation: {
+            id: "release.expectation.m021.primary",
+            kind: "problem",
+            problem:
+              "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
+          }
+        }
+      ]
+    });
+    const releaseMutationM022 = releaseMutationPlan.registerMutation("release.m022", {
+      mode: "first",
+      source: releaseIntegritySource,
+      needle: 'problem.detail !== "Server not found"',
+      replacement: "false",
+      expectedOccurrences: 1,
+      witness: {
+        kind: "token",
+        anchor: 'problem.detail !== "Server not found"',
+        before: 1,
+        after: 0
+      }
+    });
+    releaseMutationPlan.registerCase({
+      id: "release.case.m022",
+      root: releaseMutationM022,
+      checks: [
+        {
+          invoke: {
+            kind: "registry.evaluator",
+            baseline: releaseIntegritySource,
+            mutant: releaseMutationM022
+          },
+          expectation: {
+            id: "release.expectation.m022.primary",
+            kind: "problem",
+            problem:
+              "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
+          }
+        }
+      ]
+    });
+    const releaseMutationM023 = releaseMutationPlan.registerMutation("release.m023", {
+      mode: "first",
+      source: releaseIntegritySource,
+      needle: 'problem.status !== 404 || problem.title !== "Not Found"',
+      replacement: "false",
+      expectedOccurrences: 1,
+      witness: {
+        kind: "token",
+        anchor: 'problem.status !== 404 || problem.title !== "Not Found"',
+        before: 1,
+        after: 0
+      }
+    });
+    releaseMutationPlan.registerCase({
+      id: "release.case.m023",
+      root: releaseMutationM023,
+      checks: [
+        {
+          invoke: {
+            kind: "registry.evaluator",
+            baseline: releaseIntegritySource,
+            mutant: releaseMutationM023
+          },
+          expectation: {
+            id: "release.expectation.m023.primary",
+            kind: "problem",
+            problem:
+              "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
+          }
+        }
+      ]
+    });
+    const releaseMutationM024 = releaseMutationPlan.registerMutation("release.m024", {
+      mode: "first",
+      source: releaseIntegritySource,
+      needle: '["isLatest", "publishedAt", "status", "statusChangedAt"]',
+      replacement: '["status"]',
+      expectedOccurrences: 1,
+      witness: {
+        kind: "token",
+        anchor: '["isLatest", "publishedAt", "status", "statusChangedAt"]',
+        before: 1,
+        after: 0
+      }
+    });
+    releaseMutationPlan.registerCase({
+      id: "release.case.m024",
+      root: releaseMutationM024,
+      checks: [
+        {
+          invoke: {
+            kind: "registry.evaluator",
+            baseline: releaseIntegritySource,
+            mutant: releaseMutationM024
+          },
+          expectation: {
+            id: "release.expectation.m024.primary",
+            kind: "problem",
+            problem:
+              "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
+          }
+        }
+      ]
+    });
+    const releaseMutationM025 = releaseMutationPlan.registerMutation("release.m025", {
+      mode: "first",
+      source: releaseIntegritySource,
+      needle: '["active", "deprecated", "deleted"]',
+      replacement: '["active"]',
+      expectedOccurrences: 1,
+      witness: {
+        kind: "token",
+        anchor: '["active", "deprecated", "deleted"]',
+        before: 1,
+        after: 0
+      }
+    });
+    releaseMutationPlan.registerCase({
+      id: "release.case.m025",
+      root: releaseMutationM025,
+      checks: [
+        {
+          invoke: {
+            kind: "registry.evaluator",
+            baseline: releaseIntegritySource,
+            mutant: releaseMutationM025
+          },
+          expectation: {
+            id: "release.expectation.m025.primary",
+            kind: "problem",
+            problem:
+              "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
+          }
+        }
+      ]
+    });
+    const releaseMutationM026 = releaseMutationPlan.registerMutation("release.m026", {
+      mode: "first",
+      source: releaseIntegritySource,
+      needle: 'typeof metadata.isLatest !== "boolean"',
+      replacement: "false",
+      expectedOccurrences: 1,
+      witness: {
+        kind: "token",
+        anchor: 'typeof metadata.isLatest !== "boolean"',
+        before: 1,
+        after: 0
+      }
+    });
+    releaseMutationPlan.registerCase({
+      id: "release.case.m026",
+      root: releaseMutationM026,
+      checks: [
+        {
+          invoke: {
+            kind: "registry.evaluator",
+            baseline: releaseIntegritySource,
+            mutant: releaseMutationM026
+          },
+          expectation: {
+            id: "release.expectation.m026.primary",
+            kind: "problem",
+            problem:
+              "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
+          }
+        }
+      ]
+    });
+    const releaseMutationM027 = releaseMutationPlan.registerMutation("release.m027", {
+      mode: "first",
+      source: releaseIntegritySource,
+      needle: "assertRfc3339Timestamp(metadata.publishedAt",
+      replacement: "void(",
+      expectedOccurrences: 1,
+      witness: {
+        kind: "token",
+        anchor: "assertRfc3339Timestamp(metadata.publishedAt",
+        before: 1,
+        after: 0
+      }
+    });
+    releaseMutationPlan.registerCase({
+      id: "release.case.m027",
+      root: releaseMutationM027,
+      checks: [
+        {
+          invoke: {
+            kind: "registry.evaluator",
+            baseline: releaseIntegritySource,
+            mutant: releaseMutationM027
+          },
+          expectation: {
+            id: "release.expectation.m027.primary",
+            kind: "problem",
+            problem:
+              "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
+          }
+        }
+      ]
+    });
+    const releaseMutationM028 = releaseMutationPlan.registerMutation("release.m028", {
+      mode: "first",
+      source: releaseIntegritySource,
+      needle: "assertRfc3339Timestamp(metadata.statusChangedAt",
+      replacement: "void(",
+      expectedOccurrences: 1,
+      witness: {
+        kind: "token",
+        anchor: "assertRfc3339Timestamp(metadata.statusChangedAt",
+        before: 1,
+        after: 0
+      }
+    });
+    releaseMutationPlan.registerCase({
+      id: "release.case.m028",
+      root: releaseMutationM028,
+      checks: [
+        {
+          invoke: {
+            kind: "registry.evaluator",
+            baseline: releaseIntegritySource,
+            mutant: releaseMutationM028
+          },
+          expectation: {
+            id: "release.expectation.m028.primary",
+            kind: "problem",
+            problem:
+              "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
+          }
+        }
+      ]
+    });
+    const releaseMutationM029 = releaseMutationPlan.registerMutation("release.m029", {
+      mode: "first",
+      source: releaseIntegritySource,
+      needle: "Array.from(metadata.statusMessage).length > 500",
+      replacement: "Array.from(metadata.statusMessage).length > 5000",
+      expectedOccurrences: 1,
+      witness: {
+        kind: "token",
+        anchor: "Array.from(metadata.statusMessage).length > 500",
+        before: 1,
+        after: 0
+      }
+    });
+    releaseMutationPlan.registerCase({
+      id: "release.case.m029",
+      root: releaseMutationM029,
+      checks: [
+        {
+          invoke: {
+            kind: "registry.evaluator",
+            baseline: releaseIntegritySource,
+            mutant: releaseMutationM029
+          },
+          expectation: {
+            id: "release.expectation.m029.primary",
+            kind: "problem",
+            problem:
+              "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
+          }
+        }
+      ]
+    });
+    const releaseMutationM030 = releaseMutationPlan.registerMutation("release.m030", {
+      mode: "first",
+      source: releaseIntegritySource,
+      needle: 'observation.official.status === "deleted"',
+      replacement: "false",
+      expectedOccurrences: 1,
+      witness: {
+        kind: "token",
+        anchor: 'observation.official.status === "deleted"',
+        before: 1,
+        after: 0
+      }
+    });
+    releaseMutationPlan.registerCase({
+      id: "release.case.m030",
+      root: releaseMutationM030,
+      checks: [
+        {
+          invoke: {
+            kind: "registry.evaluator",
+            baseline: releaseIntegritySource,
+            mutant: releaseMutationM030
+          },
+          expectation: {
+            id: "release.expectation.m030.primary",
+            kind: "problem",
+            problem:
+              "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
+          }
+        }
+      ]
+    });
+    const releaseMutationM031 = releaseMutationPlan.registerMutation("release.m031", {
+      mode: "first",
+      source: releaseIntegritySource,
+      needle: 'observation.official.status === "deprecated"',
+      replacement: "false",
+      expectedOccurrences: 1,
+      witness: {
+        kind: "token",
+        anchor: 'observation.official.status === "deprecated"',
+        before: 1,
+        after: 0
+      }
+    });
+    releaseMutationPlan.registerCase({
+      id: "release.case.m031",
+      root: releaseMutationM031,
+      checks: [
+        {
+          invoke: {
+            kind: "registry.evaluator",
+            baseline: releaseIntegritySource,
+            mutant: releaseMutationM031
+          },
+          expectation: {
+            id: "release.expectation.m031.primary",
+            kind: "problem",
+            problem:
+              "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
+          }
+        }
+      ]
+    });
+    const releaseMutationM032 = releaseMutationPlan.registerMutation("release.m032", {
+      mode: "first",
+      source: releaseIntegritySource,
+      needle: "!isDeepStrictEqual(exact.server, expected.server)",
+      replacement: "false",
+      expectedOccurrences: 1,
+      witness: {
+        kind: "token",
+        anchor: "!isDeepStrictEqual(exact.server, expected.server)",
+        before: 1,
+        after: 0
+      }
+    });
+    releaseMutationPlan.registerCase({
+      id: "release.case.m032",
+      root: releaseMutationM032,
+      checks: [
+        {
+          invoke: {
+            kind: "registry.evaluator",
+            baseline: releaseIntegritySource,
+            mutant: releaseMutationM032
+          },
+          expectation: {
+            id: "release.expectation.m032.primary",
+            kind: "problem",
+            problem:
+              "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
+          }
+        }
+      ]
+    });
+    const releaseMutationM033 = releaseMutationPlan.registerMutation("release.m033", {
+      mode: "first",
+      source: releaseIntegritySource,
+      needle: "!isDeepStrictEqual(latest.server, expected.server)",
+      replacement: "false",
+      expectedOccurrences: 1,
+      witness: {
+        kind: "token",
+        anchor: "!isDeepStrictEqual(latest.server, expected.server)",
+        before: 1,
+        after: 0
+      }
+    });
+    releaseMutationPlan.registerCase({
+      id: "release.case.m033",
+      root: releaseMutationM033,
+      checks: [
+        {
+          invoke: {
+            kind: "registry.evaluator",
+            baseline: releaseIntegritySource,
+            mutant: releaseMutationM033
+          },
+          expectation: {
+            id: "release.expectation.m033.primary",
+            kind: "problem",
+            problem:
+              "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
+          }
+        }
+      ]
+    });
+    const releaseMutationM034 = releaseMutationPlan.registerMutation("release.m034", {
+      mode: "all",
+      source: releaseIntegritySource,
+      needle: "!isDeepStrictEqual(exact.response, latest.response)",
+      replacement: "false",
+      expectedOccurrences: 2,
+      witness: {
+        kind: "token",
+        anchor: "!isDeepStrictEqual(exact.response, latest.response)",
+        before: 2,
+        after: 0
+      }
+    });
+    releaseMutationPlan.registerCase({
+      id: "release.case.m034",
+      root: releaseMutationM034,
+      checks: [
+        {
+          invoke: {
+            kind: "registry.evaluator",
+            baseline: releaseIntegritySource,
+            mutant: releaseMutationM034
+          },
+          expectation: {
+            id: "release.expectation.m034.primary",
+            kind: "problem",
+            problem:
+              "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
+          }
+        }
+      ]
+    });
+    const releaseMutationM035 = releaseMutationPlan.registerMutation("release.m035", {
+      mode: "first",
+      source: releaseIntegritySource,
+      needle: 'phase === "convergence" && (status === 429 || status >= 500)',
+      replacement: 'phase === "convergence"',
+      expectedOccurrences: 1,
+      witness: {
+        kind: "token",
+        anchor: 'phase === "convergence" && (status === 429 || status >= 500)',
+        before: 1,
+        after: 0
+      }
+    });
+    releaseMutationPlan.registerCase({
+      id: "release.case.m035",
+      root: releaseMutationM035,
+      checks: [
+        {
+          invoke: {
+            kind: "registry.evaluator",
+            baseline: releaseIntegritySource,
+            mutant: releaseMutationM035
+          },
+          expectation: {
+            id: "release.expectation.m035.primary",
+            kind: "problem",
+            problem:
+              "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
+          }
+        }
+      ]
+    });
+    const releaseMutationM036 = releaseMutationPlan.registerMutation("release.m036", {
+      mode: "first",
+      source: releaseIntegritySource,
+      needle: '} else if (mode === "mcp-registry-state")',
+      replacement: '} else if (mode === "mcp-registry-read")',
+      expectedOccurrences: 1,
+      witness: {
+        kind: "token",
+        anchor: '} else if (mode === "mcp-registry-state")',
+        before: 1,
+        after: 0
+      }
+    });
+    releaseMutationPlan.registerCase({
+      id: "release.case.m036",
+      root: releaseMutationM036,
+      checks: [
+        {
+          invoke: {
+            kind: "registry.evaluator",
+            baseline: releaseIntegritySource,
+            mutant: releaseMutationM036
+          },
+          expectation: {
+            id: "release.expectation.m036.primary",
+            kind: "problem",
+            problem:
+              "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
+          }
+        }
+      ]
+    });
+    const releaseMutationM037 = releaseMutationPlan.registerMutation("release.m037", {
+      mode: "first",
+      source: releaseIntegritySource,
+      needle: "evaluateMcpRegistryState(payload, first)",
+      replacement: "evaluateMcpRegistryState(payload, second)",
+      expectedOccurrences: 1,
+      witness: {
+        kind: "token",
+        anchor: "evaluateMcpRegistryState(payload, first)",
+        before: 1,
+        after: 0
+      }
+    });
+    releaseMutationPlan.registerCase({
+      id: "release.case.m037",
+      root: releaseMutationM037,
+      checks: [
+        {
+          invoke: {
+            kind: "registry.evaluator",
+            baseline: releaseIntegritySource,
+            mutant: releaseMutationM037
+          },
+          expectation: {
+            id: "release.expectation.m037.primary",
+            kind: "problem",
+            problem:
+              "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
+          }
+        }
+      ]
+    });
+    const releaseMutationProblems = releaseMutationPlan.seal();
+    expect(releaseMutationProblems).toEqual([]);
+    releaseMutationPlan.execute({ registryEvaluatorProblems: mcpRegistryEvaluatorProblems });
+    expect(releaseMutationPlan.phase).toBe("executed");
+    expect(releaseMutationPlan.caseExecutions).toBe(36);
+    expect(releaseMutationPlan.expectationExecutions).toBe(36);
     const registryReleaseDocument = yamlRecord(load(mcpbInputs.release));
     const registryReleaseJob = yamlRecord(yamlRecord(registryReleaseDocument?.jobs)?.publish);
     const registryReleaseSteps = yamlSteps(registryReleaseJob ?? {});

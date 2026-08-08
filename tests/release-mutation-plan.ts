@@ -54,6 +54,7 @@ const stringConstructor: typeof String = String;
 const stringPrototype = String.prototype;
 const stringIndexOfIntrinsic = stringPrototype.indexOf;
 const stringCharAtIntrinsic = stringPrototype.charAt;
+const stringIncludesIntrinsic = stringPrototype.includes;
 const stringSliceIntrinsic = stringPrototype.slice;
 const stringSplitIntrinsic = stringPrototype.split;
 const symbolConstructor: typeof Symbol = Symbol;
@@ -142,6 +143,7 @@ const intrinsicDataProperties: readonly (readonly [object, PropertyKey, unknown]
   [setPrototype, "keys", setKeysIntrinsic],
   [stringConstructor, "prototype", stringPrototype],
   [stringPrototype, "charAt", stringCharAtIntrinsic],
+  [stringPrototype, "includes", stringIncludesIntrinsic],
   [stringPrototype, "indexOf", stringIndexOfIntrinsic],
   [stringPrototype, "slice", stringSliceIntrinsic],
   [stringPrototype, "split", stringSplitIntrinsic],
@@ -264,7 +266,7 @@ export interface ReleaseMutationRegistration {
   readonly witness: ReleaseMutationWitness;
 }
 
-/** Closed bootstrap invocation inventory for the release-mutation oracle. */
+/** Closed data-only invocation inventory for the release-mutation oracle. */
 export type ReleaseOracleInvocation =
   | {
       readonly kind: "fixture.text";
@@ -276,10 +278,33 @@ export type ReleaseOracleInvocation =
       readonly baseline: ReleaseSourceHandle | ReleaseMutationHandle;
       readonly mutant: ReleaseMutationHandle;
       readonly message: string;
+    }
+  | {
+      readonly kind: "registry.evaluator";
+      readonly baseline: ReleaseSourceHandle | ReleaseMutationHandle;
+      readonly mutant: ReleaseMutationHandle;
     };
 
-/** Exact problem identities emitted by the closed bootstrap oracle. */
-export type ReleaseProblemIdentity = "fixture.mutant-threw";
+/** Exact problem identities emitted by the closed fixtures and execution adapters. */
+export type ReleaseProblemIdentity =
+  | "fixture.mutant-threw"
+  | "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics";
+
+/**
+ * Closed execution-only adapters used to evaluate planner-materialized production sources.
+ *
+ * @example
+ * plan.execute({ registryEvaluatorProblems: evaluateRegistrySource });
+ */
+export interface ReleaseOracleAdapters {
+  /**
+   * Evaluate one exact release-integrity source.
+   *
+   * @param source - Planner-materialized baseline or mutant source bytes.
+   * @returns Closed problem identities observed for those exact bytes.
+   */
+  readonly registryEvaluatorProblems: (source: string) => readonly string[];
+}
 
 /** Named, allowlisted regular expressions available to closed expectations. */
 export type ReleaseNamedRegexIdentity = "fixture.omega-token";
@@ -370,6 +395,11 @@ type ReleaseOracleObservation =
       readonly kind: "fixture.throw";
       readonly baseline: string;
       readonly problems: readonly ReleaseProblemIdentity[];
+    }
+  | {
+      readonly kind: "registry.evaluator";
+      readonly baselineProblems: readonly ReleaseProblemIdentity[];
+      readonly mutantProblems: readonly ReleaseProblemIdentity[];
     };
 
 type PreparedExpectation = ReleaseExpectation;
@@ -413,6 +443,8 @@ const ID_PATTERN = /^[a-z0-9]+(?:[._/-][a-z0-9]+)*$/u;
 const MAX_SNAPSHOT_DEPTH = 64;
 const MAX_SNAPSHOT_ENTRIES = 10_000;
 const MAX_SNAPSHOT_OBJECTS = 50_000;
+const MCP_REGISTRY_EVALUATOR_PROBLEM: ReleaseProblemIdentity =
+  "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics";
 
 function isPositiveSafeInteger(value: number): boolean {
   return numberIsSafeIntegerIntrinsic(value) && value > 0;
@@ -763,10 +795,96 @@ function materializeOracleValue(
   return value;
 }
 
+function validateReleaseOracleAdapters(value: unknown): ReleaseOracleAdapters | undefined {
+  if (value === undefined) return undefined;
+  const object = objectValue(value);
+  if (object === null) {
+    throw new errorConstructor("release oracle adapters must be an exact plain object");
+  }
+
+  let isArray: boolean;
+  let prototype: object | null;
+  let descriptors: Record<PropertyKey, PropertyDescriptor>;
+  try {
+    isArray = isArrayIntrinsic(object);
+    prototype = getObjectPrototypeIntrinsic(object) as object | null;
+    descriptors = getOwnPropertyDescriptorsIntrinsic(object) as Record<PropertyKey, PropertyDescriptor>;
+  } catch {
+    throw new errorConstructor("release oracle adapters must support deterministic structural inspection");
+  }
+  if (isArray || prototype !== objectPrototype) {
+    throw new errorConstructor("release oracle adapters must be an exact plain object");
+  }
+
+  const keys = ownKeysIntrinsic(descriptors);
+  const detectorDescriptor = descriptors.registryEvaluatorProblems;
+  if (
+    keys.length !== 1 ||
+    keys[0] !== "registryEvaluatorProblems" ||
+    detectorDescriptor === undefined ||
+    !("value" in detectorDescriptor) ||
+    !detectorDescriptor.enumerable ||
+    typeof detectorDescriptor.value !== "function"
+  ) {
+    throw new errorConstructor(
+      "release oracle adapters must contain only an enumerable registryEvaluatorProblems data function"
+    );
+  }
+
+  return freezeObject({
+    registryEvaluatorProblems: detectorDescriptor.value as ReleaseOracleAdapters["registryEvaluatorProblems"]
+  });
+}
+
+function snapshotRegistryEvaluatorProblems(
+  value: unknown,
+  sourceKind: "baseline" | "mutant"
+): readonly ReleaseProblemIdentity[] {
+  const structuralProblems: string[] = [];
+  const snapshot = snapshotPlainData(value, `registry.evaluator ${sourceKind} result`, (code, path, detail) => {
+    pushArrayValue(structuralProblems, `[${code}] ${path}: ${detail}`);
+  });
+  if (structuralProblems.length > 0) {
+    const details = applyFunction(arrayJoinIntrinsic, structuralProblems, ["; "]) as string;
+    throw new errorConstructor(
+      `registry.evaluator ${sourceKind} result must be a dense built-in string array (${details})`
+    );
+  }
+  if (!isArrayIntrinsic(snapshot)) {
+    throw new errorConstructor(`registry.evaluator ${sourceKind} result must be a dense built-in string array`);
+  }
+
+  const entries = snapshot as readonly unknown[];
+  const problems: ReleaseProblemIdentity[] = [];
+  const seen = new setConstructor<ReleaseProblemIdentity>();
+  for (let index = 0; index < entries.length; index++) {
+    const problem = entries[index];
+    if (problem !== MCP_REGISTRY_EVALUATOR_PROBLEM) {
+      throw new errorConstructor(`registry.evaluator ${sourceKind} result contains an unknown problem identity`);
+    }
+    if (applyFunction(setHasIntrinsic, seen, [problem]) as boolean) {
+      throw new errorConstructor(`registry.evaluator ${sourceKind} result contains a duplicate problem identity`);
+    }
+    applyFunction(setAddIntrinsic, seen, [problem]);
+    pushArrayValue(problems, problem);
+  }
+  return freezeObject(problems);
+}
+
+function requiresRegistryEvaluatorAdapter(cases: readonly PreparedCase[]): boolean {
+  for (const releaseCase of cases) {
+    for (const check of releaseCase.checks) {
+      if (check.invocation.kind === "registry.evaluator") return true;
+    }
+  }
+  return false;
+}
+
 function executeReleaseOracleInvocation(
   invocation: ReleaseOracleInvocation,
   sourceValues: ReadonlyMap<ReleaseSourceHandle, string>,
-  prepared: ReadonlyMap<ReleaseMutationHandle, PreparedMutation>
+  prepared: ReadonlyMap<ReleaseMutationHandle, PreparedMutation>,
+  adapters: ReleaseOracleAdapters | undefined
 ): ReleaseOracleObservation {
   switch (invocation.kind) {
     case "fixture.text": {
@@ -794,6 +912,28 @@ function executeReleaseOracleInvocation(
       }
       return { kind: "fixture.throw", baseline, problems: freezeObject(problems) };
     }
+    case "registry.evaluator": {
+      if (adapters === undefined) {
+        throw new errorConstructor("registry.evaluator invocation requires exact release oracle adapters");
+      }
+      const baseline = materializeOracleValue(invocation.baseline, sourceValues, prepared);
+      const mutant = materializeOracleValue(invocation.mutant, sourceValues, prepared);
+      if (baseline === mutant) {
+        throw new errorConstructor("registry.evaluator clean baseline must differ from its mutant");
+      }
+
+      const baselineResult: unknown = applyFunction(adapters.registryEvaluatorProblems, undefined, [baseline]);
+      assertAmbientIntrinsics();
+      const baselineProblems = snapshotRegistryEvaluatorProblems(baselineResult, "baseline");
+      const mutantResult: unknown = applyFunction(adapters.registryEvaluatorProblems, undefined, [mutant]);
+      assertAmbientIntrinsics();
+      const mutantProblems = snapshotRegistryEvaluatorProblems(mutantResult, "mutant");
+      return freezeObject({
+        kind: "registry.evaluator",
+        baselineProblems,
+        mutantProblems
+      });
+    }
     default:
       return assertNever(invocation);
   }
@@ -815,8 +955,16 @@ function expectationSemanticIdentity(expectation: ReleaseExpectation): string {
 
 function sameOracleInvocation(left: ReleaseOracleInvocation, right: ReleaseOracleInvocation): boolean {
   if (left.kind !== right.kind || left.baseline !== right.baseline || left.mutant !== right.mutant) return false;
-  if (left.kind === "fixture.throw" && right.kind === "fixture.throw") return left.message === right.message;
-  return left.kind === "fixture.text" && right.kind === "fixture.text";
+  switch (left.kind) {
+    case "fixture.throw":
+      return right.kind === "fixture.throw" && left.message === right.message;
+    case "fixture.text":
+      return right.kind === "fixture.text";
+    case "registry.evaluator":
+      return right.kind === "registry.evaluator";
+    default:
+      return assertNever(left);
+  }
 }
 
 function errorMessage(error: unknown): string {
@@ -837,8 +985,9 @@ function errorMessage(error: unknown): string {
  * Closed, two-phase planner for the release-integrity mutation matrix.
  *
  * Registration is open-only. `seal()` validates and internally materializes the complete mutation
- * graph without executing a case. `execute()` materializes every ordered closed check internally and
- * applies that check's single data-only expectation. Handles carry no public id or value.
+ * graph without executing a case. `execute()` materializes every ordered closed check internally,
+ * invokes only its closed execution adapters, and applies that check's single data-only expectation.
+ * Handles carry no public id or value.
  *
  * @example
  * const plan = new ReleaseMutationPlan({ total: 1, first: 1, all: 0 });
@@ -1037,16 +1186,21 @@ export class ReleaseMutationPlan {
   /**
    * Execute every closed case after a clean aggregate seal.
    *
+   * @param adapters - Exact execution-only adapters required by production invocation kinds.
    * @returns Nothing. Successful completion moves the plan to `executed`.
    * @throws If preflight was not clean, an invocation throws unexpectedly, or an expectation fails.
    */
-  execute(): void {
+  execute(adapters?: ReleaseOracleAdapters): void {
     assertAmbientIntrinsics();
     if (this.state !== "sealed") {
       throw new errorConstructor(`release mutation plan execute requires sealed state; found ${this.state}`);
     }
     this.state = "executing";
     try {
+      const closedAdapters = validateReleaseOracleAdapters(adapters);
+      if (requiresRegistryEvaluatorAdapter(this.preparedCases) && closedAdapters === undefined) {
+        throw new errorConstructor("registry.evaluator cases require exact release oracle adapters at execute");
+      }
       for (let caseIndex = 0; caseIndex < this.preparedCases.length; caseIndex++) {
         const releaseCase = this.preparedCases[caseIndex];
         if (releaseCase === undefined) {
@@ -1058,7 +1212,12 @@ export class ReleaseMutationPlan {
           if (check === undefined) {
             throw new errorConstructor(`release mutation prepared check ${caseIndex}:${checkIndex} is missing`);
           }
-          const observation = executeReleaseOracleInvocation(check.invocation, this.sourceValues, this.prepared);
+          const observation = executeReleaseOracleInvocation(
+            check.invocation,
+            this.sourceValues,
+            this.prepared,
+            closedAdapters
+          );
           this.executedExpectations++;
           this.applyExpectation(releaseCase.id, check.expectation, observation);
         }
@@ -1480,14 +1639,41 @@ export class ReleaseMutationPlan {
             valid = false;
           } else {
             const closedInvocation = invocation.invocation;
-            const hasProblem = expectation.kind === "problem";
-            if (invocation.kind === "fixture.text" && hasProblem) {
-              this.addProblem("expectation.type", id, "fixture.text requires value expectations");
-              valid = false;
-            }
-            if (invocation.kind === "fixture.throw" && !hasProblem) {
-              this.addProblem("expectation.type", id, "fixture.throw requires exact problem expectations");
-              valid = false;
+            switch (closedInvocation.kind) {
+              case "fixture.text":
+                if (expectation.kind === "problem") {
+                  this.addProblem("expectation.type", id, "fixture.text requires value expectations");
+                  valid = false;
+                }
+                break;
+              case "fixture.throw":
+                if (expectation.kind !== "problem") {
+                  this.addProblem("expectation.type", id, "fixture.throw requires exact problem expectations");
+                  valid = false;
+                } else if (expectation.problem !== "fixture.mutant-threw") {
+                  this.addProblem(
+                    "expectation.problem",
+                    id,
+                    "fixture.throw requires its exact fixture problem identity"
+                  );
+                  valid = false;
+                }
+                break;
+              case "registry.evaluator":
+                if (expectation.kind !== "problem") {
+                  this.addProblem("expectation.type", id, "registry.evaluator requires exact problem expectations");
+                  valid = false;
+                } else if (expectation.problem !== MCP_REGISTRY_EVALUATOR_PROBLEM) {
+                  this.addProblem(
+                    "expectation.problem",
+                    id,
+                    "registry.evaluator requires its exact MCP Registry problem identity"
+                  );
+                  valid = false;
+                }
+                break;
+              default:
+                assertNever(closedInvocation);
             }
 
             const semanticIdentity = expectationSemanticIdentity(expectation);
@@ -1526,16 +1712,25 @@ export class ReleaseMutationPlan {
     mutations: ReadonlyMap<ReleaseMutationHandle, RegisteredMutation>
   ): InvocationAnalysis {
     const invocation = plainRecord(value);
-    const kind = invocation?.kind === "fixture.text" || invocation?.kind === "fixture.throw" ? invocation.kind : null;
+    const kind =
+      invocation?.kind === "fixture.text" ||
+      invocation?.kind === "fixture.throw" ||
+      invocation?.kind === "registry.evaluator"
+        ? invocation.kind
+        : null;
     let valid = true;
     if (kind === null) {
-      this.addProblem("invocation.kind", id, "invocation kind must be fixture.text or fixture.throw");
+      this.addProblem(
+        "invocation.kind",
+        id,
+        "invocation kind must be fixture.text, fixture.throw, or registry.evaluator"
+      );
       valid = false;
     } else {
       const expectedKeys =
-        kind === "fixture.text"
-          ? (["kind", "baseline", "mutant"] as const)
-          : (["kind", "baseline", "mutant", "message"] as const);
+        kind === "fixture.throw"
+          ? (["kind", "baseline", "mutant", "message"] as const)
+          : (["kind", "baseline", "mutant"] as const);
       if (invocation === null || !hasExactKeys(invocation, expectedKeys)) {
         this.addProblem("invocation.shape", id, `${kind} invocation has unexpected or missing fields`);
         valid = false;
@@ -1577,6 +1772,8 @@ export class ReleaseMutationPlan {
       closedInvocation = freezeObject({ kind, baseline, mutant: invocationRoot });
     } else if (valid && baseline !== null && invocationRoot !== null && kind === "fixture.throw" && message !== null) {
       closedInvocation = freezeObject({ kind, baseline, mutant: invocationRoot, message });
+    } else if (valid && baseline !== null && invocationRoot !== null && kind === "registry.evaluator") {
+      closedInvocation = freezeObject({ kind, baseline, mutant: invocationRoot });
     }
     return freezeObject({ kind, invocation: closedInvocation });
   }
@@ -1700,7 +1897,7 @@ export class ReleaseMutationPlan {
         this.addProblem("expectation.shape", caseId, `${id} has unexpected or missing fields`);
         valid = false;
       }
-      if (expectation?.problem !== "fixture.mutant-threw") {
+      if (expectation?.problem !== "fixture.mutant-threw" && expectation?.problem !== MCP_REGISTRY_EVALUATOR_PROBLEM) {
         this.addProblem("expectation.problem", caseId, `${id} has an unknown exact problem identity`);
         valid = false;
       }
@@ -1928,12 +2125,41 @@ export class ReleaseMutationPlan {
     observation: ReleaseOracleObservation
   ): void {
     if (expectation.kind === "problem") {
-      if (observation.kind !== "fixture.throw" || !observation.problems.includes(expectation.problem)) {
-        throw new errorConstructor(
-          `release mutation case ${caseId} expectation ${expectation.id} missed an exact problem`
-        );
+      switch (observation.kind) {
+        case "fixture.throw":
+          if (
+            expectation.problem !== "fixture.mutant-threw" ||
+            !(applyFunction(arrayIncludesIntrinsic, observation.problems, [expectation.problem]) as boolean)
+          ) {
+            throw new errorConstructor(
+              `release mutation case ${caseId} expectation ${expectation.id} missed an exact problem`
+            );
+          }
+          return;
+        case "registry.evaluator":
+          if (expectation.problem !== MCP_REGISTRY_EVALUATOR_PROBLEM) {
+            throw new errorConstructor(
+              `release mutation case ${caseId} expectation ${expectation.id} observed an incompatible problem identity`
+            );
+          }
+          if (observation.baselineProblems.length !== 0) {
+            throw new errorConstructor(
+              `release mutation case ${caseId} expectation ${expectation.id} found a problem in the clean baseline`
+            );
+          }
+          if (observation.mutantProblems.length !== 1 || observation.mutantProblems[0] !== expectation.problem) {
+            throw new errorConstructor(
+              `release mutation case ${caseId} expectation ${expectation.id} missed the exact mutant problem`
+            );
+          }
+          return;
+        case "fixture.text":
+          throw new errorConstructor(
+            `release mutation case ${caseId} expectation ${expectation.id} observed an incompatible result`
+          );
+        default:
+          assertNever(observation);
       }
-      return;
     }
     if (observation.kind !== "fixture.text") {
       throw new errorConstructor(

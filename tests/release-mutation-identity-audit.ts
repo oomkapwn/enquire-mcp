@@ -198,15 +198,95 @@ interface LegacyMutationCall {
 }
 
 interface MatrixScan {
+  readonly callback: ts.ArrowFunction;
   readonly calls: readonly LegacyMutationCall[];
+  readonly matrixStart: number;
   readonly matrixSlice: string;
   readonly sourceFile: ts.SourceFile;
+}
+
+interface DeclarativeMutationIdentity {
+  readonly expectedOccurrences: number;
+  readonly handle: string;
+  readonly id: string;
+  readonly mode: MutationMode;
+  readonly needle: string;
+  readonly replacement: string;
+  readonly sourceHandle: string;
+  readonly witness: Pick<MutationWitness, "after" | "anchor" | "before" | "kind">;
+}
+
+interface DeclarativeCaseIdentity {
+  readonly baselineHandle: string;
+  readonly expectationId: string;
+  readonly handle: string;
+  readonly id: string;
+  readonly invocationKind: string;
+  readonly mutantHandle: string;
+  readonly problem: string;
+}
+
+interface HybridDeclarativeScan {
+  readonly cases: readonly DeclarativeCaseIdentity[];
+  readonly mutations: readonly DeclarativeMutationIdentity[];
 }
 
 const MATRIX_TITLE = "keeps release.yml wired to the shared evaluator and an exact mirrored inventory";
 const SOURCE_COMMIT = "8420e2fca3ed0dac994859a9e9a30b933d5ddf9e";
 const MATRIX_SOURCE_SHA256 = "3fa0b67411e2fc0f4d7c6bce6075ba91eb25edc19a210b5c2f8dd408def6e18b";
 const MATRIX_SLICE_SHA256 = "caca0093c744df9f6c6cdd0e8200fd8df45052e784297079887ea48686c5e07f";
+const CURRENT_HYBRID_SOURCE_SHA256 = "fe4792f49e07312fd4504b7851342e276b3336a14fe9541fee86cf801dcf81a6";
+const CURRENT_HYBRID_MATRIX_SLICE_SHA256 = "2505517fb8f065e70405b065527921a747295082563b645dcbf75c10018a9741";
+const IDENTITY_FIXTURE_SHA256 = "b1bef74ea285f53f8acf3c78d942db4880f06648c50b051351e0e004c73253d3";
+const MUTATION_MATCH_COUNT_NODE_SHA256 = "5e57cd7a2f1dd60cc4bda3b10c4a7e906f7e5b9604902eff5e54f20bd0c8f49d";
+const REGISTRY_EVALUATOR_PROBLEM_NODE_SHA256 = "4c374cc179d7a95cdf25085358c62e482134824abca913b126167d3bb8397b26";
+const REGISTRY_EVALUATOR_DETECTOR_NODE_SHA256 = "b45c5aed44cf1bff818d5ddac4f80e8fb805e61300f93f77afc299d3e8f0047c";
+const REGISTRY_EVALUATOR_PROBLEM =
+  "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics";
+const MIGRATED_REGISTRY_EVALUATOR_IDS = [
+  "release.m002",
+  "release.m003",
+  "release.m004",
+  "release.m005",
+  "release.m006",
+  "release.m007",
+  "release.m008",
+  "release.m009",
+  "release.m010",
+  "release.m011",
+  "release.m012",
+  "release.m013",
+  "release.m014",
+  "release.m015",
+  "release.m016",
+  "release.m017",
+  "release.m018",
+  "release.m019",
+  "release.m020",
+  "release.m021",
+  "release.m022",
+  "release.m023",
+  "release.m024",
+  "release.m025",
+  "release.m026",
+  "release.m027",
+  "release.m028",
+  "release.m029",
+  "release.m030",
+  "release.m031",
+  "release.m032",
+  "release.m033",
+  "release.m034",
+  "release.m035",
+  "release.m036",
+  "release.m037"
+] as const;
+const MIGRATED_REGISTRY_EVALUATOR_ID_SET: ReadonlySet<string> = new Set<string>(MIGRATED_REGISTRY_EVALUATOR_IDS);
+const MIGRATED_REGISTRY_EVALUATOR_ALL_IDS: ReadonlySet<string> = new Set<string>([
+  "release.m009",
+  "release.m018",
+  "release.m034"
+]);
 const MATRIX_START = [
   "    const releaseWorkflow = readFileSync(",
   'new URL("../.github/workflows/release.yml", import.meta.url), "utf8");'
@@ -1516,10 +1596,558 @@ function scanMatrix(source: string, problems: string[]): MatrixScan | null {
     );
   }
   return {
+    callback: callback as ts.ArrowFunction,
     sourceFile,
     calls,
+    matrixStart,
     matrixSlice: source.slice(matrixStart, matrixEnd)
   };
+}
+
+function exactObjectProperties(
+  value: ts.Expression | undefined,
+  expectedKeys: readonly string[],
+  path: string,
+  problems: string[]
+): ReadonlyMap<string, ts.Expression> | null {
+  if (value === undefined || !ts.isObjectLiteralExpression(value)) {
+    problems.push(`${path} must be one literal object`);
+    return null;
+  }
+  const properties = new Map<string, ts.Expression>();
+  let structurallyValid = true;
+  for (const property of value.properties) {
+    if (!ts.isPropertyAssignment(property) || (!ts.isIdentifier(property.name) && !ts.isStringLiteral(property.name))) {
+      structurallyValid = false;
+      continue;
+    }
+    const name = property.name.text;
+    if (properties.has(name)) structurallyValid = false;
+    else properties.set(name, property.initializer);
+  }
+  const observedKeys = [...properties.keys()].sort();
+  const exactKeys = [...expectedKeys].sort();
+  if (!structurallyValid || JSON.stringify(observedKeys) !== JSON.stringify(exactKeys)) {
+    problems.push(`${path} must have exact literal fields ${exactKeys.join(", ")}`);
+    return null;
+  }
+  return properties;
+}
+
+function directTopLevelConst(statement: ts.Statement, name: string): ts.VariableDeclaration | null {
+  if (!ts.isVariableStatement(statement) || (statement.declarationList.flags & ts.NodeFlags.Const) === 0) return null;
+  if (statement.declarationList.declarations.length !== 1) return null;
+  const declaration = statement.declarationList.declarations[0];
+  return declaration !== undefined && ts.isIdentifier(declaration.name) && declaration.name.text === name
+    ? declaration
+    : null;
+}
+
+function directPlanCall(expression: ts.Expression | undefined, method: string): ts.CallExpression | null {
+  if (
+    expression === undefined ||
+    !ts.isCallExpression(expression) ||
+    expression.questionDotToken !== undefined ||
+    expression.typeArguments !== undefined ||
+    !ts.isPropertyAccessExpression(expression.expression) ||
+    expression.expression.questionDotToken !== undefined ||
+    !ts.isIdentifier(expression.expression.expression) ||
+    expression.expression.expression.text !== "releaseMutationPlan" ||
+    expression.expression.name.text !== method
+  ) {
+    return null;
+  }
+  return expression;
+}
+
+function literalStringValue(value: ts.Expression | undefined): string | null {
+  return value !== undefined && (ts.isStringLiteral(value) || ts.isNoSubstitutionTemplateLiteral(value))
+    ? value.text
+    : null;
+}
+
+function positiveIntegerLiteral(value: ts.Expression | undefined): number | null {
+  if (value === undefined || !ts.isNumericLiteral(value)) return null;
+  const observed = Number(value.text);
+  return Number.isSafeInteger(observed) && observed > 0 ? observed : null;
+}
+
+function exactExpectMatcher(
+  statement: ts.Statement | undefined,
+  matcherName: string
+): { readonly actual: ts.Expression; readonly expected: ts.Expression } | null {
+  if (statement === undefined || !ts.isExpressionStatement(statement)) return null;
+  const matcherCall = ts.isCallExpression(statement.expression) ? statement.expression : null;
+  const matcher =
+    matcherCall !== null &&
+    matcherCall.questionDotToken === undefined &&
+    ts.isPropertyAccessExpression(matcherCall.expression)
+      ? matcherCall.expression
+      : null;
+  const expectCall =
+    matcher !== null && matcher.questionDotToken === undefined && ts.isCallExpression(matcher.expression)
+      ? matcher.expression
+      : null;
+  const actual = expectCall?.arguments[0];
+  const expected = matcherCall?.arguments[0];
+  if (
+    matcherCall === null ||
+    matcherCall.arguments.length !== 1 ||
+    matcherCall.typeArguments !== undefined ||
+    matcher === null ||
+    matcher.name.text !== matcherName ||
+    expectCall === null ||
+    expectCall.questionDotToken !== undefined ||
+    expectCall.typeArguments !== undefined ||
+    !ts.isIdentifier(expectCall.expression) ||
+    expectCall.expression.text !== "expect" ||
+    expectCall.arguments.length !== 1 ||
+    actual === undefined ||
+    expected === undefined
+  ) {
+    return null;
+  }
+  return { actual, expected };
+}
+
+function exactPlanStatusAccess(value: ts.Expression, property: string): boolean {
+  return (
+    ts.isPropertyAccessExpression(value) &&
+    value.questionDotToken === undefined &&
+    ts.isIdentifier(value.expression) &&
+    value.expression.text === "releaseMutationPlan" &&
+    value.name.text === property
+  );
+}
+
+function scanHybridDeclarativeMatrix(matrix: MatrixScan, problems: string[]): HybridDeclarativeScan {
+  const callbackBody = matrix.callback.body;
+  if (!ts.isBlock(callbackBody)) {
+    problems.push("release mutation hybrid callback must remain one literal block");
+    return { mutations: [], cases: [] };
+  }
+  const statements = callbackBody.statements;
+  const mutations: DeclarativeMutationIdentity[] = [];
+  const cases: DeclarativeCaseIdentity[] = [];
+  let aliasCount = 0;
+  let planCount = 0;
+  let sourceCount = 0;
+  let planStatementIndex = -1;
+  let aliasStatementIndex = -1;
+  let sourceStatementIndex = -1;
+  let lastRegistrationIndex = -1;
+  let sealStatementIndex = -1;
+  let topLevelRegisterMutationCalls = 0;
+  let topLevelRegisterCaseCalls = 0;
+  let topLevelRegisterSourceCalls = 0;
+  let sealCount = 0;
+  const registrationSequence: string[] = [];
+  const registrationStatementIndexes: number[] = [];
+
+  for (let statementIndex = 0; statementIndex < statements.length; statementIndex++) {
+    const statement = statements[statementIndex];
+    if (statement === undefined || statement.getStart(matrix.sourceFile) < matrix.matrixStart) continue;
+
+    const alias = directTopLevelConst(statement, "releaseIntegrityText");
+    if (alias !== null) {
+      aliasCount++;
+      aliasStatementIndex = statementIndex;
+      const initializer = alias.initializer;
+      if (
+        initializer === undefined ||
+        !ts.isPropertyAccessExpression(initializer) ||
+        initializer.questionDotToken !== undefined ||
+        !ts.isIdentifier(initializer.expression) ||
+        initializer.expression.text !== "mcpbInputs" ||
+        initializer.name.text !== "integrity"
+      ) {
+        problems.push("release mutation hybrid alias must be exact const releaseIntegrityText = mcpbInputs.integrity");
+      }
+    }
+
+    const plan = directTopLevelConst(statement, "releaseMutationPlan");
+    if (plan !== null) {
+      planCount++;
+      planStatementIndex = statementIndex;
+      const initializer = plan.initializer;
+      if (
+        initializer === undefined ||
+        !ts.isNewExpression(initializer) ||
+        !ts.isIdentifier(initializer.expression) ||
+        initializer.expression.text !== "ReleaseMutationPlan" ||
+        initializer.typeArguments !== undefined ||
+        initializer.arguments === undefined ||
+        initializer.arguments.length !== 1
+      ) {
+        problems.push("release mutation hybrid plan must be one direct ReleaseMutationPlan construction");
+      } else {
+        const inventory = exactObjectProperties(
+          initializer.arguments[0],
+          ["total", "first", "all", "cases", "expectations", "roots", "dependencyOnly"],
+          "release mutation hybrid plan inventory",
+          problems
+        );
+        const expectedInventory = {
+          total: 36,
+          first: 33,
+          all: 3,
+          cases: 36,
+          expectations: 36,
+          roots: 36,
+          dependencyOnly: 0
+        } as const;
+        if (inventory !== null) {
+          for (const [key, expected] of Object.entries(expectedInventory)) {
+            const observed = positiveIntegerLiteral(inventory.get(key));
+            if (
+              (key === "dependencyOnly" && inventory.get(key)?.getText(matrix.sourceFile) !== "0") ||
+              (key !== "dependencyOnly" && observed !== expected)
+            ) {
+              problems.push(`release mutation hybrid plan inventory ${key} must equal ${expected}`);
+            }
+          }
+        }
+      }
+    }
+
+    if (ts.isVariableStatement(statement) && (statement.declarationList.flags & ts.NodeFlags.Const) !== 0) {
+      for (const declaration of statement.declarationList.declarations) {
+        if (!ts.isIdentifier(declaration.name)) continue;
+        const sourceCall = directPlanCall(declaration.initializer, "registerSource");
+        if (sourceCall !== null) {
+          topLevelRegisterSourceCalls++;
+          lastRegistrationIndex = statementIndex;
+          registrationSequence.push(
+            `source:${literalStringValue(sourceCall.arguments[0]) ?? "<unknown>"}:${declaration.name.text}`
+          );
+          registrationStatementIndexes.push(statementIndex);
+          if (
+            declaration.name.text !== "releaseIntegritySource" ||
+            sourceCall.arguments.length !== 2 ||
+            literalStringValue(sourceCall.arguments[0]) !== "script.release-integrity" ||
+            sourceCall.arguments[1] === undefined ||
+            !ts.isIdentifier(sourceCall.arguments[1]) ||
+            sourceCall.arguments[1].text !== "releaseIntegrityText"
+          ) {
+            problems.push(
+              "release mutation hybrid source must bind releaseIntegritySource to exact script.release-integrity bytes"
+            );
+          } else {
+            sourceCount++;
+            sourceStatementIndex = statementIndex;
+          }
+        }
+
+        const mutationCall = directPlanCall(declaration.initializer, "registerMutation");
+        if (mutationCall === null) continue;
+        topLevelRegisterMutationCalls++;
+        lastRegistrationIndex = statementIndex;
+        const id = literalStringValue(mutationCall.arguments[0]);
+        registrationSequence.push(`mutation:${id ?? "<unknown>"}`);
+        registrationStatementIndexes.push(statementIndex);
+        const descriptor = exactObjectProperties(
+          mutationCall.arguments[1],
+          ["mode", "source", "needle", "replacement", "expectedOccurrences", "witness"],
+          `release mutation hybrid descriptor ${id ?? "<unknown>"}`,
+          problems
+        );
+        if (mutationCall.arguments.length !== 2 || id === null || descriptor === null) continue;
+        const mode = literalStringValue(descriptor.get("mode"));
+        const sourceHandle = descriptor.get("source");
+        const needle = literalStringValue(descriptor.get("needle"));
+        const replacement = literalStringValue(descriptor.get("replacement"));
+        const expectedOccurrences = positiveIntegerLiteral(descriptor.get("expectedOccurrences"));
+        const witness = exactObjectProperties(
+          descriptor.get("witness"),
+          ["kind", "anchor", "before", "after"],
+          `release mutation hybrid descriptor ${id} witness`,
+          problems
+        );
+        const witnessKind = literalStringValue(witness?.get("kind"));
+        const witnessAnchor = literalStringValue(witness?.get("anchor"));
+        const witnessBefore = positiveIntegerLiteral(witness?.get("before"));
+        const witnessAfterExpression = witness?.get("after");
+        const witnessAfter =
+          witnessAfterExpression !== undefined && ts.isNumericLiteral(witnessAfterExpression)
+            ? Number(witnessAfterExpression.text)
+            : null;
+        if (
+          (mode !== "first" && mode !== "all") ||
+          sourceHandle === undefined ||
+          !ts.isIdentifier(sourceHandle) ||
+          needle === null ||
+          replacement === null ||
+          expectedOccurrences === null ||
+          (witnessKind !== "token" && witnessKind !== "line") ||
+          witnessAnchor === null ||
+          witnessBefore === null ||
+          witnessAfter === null ||
+          !Number.isSafeInteger(witnessAfter) ||
+          witnessAfter < 0
+        ) {
+          problems.push(`release mutation hybrid descriptor ${id} must contain exact literal passive values`);
+          continue;
+        }
+        mutations.push({
+          id,
+          handle: declaration.name.text,
+          mode,
+          sourceHandle: sourceHandle.text,
+          needle,
+          replacement,
+          expectedOccurrences,
+          witness: {
+            kind: witnessKind,
+            anchor: witnessAnchor,
+            before: witnessBefore,
+            after: witnessAfter
+          }
+        });
+      }
+    }
+
+    if (ts.isExpressionStatement(statement)) {
+      const caseCall = directPlanCall(statement.expression, "registerCase");
+      if (caseCall !== null) {
+        topLevelRegisterCaseCalls++;
+        lastRegistrationIndex = statementIndex;
+        const identityCase = exactObjectProperties(
+          caseCall.arguments[0],
+          ["id", "root", "checks"],
+          "release mutation hybrid case",
+          problems
+        );
+        const id = literalStringValue(identityCase?.get("id"));
+        registrationSequence.push(`case:${id ?? "<unknown>"}`);
+        registrationStatementIndexes.push(statementIndex);
+        if (caseCall.arguments.length !== 1 || identityCase === null) continue;
+        const root = identityCase.get("root");
+        const checks = identityCase.get("checks");
+        if (
+          id === null ||
+          root === undefined ||
+          !ts.isIdentifier(root) ||
+          checks === undefined ||
+          !ts.isArrayLiteralExpression(checks) ||
+          checks.elements.length !== 1
+        ) {
+          problems.push("release mutation hybrid case must have literal id/root and exactly one check");
+          continue;
+        }
+        const checkElement = checks.elements[0];
+        const check =
+          checkElement !== undefined && !ts.isSpreadElement(checkElement)
+            ? exactObjectProperties(
+                checkElement,
+                ["invoke", "expectation"],
+                `release mutation hybrid case ${id}`,
+                problems
+              )
+            : null;
+        if (check === null) continue;
+        const invocation = exactObjectProperties(
+          check.get("invoke"),
+          ["kind", "baseline", "mutant"],
+          `release mutation hybrid case ${id} invocation`,
+          problems
+        );
+        const expectation = exactObjectProperties(
+          check.get("expectation"),
+          ["id", "kind", "problem"],
+          `release mutation hybrid case ${id} expectation`,
+          problems
+        );
+        if (invocation === null || expectation === null) continue;
+        const invocationKind = literalStringValue(invocation.get("kind"));
+        const baseline = invocation.get("baseline");
+        const mutant = invocation.get("mutant");
+        const expectationId = literalStringValue(expectation.get("id"));
+        const expectationKind = literalStringValue(expectation.get("kind"));
+        const problem = literalStringValue(expectation.get("problem"));
+        if (
+          invocationKind === null ||
+          baseline === undefined ||
+          !ts.isIdentifier(baseline) ||
+          mutant === undefined ||
+          !ts.isIdentifier(mutant) ||
+          expectationId === null ||
+          expectationKind !== "problem" ||
+          problem === null
+        ) {
+          problems.push(`release mutation hybrid case ${id} must contain one exact literal problem check`);
+          continue;
+        }
+        cases.push({
+          id,
+          handle: root.text,
+          invocationKind,
+          baselineHandle: baseline.text,
+          mutantHandle: mutant.text,
+          expectationId,
+          problem
+        });
+      }
+    }
+
+    const seal = directTopLevelConst(statement, "releaseMutationProblems");
+    const sealCall = seal === null ? null : directPlanCall(seal.initializer, "seal");
+    if (sealCall !== null) {
+      sealCount++;
+      sealStatementIndex = statementIndex;
+      if (sealCall.arguments.length !== 0) {
+        problems.push("release mutation hybrid seal must be one direct zero-argument call");
+      }
+    }
+  }
+
+  let allRegisterMutationCalls = 0;
+  let allRegisterCaseCalls = 0;
+  let allRegisterSourceCalls = 0;
+  let allSealCalls = 0;
+  let allExecuteCalls = 0;
+  const visitRegistrations = (node: ts.Node): void => {
+    if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)) {
+      const receiver = node.expression.expression;
+      if (ts.isIdentifier(receiver) && receiver.text === "releaseMutationPlan") {
+        if (node.expression.name.text === "registerMutation") allRegisterMutationCalls++;
+        if (node.expression.name.text === "registerCase") allRegisterCaseCalls++;
+        if (node.expression.name.text === "registerSource") allRegisterSourceCalls++;
+        if (node.expression.name.text === "seal") allSealCalls++;
+        if (node.expression.name.text === "execute") allExecuteCalls++;
+      }
+    }
+    ts.forEachChild(node, visitRegistrations);
+  };
+  visitRegistrations(matrix.callback.body);
+  if (
+    allRegisterMutationCalls !== topLevelRegisterMutationCalls ||
+    allRegisterCaseCalls !== topLevelRegisterCaseCalls ||
+    allRegisterSourceCalls !== topLevelRegisterSourceCalls
+  ) {
+    problems.push("release mutation hybrid registrations must all be direct top-level straight-line statements");
+  }
+  if (aliasCount !== 1 || planCount !== 1 || sourceCount !== 1) {
+    problems.push(
+      `release mutation hybrid prelude requires one exact alias/plan/source; ` +
+        `found ${aliasCount}/${planCount}/${sourceCount}`
+    );
+  }
+  const expectedRegistrationSequence = [
+    "source:script.release-integrity:releaseIntegritySource",
+    ...MIGRATED_REGISTRY_EVALUATOR_IDS.flatMap((id) => [
+      `mutation:${id}`,
+      `case:${id.replace("release.", "release.case.")}`
+    ])
+  ];
+  const straightLineRegistrations =
+    registrationStatementIndexes.length === expectedRegistrationSequence.length &&
+    registrationStatementIndexes.every((statementIndex, index) => statementIndex === sourceStatementIndex + index);
+  if (
+    JSON.stringify(registrationSequence) !== JSON.stringify(expectedRegistrationSequence) ||
+    !straightLineRegistrations
+  ) {
+    problems.push(
+      "release mutation hybrid registrations must be the exact contiguous source plus ordered m002-m037 " +
+        "mutation/case sequence"
+    );
+  }
+  if (
+    planStatementIndex < 0 ||
+    aliasStatementIndex < 0 ||
+    sourceStatementIndex < 0 ||
+    aliasStatementIndex + 1 !== planStatementIndex ||
+    planStatementIndex + 1 !== sourceStatementIndex
+  ) {
+    problems.push("release mutation hybrid prelude must be the exact contiguous alias, plan, source sequence");
+  }
+  const baselineAssertion = exactExpectMatcher(statements[aliasStatementIndex - 1], "toEqual");
+  const baselineDetector = baselineAssertion?.actual;
+  const baselineInput =
+    baselineDetector !== undefined && ts.isCallExpression(baselineDetector) ? baselineDetector.arguments[0] : undefined;
+  const exactBaselineAssertion =
+    baselineAssertion !== null &&
+    baselineDetector !== undefined &&
+    ts.isCallExpression(baselineDetector) &&
+    baselineDetector.questionDotToken === undefined &&
+    baselineDetector.typeArguments === undefined &&
+    ts.isIdentifier(baselineDetector.expression) &&
+    baselineDetector.expression.text === "mcpRegistryEvaluatorProblems" &&
+    baselineDetector.arguments.length === 1 &&
+    baselineInput !== undefined &&
+    ts.isPropertyAccessExpression(baselineInput) &&
+    baselineInput.questionDotToken === undefined &&
+    ts.isIdentifier(baselineInput.expression) &&
+    baselineInput.expression.text === "mcpbInputs" &&
+    baselineInput.name.text === "integrity" &&
+    ts.isArrayLiteralExpression(baselineAssertion.expected) &&
+    baselineAssertion.expected.elements.length === 0;
+  if (!exactBaselineAssertion) {
+    problems.push("release mutation hybrid prelude must start with one exact clean registry evaluator assertion");
+  }
+
+  const sealAssertion = exactExpectMatcher(statements[sealStatementIndex + 1], "toEqual");
+  const executeStatement = statements[sealStatementIndex + 2];
+  const phaseAssertion = exactExpectMatcher(statements[sealStatementIndex + 3], "toBe");
+  const caseCountAssertion = exactExpectMatcher(statements[sealStatementIndex + 4], "toBe");
+  const expectationCountAssertion = exactExpectMatcher(statements[sealStatementIndex + 5], "toBe");
+  const executeCall =
+    executeStatement !== undefined && ts.isExpressionStatement(executeStatement)
+      ? directPlanCall(executeStatement.expression, "execute")
+      : null;
+  const executeAdapters = exactObjectProperties(
+    executeCall?.arguments[0],
+    ["registryEvaluatorProblems"],
+    "release mutation hybrid execute adapters",
+    problems
+  );
+  const registryEvaluatorAdapter = executeAdapters?.get("registryEvaluatorProblems");
+  const exactExecute =
+    executeCall !== null &&
+    executeCall.arguments.length === 1 &&
+    registryEvaluatorAdapter !== undefined &&
+    ts.isIdentifier(registryEvaluatorAdapter) &&
+    registryEvaluatorAdapter.text === "mcpRegistryEvaluatorProblems";
+  if (!exactExecute) {
+    problems.push(
+      "release mutation hybrid execute adapter must bind registryEvaluatorProblems exactly to " +
+        "mcpRegistryEvaluatorProblems"
+    );
+  }
+  const exactSealAssertion =
+    sealAssertion !== null &&
+    ts.isIdentifier(sealAssertion.actual) &&
+    sealAssertion.actual.text === "releaseMutationProblems" &&
+    ts.isArrayLiteralExpression(sealAssertion.expected) &&
+    sealAssertion.expected.elements.length === 0;
+  const exactPhase =
+    phaseAssertion !== null &&
+    exactPlanStatusAccess(phaseAssertion.actual, "phase") &&
+    literalStringValue(phaseAssertion.expected) === "executed";
+  const exactCaseCount =
+    caseCountAssertion !== null &&
+    exactPlanStatusAccess(caseCountAssertion.actual, "caseExecutions") &&
+    positiveIntegerLiteral(caseCountAssertion.expected) === 36;
+  const exactExpectationCount =
+    expectationCountAssertion !== null &&
+    exactPlanStatusAccess(expectationCountAssertion.actual, "expectationExecutions") &&
+    positiveIntegerLiteral(expectationCountAssertion.expected) === 36;
+  if (
+    sealCount !== 1 ||
+    allSealCalls !== 1 ||
+    allExecuteCalls !== 1 ||
+    sealStatementIndex !== lastRegistrationIndex + 1 ||
+    !exactSealAssertion ||
+    !exactExecute ||
+    !exactPhase ||
+    !exactCaseCount ||
+    !exactExpectationCount
+  ) {
+    problems.push(
+      "release mutation hybrid lifecycle must be one clean seal, execute, phase and exact 36/36 " +
+        "execution census after every registration"
+    );
+  }
+  return { mutations, cases };
 }
 
 function validateProvenance(manifest: IdentityManifest, matrix: MatrixScan, problems: string[]): void {
@@ -1550,7 +2178,7 @@ function validateProvenance(manifest: IdentityManifest, matrix: MatrixScan, prob
   }
 }
 
-function validateRawExpressionShape(matrix: MatrixScan, problems: string[]): void {
+function validateRawExpressionShape(matrix: MatrixScan, problems: string[], requireFrozenCensus = true): void {
   const observed = {
     classifier: "outer-expression-v1" as const,
     source: { identifier: 0, nestedCall: 0 },
@@ -1613,7 +2241,7 @@ function validateRawExpressionShape(matrix: MatrixScan, problems: string[]): voi
       problems.push(`legacy expectedOccurrences at ${call.span.start} is outside outer-expression-v1`);
     }
   }
-  if (JSON.stringify(observed) !== JSON.stringify(EXPECTED_RAW_EXPRESSION_SHAPE)) {
+  if (requireFrozenCensus && JSON.stringify(observed) !== JSON.stringify(EXPECTED_RAW_EXPRESSION_SHAPE)) {
     problems.push(`matrix outer-expression census disagrees with reviewed shape: ${JSON.stringify(observed)}`);
   }
 }
@@ -1720,29 +2348,86 @@ function validateSources(manifest: IdentityManifest, matrix: MatrixScan, problem
     }
   }
 
+  if (!ts.isBlock(matrix.callback.body)) {
+    problems.push("release mutation hybrid matrix callback must retain its exact block body");
+    return false;
+  }
+
   const mcpbInputProperties = new Set<string>();
-  const visit = (node: ts.Node): void => {
-    if (
-      ts.isVariableDeclaration(node) &&
-      ts.isIdentifier(node.name) &&
-      node.name.text === "mcpbInputs" &&
-      node.initializer !== undefined &&
-      ts.isObjectLiteralExpression(node.initializer)
-    ) {
-      for (const property of node.initializer.properties) {
-        if (ts.isPropertyAssignment(property) || ts.isShorthandPropertyAssignment(property)) {
-          const key = ts.isIdentifier(property.name) || ts.isStringLiteral(property.name) ? property.name.text : null;
-          if (key !== null) mcpbInputProperties.add(`mcpbInputs.${key}`);
+  let mcpbInputDeclarations = 0;
+  let exactFrozenMcpbInputObjects = 0;
+  let mcpbInputPropertyNodes = 0;
+  let unsupportedMcpbInputProperties = 0;
+  let exactIntegrityReads = 0;
+  for (const statement of matrix.callback.body.statements) {
+    const declaration = directTopLevelConst(statement, "mcpbInputs");
+    if (declaration === null) continue;
+    mcpbInputDeclarations++;
+    const initializer = declaration.initializer;
+    const freezeCall =
+      initializer !== undefined &&
+      ts.isCallExpression(initializer) &&
+      initializer.questionDotToken === undefined &&
+      initializer.typeArguments === undefined &&
+      ts.isPropertyAccessExpression(initializer.expression) &&
+      initializer.expression.questionDotToken === undefined &&
+      ts.isIdentifier(initializer.expression.expression) &&
+      initializer.expression.expression.text === "Object" &&
+      initializer.expression.name.text === "freeze" &&
+      initializer.arguments.length === 1
+        ? initializer
+        : null;
+    const object = freezeCall?.arguments[0];
+    if (object === undefined || !ts.isObjectLiteralExpression(object)) continue;
+    exactFrozenMcpbInputObjects++;
+    for (const property of object.properties) {
+      mcpbInputPropertyNodes++;
+      if (ts.isPropertyAssignment(property) || ts.isShorthandPropertyAssignment(property)) {
+        const key = ts.isIdentifier(property.name) || ts.isStringLiteral(property.name) ? property.name.text : null;
+        if (key === null) {
+          unsupportedMcpbInputProperties++;
+          continue;
         }
-      }
+        mcpbInputProperties.add(`mcpbInputs.${key}`);
+        if (
+          key === "integrity" &&
+          ts.isPropertyAssignment(property) &&
+          property.initializer.getText(matrix.sourceFile) ===
+            'readFileSync(new URL("../scripts/check-release-integrity.mjs", import.meta.url), "utf8")'
+        ) {
+          exactIntegrityReads++;
+        }
+      } else unsupportedMcpbInputProperties++;
     }
-    ts.forEachChild(node, visit);
-  };
-  visit(matrix.sourceFile);
-  if (mcpbInputProperties.size !== REQUIRED_PEER_ALIASES.length) {
+  }
+  const requiredMcpbInputProperties: ReadonlySet<string> = new Set(REQUIRED_PEER_ALIASES);
+  const missingMcpbInputProperties = REQUIRED_PEER_ALIASES.filter((peer) => !mcpbInputProperties.has(peer));
+  const unexpectedMcpbInputProperties = [...mcpbInputProperties].filter(
+    (peer) => !requiredMcpbInputProperties.has(peer)
+  );
+  if (
+    mcpbInputDeclarations !== 1 ||
+    exactFrozenMcpbInputObjects !== 1 ||
+    mcpbInputPropertyNodes !== REQUIRED_PEER_ALIASES.length ||
+    unsupportedMcpbInputProperties !== 0 ||
+    exactIntegrityReads !== 1
+  ) {
     problems.push(
-      "release matrix mcpbInputs peer inventory must contain " +
-        `${REQUIRED_PEER_ALIASES.length} properties; found ${mcpbInputProperties.size}`
+      `release mutation hybrid mcpbInputs must be one exact frozen source object with ` +
+        `${REQUIRED_PEER_ALIASES.length} direct reviewed properties and one direct integrity file read; found ` +
+        `${mcpbInputDeclarations}/${exactFrozenMcpbInputObjects}/${mcpbInputPropertyNodes}/` +
+        `${unsupportedMcpbInputProperties}/${exactIntegrityReads}`
+    );
+  }
+  if (
+    mcpbInputProperties.size !== REQUIRED_PEER_ALIASES.length ||
+    missingMcpbInputProperties.length !== 0 ||
+    unexpectedMcpbInputProperties.length !== 0
+  ) {
+    problems.push(
+      `release matrix mcpbInputs peer inventory must contain the exact ${REQUIRED_PEER_ALIASES.length} reviewed ` +
+        `properties; found ${mcpbInputProperties.size}, missing ${missingMcpbInputProperties.join(", ") || "none"}, ` +
+        `unexpected ${unexpectedMcpbInputProperties.join(", ") || "none"}`
     );
   }
   for (const peer of mcpbInputProperties) {
@@ -2829,62 +3514,131 @@ function validateCompositeInvocation(check: CheckIdentity, root: string, path: s
 }
 
 interface VariableBindingFlow {
-  readonly name: string;
-  readonly references: ReadonlySet<string>;
+  readonly bindings: readonly ts.Symbol[];
+  readonly references: ReadonlySet<ts.Symbol>;
 }
 
-function variableBindingFlows(sourceFile: ts.SourceFile): readonly VariableBindingFlow[] {
+interface VariableBindingGraph {
+  readonly checker: ts.TypeChecker;
+  readonly flows: readonly VariableBindingFlow[];
+}
+
+function lexicalTypeChecker(sourceFile: ts.SourceFile): ts.TypeChecker {
+  const host: ts.CompilerHost = {
+    fileExists: (filename) => filename === sourceFile.fileName,
+    getCanonicalFileName: (filename) => filename,
+    getCurrentDirectory: () => "",
+    getDefaultLibFileName: () => "lib.d.ts",
+    getDirectories: () => [],
+    getNewLine: () => "\n",
+    getSourceFile: (filename) => (filename === sourceFile.fileName ? sourceFile : undefined),
+    readFile: (filename) => (filename === sourceFile.fileName ? sourceFile.text : undefined),
+    useCaseSensitiveFileNames: () => true,
+    writeFile: () => undefined
+  };
+  return ts
+    .createProgram([sourceFile.fileName], { noLib: true, noResolve: true, target: ts.ScriptTarget.Latest }, host)
+    .getTypeChecker();
+}
+
+function bindingSymbols(name: ts.BindingName, checker: ts.TypeChecker): readonly ts.Symbol[] {
+  if (ts.isIdentifier(name)) {
+    const symbol = checker.getSymbolAtLocation(name);
+    return symbol === undefined ? [] : [symbol];
+  }
+  return name.elements.flatMap((element) =>
+    ts.isOmittedExpression(element) ? [] : bindingSymbols(element.name, checker)
+  );
+}
+
+function referencedSymbols(node: ts.Node, checker: ts.TypeChecker): ReadonlySet<ts.Symbol> {
+  const references = new Set<ts.Symbol>();
+  const collect = (candidate: ts.Node): void => {
+    if (ts.isIdentifier(candidate)) {
+      const symbol = checker.getSymbolAtLocation(candidate);
+      if (symbol !== undefined) references.add(symbol);
+    }
+    ts.forEachChild(candidate, collect);
+  };
+  collect(node);
+  return references;
+}
+
+function variableBindingFlows(sourceFile: ts.SourceFile): VariableBindingGraph {
+  const checker = lexicalTypeChecker(sourceFile);
   const flows: VariableBindingFlow[] = [];
   const visit = (node: ts.Node): void => {
-    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer !== undefined) {
-      const references = new Set<string>();
-      const collect = (candidate: ts.Node): void => {
-        if (ts.isIdentifier(candidate)) references.add(candidate.text);
-        ts.forEachChild(candidate, collect);
-      };
-      collect(node.initializer);
-      flows.push({ name: node.name.text, references });
+    if (ts.isVariableDeclaration(node) && node.initializer !== undefined) {
+      flows.push({
+        bindings: bindingSymbols(node.name, checker),
+        references: referencedSymbols(node.initializer, checker)
+      });
+    }
+    if ((ts.isForOfStatement(node) || ts.isForInStatement(node)) && ts.isVariableDeclarationList(node.initializer)) {
+      flows.push({
+        bindings: node.initializer.declarations.flatMap((declaration) => bindingSymbols(declaration.name, checker)),
+        references: referencedSymbols(node.expression, checker)
+      });
     }
     ts.forEachChild(node, visit);
   };
   visit(sourceFile);
-  return flows;
+  return { checker, flows };
 }
 
-function rootBindingNames(call: ts.CallExpression, flows: readonly VariableBindingFlow[]): ReadonlySet<string> {
-  const names = new Set<string>();
+function rootBindingSymbols(call: ts.CallExpression, graph: VariableBindingGraph): ReadonlySet<ts.Symbol> {
+  const symbols = new Set<ts.Symbol>();
   let ancestor: ts.Node | undefined = call.parent;
   while (ancestor !== undefined) {
-    if (ts.isVariableDeclaration(ancestor) && ts.isIdentifier(ancestor.name)) names.add(ancestor.name.text);
+    if (ts.isVariableDeclaration(ancestor)) {
+      for (const symbol of bindingSymbols(ancestor.name, graph.checker)) symbols.add(symbol);
+    }
+    if (
+      (ts.isForOfStatement(ancestor) || ts.isForInStatement(ancestor)) &&
+      call.getStart() >= ancestor.expression.getStart() &&
+      call.end <= ancestor.expression.end &&
+      ts.isVariableDeclarationList(ancestor.initializer)
+    ) {
+      for (const declaration of ancestor.initializer.declarations) {
+        for (const symbol of bindingSymbols(declaration.name, graph.checker)) symbols.add(symbol);
+      }
+    }
     ancestor = ancestor.parent;
   }
   let changed = true;
   while (changed) {
     changed = false;
-    for (const flow of flows) {
-      let referencesKnownName = false;
+    for (const flow of graph.flows) {
+      let referencesKnownBinding = false;
       for (const reference of flow.references) {
-        if (names.has(reference)) {
-          referencesKnownName = true;
+        if (symbols.has(reference)) {
+          referencesKnownBinding = true;
           break;
         }
       }
-      if (!names.has(flow.name) && referencesKnownName) {
-        names.add(flow.name);
-        changed = true;
+      if (referencesKnownBinding) {
+        for (const binding of flow.bindings) {
+          if (!symbols.has(binding)) {
+            symbols.add(binding);
+            changed = true;
+          }
+        }
       }
     }
   }
-  return names;
+  return symbols;
 }
 
-function nodeContainsName(node: ts.Node, names: ReadonlySet<string>): boolean {
+function nodeContainsBinding(node: ts.Node, bindings: ReadonlySet<ts.Symbol>, checker: ts.TypeChecker): boolean {
   let found = false;
   const visit = (candidate: ts.Node): void => {
     if (found) return;
-    if (ts.isIdentifier(candidate) && names.has(candidate.text)) {
-      found = true;
-      return;
+    if (ts.isIdentifier(candidate)) {
+      const symbol = checker.getSymbolAtLocation(candidate);
+      if (symbol !== undefined && bindings.has(symbol)) {
+        found = true;
+        return;
+      }
     }
     ts.forEachChild(candidate, visit);
   };
@@ -2896,36 +3650,13 @@ function rootIsBoundToAssertion(
   rootCall: ts.CallExpression,
   assertion: ts.CallExpression,
   sourceFile: ts.SourceFile,
-  flows: readonly VariableBindingFlow[]
+  graph: VariableBindingGraph
 ): boolean {
   if (rootCall.getStart(sourceFile) >= assertion.getStart(sourceFile) && rootCall.end <= assertion.end) {
     return true;
   }
-  let rootAncestor: ts.Node | undefined = rootCall.parent;
-  while (rootAncestor !== undefined && !ts.isFunctionLike(rootAncestor)) {
-    if (
-      (ts.isForStatement(rootAncestor) || ts.isForOfStatement(rootAncestor) || ts.isForInStatement(rootAncestor)) &&
-      assertion.getStart(sourceFile) >= rootAncestor.getStart(sourceFile) &&
-      assertion.end <= rootAncestor.end
-    ) {
-      return true;
-    }
-    rootAncestor = rootAncestor.parent;
-  }
-  const names = rootBindingNames(rootCall, flows);
-  if (names.size === 0) return false;
-  if (nodeContainsName(assertion, names)) return true;
-  let ancestor: ts.Node | undefined = assertion.parent;
-  while (ancestor !== undefined && !ts.isFunctionLike(ancestor)) {
-    if (
-      (ts.isForStatement(ancestor) || ts.isForOfStatement(ancestor) || ts.isForInStatement(ancestor)) &&
-      nodeContainsName(ancestor, names)
-    ) {
-      return true;
-    }
-    ancestor = ancestor.parent;
-  }
-  return false;
+  const bindings = rootBindingSymbols(rootCall, graph);
+  return bindings.size !== 0 && nodeContainsBinding(assertion, bindings, graph.checker);
 }
 
 function literalExpectedProblemForRoot(rootCall: ts.CallExpression): string | null {
@@ -3379,6 +4110,1099 @@ function validateSemanticFingerprints(manifest: IdentityManifest, problems: stri
   }
 }
 
+function validateFrozenProvenance(manifest: IdentityManifest, problems: string[]): void {
+  if (manifest.generatedFrom.commit !== SOURCE_COMMIT) {
+    problems.push(`manifest.generatedFrom.commit must pin exact source ${SOURCE_COMMIT}`);
+  }
+  if (manifest.generatedFrom.path !== "tests/release-integrity.test.ts") {
+    problems.push("manifest.generatedFrom.path must name tests/release-integrity.test.ts");
+  }
+  if (manifest.generatedFrom.matrixTitle !== MATRIX_TITLE) {
+    problems.push("manifest.generatedFrom.matrixTitle must equal the exact matrix title");
+  }
+  if (manifest.generatedFrom.matrixSliceSha256 !== MATRIX_SLICE_SHA256) {
+    problems.push(`manifest provenance must pin reviewed matrix SHA-256 ${MATRIX_SLICE_SHA256}`);
+  }
+  if (JSON.stringify(manifest.generatedFrom.rawExpressionShape) !== JSON.stringify(EXPECTED_RAW_EXPRESSION_SHAPE)) {
+    problems.push("manifest.generatedFrom.rawExpressionShape must equal the exact reviewed outer-expression census");
+  }
+}
+
+function validateFrozenMutationTopology(
+  manifest: IdentityManifest,
+  matrix: MatrixScan,
+  sourceCatalogueValid: boolean,
+  problems: string[]
+): void {
+  validateCardinalityConstants(matrix, problems);
+  if (manifest.mutations.length !== EXPECTED_INVENTORY.mutations) {
+    problems.push(`manifest mutations must contain exactly 560 entries; found ${manifest.mutations.length}`);
+  }
+  const sourceIds = new Set(manifest.sources.map((source) => source.id));
+  const sourceByAlias = new Map<string, string>();
+  for (const source of manifest.sources) {
+    for (const alias of source.legacyExpressions) sourceByAlias.set(alias, source.id);
+  }
+  const mutationById = new Map(manifest.mutations.map((mutation) => [mutation.id, mutation]));
+  const duplicateMutationIds = duplicateValues(manifest.mutations.map((mutation) => mutation.id));
+  if (duplicateMutationIds.length !== 0) {
+    problems.push(`manifest mutation IDs must be unique; duplicates: ${duplicateMutationIds.join(", ")}`);
+  }
+  const duplicateLegacyOrders = duplicateValues(manifest.mutations.map((mutation) => String(mutation.legacyOrder)));
+  if (duplicateLegacyOrders.length !== 0) {
+    problems.push(`manifest legacy orders must be unique; duplicates: ${duplicateLegacyOrders.join(", ")}`);
+  }
+  const duplicateMutationFingerprints = duplicateValues(
+    manifest.mutations.map((mutation) => mutation.semanticFingerprint)
+  );
+  if (duplicateMutationFingerprints.length !== 0) {
+    problems.push(
+      `manifest mutation semantic identities must be unique; duplicates: ${duplicateMutationFingerprints.join(", ")}`
+    );
+  }
+  const parentByDependency = new Map<string, { readonly argument: 0 | 2; readonly parent: string }>();
+  let first = 0;
+  let all = 0;
+  let roots = 0;
+  let dependencies = 0;
+  let sourceEdges = 0;
+  let replacementEdges = 0;
+  for (let index = 0; index < manifest.mutations.length; index++) {
+    const mutation = manifest.mutations[index];
+    if (mutation === undefined) continue;
+    if (mutation.order !== index + 1) {
+      problems.push(`manifest mutation order must be contiguous; index ${index} declares ${mutation.order}`);
+    }
+    const expectedId = `release.m${String(mutation.legacyOrder).padStart(3, "0")}`;
+    if (!MUTATION_ID_PATTERN.test(mutation.id) || mutation.id !== expectedId) {
+      problems.push(`manifest mutation ${mutation.id} must equal legacy identity ${expectedId}`);
+    }
+    if (mutation.mode === "first") first++;
+    else all++;
+    if (mutation.role === "root") roots++;
+    else dependencies++;
+    if (mutation.source.kind === "source") {
+      if (!sourceIds.has(mutation.source.id)) {
+        problems.push(`manifest mutation ${mutation.id} has unknown source ${mutation.source.id}`);
+      }
+      if (sourceByAlias.get(mutation.expressions.source.raw) !== mutation.source.id) {
+        problems.push(`manifest mutation ${mutation.id} source identity does not match exact frozen alias`);
+      }
+    } else {
+      sourceEdges++;
+      const dependency = mutationById.get(mutation.source.id);
+      if (dependency === undefined) {
+        problems.push(`manifest mutation ${mutation.id} has unknown source mutation ${mutation.source.id}`);
+      } else if (dependency.order >= mutation.order) {
+        problems.push(`manifest source dependency ${dependency.id} -> ${mutation.id} is not topologically ordered`);
+      }
+      if (parentByDependency.has(mutation.source.id)) {
+        problems.push(`manifest dependency ${mutation.source.id} has more than one parent`);
+      }
+      parentByDependency.set(mutation.source.id, { parent: mutation.id, argument: 0 });
+    }
+    if (mutation.replacementDependency !== null) {
+      replacementEdges++;
+      const dependency = mutationById.get(mutation.replacementDependency);
+      if (dependency === undefined) {
+        problems.push(
+          `manifest mutation ${mutation.id} has unknown replacement dependency ${mutation.replacementDependency}`
+        );
+      } else if (dependency.order >= mutation.order) {
+        problems.push(
+          `manifest replacement dependency ${dependency.id} -> ${mutation.id} is not topologically ordered`
+        );
+      }
+      if (parentByDependency.has(mutation.replacementDependency)) {
+        problems.push(`manifest dependency ${mutation.replacementDependency} has more than one parent`);
+      }
+      parentByDependency.set(mutation.replacementDependency, { parent: mutation.id, argument: 2 });
+    }
+    if (mutation.expressions.source.resolved !== mutation.source.id) {
+      problems.push(`manifest mutation ${mutation.id} resolved source must equal ${mutation.source.id}`);
+    }
+    if (
+      mutation.replacementDependency !== null &&
+      mutation.expressions.replacement.resolved !== mutation.replacementDependency
+    ) {
+      problems.push(
+        `manifest mutation ${mutation.id} resolved replacement must equal dependency ${mutation.replacementDependency}`
+      );
+    }
+    if (mutation.expressions.expectedOccurrences.resolved <= 0) {
+      problems.push(`manifest mutation ${mutation.id} expectedOccurrences must be positive`);
+    }
+    if (mutation.witness.before === mutation.witness.after) {
+      problems.push(`manifest mutation ${mutation.id} witness must prove an exact positive delta`);
+    }
+    if (mutation.witness.sourceSha256 === mutation.witness.mutantSha256) {
+      problems.push(`manifest mutation ${mutation.id} source and mutant digests must differ`);
+    }
+  }
+
+  const observedSourceEdges = manifest.mutations
+    .filter((mutation) => mutation.source.kind === "mutation")
+    .map((mutation) => `${mutation.source.id}->${mutation.id}`)
+    .sort();
+  const observedReplacementEdges = manifest.mutations
+    .filter((mutation) => mutation.replacementDependency !== null)
+    .map((mutation) => `${mutation.replacementDependency}->${mutation.id}`)
+    .sort();
+  if (JSON.stringify(observedSourceEdges) !== JSON.stringify([...EXPECTED_SOURCE_DEPENDENCY_EDGES].sort())) {
+    problems.push("manifest source-dependency identities disagree with the exact six reviewed edges");
+  }
+  if (JSON.stringify(observedReplacementEdges) !== JSON.stringify([...EXPECTED_REPLACEMENT_DEPENDENCY_EDGES].sort())) {
+    problems.push("manifest replacement-dependency identities disagree with the exact 18 reviewed edges");
+  }
+
+  let maximumDepth = 0;
+  for (const mutation of manifest.mutations) {
+    const shouldBeRoot = !parentByDependency.has(mutation.id);
+    if ((mutation.role === "root") !== shouldBeRoot) {
+      problems.push(`manifest mutation ${mutation.id} role disagrees with dependency topology`);
+    }
+    let current = mutation.id;
+    let depth = 0;
+    const visited = new Set<string>();
+    while (parentByDependency.has(current)) {
+      if (visited.has(current)) {
+        problems.push(`manifest dependency cycle includes ${mutation.id}`);
+        break;
+      }
+      visited.add(current);
+      current = parentByDependency.get(current)?.parent ?? current;
+      depth++;
+    }
+    maximumDepth = Math.max(maximumDepth, depth);
+    if (mutation.ownerRoot !== current) {
+      problems.push(`manifest mutation ${mutation.id} ownerRoot must be ${current}; found ${mutation.ownerRoot}`);
+    }
+  }
+  if (first !== 538 || all !== 22) {
+    problems.push(`manifest mutation modes must be 538 first / 22 all; found ${first} / ${all}`);
+  }
+  if (roots !== 536 || dependencies !== 24) {
+    problems.push(`manifest mutation roles must be 536 root / 24 dependency; found ${roots} / ${dependencies}`);
+  }
+  if (sourceEdges !== 6 || replacementEdges !== 18) {
+    problems.push(
+      `manifest dependency edges must be 6 source / 18 replacement; found ${sourceEdges} / ${replacementEdges}`
+    );
+  }
+  if (maximumDepth !== 2) problems.push(`manifest maximum dependency depth must be 2; found ${maximumDepth}`);
+  if (sourceCatalogueValid) validateMaterializedMutations(manifest, matrix, problems);
+}
+
+function validateFrozenCaseTopology(manifest: IdentityManifest, problems: string[]): void {
+  if (manifest.cases.length !== EXPECTED_INVENTORY.cases) {
+    problems.push(`manifest cases must contain exactly 536 entries; found ${manifest.cases.length}`);
+  }
+  const mutationById = new Map(manifest.mutations.map((mutation) => [mutation.id, mutation]));
+  const roots = new Set(
+    manifest.mutations.filter((mutation) => mutation.role === "root").map((mutation) => mutation.id)
+  );
+  const caseIds = manifest.cases.map((identityCase) => identityCase.id);
+  const caseRoots = manifest.cases.map((identityCase) => identityCase.root);
+  for (const [label, values] of [
+    ["IDs", caseIds],
+    ["roots", caseRoots],
+    ["semantic fingerprints", manifest.cases.map((identityCase) => identityCase.semanticFingerprint)]
+  ] as const) {
+    const duplicates = duplicateValues(values);
+    if (duplicates.length !== 0) {
+      problems.push(`manifest case ${label} must be unique; duplicates: ${duplicates.join(", ")}`);
+    }
+  }
+  const invocationCensus = new Map<string, number>();
+  const expectationCensus = new Map<string, number>();
+  const mcpbMutantSlots = new Map<string, number>();
+  let logicalChecks = 0;
+  let rawMatchers = 0;
+  let compositeChecks = 0;
+  const compositeProfiles: number[] = [];
+  const transactionChecks: Array<{ readonly problem: string; readonly spanKey: string }> = [];
+  const ultimateSource = (mutationId: string): string | null => {
+    const visited = new Set<string>();
+    let mutation = mutationById.get(mutationId);
+    while (mutation !== undefined && mutation.source.kind === "mutation") {
+      if (visited.has(mutation.id)) return null;
+      visited.add(mutation.id);
+      mutation = mutationById.get(mutation.source.id);
+    }
+    return mutation?.source.kind === "source" ? mutation.source.id : null;
+  };
+  for (let caseIndex = 0; caseIndex < manifest.cases.length; caseIndex++) {
+    const identityCase = manifest.cases[caseIndex];
+    if (identityCase === undefined) continue;
+    if (identityCase.order !== caseIndex + 1) {
+      problems.push(`manifest case order must be contiguous; index ${caseIndex} declares ${identityCase.order}`);
+    }
+    const expectedCaseId = identityCase.root.replace("release.", "release.case.");
+    if (!CASE_ID_PATTERN.test(identityCase.id) || identityCase.id !== expectedCaseId) {
+      problems.push(`manifest case for ${identityCase.root} must use exact identity ${expectedCaseId}`);
+    }
+    if (!roots.has(identityCase.root)) {
+      problems.push(`manifest case ${identityCase.id} references non-root ${identityCase.root}`);
+    }
+    if (identityCase.checks.length !== 1 && identityCase.checks.length !== 2) {
+      problems.push(`manifest case ${identityCase.id} must contain one primary and at most one composite check`);
+    }
+    logicalChecks += identityCase.checks.length;
+    for (let checkIndex = 0; checkIndex < identityCase.checks.length; checkIndex++) {
+      const check = identityCase.checks[checkIndex];
+      if (check === undefined) continue;
+      const expectedExpectationId = `${identityCase.root.replace("release.", "release.expectation.")}.${
+        checkIndex === 0 ? "primary" : "composition"
+      }`;
+      if (check.expectation.id !== expectedExpectationId) {
+        problems.push(
+          `manifest case ${identityCase.id} check ${checkIndex} expectation ID must be ${expectedExpectationId}`
+        );
+      }
+      if (check.invoke.mutant !== identityCase.root) {
+        problems.push(
+          `manifest case ${identityCase.id} check ${checkIndex} mutant must equal root ${identityCase.root}`
+        );
+      }
+      const expectedBaseline = ultimateSource(identityCase.root);
+      if (check.invoke.baseline !== expectedBaseline) {
+        problems.push(
+          `manifest case ${identityCase.id} check ${checkIndex} baseline must be ultimate source ` +
+            `${expectedBaseline ?? "missing"}`
+        );
+      }
+      if (checkIndex === 0) {
+        validatePrimaryInvocation(check, `${identityCase.id}.checks[0].invoke`, mcpbMutantSlots, problems);
+        invocationCensus.set(check.invoke.kind, (invocationCensus.get(check.invoke.kind) ?? 0) + 1);
+        if (check.matcherEvaluations.length !== 1) {
+          problems.push(`manifest case ${identityCase.id} primary check must have exactly one matcher leaf`);
+        }
+      } else {
+        validateCompositeInvocation(check, identityCase.root, `${identityCase.id}.checks[1].invoke`, problems);
+        compositeChecks++;
+        compositeProfiles.push(check.matcherEvaluations.length);
+      }
+      rawMatchers += check.matcherEvaluations.length;
+      expectationCensus.set(check.expectation.kind, (expectationCensus.get(check.expectation.kind) ?? 0) + 1);
+      if (checkIndex === 0 && check.expectation.kind === "problem") {
+        const leaf = check.matcherEvaluations[0];
+        if (leaf?.operand.resolved !== check.expectation.problem) {
+          problems.push(`manifest case ${identityCase.id} problem identity does not equal its exact matcher operand`);
+        }
+      }
+      if (check.expectation.kind === "regex") {
+        const expectedOperand = NAMED_REGEX_OPERANDS[check.expectation.regex];
+        if (expectedOperand === undefined) {
+          problems.push(`manifest case ${identityCase.id} check ${checkIndex} uses an unknown named-regex identity`);
+        }
+      }
+      if (check.invoke.kind === "github.release-transaction" && checkIndex === 0) {
+        if (check.expectation.kind !== "problem") {
+          problems.push(`manifest transaction case ${identityCase.id} must select an exact problem identity`);
+        } else {
+          transactionChecks.push({
+            problem: check.expectation.problem,
+            spanKey: `${check.assertionSpan.start}:${check.assertionSpan.end}`
+          });
+        }
+      }
+    }
+  }
+  for (const root of roots) {
+    if (!caseRoots.includes(root)) problems.push(`manifest root ${root} has no exact case`);
+  }
+  if (logicalChecks !== 541 || compositeChecks !== 5 || rawMatchers !== 546) {
+    problems.push(
+      "manifest frozen case topology must be 541 checks / 5 composite / 546 leaves; " +
+        `found ${logicalChecks} / ${compositeChecks} / ${rawMatchers}`
+    );
+  }
+  if (JSON.stringify(compositeProfiles) !== JSON.stringify([2, 1, 2, 3, 2])) {
+    problems.push(`manifest composite profiles must be exactly 2/1/2/3/2; found ${compositeProfiles.join("/")}`);
+  }
+  const observedExpectationCensus = Object.fromEntries(
+    [...expectationCensus].sort(([left], [right]) => left.localeCompare(right))
+  );
+  if (JSON.stringify(observedExpectationCensus) !== JSON.stringify({ equal: 5, problem: 535, regex: 1 })) {
+    problems.push(`manifest expectation identity census is wrong: ${JSON.stringify(observedExpectationCensus)}`);
+  }
+  const observedInvocationCensus = Object.fromEntries(
+    [...invocationCensus].sort(([left], [right]) => left.localeCompare(right))
+  );
+  const expectedInvocationCensus = Object.fromEntries(
+    Object.entries(EXPECTED_INVOCATION_CENSUS).sort(([left], [right]) => left.localeCompare(right))
+  );
+  if (JSON.stringify(observedInvocationCensus) !== JSON.stringify(expectedInvocationCensus)) {
+    problems.push(
+      "manifest primary invocation census disagrees with the exact 536-root adapter split: " +
+        JSON.stringify(observedInvocationCensus)
+    );
+  }
+  const observedMcpbMutantSlots = Object.fromEntries(
+    [...mcpbMutantSlots].sort(([left], [right]) => left.localeCompare(right))
+  );
+  const expectedMcpbMutantSlots = Object.fromEntries(
+    Object.entries(MCPB_MUTANT_SLOT_CENSUS).sort(([left], [right]) => left.localeCompare(right))
+  );
+  if (JSON.stringify(observedMcpbMutantSlots) !== JSON.stringify(expectedMcpbMutantSlots)) {
+    problems.push(`manifest MCPB mutable-slot profile is wrong: ${JSON.stringify(observedMcpbMutantSlots)}`);
+  }
+  const expectedTransactionProblems = TRANSACTION_PROBLEM_RUNS.flatMap(([problem, count]) =>
+    Array.from({ length: count }, () => problem)
+  );
+  const transactionSpanCounts = new Map<string, number>();
+  for (const check of transactionChecks) {
+    transactionSpanCounts.set(check.spanKey, (transactionSpanCounts.get(check.spanKey) ?? 0) + 1);
+  }
+  const transactionSpans = [...transactionSpanCounts].filter(([, count]) => count === 76);
+  const exactTransactionSpan = transactionSpans[0]?.[0];
+  if (transactionSpans.length !== 1) {
+    problems.push(`manifest must have one exact 76-case transaction assertion span; found ${transactionSpans.length}`);
+  }
+  const transactionProblems = transactionChecks
+    .filter((check) => check.spanKey === exactTransactionSpan)
+    .map((check) => check.problem);
+  if (JSON.stringify(transactionProblems) !== JSON.stringify(expectedTransactionProblems)) {
+    problems.push("manifest transaction profile must preserve the exact ordered 76 problem identities");
+  }
+}
+
+function expectedMutationHandle(id: string): string {
+  const suffix = id.slice("release.m".length);
+  return `releaseMutationM${suffix}`;
+}
+
+function validateHybridPartition(
+  manifest: IdentityManifest,
+  matrix: MatrixScan,
+  declarative: HybridDeclarativeScan,
+  problems: string[]
+): ReadonlyMap<string, LegacyMutationCall> {
+  const mutationById = new Map(manifest.mutations.map((mutation) => [mutation.id, mutation]));
+  const caseByRoot = new Map(manifest.cases.map((identityCase) => [identityCase.root, identityCase]));
+  const observedDeclarativeIds = declarative.mutations.map((mutation) => mutation.id);
+  if (JSON.stringify(observedDeclarativeIds) !== JSON.stringify(MIGRATED_REGISTRY_EVALUATOR_IDS)) {
+    problems.push(
+      `release mutation hybrid declarative allowlist must be exact ${MIGRATED_REGISTRY_EVALUATOR_IDS.join(", ")}; ` +
+        `found ${observedDeclarativeIds.join(", ")}`
+    );
+  }
+  const duplicateDeclarativeIds = duplicateValues(observedDeclarativeIds);
+  if (duplicateDeclarativeIds.length !== 0) {
+    problems.push(`release mutation hybrid declarative IDs must be unique: ${duplicateDeclarativeIds.join(", ")}`);
+  }
+  const handleToId = new Map<string, string>();
+  let declarativeFirst = 0;
+  let declarativeAll = 0;
+  for (const observed of declarative.mutations) {
+    const frozen = mutationById.get(observed.id);
+    if (frozen === undefined) {
+      problems.push(`release mutation hybrid descriptor ${observed.id} has no frozen identity`);
+      continue;
+    }
+    handleToId.set(observed.handle, observed.id);
+    const expectedHandle = expectedMutationHandle(observed.id);
+    if (observed.handle !== expectedHandle) {
+      problems.push(`release mutation hybrid descriptor ${observed.id} handle must be ${expectedHandle}`);
+    }
+    if (observed.mode === "first") declarativeFirst++;
+    else declarativeAll++;
+    if (observed.mode !== frozen.mode) {
+      problems.push(`release mutation hybrid descriptor ${observed.id} mode disagrees with frozen identity`);
+    }
+    const frozenSourceId = frozen.source.kind === "source" ? frozen.source.id : null;
+    if (
+      frozenSourceId !== "script.release-integrity" ||
+      observed.sourceHandle !== "releaseIntegritySource" ||
+      observed.needle !== frozen.expressions.needle.resolved ||
+      observed.replacement !== frozen.expressions.replacement.resolved ||
+      observed.expectedOccurrences !== frozen.expressions.expectedOccurrences.resolved ||
+      observed.witness.kind !== frozen.witness.kind ||
+      observed.witness.anchor !== frozen.witness.anchor ||
+      observed.witness.before !== frozen.witness.before ||
+      observed.witness.after !== frozen.witness.after ||
+      frozen.witness.derivation !== "needle" ||
+      frozen.role !== "root" ||
+      frozen.ownerRoot !== frozen.id ||
+      frozen.replacementDependency !== null
+    ) {
+      problems.push(`release mutation hybrid descriptor ${observed.id} disagrees with its exact frozen semantics`);
+    }
+  }
+  const observedAllIds = declarative.mutations
+    .filter((mutation) => mutation.mode === "all")
+    .map((mutation) => mutation.id);
+  if (
+    declarative.mutations.length !== 36 ||
+    declarativeFirst !== 33 ||
+    declarativeAll !== 3 ||
+    JSON.stringify(observedAllIds) !== JSON.stringify([...MIGRATED_REGISTRY_EVALUATOR_ALL_IDS])
+  ) {
+    problems.push(
+      `release mutation hybrid migrated modes must be 36 total / 33 first / exact all m009,m018,m034; ` +
+        `found ${declarative.mutations.length} / ${declarativeFirst} / ${observedAllIds.join(",")}`
+    );
+  }
+
+  const observedCaseIds = declarative.cases.map((identityCase) => identityCase.id);
+  const expectedCaseIds = MIGRATED_REGISTRY_EVALUATOR_IDS.map((id) => id.replace("release.", "release.case."));
+  if (JSON.stringify(observedCaseIds) !== JSON.stringify(expectedCaseIds)) {
+    problems.push(
+      `release mutation hybrid case allowlist must be exact ${expectedCaseIds.join(", ")}; ` +
+        `found ${observedCaseIds.join(", ")}`
+    );
+  }
+  for (const observed of declarative.cases) {
+    const rootId = handleToId.get(observed.handle);
+    const frozen = rootId === undefined ? undefined : caseByRoot.get(rootId);
+    const frozenCheck = frozen?.checks[0];
+    const exactInvocation =
+      rootId !== undefined &&
+      frozenCheck !== undefined &&
+      observed.invocationKind === "registry.evaluator" &&
+      observed.baselineHandle === "releaseIntegritySource" &&
+      observed.mutantHandle === observed.handle &&
+      frozenCheck.invoke.kind === "registry.evaluator" &&
+      frozenCheck.invoke.baseline === "script.release-integrity" &&
+      frozenCheck.invoke.mutant === rootId;
+    if (!exactInvocation) {
+      problems.push(
+        `release mutation hybrid case ${observed.id} invocation must retain the exact registry.evaluator adapter`
+      );
+    }
+    if (
+      rootId === undefined ||
+      frozen === undefined ||
+      observed.id !== frozen.id ||
+      observed.handle !== expectedMutationHandle(rootId) ||
+      frozenCheck === undefined ||
+      !exactInvocation ||
+      observed.expectationId !== frozenCheck.expectation.id ||
+      frozenCheck.expectation.kind !== "problem" ||
+      observed.problem !== frozenCheck.expectation.problem ||
+      observed.problem !== REGISTRY_EVALUATOR_PROBLEM ||
+      frozen.checks.length !== 1 ||
+      frozenCheck.matcherEvaluations.length !== 1
+    ) {
+      problems.push(`release mutation hybrid case ${observed.id} disagrees with its exact frozen identity`);
+    }
+  }
+  if (declarative.cases.length !== 36) {
+    problems.push(`release mutation hybrid migrated cases must equal 36; found ${declarative.cases.length}`);
+  }
+
+  const frozenLegacyOrder = [...manifest.mutations].sort((left, right) => left.legacyOrder - right.legacyOrder);
+  const expectedLegacy = frozenLegacyOrder.filter((mutation) => !MIGRATED_REGISTRY_EVALUATOR_ID_SET.has(mutation.id));
+  const legacyById = new Map<string, LegacyMutationCall>();
+  const numericDeclarations = numericConstDeclarations(matrix.sourceFile);
+  const stringDeclarations = constDeclarations(matrix.sourceFile);
+  if (matrix.calls.length !== 524) {
+    problems.push(`release mutation hybrid remaining legacy calls must equal 524; found ${matrix.calls.length}`);
+  }
+  const comparableLength = Math.min(expectedLegacy.length, matrix.calls.length);
+  for (let index = 0; index < comparableLength; index++) {
+    const frozen = expectedLegacy[index];
+    const current = matrix.calls[index];
+    if (frozen === undefined || current === undefined) continue;
+    if (current.mode !== frozen.mode || current.span.sha256 !== frozen.legacySpan.sha256) {
+      problems.push(
+        `release mutation hybrid remaining legacy order ${index + 1} must retain ${frozen.id} exact node-text identity`
+      );
+    } else {
+      // `legacyOccurrence` is keyed by the raw expression tuple, not by AST-node hash.
+      // Once an earlier tuple peer migrates, only the exact filtered legacy order can preserve
+      // the immutable ID-to-node relation without conflating those two ordinal domains.
+      legacyById.set(frozen.id, current);
+    }
+    const currentExpressions = {
+      source: current.sourceExpression,
+      needle: current.needleExpression,
+      replacement: current.replacementExpression,
+      expectedOccurrences: current.expectedOccurrencesExpression
+    };
+    for (const key of ["source", "needle", "replacement", "expectedOccurrences"] as const) {
+      if (frozen.expressions[key].raw !== currentExpressions[key]) {
+        problems.push(`manifest mutation ${frozen.id} ${key} raw expression disagrees with exact AST identity`);
+      }
+    }
+    const observedNeedle = resolveStaticString(current.node.arguments[1], stringDeclarations);
+    if (observedNeedle === null || observedNeedle !== frozen.expressions.needle.resolved) {
+      problems.push(`manifest mutation ${frozen.id} resolved needle disagrees with independent AST evaluation`);
+    }
+    if (frozen.replacementDependency === null) {
+      const observedReplacement = resolveStaticString(current.node.arguments[2], stringDeclarations);
+      if (observedReplacement === null || observedReplacement !== frozen.expressions.replacement.resolved) {
+        problems.push(`manifest mutation ${frozen.id} resolved replacement disagrees with independent AST evaluation`);
+      }
+    }
+    const observedExpectedOccurrences = resolveStaticInteger(current.node.arguments[3], numericDeclarations) ?? 1;
+    if (observedExpectedOccurrences !== frozen.expressions.expectedOccurrences.resolved) {
+      problems.push(
+        `manifest mutation ${frozen.id} resolved expectedOccurrences must be ${observedExpectedOccurrences}; ` +
+          `found ${frozen.expressions.expectedOccurrences.resolved}`
+      );
+    }
+  }
+  const legacyFirst = expectedLegacy.filter((mutation) => mutation.mode === "first").length;
+  const legacyAll = expectedLegacy.filter((mutation) => mutation.mode === "all").length;
+  const legacyRoots = expectedLegacy.filter((mutation) => mutation.role === "root").length;
+  const legacyDependencies = expectedLegacy.filter((mutation) => mutation.role === "dependency").length;
+  const legacyCases = manifest.cases.filter(
+    (identityCase) => !MIGRATED_REGISTRY_EVALUATOR_ID_SET.has(identityCase.root)
+  );
+  const legacyChecks = legacyCases.reduce((total, identityCase) => total + identityCase.checks.length, 0);
+  const legacyLeaves = legacyCases.reduce(
+    (total, identityCase) =>
+      total + identityCase.checks.reduce((caseTotal, check) => caseTotal + check.matcherEvaluations.length, 0),
+    0
+  );
+  if (
+    expectedLegacy.length !== 524 ||
+    legacyFirst !== 505 ||
+    legacyAll !== 19 ||
+    legacyRoots !== 500 ||
+    legacyDependencies !== 24 ||
+    legacyCases.length !== 500 ||
+    legacyChecks !== 505 ||
+    legacyLeaves !== 510
+  ) {
+    problems.push(
+      `release mutation hybrid frozen partition must retain 524=505/19, 500 roots/cases, 24 dependencies, ` +
+        `505 checks and 510 leaves; found ${expectedLegacy.length}=${legacyFirst}/${legacyAll}, ` +
+        `${legacyRoots}/${legacyCases.length}, ${legacyDependencies}, ${legacyChecks}, ${legacyLeaves}`
+    );
+  }
+
+  const declarativeCounts = new Map<string, number>();
+  for (const mutation of declarative.mutations) {
+    declarativeCounts.set(mutation.id, (declarativeCounts.get(mutation.id) ?? 0) + 1);
+  }
+  const exactLegacyKey = (mode: MutationMode, hash: string): string => `${mode}:${hash}`;
+  const observedLegacyMultiplicity = new Map<string, number>();
+  for (const call of matrix.calls) {
+    const key = exactLegacyKey(call.mode, call.span.sha256);
+    observedLegacyMultiplicity.set(key, (observedLegacyMultiplicity.get(key) ?? 0) + 1);
+  }
+  const expectedLegacyMultiplicity = new Map<string, number>();
+  for (const mutation of expectedLegacy) {
+    const key = exactLegacyKey(mutation.mode, mutation.legacySpan.sha256);
+    expectedLegacyMultiplicity.set(key, (expectedLegacyMultiplicity.get(key) ?? 0) + 1);
+  }
+  for (const mutation of manifest.mutations) {
+    const migrated = MIGRATED_REGISTRY_EVALUATOR_ID_SET.has(mutation.id);
+    const key = exactLegacyKey(mutation.mode, mutation.legacySpan.sha256);
+    const observedMultiplicity = observedLegacyMultiplicity.get(key) ?? 0;
+    const expectedMultiplicity = expectedLegacyMultiplicity.get(key) ?? 0;
+    const legacyCount = migrated
+      ? Math.max(0, observedMultiplicity - expectedMultiplicity)
+      : Number(legacyById.has(mutation.id));
+    const declarativeCount = declarativeCounts.get(mutation.id) ?? 0;
+    if (legacyCount + declarativeCount !== 1) {
+      problems.push(
+        `release mutation hybrid frozen ID ${mutation.id} must exist in exactly one legacy XOR declarative ` +
+          `representation; found ${legacyCount}/${declarativeCount}`
+      );
+    }
+    const dependencies = [
+      mutation.source.kind === "mutation" ? mutation.source.id : null,
+      mutation.replacementDependency
+    ].filter((value): value is string => value !== null);
+    for (const dependency of dependencies) {
+      if (MIGRATED_REGISTRY_EVALUATOR_ID_SET.has(dependency) !== migrated) {
+        problems.push(
+          `release mutation hybrid dependency edge ${dependency}->${mutation.id} crosses the freeze boundary`
+        );
+      }
+    }
+    if (MIGRATED_REGISTRY_EVALUATOR_ID_SET.has(mutation.ownerRoot) !== migrated) {
+      problems.push(
+        `release mutation hybrid owner root ${mutation.ownerRoot} for ${mutation.id} crosses the freeze boundary`
+      );
+    }
+  }
+  return legacyById;
+}
+
+function matcherCallsByNodeSha(matrix: MatrixScan): ReadonlyMap<string, readonly ts.CallExpression[]> {
+  const calls = new Map<string, ts.CallExpression[]>();
+  const visit = (node: ts.Node): void => {
+    if (
+      ts.isCallExpression(node) &&
+      node.getStart(matrix.sourceFile) >= matrix.matrixStart &&
+      node.end <= matrix.callback.body.end
+    ) {
+      const hash = sha256(node.getText(matrix.sourceFile));
+      const entries = calls.get(hash) ?? [];
+      entries.push(node);
+      calls.set(hash, entries);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(matrix.callback.body);
+  return calls;
+}
+
+function rootBoundToCurrentMatcher(
+  rootCall: ts.CallExpression,
+  matcherCall: ts.CallExpression,
+  sourceFile: ts.SourceFile,
+  graph: VariableBindingGraph
+): boolean {
+  return rootIsBoundToAssertion(rootCall, matcherCall, sourceFile, graph);
+}
+
+function validateRemainingLegacyMatchers(
+  manifest: IdentityManifest,
+  matrix: MatrixScan,
+  legacyById: ReadonlyMap<string, LegacyMutationCall>,
+  problems: string[]
+): void {
+  const callsByHash = matcherCallsByNodeSha(matrix);
+  const bindingGraph = variableBindingFlows(matrix.sourceFile);
+  let cases = 0;
+  let checks = 0;
+  let leaves = 0;
+  for (const identityCase of manifest.cases) {
+    if (MIGRATED_REGISTRY_EVALUATOR_ID_SET.has(identityCase.root)) continue;
+    cases++;
+    const rootCall = legacyById.get(identityCase.root)?.node;
+    if (rootCall === undefined) {
+      problems.push(`release mutation hybrid legacy case ${identityCase.id} has no remaining root call`);
+      continue;
+    }
+    for (let checkIndex = 0; checkIndex < identityCase.checks.length; checkIndex++) {
+      const check = identityCase.checks[checkIndex];
+      if (check === undefined) continue;
+      checks++;
+      const matched: ts.CallExpression[] = [];
+      let previousStart = -1;
+      for (let matcherIndex = 0; matcherIndex < check.matcherEvaluations.length; matcherIndex++) {
+        const matcher = check.matcherEvaluations[matcherIndex];
+        if (matcher === undefined) continue;
+        leaves++;
+        const candidates = (callsByHash.get(matcher.assertionSpan.sha256) ?? []).filter(
+          (candidate) =>
+            candidate.getStart(matrix.sourceFile) > previousStart &&
+            rootBoundToCurrentMatcher(rootCall, candidate, matrix.sourceFile, bindingGraph)
+        );
+        if (candidates.length !== 1) {
+          problems.push(
+            `release mutation hybrid legacy case ${identityCase.id} check ${checkIndex} leaf ${matcherIndex} ` +
+              `must have one exact node-text/root-bound matcher; found ${candidates.length}`
+          );
+          continue;
+        }
+        const candidate = candidates[0];
+        if (candidate !== undefined) {
+          matched.push(candidate);
+          previousStart = candidate.getStart(matrix.sourceFile);
+        }
+      }
+      const firstMatcher = matched[0];
+      const lastMatcher = matched.at(-1);
+      if (
+        matched.length === check.matcherEvaluations.length &&
+        firstMatcher !== undefined &&
+        lastMatcher !== undefined
+      ) {
+        const currentCheckHash = sha256(
+          matrix.sourceFile.text.slice(firstMatcher.getStart(matrix.sourceFile), lastMatcher.end)
+        );
+        if (currentCheckHash !== check.assertionSpan.sha256) {
+          problems.push(
+            `release mutation hybrid legacy case ${identityCase.id} check ${checkIndex} ordered matcher range drifted`
+          );
+        }
+      }
+    }
+  }
+  if (cases !== 500 || checks !== 505 || leaves !== 510) {
+    problems.push(
+      `release mutation hybrid remaining matcher census must be 500 cases / 505 checks / 510 leaves; ` +
+        `found ${cases} / ${checks} / ${leaves}`
+    );
+  }
+  const migratedMatcherHashes = new Set(
+    manifest.cases
+      .filter((identityCase) => MIGRATED_REGISTRY_EVALUATOR_ID_SET.has(identityCase.root))
+      .flatMap((identityCase) =>
+        identityCase.checks.flatMap((check) => check.matcherEvaluations.map((matcher) => matcher.assertionSpan.sha256))
+      )
+  );
+  for (const hash of migratedMatcherHashes) {
+    if ((callsByHash.get(hash) ?? []).length !== 0) {
+      problems.push("release mutation hybrid migrated registry loop matcher must not remain beside declarative cases");
+    }
+  }
+}
+
+function assignmentTargetContainsIdentifier(value: ts.Expression, identifier: string): boolean {
+  if (ts.isIdentifier(value)) return value.text === identifier;
+  if (
+    ts.isParenthesizedExpression(value) ||
+    ts.isAsExpression(value) ||
+    ts.isTypeAssertionExpression(value) ||
+    ts.isNonNullExpression(value)
+  ) {
+    return assignmentTargetContainsIdentifier(value.expression, identifier);
+  }
+  if (ts.isPropertyAccessExpression(value) || ts.isElementAccessExpression(value)) {
+    return assignmentTargetContainsIdentifier(value.expression, identifier);
+  }
+  if (ts.isArrayLiteralExpression(value)) {
+    return value.elements.some(
+      (element) => !ts.isOmittedExpression(element) && assignmentTargetContainsIdentifier(element, identifier)
+    );
+  }
+  if (ts.isObjectLiteralExpression(value)) {
+    return value.properties.some((property) => {
+      if (ts.isShorthandPropertyAssignment(property)) {
+        return property.name.text === identifier;
+      }
+      if (ts.isPropertyAssignment(property)) {
+        return assignmentTargetContainsIdentifier(property.initializer, identifier);
+      }
+      return ts.isSpreadAssignment(property) && assignmentTargetContainsIdentifier(property.expression, identifier);
+    });
+  }
+  if (ts.isSpreadElement(value)) return assignmentTargetContainsIdentifier(value.expression, identifier);
+  if (ts.isBinaryExpression(value) && value.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
+    return assignmentTargetContainsIdentifier(value.left, identifier);
+  }
+  return false;
+}
+
+const REGISTRY_EVALUATOR_ASSIGNMENT_OPERATORS: ReadonlySet<ts.SyntaxKind> = new Set([
+  ts.SyntaxKind.EqualsToken,
+  ts.SyntaxKind.PlusEqualsToken,
+  ts.SyntaxKind.MinusEqualsToken,
+  ts.SyntaxKind.AsteriskEqualsToken,
+  ts.SyntaxKind.AsteriskAsteriskEqualsToken,
+  ts.SyntaxKind.SlashEqualsToken,
+  ts.SyntaxKind.PercentEqualsToken,
+  ts.SyntaxKind.LessThanLessThanEqualsToken,
+  ts.SyntaxKind.GreaterThanGreaterThanEqualsToken,
+  ts.SyntaxKind.GreaterThanGreaterThanGreaterThanEqualsToken,
+  ts.SyntaxKind.AmpersandEqualsToken,
+  ts.SyntaxKind.BarEqualsToken,
+  ts.SyntaxKind.CaretEqualsToken,
+  ts.SyntaxKind.BarBarEqualsToken,
+  ts.SyntaxKind.AmpersandAmpersandEqualsToken,
+  ts.SyntaxKind.QuestionQuestionEqualsToken
+]);
+
+function validateRegistryEvaluatorPins(matrix: MatrixScan, problems: string[]): void {
+  const functionHashes = new Map<string, string[]>();
+  const problemConstantHashes: string[] = [];
+  for (const statement of matrix.sourceFile.statements) {
+    if (ts.isFunctionDeclaration(statement) && statement.name !== undefined) {
+      const entries = functionHashes.get(statement.name.text) ?? [];
+      entries.push(sha256(statement.getText(matrix.sourceFile)));
+      functionHashes.set(statement.name.text, entries);
+    }
+    if (ts.isVariableStatement(statement)) {
+      for (const declaration of statement.declarationList.declarations) {
+        if (ts.isIdentifier(declaration.name) && declaration.name.text === "MCP_REGISTRY_EVALUATOR_CONTRACT_PROBLEM") {
+          problemConstantHashes.push(sha256(statement.getText(matrix.sourceFile)));
+        }
+      }
+    }
+  }
+  const exactNodeHash = (name: string, expected: string): void => {
+    const observed = functionHashes.get(name) ?? [];
+    if (observed.length !== 1 || observed[0] !== expected) {
+      problems.push(`release mutation hybrid pinned ${name} AST node must retain exact SHA-256 ${expected}`);
+    }
+  };
+  exactNodeHash("mutationMatchCount", MUTATION_MATCH_COUNT_NODE_SHA256);
+  exactNodeHash("mcpRegistryEvaluatorProblems", REGISTRY_EVALUATOR_DETECTOR_NODE_SHA256);
+  if (problemConstantHashes.length !== 1 || problemConstantHashes[0] !== REGISTRY_EVALUATOR_PROBLEM_NODE_SHA256) {
+    problems.push(
+      "release mutation hybrid pinned registry problem AST node must retain exact SHA-256 " +
+        REGISTRY_EVALUATOR_PROBLEM_NODE_SHA256
+    );
+  }
+
+  let directBindings = 0;
+  let shadowBindings = 0;
+  let aliases = 0;
+  let writes = 0;
+  let otherReferences = 0;
+  let matchCountDirectBindings = 0;
+  let matchCountShadowBindings = 0;
+  let matchCountAliases = 0;
+  let matchCountWrites = 0;
+  let matchCountOtherReferences = 0;
+  let mcpbInputWrites = 0;
+  const recordShadowBinding = (name: ts.BindingName | ts.Identifier): void => {
+    if (ts.isIdentifier(name)) {
+      if (name.text === "mcpRegistryEvaluatorProblems") shadowBindings++;
+      if (name.text === "mutationMatchCount") matchCountShadowBindings++;
+      return;
+    }
+    for (const element of name.elements) {
+      if (ts.isBindingElement(element)) recordShadowBinding(element.name);
+    }
+  };
+  const isExactAdapterReference = (identifier: ts.Identifier): boolean => {
+    const property = identifier.parent;
+    if (
+      !ts.isPropertyAssignment(property) ||
+      property.initializer !== identifier ||
+      (!ts.isIdentifier(property.name) && !ts.isStringLiteral(property.name)) ||
+      property.name.text !== "registryEvaluatorProblems"
+    ) {
+      return false;
+    }
+    const object = property.parent;
+    if (!ts.isObjectLiteralExpression(object) || object.properties.length !== 1) return false;
+    const call = object.parent;
+    return (
+      ts.isCallExpression(call) &&
+      call.arguments.length === 1 &&
+      call.arguments[0] === object &&
+      directPlanCall(call, "execute") !== null
+    );
+  };
+  const unwrappedIdentifier = (expression: ts.Expression): ts.Identifier | null => {
+    let current = expression;
+    while (
+      ts.isParenthesizedExpression(current) ||
+      ts.isAsExpression(current) ||
+      ts.isTypeAssertionExpression(current) ||
+      ts.isNonNullExpression(current)
+    ) {
+      current = current.expression;
+    }
+    return ts.isIdentifier(current) ? current : null;
+  };
+  const visitRuntimeIdentity = (node: ts.Node): void => {
+    if (ts.isImportDeclaration(node)) {
+      const importClause = node.importClause;
+      if (importClause === undefined || importClause.isTypeOnly) return;
+      if (importClause.name !== undefined) recordShadowBinding(importClause.name);
+      const bindings = importClause.namedBindings;
+      if (bindings === undefined) return;
+      if (ts.isNamespaceImport(bindings)) recordShadowBinding(bindings.name);
+      else {
+        for (const element of bindings.elements) {
+          if (!element.isTypeOnly) recordShadowBinding(element.name);
+        }
+      }
+      return;
+    }
+    if (ts.isFunctionDeclaration(node) && node.name?.text === "mcpRegistryEvaluatorProblems") {
+      if (node.parent === matrix.sourceFile) directBindings++;
+      else shadowBindings++;
+    } else if (ts.isFunctionDeclaration(node) && node.name?.text === "mutationMatchCount") {
+      if (node.parent === matrix.sourceFile) matchCountDirectBindings++;
+      else matchCountShadowBindings++;
+    } else if (ts.isVariableDeclaration(node) || ts.isParameter(node)) {
+      recordShadowBinding(node.name);
+    } else if (
+      ts.isFunctionDeclaration(node) ||
+      ts.isFunctionExpression(node) ||
+      ts.isClassDeclaration(node) ||
+      ts.isClassExpression(node) ||
+      ts.isEnumDeclaration(node) ||
+      ts.isModuleDeclaration(node) ||
+      ts.isImportEqualsDeclaration(node)
+    ) {
+      if (node.name !== undefined && ts.isIdentifier(node.name)) recordShadowBinding(node.name);
+    }
+    if (ts.isVariableDeclaration(node) && node.initializer !== undefined) {
+      const initializer = unwrappedIdentifier(node.initializer);
+      if (initializer?.text === "mcpRegistryEvaluatorProblems") aliases++;
+      if (initializer?.text === "mutationMatchCount") matchCountAliases++;
+    }
+    if (
+      ts.isBinaryExpression(node) &&
+      REGISTRY_EVALUATOR_ASSIGNMENT_OPERATORS.has(node.operatorToken.kind) &&
+      assignmentTargetContainsIdentifier(node.left, "mcpRegistryEvaluatorProblems")
+    ) {
+      writes++;
+    }
+    if (
+      ts.isBinaryExpression(node) &&
+      REGISTRY_EVALUATOR_ASSIGNMENT_OPERATORS.has(node.operatorToken.kind) &&
+      assignmentTargetContainsIdentifier(node.left, "mutationMatchCount")
+    ) {
+      matchCountWrites++;
+    }
+    if (
+      ts.isBinaryExpression(node) &&
+      REGISTRY_EVALUATOR_ASSIGNMENT_OPERATORS.has(node.operatorToken.kind) &&
+      assignmentTargetContainsIdentifier(node.left, "mcpbInputs")
+    ) {
+      mcpbInputWrites++;
+    }
+    if (
+      (ts.isPrefixUnaryExpression(node) || ts.isPostfixUnaryExpression(node)) &&
+      (node.operator === ts.SyntaxKind.PlusPlusToken || node.operator === ts.SyntaxKind.MinusMinusToken) &&
+      assignmentTargetContainsIdentifier(node.operand, "mcpRegistryEvaluatorProblems")
+    ) {
+      writes++;
+    }
+    if (
+      (ts.isPrefixUnaryExpression(node) || ts.isPostfixUnaryExpression(node)) &&
+      (node.operator === ts.SyntaxKind.PlusPlusToken || node.operator === ts.SyntaxKind.MinusMinusToken) &&
+      assignmentTargetContainsIdentifier(node.operand, "mutationMatchCount")
+    ) {
+      matchCountWrites++;
+    }
+    if (
+      (ts.isPrefixUnaryExpression(node) || ts.isPostfixUnaryExpression(node)) &&
+      (node.operator === ts.SyntaxKind.PlusPlusToken || node.operator === ts.SyntaxKind.MinusMinusToken) &&
+      assignmentTargetContainsIdentifier(node.operand, "mcpbInputs")
+    ) {
+      mcpbInputWrites++;
+    }
+    if (
+      (ts.isForOfStatement(node) || ts.isForInStatement(node)) &&
+      !ts.isVariableDeclarationList(node.initializer) &&
+      assignmentTargetContainsIdentifier(node.initializer, "mcpRegistryEvaluatorProblems")
+    ) {
+      writes++;
+    }
+    if (
+      (ts.isForOfStatement(node) || ts.isForInStatement(node)) &&
+      !ts.isVariableDeclarationList(node.initializer) &&
+      assignmentTargetContainsIdentifier(node.initializer, "mutationMatchCount")
+    ) {
+      matchCountWrites++;
+    }
+    if (
+      (ts.isForOfStatement(node) || ts.isForInStatement(node)) &&
+      !ts.isVariableDeclarationList(node.initializer) &&
+      assignmentTargetContainsIdentifier(node.initializer, "mcpbInputs")
+    ) {
+      mcpbInputWrites++;
+    }
+    if (ts.isDeleteExpression(node) && assignmentTargetContainsIdentifier(node.expression, "mcpbInputs")) {
+      mcpbInputWrites++;
+    }
+    if (
+      ts.isCallExpression(node) &&
+      node.arguments[0] !== undefined &&
+      assignmentTargetContainsIdentifier(node.arguments[0], "mcpbInputs") &&
+      ts.isPropertyAccessExpression(node.expression) &&
+      ts.isIdentifier(node.expression.expression) &&
+      ((node.expression.expression.text === "Object" &&
+        ["assign", "defineProperties", "defineProperty", "setPrototypeOf"].includes(node.expression.name.text)) ||
+        (node.expression.expression.text === "Reflect" &&
+          ["defineProperty", "set", "setPrototypeOf"].includes(node.expression.name.text)))
+    ) {
+      mcpbInputWrites++;
+    }
+    if (ts.isIdentifier(node) && node.text === "mcpRegistryEvaluatorProblems") {
+      const parent = node.parent;
+      const exactDeclaration =
+        ts.isFunctionDeclaration(parent) && parent.name === node && parent.parent === matrix.sourceFile;
+      const exactDirectCall =
+        ts.isCallExpression(parent) &&
+        parent.expression === node &&
+        parent.questionDotToken === undefined &&
+        parent.typeArguments === undefined &&
+        parent.arguments.length === 1;
+      if (!exactDeclaration && !exactDirectCall && !isExactAdapterReference(node)) otherReferences++;
+    }
+    if (ts.isIdentifier(node) && node.text === "mutationMatchCount") {
+      const parent = node.parent;
+      const exactDeclaration =
+        ts.isFunctionDeclaration(parent) && parent.name === node && parent.parent === matrix.sourceFile;
+      const exactDirectCall =
+        ts.isCallExpression(parent) &&
+        parent.expression === node &&
+        parent.questionDotToken === undefined &&
+        parent.typeArguments === undefined &&
+        parent.arguments.length === 2;
+      if (!exactDeclaration && !exactDirectCall) matchCountOtherReferences++;
+    }
+    ts.forEachChild(node, visitRuntimeIdentity);
+  };
+  visitRuntimeIdentity(matrix.sourceFile);
+  if (directBindings !== 1 || shadowBindings !== 0) {
+    problems.push(
+      `release mutation hybrid registry evaluator binding must have one top-level declaration and no runtime ` +
+        `shadows; found ${directBindings}/${shadowBindings}`
+    );
+  }
+  if (aliases !== 0 || writes !== 0 || otherReferences !== 0) {
+    problems.push(
+      `release mutation hybrid registry evaluator binding must have no aliases, writes, or indirect references; ` +
+        `found ${aliases}/${writes}/${otherReferences}`
+    );
+  }
+  if (matchCountDirectBindings !== 1 || matchCountShadowBindings !== 0) {
+    problems.push(
+      `release mutation hybrid mutationMatchCount binding must have one top-level declaration and no runtime ` +
+        `shadows; found ${matchCountDirectBindings}/${matchCountShadowBindings}`
+    );
+  }
+  if (matchCountAliases !== 0) {
+    problems.push(
+      `release mutation hybrid mutationMatchCount must have no aliases; found ${matchCountAliases} alias initializer(s)`
+    );
+  }
+  if (matchCountWrites !== 0) {
+    problems.push(
+      `release mutation hybrid mutationMatchCount binding must never be reassigned; found ${matchCountWrites} write(s)`
+    );
+  }
+  if (matchCountOtherReferences !== 0) {
+    problems.push(
+      `release mutation hybrid mutationMatchCount may only be called directly with two arguments; ` +
+        `found ${matchCountOtherReferences} other reference(s)`
+    );
+  }
+  if (mcpbInputWrites !== 0) {
+    problems.push(
+      `release mutation hybrid mcpbInputs integrity source must remain immutable; found ${mcpbInputWrites} write(s)`
+    );
+  }
+
+  let baselineAssertions = 0;
+  const visit = (node: ts.Node): void => {
+    if (
+      ts.isCallExpression(node) &&
+      ts.isPropertyAccessExpression(node.expression) &&
+      node.expression.name.text === "toEqual"
+    ) {
+      const expectCall = ts.isCallExpression(node.expression.expression) ? node.expression.expression : null;
+      const detector = expectCall?.arguments[0];
+      const expected = node.arguments[0];
+      if (
+        expectCall !== null &&
+        ts.isIdentifier(expectCall.expression) &&
+        expectCall.expression.text === "expect" &&
+        detector !== undefined &&
+        ts.isCallExpression(detector) &&
+        ts.isIdentifier(detector.expression) &&
+        detector.expression.text === "mcpRegistryEvaluatorProblems" &&
+        detector.arguments.length === 1 &&
+        detector.arguments[0] !== undefined &&
+        ts.isPropertyAccessExpression(detector.arguments[0]) &&
+        ts.isIdentifier(detector.arguments[0].expression) &&
+        detector.arguments[0].expression.text === "mcpbInputs" &&
+        detector.arguments[0].name.text === "integrity" &&
+        expected !== undefined &&
+        ts.isArrayLiteralExpression(expected) &&
+        expected.elements.length === 0
+      ) {
+        baselineAssertions++;
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(matrix.callback.body);
+  if (baselineAssertions !== 1) {
+    problems.push(
+      `release mutation hybrid registry evaluator requires one exact clean baseline assertion; ` +
+        `found ${baselineAssertions}`
+    );
+  }
+}
+
 /**
  * Audits a generated schema-v2 release mutation identity manifest against the exact legacy matrix AST.
  *
@@ -3390,7 +5214,10 @@ function validateSemanticFingerprints(manifest: IdentityManifest, problems: stri
  * @param manifestSource - Complete generated schema-v2 manifest JSON bytes.
  * @returns Stable diagnostics; empty only for the reviewed exact identity graph.
  */
-export function releaseMutationIdentityAuditProblems(matrixSource: string, manifestSource: string): string[] {
+export function releaseMutationExactLegacyIdentityAuditProblems(
+  matrixSource: string,
+  manifestSource: string
+): string[] {
   const problems: string[] = [];
   validateWitnessCounterSemantics(problems);
   if (sha256(matrixSource) !== MATRIX_SOURCE_SHA256) {
@@ -3407,5 +5234,57 @@ export function releaseMutationIdentityAuditProblems(matrixSource: string, manif
   validateMutationGraph(manifest, matrix, sourceCatalogueValid, problems);
   validateCases(manifest, matrixSource, matrix, problems);
   validateSemanticFingerprints(manifest, problems);
+  return problems;
+}
+
+/**
+ * Audits the immutable schema-v2 identity fixture against the reviewed hybrid migration boundary.
+ *
+ * The frozen fixture remains byte-identical authority. Current source offsets may move, while
+ * separately reviewed digests pin the complete test source and mixed matrix slice at each migration
+ * boundary. Every frozen mutation must remain in exactly one representation: its exact legacy node
+ * text or the literal declarative Registry evaluator projection.
+ *
+ * @param matrixSource - Complete current `tests/release-integrity.test.ts` source text.
+ * @param manifestSource - Immutable generated schema-v2 manifest JSON bytes.
+ * @returns Stable diagnostics; empty only for the exact m002-m037 hybrid boundary.
+ */
+export function releaseMutationIdentityAuditProblems(matrixSource: string, manifestSource: string): string[] {
+  const problems: string[] = [];
+  validateWitnessCounterSemantics(problems);
+  const observedHybridSourceSha256 = sha256(matrixSource);
+  if (observedHybridSourceSha256 !== CURRENT_HYBRID_SOURCE_SHA256) {
+    problems.push(
+      `release mutation hybrid current source must retain exact SHA-256 ` +
+        `${CURRENT_HYBRID_SOURCE_SHA256}; found ${observedHybridSourceSha256}`
+    );
+  }
+  const manifest = parseManifest(manifestSource, problems);
+  if (manifest === null) return problems;
+  if (sha256(manifestSource) !== IDENTITY_FIXTURE_SHA256) {
+    problems.push(`release mutation identity fixture must remain byte-exact SHA-256 ${IDENTITY_FIXTURE_SHA256}`);
+  }
+  const matrix = scanMatrix(matrixSource, problems);
+  if (matrix === null) return problems;
+  const observedHybridMatrixSha256 = sha256(matrix.matrixSlice);
+  if (observedHybridMatrixSha256 !== CURRENT_HYBRID_MATRIX_SLICE_SHA256) {
+    problems.push(
+      `release mutation hybrid current matrix slice must retain exact SHA-256 ` +
+        `${CURRENT_HYBRID_MATRIX_SLICE_SHA256}; found ${observedHybridMatrixSha256}`
+    );
+  }
+
+  validateRawExpressionShape(matrix, problems, false);
+  validateFrozenProvenance(manifest, problems);
+  validateInventory(manifest, problems);
+  const sourceCatalogueValid = validateSources(manifest, matrix, problems);
+  validateFrozenMutationTopology(manifest, matrix, sourceCatalogueValid, problems);
+  validateFrozenCaseTopology(manifest, problems);
+  validateSemanticFingerprints(manifest, problems);
+
+  const declarative = scanHybridDeclarativeMatrix(matrix, problems);
+  const legacyById = validateHybridPartition(manifest, matrix, declarative, problems);
+  validateRemainingLegacyMatchers(manifest, matrix, legacyById, problems);
+  validateRegistryEvaluatorPins(matrix, problems);
   return problems;
 }

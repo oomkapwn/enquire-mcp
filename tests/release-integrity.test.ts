@@ -8628,7 +8628,7 @@ describe("release identity and exact required-job gate", () => {
     const releaseWorkflowFixtureSourceOffset = declarativeBatchOffset(releaseWorkflowFixtureSourceToken);
     const transplantedReleaseWorkflowFixtureSource = [
       hybridDeclarativeMutation.slice(0, releaseWorkflowFixtureSourceOffset),
-      ['"fixture.release-workflow",', "mcpbInputs.integrity"].join("\n      "),
+      ['"fixture.release-workflow",', "releaseIntegrityText"].join("\n      "),
       hybridDeclarativeMutation.slice(releaseWorkflowFixtureSourceOffset + releaseWorkflowFixtureSourceToken.length)
     ].join("");
     expect(releaseMutationInventoryProblems(transplantedReleaseWorkflowFixtureSource)).toContainEqual(

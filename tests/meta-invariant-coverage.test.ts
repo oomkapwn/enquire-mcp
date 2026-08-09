@@ -1269,8 +1269,14 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
     // dense case array, not a shortened literal prefix.
     const shortenedTransactionMutationLoop = replaceExactly(
       matrixSource,
-      "    for (let mutationIndex = 0; mutationIndex < 76; mutationIndex++) {",
-      "    for (let mutationIndex = 0; mutationIndex < 75; mutationIndex++) {"
+      [
+        "    for (let mutationIndex = 0; mutationIndex < 76; mutationIndex++) {",
+        "      const { mutant, expectedProblem } = releaseTransactionMutationCases[mutationIndex]!;"
+      ].join("\n"),
+      [
+        "    for (let mutationIndex = 0; mutationIndex < 75; mutationIndex++) {",
+        "      const { mutant, expectedProblem } = releaseTransactionMutationCases[mutationIndex]!;"
+      ].join("\n")
     );
     expect(preparedAudit.auditMatrix(shortenedTransactionMutationLoop)).toEqual(
       expect.arrayContaining([

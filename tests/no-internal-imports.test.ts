@@ -113,9 +113,7 @@ interface CoverageIsolationInputs {
 }
 
 function asRecord(value: unknown): UnknownRecord | undefined {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as UnknownRecord)
-    : undefined;
+  return typeof value === "object" && value !== null && !Array.isArray(value) ? (value as UnknownRecord) : undefined;
 }
 
 function propertyNameText(name: ts.PropertyName): string | undefined {
@@ -267,7 +265,7 @@ function ciCoverageProblems(source: string): string[] {
   } else {
     if (
       !recordHasExactKeys(testJob, ["name", "runs-on", "timeout-minutes", "env", "strategy", "steps"]) ||
-      testJob.name !== "test (${{ matrix.label }})" ||
+      testJob.name !== `test (\${{ matrix.label }})` ||
       testJob["runs-on"] !== "ubuntu-latest" ||
       testJob["timeout-minutes"] !== 10 ||
       !isDeepStrictEqual(asRecord(testJob.env), { NPM_CONFIG_ENGINE_STRICT: "true" })
@@ -304,7 +302,7 @@ function ciCoverageProblems(source: string): string[] {
       !recordHasExactKeys(setupNodeStep, ["uses", "with"]) ||
       setupNodeStep.uses !== EXPECTED_SETUP_NODE_ACTION ||
       !isDeepStrictEqual(asRecord(setupNodeStep.with), {
-        "node-version": "${{ matrix.node-version }}",
+        "node-version": `\${{ matrix.node-version }}`,
         cache: "npm",
         "cache-dependency-path": "package-lock.json"
       })
@@ -322,7 +320,7 @@ function ciCoverageProblems(source: string): string[] {
       testSteps[0] !== finalStep ||
       finalStep === undefined ||
       !recordHasExactKeys(finalStep, ["run", "env"]) ||
-      !isDeepStrictEqual(asRecord(finalStep.env), { GH_TOKEN: "${{ github.token }}" })
+      !isDeepStrictEqual(asRecord(finalStep.env), { GH_TOKEN: `\${{ github.token }}` })
     ) {
       problems.push("each CI Node leg must end with one exact unfiltered fail-capable npm test");
     }
@@ -574,10 +572,7 @@ function importClauseHasRuntimeValue(clause: ts.ImportClause | undefined): boole
   if (clause.name !== undefined) return true;
   if (clause.namedBindings === undefined) return false;
   if (ts.isNamespaceImport(clause.namedBindings)) return true;
-  return (
-    clause.namedBindings.elements.length === 0 ||
-    clause.namedBindings.elements.some((element) => !element.isTypeOnly)
-  );
+  return clause.namedBindings.elements.length === 0 || clause.namedBindings.elements.some((element) => !element.isTypeOnly);
 }
 
 function exportDeclarationHasRuntimeValue(declaration: ts.ExportDeclaration): boolean {
@@ -704,9 +699,7 @@ function resolveClosureTarget(
     candidates.push(`${base}.ts`, `${base}.tsx`, `${base}.mjs`, `${base}.mts`, `${base}/index.ts`);
   }
   const target = candidates.find((candidate) => sources.has(candidate));
-  return target === undefined
-    ? { problem: `${importer} has unresolved runtime import ${specifier}` }
-    : { target };
+  return target === undefined ? { problem: `${importer} has unresolved runtime import ${specifier}` } : { target };
 }
 
 function coverageImportClosureProblems(sources: ReadonlyMap<string, string>): string[] {
@@ -794,9 +787,7 @@ async function readCoverageIsolationInputs(): Promise<CoverageIsolationInputs> {
     closureSources.set(filename, await fs.readFile(realCandidate, "utf8"));
   }
   const rootEntries = await fs.readdir(repoRoot);
-  const vitestConfigFiles = rootEntries
-    .filter((name) => /^vitest\.(?:config|workspace)\./u.test(name))
-    .sort();
+  const vitestConfigFiles = rootEntries.filter((name) => /^vitest\.(?:config|workspace)\./u.test(name)).sort();
   const [packageJson, ciWorkflow, vitestConfig] = await Promise.all([
     fs.readFile(path.join(repoRoot, "package.json"), "utf8"),
     fs.readFile(path.join(repoRoot, ".github", "workflows", "ci.yml"), "utf8"),
@@ -812,11 +803,7 @@ function currentCoverageIsolationInputs(): Promise<CoverageIsolationInputs> {
   return coverageInputsPromise;
 }
 
-function withClosureSource(
-  input: CoverageIsolationInputs,
-  filename: string,
-  source: string
-): CoverageIsolationInputs {
+function withClosureSource(input: CoverageIsolationInputs, filename: string, source: string): CoverageIsolationInputs {
   const closureSources = new Map(input.closureSources);
   closureSources.set(filename, source);
   return { ...input, closureSources };
@@ -1025,8 +1012,7 @@ describe("Class A invariant — no test imports value from registration boilerpl
       "CI coverage must retain the exact pinned Node 22 setup step"
     );
     const ciWithSkippedPerFileGate = mutableWorkflow(current.ciWorkflow, (workflow) => {
-      mutableRunStep(mutableWorkflowJob(workflow, "coverage"), "npm run check:per-file-coverage")["if"] =
-        "false";
+      mutableRunStep(mutableWorkflowJob(workflow, "coverage"), "npm run check:per-file-coverage").if = "false";
     });
     expect(coverageIsolationProblems({ ...current, ciWorkflow: ciWithSkippedPerFileGate })).toContain(
       "CI coverage must retain contiguous fail-capable build, coverage and floor gates"
@@ -1125,11 +1111,7 @@ describe("Class A invariant — no test imports value from registration boilerpl
     expect(coverageIsolationProblems({ ...current, vitestConfig: vitestWithWrongProvider })).toContain(
       "vitest coverage provider must remain v8"
     );
-    const vitestWithLowerFloor = replaceExactly(
-      current.vitestConfig,
-      "        branches: 74",
-      "        branches: 73"
-    );
+    const vitestWithLowerFloor = replaceExactly(current.vitestConfig, "        branches: 74", "        branches: 73");
     expect(coverageIsolationProblems({ ...current, vitestConfig: vitestWithLowerFloor })).toContain(
       "vitest coverage threshold branches must remain 74"
     );
@@ -1147,22 +1129,14 @@ describe("Class A invariant — no test imports value from registration boilerpl
       '  }, 481_000);\n\n  it("every *-invariant.test.ts file has NEGATIVE control OR explicit exempt marker",'
     );
     expect(
-      coverageIsolationProblems(
-        withClosureSource(current, "tests/meta-invariant-coverage.test.ts", raisedMetaTimeout)
-      )
+      coverageIsolationProblems(withClosureSource(current, "tests/meta-invariant-coverage.test.ts", raisedMetaTimeout))
     ).toContain(
       "tests/meta-invariant-coverage.test.ts must retain one direct beforeAll registration with timeout 480_000"
     );
     const releaseSource = requiredClosureSource(current.closureSources, "tests/release-integrity.test.ts");
-    const raisedReleaseTimeout = replaceExactly(
-      releaseSource,
-      '  }, 330_000);\n});\n',
-      '  }, 331_000);\n});\n'
-    );
+    const raisedReleaseTimeout = replaceExactly(releaseSource, "  }, 330_000);\n});\n", "  }, 331_000);\n});\n");
     expect(
-      coverageIsolationProblems(
-        withClosureSource(current, "tests/release-integrity.test.ts", raisedReleaseTimeout)
-      )
+      coverageIsolationProblems(withClosureSource(current, "tests/release-integrity.test.ts", raisedReleaseTimeout))
     ).toContain("tests/release-integrity.test.ts must retain one direct it registration with timeout 330_000");
     const unreachableReleaseRegistration = replaceExactly(
       releaseSource,
@@ -1177,9 +1151,7 @@ describe("Class A invariant — no test imports value from registration boilerpl
 
     const directProductionImport = `import { Vault } from "../src/vault.js";\n${releaseSource}`;
     expect(
-      coverageIsolationProblems(
-        withClosureSource(current, "tests/release-integrity.test.ts", directProductionImport)
-      )
+      coverageIsolationProblems(withClosureSource(current, "tests/release-integrity.test.ts", directProductionImport))
     ).toContain("tests/release-integrity.test.ts value-imports production path src/vault.js");
     const helperSource = requiredClosureSource(current.closureSources, "tests/helpers/exact-source-mutation.ts");
     const transitiveProductionImport = `import "../../dist/index.js";\n${helperSource}`;
@@ -1188,12 +1160,9 @@ describe("Class A invariant — no test imports value from registration boilerpl
         withClosureSource(current, "tests/helpers/exact-source-mutation.ts", transitiveProductionImport)
       )
     ).toContain("tests/helpers/exact-source-mutation.ts value-imports production path dist/index.js");
-    const vitestProductionImport =
-      'import { vi } from "vitest";\nvoid vi.importActual("../src/vault.js");\n' + releaseSource;
+    const vitestProductionImport = `import { vi } from "vitest";\nvoid vi.importActual("../src/vault.js");\n${releaseSource}`;
     expect(
-      coverageIsolationProblems(
-        withClosureSource(current, "tests/release-integrity.test.ts", vitestProductionImport)
-      )
+      coverageIsolationProblems(withClosureSource(current, "tests/release-integrity.test.ts", vitestProductionImport))
     ).toContain("tests/release-integrity.test.ts value-imports production path src/vault.js");
     const createRequireLoader =
       'import { createRequire } from "node:module";\n' +
@@ -1214,21 +1183,16 @@ describe("Class A invariant — no test imports value from registration boilerpl
     ).toContain("tests/release-integrity.test.ts value-imports the enquire-mcp package surface");
     const unresolvedImport = `import "./missing-coverage-helper.js";\n${metaSource}`;
     expect(
-      coverageIsolationProblems(
-        withClosureSource(current, "tests/meta-invariant-coverage.test.ts", unresolvedImport)
-      )
+      coverageIsolationProblems(withClosureSource(current, "tests/meta-invariant-coverage.test.ts", unresolvedImport))
     ).toContain("tests/meta-invariant-coverage.test.ts has unresolved runtime import ./missing-coverage-helper.js");
     const computedImport =
-      'const hiddenModule = "./helpers/exact-source-mutation.js";\n' +
-      `void import(hiddenModule);\n${metaSource}`;
+      'const hiddenModule = "./helpers/exact-source-mutation.js";\n' + `void import(hiddenModule);\n${metaSource}`;
     expect(
       coverageIsolationProblems(withClosureSource(current, "tests/meta-invariant-coverage.test.ts", computedImport))
     ).toContain("tests/meta-invariant-coverage.test.ts uses a nonliteral dynamic import loader");
     const unreviewedAliasImport = `import "#production-alias";\n${releaseSource}`;
     expect(
-      coverageIsolationProblems(
-        withClosureSource(current, "tests/release-integrity.test.ts", unreviewedAliasImport)
-      )
+      coverageIsolationProblems(withClosureSource(current, "tests/release-integrity.test.ts", unreviewedAliasImport))
     ).toContain("tests/release-integrity.test.ts uses an unreviewed external runtime module #production-alias");
     expect(reviewedClosurePathProblem("tests/helpers/exact-source-mutation.ts", "src/vault.ts")).toBe(
       "reviewed coverage closure path tests/helpers/exact-source-mutation.ts resolves to unexpected src/vault.ts"
@@ -1236,9 +1200,7 @@ describe("Class A invariant — no test imports value from registration boilerpl
 
     const typeOnlyProductionImport = `import type { Vault } from "../src/vault.js";\n${releaseSource}`;
     expect(
-      coverageIsolationProblems(
-        withClosureSource(current, "tests/release-integrity.test.ts", typeOnlyProductionImport)
-      )
+      coverageIsolationProblems(withClosureSource(current, "tests/release-integrity.test.ts", typeOnlyProductionImport))
     ).toEqual([]);
   });
 });

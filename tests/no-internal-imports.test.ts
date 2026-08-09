@@ -572,7 +572,9 @@ function importClauseHasRuntimeValue(clause: ts.ImportClause | undefined): boole
   if (clause.name !== undefined) return true;
   if (clause.namedBindings === undefined) return false;
   if (ts.isNamespaceImport(clause.namedBindings)) return true;
-  return clause.namedBindings.elements.length === 0 || clause.namedBindings.elements.some((element) => !element.isTypeOnly);
+  return (
+    clause.namedBindings.elements.length === 0 || clause.namedBindings.elements.some((element) => !element.isTypeOnly)
+  );
 }
 
 function exportDeclarationHasRuntimeValue(declaration: ts.ExportDeclaration): boolean {
@@ -1185,8 +1187,7 @@ describe("Class A invariant — no test imports value from registration boilerpl
     expect(
       coverageIsolationProblems(withClosureSource(current, "tests/meta-invariant-coverage.test.ts", unresolvedImport))
     ).toContain("tests/meta-invariant-coverage.test.ts has unresolved runtime import ./missing-coverage-helper.js");
-    const computedImport =
-      'const hiddenModule = "./helpers/exact-source-mutation.js";\n' + `void import(hiddenModule);\n${metaSource}`;
+    const computedImport = `const hiddenModule = "./helpers/exact-source-mutation.js";\nvoid import(hiddenModule);\n${metaSource}`;
     expect(
       coverageIsolationProblems(withClosureSource(current, "tests/meta-invariant-coverage.test.ts", computedImport))
     ).toContain("tests/meta-invariant-coverage.test.ts uses a nonliteral dynamic import loader");

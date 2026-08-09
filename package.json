@@ -85,7 +85,7 @@
     "start": "node dist/index.js",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage",
+    "test:coverage": "vitest run --coverage --exclude tests/meta-invariant-coverage.test.ts --exclude tests/release-integrity.test.ts",
     "check:changelog-coverage": "node scripts/check-changelog-coverage.mjs",
     "check:per-file-coverage": "node scripts/check-per-file-coverage.mjs",
     "check:oia": "node scripts/oia-walk.mjs",

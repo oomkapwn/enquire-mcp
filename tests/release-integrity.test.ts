@@ -8418,7 +8418,7 @@ describe("release identity and exact required-job gate", () => {
       oracleSource.slice(matrixBodyOffset)
     ].join("");
     expect(releaseMutationInventoryProblems(extraProjectMutation)).toContain(
-      "release mutation hybrid inventory expected 538 first / 22 all, found 539 first / 22 all (legacy 506/19; declarative 33/3; cases 36)"
+      "release mutation hybrid inventory expected 538 first / 22 all, found 539 first / 22 all (legacy 504/19; declarative 35/3; cases 38)"
     );
     const outsideMutation = `${oracleSource}\nvoid replaceAllExactly("inventory", "inventory", "mutant");\n`;
     expect(releaseMutationInventoryProblems(outsideMutation)).toContain(
@@ -8432,11 +8432,11 @@ describe("release identity and exact required-job gate", () => {
       oracleSource.slice(firstProjectCallOffset + "replaceExactly(".length)
     ].join("");
     expect(releaseMutationInventoryProblems(projectModeDrift)).toContain(
-      "release mutation hybrid inventory expected 538 first / 22 all, found 537 first / 23 all (legacy 504/20; declarative 33/3; cases 36)"
+      "release mutation hybrid inventory expected 538 first / 22 all, found 537 first / 23 all (legacy 502/20; declarative 35/3; cases 38)"
     );
     const hybridDeclarativeMutation = oracleSource;
     const declarativeBatchStartToken = "    const releaseIntegrityText = mcpbInputs.integrity;";
-    const declarativeBatchEndToken = "    const registryReleaseDocument = yamlRecord(load(mcpbInputs.release));";
+    const declarativeBatchEndToken = "    const provenanceWorkflowCompositionMutation = replaceExactly(";
     const declarativeBatchStart = hybridDeclarativeMutation.indexOf(declarativeBatchStartToken, matrixBodyOffset);
     expect(declarativeBatchStart).toBeGreaterThan(matrixBodyOffset);
     const declarativeBatchEnd = hybridDeclarativeMutation.indexOf(declarativeBatchEndToken, declarativeBatchStart);
@@ -8614,8 +8614,11 @@ describe("release identity and exact required-job gate", () => {
     const sealSequence = [
       "const releaseMutationProblems = releaseMutationPlan.seal();",
       "expect(releaseMutationProblems).toEqual([]);",
-      "releaseMutationPlan.execute({ registryEvaluatorProblems: mcpRegistryEvaluatorProblems });",
-      'expect(releaseMutationPlan.phase).toBe("executed");',
+      "releaseMutationPlan.executeThrough(releaseMutationM037, {",
+      "  registryEvaluatorProblems: mcpRegistryEvaluatorProblems,",
+      "  registryStepProblems: mcpRegistryRunProblems",
+      "});",
+      'expect(releaseMutationPlan.phase).toBe("partially-executed");',
       "expect(releaseMutationPlan.caseExecutions).toBe(36);",
       "expect(releaseMutationPlan.expectationExecutions).toBe(36);"
     ].join("\n    ");
@@ -8666,40 +8669,72 @@ describe("release identity and exact required-job gate", () => {
     expect(releaseMutationInventoryProblems(wrongDeclarativeExpectationExecutionCount)).toContain(
       declarativeLifecycleProblem
     );
-    const phaseAssertion = 'expect(releaseMutationPlan.phase).toBe("executed");';
+    const phaseAssertion = 'expect(releaseMutationPlan.phase).toBe("partially-executed");';
     const phaseAssertionOffset = declarativeBatchOffset(phaseAssertion);
     const optionalDeclarativePhaseAssertion = [
       hybridDeclarativeMutation.slice(0, phaseAssertionOffset),
-      'expect(releaseMutationPlan.phase)?.toBe("executed");',
+      'expect(releaseMutationPlan.phase)?.toBe("partially-executed");',
       hybridDeclarativeMutation.slice(phaseAssertionOffset + phaseAssertion.length)
     ].join("");
     expect(releaseMutationInventoryProblems(optionalDeclarativePhaseAssertion)).toContain(declarativeLifecycleProblem);
-    const executeToken = "releaseMutationPlan.execute({ registryEvaluatorProblems: mcpRegistryEvaluatorProblems });";
+    const executeToken = [
+      "releaseMutationPlan.executeThrough(releaseMutationM037, {",
+      "  registryEvaluatorProblems: mcpRegistryEvaluatorProblems,",
+      "  registryStepProblems: mcpRegistryRunProblems",
+      "});"
+    ].join("\n    ");
     const executeOffset = declarativeBatchOffset(executeToken);
     const missingRegistryAdapter = [
       hybridDeclarativeMutation.slice(0, executeOffset),
-      "releaseMutationPlan.execute();",
+      "releaseMutationPlan.executeThrough(releaseMutationM037);",
       hybridDeclarativeMutation.slice(executeOffset + executeToken.length)
     ].join("");
     expect(releaseMutationInventoryProblems(missingRegistryAdapter)).toContainEqual(
-      expect.stringMatching(/execute requires one exact literal registryEvaluatorProblems adapter/)
+      expect.stringMatching(
+        /executeThrough requires one literal case-root boundary and one exact literal registryEvaluatorProblems\/registryStepProblems adapter object/
+      )
     );
     expect(releaseMutationInventoryProblems(missingRegistryAdapter)).toContain(declarativeLifecycleProblem);
+    const missingRegistryStepAdapter = [
+      hybridDeclarativeMutation.slice(0, executeOffset),
+      [
+        "releaseMutationPlan.executeThrough(releaseMutationM037, {",
+        "      registryEvaluatorProblems: mcpRegistryEvaluatorProblems",
+        "    });"
+      ].join("\n    "),
+      hybridDeclarativeMutation.slice(executeOffset + executeToken.length)
+    ].join("");
+    expect(releaseMutationInventoryProblems(missingRegistryStepAdapter)).toContainEqual(
+      expect.stringMatching(
+        /executeThrough requires one literal case-root boundary and one exact literal registryEvaluatorProblems\/registryStepProblems adapter object/
+      )
+    );
     const extraRegistryAdapterProperty = [
       hybridDeclarativeMutation.slice(0, executeOffset),
-      "releaseMutationPlan.execute({ registryEvaluatorProblems: mcpRegistryEvaluatorProblems, extra: true });",
+      [
+        "releaseMutationPlan.executeThrough(releaseMutationM037, {",
+        "      registryEvaluatorProblems: mcpRegistryEvaluatorProblems,",
+        "      registryStepProblems: mcpRegistryRunProblems,",
+        "      extra: true",
+        "    });"
+      ].join("\n    "),
       hybridDeclarativeMutation.slice(executeOffset + executeToken.length)
     ].join("");
     expect(releaseMutationInventoryProblems(extraRegistryAdapterProperty)).toContainEqual(
-      expect.stringMatching(/execute requires one exact literal registryEvaluatorProblems adapter/)
+      expect.stringMatching(/executeThrough requires one literal case-root boundary and one exact literal/)
     );
     const computedRegistryAdapterProperty = [
       hybridDeclarativeMutation.slice(0, executeOffset),
-      'releaseMutationPlan.execute({ ["registryEvaluatorProblems"]: mcpRegistryEvaluatorProblems });',
+      [
+        "releaseMutationPlan.executeThrough(releaseMutationM037, {",
+        '      ["registryEvaluatorProblems"]: mcpRegistryEvaluatorProblems,',
+        "      registryStepProblems: mcpRegistryRunProblems",
+        "    });"
+      ].join("\n    "),
       hybridDeclarativeMutation.slice(executeOffset + executeToken.length)
     ].join("");
     expect(releaseMutationInventoryProblems(computedRegistryAdapterProperty)).toContainEqual(
-      expect.stringMatching(/execute requires one exact literal registryEvaluatorProblems adapter/)
+      expect.stringMatching(/executeThrough requires one literal case-root boundary and one exact literal/)
     );
     expect(releaseMutationInventoryProblems(computedRegistryAdapterProperty)).toContainEqual(
       expect.stringMatching(/may only be called directly or occupy the exact execute adapter slot/)
@@ -8707,45 +8742,55 @@ describe("release identity and exact required-job gate", () => {
     const getterRegistryAdapter = [
       hybridDeclarativeMutation.slice(0, executeOffset),
       [
-        "releaseMutationPlan.execute({",
+        "releaseMutationPlan.executeThrough(releaseMutationM037, {",
         "      get registryEvaluatorProblems() {",
         "        return mcpRegistryEvaluatorProblems;",
-        "      }",
+        "      },",
+        "      registryStepProblems: mcpRegistryRunProblems",
         "    });"
       ].join("\n    "),
       hybridDeclarativeMutation.slice(executeOffset + executeToken.length)
     ].join("");
     expect(releaseMutationInventoryProblems(getterRegistryAdapter)).toContainEqual(
-      expect.stringMatching(/execute requires one exact literal registryEvaluatorProblems adapter/)
+      expect.stringMatching(/executeThrough requires one literal case-root boundary and one exact literal/)
     );
     expect(releaseMutationInventoryProblems(getterRegistryAdapter)).toContainEqual(
       expect.stringMatching(/may only be called directly or occupy the exact execute adapter slot/)
     );
     const spreadRegistryAdapter = [
       hybridDeclarativeMutation.slice(0, executeOffset),
-      "releaseMutationPlan.execute({ ...{ registryEvaluatorProblems: mcpRegistryEvaluatorProblems } });",
+      [
+        "releaseMutationPlan.executeThrough(releaseMutationM037, {",
+        "      ...{ registryEvaluatorProblems: mcpRegistryEvaluatorProblems },",
+        "      registryStepProblems: mcpRegistryRunProblems",
+        "    });"
+      ].join("\n    "),
       hybridDeclarativeMutation.slice(executeOffset + executeToken.length)
     ].join("");
     expect(releaseMutationInventoryProblems(spreadRegistryAdapter)).toContainEqual(
-      expect.stringMatching(/execute requires one exact literal registryEvaluatorProblems adapter/)
+      expect.stringMatching(/executeThrough requires one literal case-root boundary and one exact literal/)
     );
     const wrappedRegistryAdapter = [
       hybridDeclarativeMutation.slice(0, executeOffset),
       [
-        "releaseMutationPlan.execute({",
-        "      registryEvaluatorProblems: (source) => mcpRegistryEvaluatorProblems(source)",
+        "releaseMutationPlan.executeThrough(releaseMutationM037, {",
+        "      registryEvaluatorProblems: (source) => mcpRegistryEvaluatorProblems(source),",
+        "      registryStepProblems: mcpRegistryRunProblems",
         "    });"
       ].join("\n    "),
       hybridDeclarativeMutation.slice(executeOffset + executeToken.length)
     ].join("");
     expect(releaseMutationInventoryProblems(wrappedRegistryAdapter)).toContainEqual(
-      expect.stringMatching(/execute requires one exact literal registryEvaluatorProblems adapter/)
+      expect.stringMatching(/executeThrough requires one literal case-root boundary and one exact literal/)
     );
     const aliasedRegistryAdapter = [
       hybridDeclarativeMutation.slice(0, executeOffset),
       [
         "const registryEvaluatorAlias = mcpRegistryEvaluatorProblems;",
-        "    releaseMutationPlan.execute({ registryEvaluatorProblems: registryEvaluatorAlias });"
+        "    releaseMutationPlan.executeThrough(releaseMutationM037, {",
+        "      registryEvaluatorProblems: registryEvaluatorAlias,",
+        "      registryStepProblems: mcpRegistryRunProblems",
+        "    });"
       ].join("\n    "),
       hybridDeclarativeMutation.slice(executeOffset + executeToken.length)
     ].join("");
@@ -8754,7 +8799,7 @@ describe("release identity and exact required-job gate", () => {
       "release mutation registry evaluator must not have alias initializers; found 1"
     );
     expect(aliasedRegistryAdapterProblems).toContainEqual(
-      expect.stringMatching(/execute requires one exact literal registryEvaluatorProblems adapter/)
+      expect.stringMatching(/executeThrough requires one literal case-root boundary and one exact literal/)
     );
     const shadowedRegistryEvaluator = [
       hybridDeclarativeMutation.slice(0, matrixBodyOffset),
@@ -8773,6 +8818,32 @@ describe("release identity and exact required-job gate", () => {
     ].join("");
     expect(releaseMutationInventoryProblems(reassignedRegistryEvaluator)).toContain(
       "release mutation registry evaluator binding must never be reassigned; found 1 write(s)"
+    );
+    const aliasedRegistryStepOracle = [
+      hybridDeclarativeMutation.slice(0, matrixBodyOffset),
+      "\n    const registryStepAlias = mcpRegistryStepProblems;",
+      hybridDeclarativeMutation.slice(matrixBodyOffset)
+    ].join("");
+    expect(releaseMutationInventoryProblems(aliasedRegistryStepOracle)).toContain(
+      "release mutation registry step oracle must not have alias initializers; found 1"
+    );
+    const shadowedRegistryStepOracle = [
+      hybridDeclarativeMutation.slice(0, matrixBodyOffset),
+      "\n    const mcpRegistryStepProblems = (_step: YamlRecord, _integrity: string): string[] => [];",
+      hybridDeclarativeMutation.slice(matrixBodyOffset)
+    ].join("");
+    expect(releaseMutationInventoryProblems(shadowedRegistryStepOracle)).toContainEqual(
+      expect.stringMatching(
+        /registry step oracle must have one top-level function declaration and no other runtime bindings/
+      )
+    );
+    const reassignedRegistryStepOracle = [
+      hybridDeclarativeMutation.slice(0, matrixBodyOffset),
+      "\n    mcpRegistryStepProblems = (_step: YamlRecord, _integrity: string): string[] => [];",
+      hybridDeclarativeMutation.slice(matrixBodyOffset)
+    ].join("");
+    expect(releaseMutationInventoryProblems(reassignedRegistryStepOracle)).toContain(
+      "release mutation registry step oracle binding must never be reassigned; found 1 write(s)"
     );
     const aliasedRegistryRunAdapter = [
       hybridDeclarativeMutation.slice(0, matrixBodyOffset),
@@ -8810,7 +8881,7 @@ describe("release identity and exact required-job gate", () => {
         .join("legacyMigratedExactly(")
     ].join("");
     expect(releaseMutationInventoryProblems(legacyFreeMatrix)).toContain(
-      "release mutation final closed graph expected 560 unique descriptors / 536 cases and roots / 541 expectations / 24 dependency-only, found 36 descriptors / 36 cases / 36 roots / 36 expectations / 0 dependency-only"
+      "release mutation final closed graph expected 560 unique descriptors / 536 cases and roots / 541 expectations / 24 dependency-only, found 38 descriptors / 38 cases / 38 roots / 38 expectations / 0 dependency-only"
     );
     const loopGeneratedDeclarative = [
       oracleSource.slice(0, matrixBodyOffset),
@@ -8953,7 +9024,7 @@ describe("release identity and exact required-job gate", () => {
       expect.stringMatching(/must be one explicit straight-line case/)
     );
     expect(iterableLiteralProblems).toContain(
-      "release mutation hybrid inventory expected 538 first / 22 all, found 539 first / 22 all (legacy 506/19; declarative 33/3; cases 36)"
+      "release mutation hybrid inventory expected 538 first / 22 all, found 539 first / 22 all (legacy 504/19; declarative 35/3; cases 38)"
     );
     const nestedStraightLineMutation = [
       oracleSource.slice(0, matrixBodyOffset),
@@ -8965,7 +9036,7 @@ describe("release identity and exact required-job gate", () => {
       expect.stringMatching(/must be one explicit straight-line case/)
     );
     expect(nestedStraightLineProblems).toContain(
-      "release mutation hybrid inventory expected 538 first / 22 all, found 540 first / 22 all (legacy 507/19; declarative 33/3; cases 36)"
+      "release mutation hybrid inventory expected 538 first / 22 all, found 540 first / 22 all (legacy 505/19; declarative 35/3; cases 38)"
     );
     const earlyReturnMutation = [
       oracleSource.slice(0, matrixBodyOffset),
@@ -11043,12 +11114,12 @@ describe("release identity and exact required-job gate", () => {
 
     const releaseIntegrityText = mcpbInputs.integrity;
     const releaseMutationPlan = new ReleaseMutationPlan({
-      total: 36,
-      first: 33,
+      total: 38,
+      first: 35,
       all: 3,
-      cases: 36,
-      expectations: 36,
-      roots: 36,
+      cases: 38,
+      expectations: 38,
+      roots: 38,
       dependencyOnly: 0
     });
     const releaseIntegritySource = releaseMutationPlan.registerSource("script.release-integrity", releaseIntegrityText);
@@ -12204,12 +12275,6 @@ describe("release identity and exact required-job gate", () => {
         }
       ]
     });
-    const releaseMutationProblems = releaseMutationPlan.seal();
-    expect(releaseMutationProblems).toEqual([]);
-    releaseMutationPlan.execute({ registryEvaluatorProblems: mcpRegistryEvaluatorProblems });
-    expect(releaseMutationPlan.phase).toBe("executed");
-    expect(releaseMutationPlan.caseExecutions).toBe(36);
-    expect(releaseMutationPlan.expectationExecutions).toBe(36);
     const registryReleaseDocument = yamlRecord(load(mcpbInputs.release));
     const registryReleaseJob = yamlRecord(yamlRecord(registryReleaseDocument?.jobs)?.publish);
     const registryReleaseSteps = yamlSteps(registryReleaseJob ?? {});
@@ -12224,6 +12289,82 @@ describe("release identity and exact required-job gate", () => {
     expect(Object.isFrozen(MCP_REGISTRY_EXACT_STEP_ENV)).toBe(true);
     expect(Object.isFrozen(MCP_REGISTRY_EXACT_STEP_METADATA)).toBe(true);
     expect(mcpRegistryRunProblems(registryRun, mcpbInputs.integrity)).toEqual([]);
+    const registryPublishStepSource = releaseMutationPlan.registerSource("workflow.registry-publish-step", registryRun);
+    const releaseMutationM109 = releaseMutationPlan.registerMutation("release.m109", {
+      mode: "first",
+      source: registryPublishStepSource,
+      needle: "MCP_REGISTRY_CONFIRMED=false",
+      replacement: "MCP_REGISTRY_CONFIRMED=false\nMCP_REGISTRY_CONFIRMED=true",
+      expectedOccurrences: 1,
+      witness: {
+        kind: "token",
+        anchor: "MCP_REGISTRY_CONFIRMED=false\nMCP_REGISTRY_CONFIRMED=true",
+        before: 0,
+        after: 1
+      }
+    });
+    releaseMutationPlan.registerCase({
+      id: "release.case.m109",
+      root: releaseMutationM109,
+      checks: [
+        {
+          invoke: {
+            kind: "registry.step.run",
+            baseline: registryPublishStepSource,
+            mutant: releaseMutationM109,
+            integrity: releaseIntegritySource
+          },
+          expectation: {
+            id: "release.expectation.m109.primary",
+            kind: "problem",
+            problem:
+              "stable MCP Registry publication must bind exact source manifests, one pinned publisher write, and bounded readback"
+          }
+        }
+      ]
+    });
+    const releaseMutationM110 = releaseMutationPlan.registerMutation("release.m110", {
+      mode: "first",
+      source: registryPublishStepSource,
+      needle: '[ "$MCP_PUBLISH_ATTEMPTED" != "true" ] || [ "$MCP_REGISTRY_CONFIRMED" != "true" ]',
+      replacement: '[ "$MCP_PUBLISH_ATTEMPTED" != "true" ] && [ "$MCP_REGISTRY_CONFIRMED" != "true" ]',
+      expectedOccurrences: 1,
+      witness: {
+        kind: "token",
+        anchor: '[ "$MCP_PUBLISH_ATTEMPTED" != "true" ] || [ "$MCP_REGISTRY_CONFIRMED" != "true" ]',
+        before: 1,
+        after: 0
+      }
+    });
+    releaseMutationPlan.registerCase({
+      id: "release.case.m110",
+      root: releaseMutationM110,
+      checks: [
+        {
+          invoke: {
+            kind: "registry.step.run",
+            baseline: registryPublishStepSource,
+            mutant: releaseMutationM110,
+            integrity: releaseIntegritySource
+          },
+          expectation: {
+            id: "release.expectation.m110.primary",
+            kind: "problem",
+            problem:
+              "stable MCP Registry publication must bind exact source manifests, one pinned publisher write, and bounded readback"
+          }
+        }
+      ]
+    });
+    const releaseMutationProblems = releaseMutationPlan.seal();
+    expect(releaseMutationProblems).toEqual([]);
+    releaseMutationPlan.executeThrough(releaseMutationM037, {
+      registryEvaluatorProblems: mcpRegistryEvaluatorProblems,
+      registryStepProblems: mcpRegistryRunProblems
+    });
+    expect(releaseMutationPlan.phase).toBe("partially-executed");
+    expect(releaseMutationPlan.caseExecutions).toBe(36);
+    expect(releaseMutationPlan.expectationExecutions).toBe(36);
     expect(mcpRegistryRunProblems(registryRun, "")).toContain(MCP_REGISTRY_WORKFLOW_CONTRACT_PROBLEM);
     expect(canonicalLogicalShellIdentifierInventory(registryRun, "CURL_BIN")).toEqual(
       MCP_REGISTRY_CURL_LOGICAL_INVENTORY
@@ -12755,20 +12896,6 @@ describe("release identity and exact required-job gate", () => {
           'echo "MCP Registry exact publication is confirmed for $MCP_NAME@$VERSION"',
           'echo "MCP Registry exact publication is confirmed for $MCP_NAME@$VERSION"\ndone'
         )
-      ),
-      registryStepWithRun(
-        replaceExactly(
-          registryRun,
-          "MCP_REGISTRY_CONFIRMED=false",
-          "MCP_REGISTRY_CONFIRMED=false\nMCP_REGISTRY_CONFIRMED=true"
-        )
-      ),
-      registryStepWithRun(
-        replaceExactly(
-          registryRun,
-          '[ "$MCP_PUBLISH_ATTEMPTED" != "true" ] || [ "$MCP_REGISTRY_CONFIRMED" != "true" ]',
-          '[ "$MCP_PUBLISH_ATTEMPTED" != "true" ] && [ "$MCP_REGISTRY_CONFIRMED" != "true" ]'
-        )
       )
     ];
     for (const weakenedRegistryStep of weakenedRegistrySteps) {
@@ -12776,6 +12903,10 @@ describe("release identity and exact required-job gate", () => {
         MCP_REGISTRY_WORKFLOW_CONTRACT_PROBLEM
       );
     }
+    releaseMutationPlan.executeRemaining();
+    expect(releaseMutationPlan.phase).toBe("executed");
+    expect(releaseMutationPlan.caseExecutions).toBe(38);
+    expect(releaseMutationPlan.expectationExecutions).toBe(38);
     expect(
       mcpRegistryStepProblems(
         registryStep,

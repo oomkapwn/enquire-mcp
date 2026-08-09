@@ -898,12 +898,13 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
     // inherit diagnostics or mutable caller state from either neighbour.
     const firstRepeatedProblems = preparedAudit.auditMatrix(outsideSliceCommentDrift);
     const stableRepeatedProblems = [...firstRepeatedProblems];
+    // The reviewed mixed baseline is the positive control for the exact partition, descriptor,
+    // case, detector and remaining-legacy identities. Assert it before interpreting the mutant so
+    // a stale negative-control expectation can never mask a real canonical-baseline regression.
+    expect(preparedAudit.auditMatrix(matrixSource)).toEqual([]);
     expect(firstRepeatedProblems).toEqual([
       expect.stringMatching(/release mutation hybrid current source must retain exact SHA-256/)
     ]);
-    // The reviewed mixed baseline is the positive control for the exact partition, descriptor,
-    // case, detector and remaining-legacy identities.
-    expect(preparedAudit.auditMatrix(matrixSource)).toEqual([]);
 
     const mcpbSpreadOverride = replaceExactly(
       matrixSource,
@@ -1235,7 +1236,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
         expect.stringMatching(/release mutation hybrid current source must retain exact SHA-256/),
         expect.stringMatching(/release mutation hybrid current matrix slice must retain exact SHA-256/),
         expect.stringMatching(
-          /release mutation hybrid shared primary matcher 3df3ee2e.*exact closed iterable\/runtime topology for 36 frozen root/
+          /release mutation hybrid shared primary matcher 3df3ee2e.*exact closed iterable\/runtime topology for 35 frozen root/
         )
       ])
     );

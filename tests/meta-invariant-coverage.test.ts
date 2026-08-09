@@ -1032,18 +1032,16 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       ]
     ] as const) {
       const registrySourceDrift = replaceExactly(matrixSource, registrySourceLine, registryReplacement);
-      const sourceDrift = replaceExactly(
-        registrySourceDrift,
-        releaseWorkflowSourceBlock,
-        releaseWorkflowReplacement
-      );
-      const sourceBindingProblems = preparedAudit.auditMatrix(sourceDrift).filter((problem) =>
-        problem.startsWith(
-          "release mutation hybrid sources must bind releaseIntegritySource/script.release-integrity and " +
-            "registryPublishStepSource/workflow.registry-publish-step and " +
-            "releaseWorkflowFixtureSource/fixture.release-workflow"
-        )
-      );
+      const sourceDrift = replaceExactly(registrySourceDrift, releaseWorkflowSourceBlock, releaseWorkflowReplacement);
+      const sourceBindingProblems = preparedAudit
+        .auditMatrix(sourceDrift)
+        .filter((problem) =>
+          problem.startsWith(
+            "release mutation hybrid sources must bind releaseIntegritySource/script.release-integrity and " +
+              "registryPublishStepSource/workflow.registry-publish-step and " +
+              "releaseWorkflowFixtureSource/fixture.release-workflow"
+          )
+        );
       expect(sourceBindingProblems, `derived source ${label} drift`).toHaveLength(2);
     }
 

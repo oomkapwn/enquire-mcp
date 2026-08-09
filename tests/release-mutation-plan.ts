@@ -2337,9 +2337,7 @@ export class ReleaseMutationPlan {
       kind === "registry.step.integrity" ? this.#validateCaseCompanionSource(invocation?.run, id, "run") : null;
     if (kind === "registry.step.integrity" && run === null) valid = false;
     const release =
-      kind === "npm.contract.integrity"
-        ? this.#validateCaseCompanionSource(invocation?.release, id, "release")
-        : null;
+      kind === "npm.contract.integrity" ? this.#validateCaseCompanionSource(invocation?.release, id, "release") : null;
     if (kind === "npm.contract.integrity" && release === null) valid = false;
 
     let message: string | null = null;

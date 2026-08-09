@@ -309,8 +309,8 @@ const MATRIX_TITLE = "keeps release.yml wired to the shared evaluator and an exa
 const SOURCE_COMMIT = "8420e2fca3ed0dac994859a9e9a30b933d5ddf9e";
 const MATRIX_SOURCE_SHA256 = "3fa0b67411e2fc0f4d7c6bce6075ba91eb25edc19a210b5c2f8dd408def6e18b";
 const MATRIX_SLICE_SHA256 = "caca0093c744df9f6c6cdd0e8200fd8df45052e784297079887ea48686c5e07f";
-const CURRENT_HYBRID_SOURCE_SHA256 = "f3331314741d4e341411b1d97e9a07ba88ef7b41190b39b73dfccca9502d1565";
-const CURRENT_HYBRID_MATRIX_SLICE_SHA256 = "99c4e7e9570685745ac475bc742bf2540d725a094c9a7f0effb9be632b993447";
+const CURRENT_HYBRID_SOURCE_SHA256 = "dabf2d885822337f624fd4770a553eb25249bcd3a8a7a7c0767f582e9b04db43";
+const CURRENT_HYBRID_MATRIX_SLICE_SHA256 = "19052c2f33a5dd3ef3902607432c75abe2569f27e4088e5dc849204f6974940b";
 const IDENTITY_FIXTURE_SHA256 = "fb431715ec32253b4474c4993a46acbc0c20749b9f3162b31985c3f8668513e9";
 const MUTATION_MATCH_COUNT_NODE_SHA256 = "5e57cd7a2f1dd60cc4bda3b10c4a7e906f7e5b9604902eff5e54f20bd0c8f49d";
 const NPM_PROVENANCE_PROBLEM_NODE_SHA256 = "f6f47a5f8eb309db455cf684ca187c5c1ce6dadd0443e4c11475a779a5944334";
@@ -6712,10 +6712,7 @@ function validateReleaseOraclePins(matrix: MatrixScan, declarative: HybridDeclar
   exactNodeHash("mcpRegistryEvaluatorProblems", REGISTRY_EVALUATOR_DETECTOR_NODE_SHA256);
   exactNodeHash("mcpRegistryStepProblems", REGISTRY_STEP_DETECTOR_NODE_SHA256);
   exactNodeHash("mcpRegistryRunProblems", REGISTRY_RUN_DETECTOR_NODE_SHA256);
-  if (
-    npmProblemConstantHashes.length !== 1 ||
-    npmProblemConstantHashes[0] !== NPM_PROVENANCE_PROBLEM_NODE_SHA256
-  ) {
+  if (npmProblemConstantHashes.length !== 1 || npmProblemConstantHashes[0] !== NPM_PROVENANCE_PROBLEM_NODE_SHA256) {
     problems.push(
       "release mutation hybrid pinned npm provenance problem AST node must retain exact SHA-256 " +
         NPM_PROVENANCE_PROBLEM_NODE_SHA256

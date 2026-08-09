@@ -8624,17 +8624,12 @@ describe("release identity and exact required-job gate", () => {
     expect(releaseMutationInventoryProblems(evaluatedDeclarativeSource)).toContainEqual(
       expect.stringMatching(/passive identifier\/string source value/)
     );
-    const releaseWorkflowFixtureSourceToken = [
-      '"fixture.release-workflow",',
-      "mcpbInputs.release"
-    ].join("\n      ");
+    const releaseWorkflowFixtureSourceToken = ['"fixture.release-workflow",', "mcpbInputs.release"].join("\n      ");
     const releaseWorkflowFixtureSourceOffset = declarativeBatchOffset(releaseWorkflowFixtureSourceToken);
     const transplantedReleaseWorkflowFixtureSource = [
       hybridDeclarativeMutation.slice(0, releaseWorkflowFixtureSourceOffset),
       ['"fixture.release-workflow",', "mcpbInputs.integrity"].join("\n      "),
-      hybridDeclarativeMutation.slice(
-        releaseWorkflowFixtureSourceOffset + releaseWorkflowFixtureSourceToken.length
-      )
+      hybridDeclarativeMutation.slice(releaseWorkflowFixtureSourceOffset + releaseWorkflowFixtureSourceToken.length)
     ].join("");
     expect(releaseMutationInventoryProblems(transplantedReleaseWorkflowFixtureSource)).toContainEqual(
       expect.stringMatching(/fixture\.release-workflow source requires the exact/)
@@ -11349,9 +11344,7 @@ describe("release identity and exact required-job gate", () => {
     npmPositivePlan.execute({
       npmContractProblems: (release, integrity) => {
         npmPositiveCalls.push([release, integrity]);
-        return release === "release-clean" && integrity === "integrity-clean"
-          ? []
-          : [RELEASE_MUTATION_NPM_PROBLEM];
+        return release === "release-clean" && integrity === "integrity-clean" ? [] : [RELEASE_MUTATION_NPM_PROBLEM];
       }
     });
     expect(npmPositiveCalls).toEqual([
@@ -12768,14 +12761,12 @@ describe("release identity and exact required-job gate", () => {
     const releaseMutationM112 = releaseMutationPlan.registerMutation("release.m112", {
       mode: "first",
       source: releaseWorkflowFixtureSource,
-      needle:
-        '"$NODE_BIN" scripts/check-release-integrity.mjs npm-provenance-context "$SOURCE_SHA" "$TAG"',
+      needle: '"$NODE_BIN" scripts/check-release-integrity.mjs npm-provenance-context "$SOURCE_SHA" "$TAG"',
       replacement: "true # provenance context bypassed",
       expectedOccurrences: 1,
       witness: {
         kind: "token",
-        anchor:
-          '"$NODE_BIN" scripts/check-release-integrity.mjs npm-provenance-context "$SOURCE_SHA" "$TAG"',
+        anchor: '"$NODE_BIN" scripts/check-release-integrity.mjs npm-provenance-context "$SOURCE_SHA" "$TAG"',
         before: 1,
         after: 0
       }

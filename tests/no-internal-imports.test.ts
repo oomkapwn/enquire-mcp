@@ -1039,9 +1039,15 @@ describe("Class A invariant — no test imports value from registration boilerpl
       '    include: ["tests/**/*.test.ts"],\n',
       '    include: ["tests/**/*.test.ts"],\n    exclude: ["tests/release-integrity.test.ts"],\n'
     );
-    expect(coverageIsolationProblems({ ...current, vitestConfig: vitestWithGlobalExclusion })).toContain(
+    const vitestAggregateProblems = coverageIsolationProblems({
+      ...current,
+      vitestConfig: vitestWithGlobalExclusion,
+      vitestConfigFiles: [...current.vitestConfigFiles, "vitest.workspace.ts"]
+    });
+    expect(vitestAggregateProblems).toContain(
       "vitest test config must retain its exact reviewed static key set"
     );
+    expect(vitestAggregateProblems).toContain("the repository must retain one canonical vitest.config.ts");
     const vitestWithHiddenExclusion = replaceExactly(
       current.vitestConfig,
       '    include: ["tests/**/*.test.ts"],\n',
@@ -1115,13 +1121,9 @@ describe("Class A invariant — no test imports value from registration boilerpl
       '      provider: "v8",',
       '      provider: "istanbul",'
     );
-    expect(currentVitestProblems(vitestWithWrongProvider)).toContain(
-      "vitest coverage provider must remain v8"
-    );
+    expect(currentVitestProblems(vitestWithWrongProvider)).toContain("vitest coverage provider must remain v8");
     const vitestWithLowerFloor = replaceExactly(current.vitestConfig, "        branches: 74", "        branches: 73");
-    expect(currentVitestProblems(vitestWithLowerFloor)).toContain(
-      "vitest coverage threshold branches must remain 74"
-    );
+    expect(currentVitestProblems(vitestWithLowerFloor)).toContain("vitest coverage threshold branches must remain 74");
     expect(
       vitestCoverageProblems(current.vitestConfig, [...current.vitestConfigFiles, "vitest.workspace.ts"])
     ).toContain("the repository must retain one canonical vitest.config.ts");

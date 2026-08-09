@@ -309,15 +309,19 @@ const MATRIX_TITLE = "keeps release.yml wired to the shared evaluator and an exa
 const SOURCE_COMMIT = "8420e2fca3ed0dac994859a9e9a30b933d5ddf9e";
 const MATRIX_SOURCE_SHA256 = "3fa0b67411e2fc0f4d7c6bce6075ba91eb25edc19a210b5c2f8dd408def6e18b";
 const MATRIX_SLICE_SHA256 = "caca0093c744df9f6c6cdd0e8200fd8df45052e784297079887ea48686c5e07f";
-const CURRENT_HYBRID_SOURCE_SHA256 = "621ebed432545f10921304da0f18827be532d3c2111de34a0482ec3eef88adc7";
-const CURRENT_HYBRID_MATRIX_SLICE_SHA256 = "e18c9dc6bd292117977641025d28cb7cb478234d38fc4c23a70dfaa6db441583";
+const CURRENT_HYBRID_SOURCE_SHA256 = "99931714ff611a51a3d9e1320d103d247bff79d00dcc7d909f016a4d4b6b55e5";
+const CURRENT_HYBRID_MATRIX_SLICE_SHA256 = "25d53696f36dad372469a1cbb5c0593b73b2045f37bd5ba3cde84dc19c87931d";
 const IDENTITY_FIXTURE_SHA256 = "fb431715ec32253b4474c4993a46acbc0c20749b9f3162b31985c3f8668513e9";
 const MUTATION_MATCH_COUNT_NODE_SHA256 = "5e57cd7a2f1dd60cc4bda3b10c4a7e906f7e5b9604902eff5e54f20bd0c8f49d";
 const REGISTRY_EVALUATOR_PROBLEM_NODE_SHA256 = "4c374cc179d7a95cdf25085358c62e482134824abca913b126167d3bb8397b26";
 const REGISTRY_EVALUATOR_DETECTOR_NODE_SHA256 = "b45c5aed44cf1bff818d5ddac4f80e8fb805e61300f93f77afc299d3e8f0047c";
+const REGISTRY_STEP_DETECTOR_NODE_SHA256 = "5dec02c19d724cf373acc0c9b65fba7309b4b3e5c4ca6cff5422ec5c64e12db6";
 const REGISTRY_RUN_DETECTOR_NODE_SHA256 = "5b09ecbae41cfc47a6f66ff353e923ef511dd0007fba0a075d61de6e256935e6";
+const REGISTRY_WORKFLOW_PROBLEM_NODE_SHA256 = "65bf82b0a4429d04ea16bfd0baa7b8397c0c43a945f978e0f4395e59cbcf1221";
 const REGISTRY_EVALUATOR_PROBLEM =
   "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics";
+const REGISTRY_WORKFLOW_PROBLEM =
+  "stable MCP Registry publication must bind exact source manifests, one pinned publisher write, and bounded readback";
 const MIGRATED_REGISTRY_EVALUATOR_IDS = [
   "release.m002",
   "release.m003",
@@ -356,8 +360,12 @@ const MIGRATED_REGISTRY_EVALUATOR_IDS = [
   "release.m036",
   "release.m037"
 ] as const;
+const MIGRATED_REGISTRY_RUN_IDS = ["release.m109", "release.m110"] as const;
 const MIGRATED_REGISTRY_EVALUATOR_ID_SET: ReadonlySet<string> = new Set<string>(MIGRATED_REGISTRY_EVALUATOR_IDS);
-const MIGRATED_REGISTRY_EVALUATOR_ALL_IDS: ReadonlySet<string> = new Set<string>([
+const MIGRATED_REGISTRY_RUN_ID_SET: ReadonlySet<string> = new Set<string>(MIGRATED_REGISTRY_RUN_IDS);
+const MIGRATED_REGISTRY_IDS = [...MIGRATED_REGISTRY_EVALUATOR_IDS, ...MIGRATED_REGISTRY_RUN_IDS] as const;
+const MIGRATED_REGISTRY_ID_SET: ReadonlySet<string> = new Set<string>(MIGRATED_REGISTRY_IDS);
+const MIGRATED_REGISTRY_ALL_IDS: ReadonlySet<string> = new Set<string>([
   "release.m009",
   "release.m018",
   "release.m034"
@@ -1889,6 +1897,12 @@ function positiveIntegerLiteral(value: ts.Expression | undefined): number | null
   return Number.isSafeInteger(observed) && observed > 0 ? observed : null;
 }
 
+function nonNegativeIntegerLiteral(value: ts.Expression | undefined): number | null {
+  if (value === undefined || !ts.isNumericLiteral(value)) return null;
+  const observed = Number(value.text);
+  return Number.isSafeInteger(observed) && observed >= 0 ? observed : null;
+}
+
 function exactExpectMatcher(
   statement: ts.Statement | undefined,
   matcherName: string
@@ -2254,6 +2268,7 @@ function scanHybridDeclarativeMatrix(matrix: MatrixScan, problems: string[]): Hy
   let planStatementIndex = -1;
   let aliasStatementIndex = -1;
   let sourceStatementIndex = -1;
+  let registrySourceStatementIndex = -1;
   let lastRegistrationIndex = -1;
   let sealStatementIndex = -1;
   let topLevelRegisterMutationCalls = 0;
@@ -2308,12 +2323,12 @@ function scanHybridDeclarativeMatrix(matrix: MatrixScan, problems: string[]): Hy
           problems
         );
         const expectedInventory = {
-          total: 36,
-          first: 33,
+          total: 38,
+          first: 35,
           all: 3,
-          cases: 36,
-          expectations: 36,
-          roots: 36,
+          cases: 38,
+          expectations: 38,
+          roots: 38,
           dependencyOnly: 0
         } as const;
         if (inventory !== null) {
@@ -2341,20 +2356,33 @@ function scanHybridDeclarativeMatrix(matrix: MatrixScan, problems: string[]): Hy
             `source:${literalStringValue(sourceCall.arguments[0]) ?? "<unknown>"}:${declaration.name.text}`
           );
           registrationStatementIndexes.push(statementIndex);
-          if (
-            declaration.name.text !== "releaseIntegritySource" ||
-            sourceCall.arguments.length !== 2 ||
-            literalStringValue(sourceCall.arguments[0]) !== "script.release-integrity" ||
-            sourceCall.arguments[1] === undefined ||
-            !ts.isIdentifier(sourceCall.arguments[1]) ||
-            sourceCall.arguments[1].text !== "releaseIntegrityText"
-          ) {
-            problems.push(
-              "release mutation hybrid source must bind releaseIntegritySource to exact script.release-integrity bytes"
-            );
-          } else {
+          const sourceId = literalStringValue(sourceCall.arguments[0]);
+          const sourceValue = sourceCall.arguments[1];
+          const exactReleaseIntegritySource =
+            declaration.name.text === "releaseIntegritySource" &&
+            sourceCall.arguments.length === 2 &&
+            sourceId === "script.release-integrity" &&
+            sourceValue !== undefined &&
+            ts.isIdentifier(sourceValue) &&
+            sourceValue.text === "releaseIntegrityText";
+          const exactRegistryPublishStepSource =
+            declaration.name.text === "registryPublishStepSource" &&
+            sourceCall.arguments.length === 2 &&
+            sourceId === "workflow.registry-publish-step" &&
+            sourceValue !== undefined &&
+            ts.isIdentifier(sourceValue) &&
+            sourceValue.text === "registryRun";
+          if (exactReleaseIntegritySource) {
             sourceCount++;
             sourceStatementIndex = statementIndex;
+          } else if (exactRegistryPublishStepSource) {
+            sourceCount++;
+            registrySourceStatementIndex = statementIndex;
+          } else {
+            problems.push(
+              "release mutation hybrid sources must bind releaseIntegritySource/script.release-integrity and " +
+                "registryPublishStepSource/workflow.registry-publish-step to their exact source bytes"
+            );
           }
         }
 
@@ -2385,12 +2413,8 @@ function scanHybridDeclarativeMatrix(matrix: MatrixScan, problems: string[]): Hy
         );
         const witnessKind = literalStringValue(witness?.get("kind"));
         const witnessAnchor = literalStringValue(witness?.get("anchor"));
-        const witnessBefore = positiveIntegerLiteral(witness?.get("before"));
-        const witnessAfterExpression = witness?.get("after");
-        const witnessAfter =
-          witnessAfterExpression !== undefined && ts.isNumericLiteral(witnessAfterExpression)
-            ? Number(witnessAfterExpression.text)
-            : null;
+        const witnessBefore = nonNegativeIntegerLiteral(witness?.get("before"));
+        const witnessAfter = nonNegativeIntegerLiteral(witness?.get("after"));
         if (
           (mode !== "first" && mode !== "all") ||
           sourceHandle === undefined ||
@@ -2402,8 +2426,7 @@ function scanHybridDeclarativeMatrix(matrix: MatrixScan, problems: string[]): Hy
           witnessAnchor === null ||
           witnessBefore === null ||
           witnessAfter === null ||
-          !Number.isSafeInteger(witnessAfter) ||
-          witnessAfter < 0
+          witnessBefore === witnessAfter
         ) {
           problems.push(`release mutation hybrid descriptor ${id} must contain exact literal passive values`);
           continue;
@@ -2574,9 +2597,9 @@ function scanHybridDeclarativeMatrix(matrix: MatrixScan, problems: string[]): Hy
   ) {
     problems.push("release mutation hybrid execution events must be exact direct top-level property calls");
   }
-  if (aliasCount !== 1 || planCount !== 1 || sourceCount !== 1) {
+  if (aliasCount !== 1 || planCount !== 1 || sourceCount !== 2) {
     problems.push(
-      `release mutation hybrid prelude requires one exact alias/plan/source; ` +
+      `release mutation hybrid prelude requires one exact alias/plan and two exact sources; ` +
         `found ${aliasCount}/${planCount}/${sourceCount}`
     );
   }
@@ -2585,18 +2608,32 @@ function scanHybridDeclarativeMatrix(matrix: MatrixScan, problems: string[]): Hy
     ...MIGRATED_REGISTRY_EVALUATOR_IDS.flatMap((id) => [
       `mutation:${id}`,
       `case:${id.replace("release.", "release.case.")}`
+    ]),
+    "source:workflow.registry-publish-step:registryPublishStepSource",
+    ...MIGRATED_REGISTRY_RUN_IDS.flatMap((id) => [
+      `mutation:${id}`,
+      `case:${id.replace("release.", "release.case.")}`
     ])
   ];
+  const evaluatorRegistrationCount = 1 + MIGRATED_REGISTRY_EVALUATOR_IDS.length * 2;
+  const registryRunRegistrationCount = 1 + MIGRATED_REGISTRY_RUN_IDS.length * 2;
+  const straightLineEvaluatorRegistrations = registrationStatementIndexes
+    .slice(0, evaluatorRegistrationCount)
+    .every((statementIndex, index) => statementIndex === sourceStatementIndex + index);
+  const straightLineRegistryRunRegistrations = registrationStatementIndexes
+    .slice(evaluatorRegistrationCount)
+    .every((statementIndex, index) => statementIndex === registrySourceStatementIndex + index);
   const straightLineRegistrations =
-    registrationStatementIndexes.length === expectedRegistrationSequence.length &&
-    registrationStatementIndexes.every((statementIndex, index) => statementIndex === sourceStatementIndex + index);
+    registrationStatementIndexes.length === evaluatorRegistrationCount + registryRunRegistrationCount &&
+    straightLineEvaluatorRegistrations &&
+    straightLineRegistryRunRegistrations;
   if (
     JSON.stringify(registrationSequence) !== JSON.stringify(expectedRegistrationSequence) ||
     !straightLineRegistrations
   ) {
     problems.push(
-      "release mutation hybrid registrations must be the exact contiguous source plus ordered m002-m037 " +
-        "mutation/case sequence"
+      "release mutation hybrid registrations must be exact contiguous source/m002-m037 and " +
+        "source/m109-m110 mutation/case sequences"
     );
   }
   if (
@@ -2631,6 +2668,33 @@ function scanHybridDeclarativeMatrix(matrix: MatrixScan, problems: string[]): Hy
     baselineAssertion.expected.elements.length === 0;
   if (!exactBaselineAssertion) {
     problems.push("release mutation hybrid prelude must start with one exact clean registry evaluator assertion");
+  }
+  const registryBaselineAssertion = exactExpectMatcher(statements[registrySourceStatementIndex - 1], "toEqual");
+  const registryBaselineDetector = registryBaselineAssertion?.actual;
+  const exactRegistryBaselineAssertion =
+    registryBaselineAssertion !== null &&
+    registryBaselineDetector !== undefined &&
+    ts.isCallExpression(registryBaselineDetector) &&
+    registryBaselineDetector.questionDotToken === undefined &&
+    registryBaselineDetector.typeArguments === undefined &&
+    ts.isIdentifier(registryBaselineDetector.expression) &&
+    registryBaselineDetector.expression.text === "mcpRegistryRunProblems" &&
+    registryBaselineDetector.arguments.length === 2 &&
+    registryBaselineDetector.arguments[0] !== undefined &&
+    ts.isIdentifier(registryBaselineDetector.arguments[0]) &&
+    registryBaselineDetector.arguments[0].text === "registryRun" &&
+    registryBaselineDetector.arguments[1] !== undefined &&
+    ts.isPropertyAccessExpression(registryBaselineDetector.arguments[1]) &&
+    registryBaselineDetector.arguments[1].questionDotToken === undefined &&
+    ts.isIdentifier(registryBaselineDetector.arguments[1].expression) &&
+    registryBaselineDetector.arguments[1].expression.text === "mcpbInputs" &&
+    registryBaselineDetector.arguments[1].name.text === "integrity" &&
+    ts.isArrayLiteralExpression(registryBaselineAssertion.expected) &&
+    registryBaselineAssertion.expected.elements.length === 0;
+  if (!exactRegistryBaselineAssertion) {
+    problems.push(
+      "release mutation hybrid Registry-step source must immediately follow one exact clean registry run assertion"
+    );
   }
 
   const sealAssertion = exactExpectMatcher(statements[sealStatementIndex + 1], "toEqual");
@@ -2750,21 +2814,6 @@ function scanHybridDeclarativeMatrix(matrix: MatrixScan, problems: string[]): Hy
   const commonLifecycle =
     sealCount === 1 && allSealCalls === 1 && sealStatementIndex === lastRegistrationIndex + 1 && exactSealAssertion;
 
-  let exactFullLifecycle = false;
-  if (executionEvents.length === 1 && executionCalls.length === 1) {
-    const event = executionEvents[0];
-    const call = executionCalls[0];
-    if (event !== undefined && call !== undefined && event.kind === "execute") {
-      exactFullLifecycle =
-        event.statementIndex === lifecycleStart &&
-        event.boundaryHandle === null &&
-        exactExecutionArguments(call, "execute", 0) &&
-        exactPhaseAt(lifecycleStart + 1, "executed") &&
-        exactExecutionCountAt(lifecycleStart + 2, "caseExecutions", totalCaseCount) &&
-        exactExecutionCountAt(lifecycleStart + 3, "expectationExecutions", totalExpectationCount);
-    }
-  }
-
   let exactStagedLifecycle = false;
   if (executionEvents.length === 2 && executionCalls.length === 2) {
     const prefixEvent = executionEvents[0];
@@ -2792,6 +2841,7 @@ function scanHybridDeclarativeMatrix(matrix: MatrixScan, problems: string[]): Hy
       exactStagedLifecycle =
         boundaryIndex !== undefined &&
         boundaryIndex < cases.length - 1 &&
+        prefixEvent.boundaryHandle === "releaseMutationM037" &&
         prefixEvent.statementIndex === lifecycleStart &&
         remainingStatementIndex > lifecycleStart + 3 &&
         exactExecutionArguments(prefixCall, "executeThrough", 1) &&
@@ -2805,10 +2855,10 @@ function scanHybridDeclarativeMatrix(matrix: MatrixScan, problems: string[]): Hy
     }
   }
 
-  if (!commonLifecycle || !hasClosedInvocationKinds || (!exactFullLifecycle && !exactStagedLifecycle)) {
+  if (!commonLifecycle || !hasClosedInvocationKinds || !exactStagedLifecycle) {
     problems.push(
-      "release mutation hybrid lifecycle must be one clean seal followed by either one exact full execute or " +
-        "one exact executeThrough/executeRemaining pair with derived phase and execution censuses"
+      "release mutation hybrid lifecycle must be one clean seal followed by the exact m037 " +
+        "executeThrough/executeRemaining pair with derived phase and execution censuses"
     );
   }
   return { mutations, cases, executionEvents };
@@ -5264,10 +5314,11 @@ function validateHybridPartition(
 ): ReadonlyMap<string, LegacyMutationCall> {
   const mutationById = new Map(manifest.mutations.map((mutation) => [mutation.id, mutation]));
   const caseByRoot = new Map(manifest.cases.map((identityCase) => [identityCase.root, identityCase]));
+  const sourceBindingById = new Map(manifest.sources.map((source) => [source.id, source.declarativeBinding]));
   const observedDeclarativeIds = declarative.mutations.map((mutation) => mutation.id);
-  if (JSON.stringify(observedDeclarativeIds) !== JSON.stringify(MIGRATED_REGISTRY_EVALUATOR_IDS)) {
+  if (JSON.stringify(observedDeclarativeIds) !== JSON.stringify(MIGRATED_REGISTRY_IDS)) {
     problems.push(
-      `release mutation hybrid declarative allowlist must be exact ${MIGRATED_REGISTRY_EVALUATOR_IDS.join(", ")}; ` +
+      `release mutation hybrid declarative allowlist must be exact ${MIGRATED_REGISTRY_IDS.join(", ")}; ` +
         `found ${observedDeclarativeIds.join(", ")}`
     );
   }
@@ -5295,9 +5346,15 @@ function validateHybridPartition(
       problems.push(`release mutation hybrid descriptor ${observed.id} mode disagrees with frozen identity`);
     }
     const frozenSourceId = frozen.source.kind === "source" ? frozen.source.id : null;
+    const frozenSourceHandle = frozenSourceId === null ? undefined : sourceBindingById.get(frozenSourceId);
+    const exactWitnessDerivation =
+      (frozen.witness.derivation === "needle" && frozen.witness.anchor === frozen.expressions.needle.resolved) ||
+      (frozen.witness.derivation === "replacement" &&
+        frozen.witness.anchor === frozen.expressions.replacement.resolved);
     if (
-      frozenSourceId !== "script.release-integrity" ||
-      observed.sourceHandle !== "releaseIntegritySource" ||
+      frozenSourceId === null ||
+      frozenSourceHandle === undefined ||
+      observed.sourceHandle !== frozenSourceHandle ||
       observed.needle !== frozen.expressions.needle.resolved ||
       observed.replacement !== frozen.expressions.replacement.resolved ||
       observed.expectedOccurrences !== frozen.expressions.expectedOccurrences.resolved ||
@@ -5305,7 +5362,7 @@ function validateHybridPartition(
       observed.witness.anchor !== frozen.witness.anchor ||
       observed.witness.before !== frozen.witness.before ||
       observed.witness.after !== frozen.witness.after ||
-      frozen.witness.derivation !== "needle" ||
+      !exactWitnessDerivation ||
       frozen.role !== "root" ||
       frozen.ownerRoot !== frozen.id ||
       frozen.replacementDependency !== null
@@ -5317,19 +5374,19 @@ function validateHybridPartition(
     .filter((mutation) => mutation.mode === "all")
     .map((mutation) => mutation.id);
   if (
-    declarative.mutations.length !== 36 ||
-    declarativeFirst !== 33 ||
+    declarative.mutations.length !== 38 ||
+    declarativeFirst !== 35 ||
     declarativeAll !== 3 ||
-    JSON.stringify(observedAllIds) !== JSON.stringify([...MIGRATED_REGISTRY_EVALUATOR_ALL_IDS])
+    JSON.stringify(observedAllIds) !== JSON.stringify([...MIGRATED_REGISTRY_ALL_IDS])
   ) {
     problems.push(
-      `release mutation hybrid migrated modes must be 36 total / 33 first / exact all m009,m018,m034; ` +
+      `release mutation hybrid migrated modes must be 38 total / 35 first / exact all m009,m018,m034; ` +
         `found ${declarative.mutations.length} / ${declarativeFirst} / ${observedAllIds.join(",")}`
     );
   }
 
   const observedCaseIds = declarative.cases.map((identityCase) => identityCase.id);
-  const expectedCaseIds = MIGRATED_REGISTRY_EVALUATOR_IDS.map((id) => id.replace("release.", "release.case."));
+  const expectedCaseIds = MIGRATED_REGISTRY_IDS.map((id) => id.replace("release.", "release.case."));
   if (JSON.stringify(observedCaseIds) !== JSON.stringify(expectedCaseIds)) {
     problems.push(
       `release mutation hybrid case allowlist must be exact ${expectedCaseIds.join(", ")}; ` +
@@ -5343,14 +5400,20 @@ function validateHybridPartition(
     const exactInvocation =
       rootId !== undefined &&
       frozenCheck !== undefined &&
-      observed.invocationKind === "registry.evaluator" &&
-      frozenCheck.invoke.kind === "registry.evaluator" &&
       matchesFrozenDeclarativeInvocation(manifest, observed, rootId, frozenCheck);
+    const expectedInvocationKind =
+      rootId !== undefined && MIGRATED_REGISTRY_EVALUATOR_ID_SET.has(rootId)
+        ? "registry.evaluator"
+        : rootId !== undefined && MIGRATED_REGISTRY_RUN_ID_SET.has(rootId)
+          ? "registry.step.run"
+          : null;
     if (!exactInvocation) {
       problems.push(
-        `release mutation hybrid case ${observed.id} invocation must retain the exact registry.evaluator adapter`
+        `release mutation hybrid case ${observed.id} invocation must retain its exact frozen Registry adapter`
       );
     }
+    const expectedProblem =
+      expectedInvocationKind === "registry.evaluator" ? REGISTRY_EVALUATOR_PROBLEM : REGISTRY_WORKFLOW_PROBLEM;
     if (
       rootId === undefined ||
       frozen === undefined ||
@@ -5358,27 +5421,29 @@ function validateHybridPartition(
       observed.handle !== expectedMutationHandle(rootId) ||
       frozenCheck === undefined ||
       !exactInvocation ||
+      observed.invocationKind !== expectedInvocationKind ||
+      frozenCheck.invoke.kind !== expectedInvocationKind ||
       observed.expectationId !== frozenCheck.expectation.id ||
       frozenCheck.expectation.kind !== "problem" ||
       observed.problem !== frozenCheck.expectation.problem ||
-      observed.problem !== REGISTRY_EVALUATOR_PROBLEM ||
+      observed.problem !== expectedProblem ||
       frozen.checks.length !== 1 ||
       frozenCheck.matcherEvaluations.length !== 1
     ) {
       problems.push(`release mutation hybrid case ${observed.id} disagrees with its exact frozen identity`);
     }
   }
-  if (declarative.cases.length !== 36) {
-    problems.push(`release mutation hybrid migrated cases must equal 36; found ${declarative.cases.length}`);
+  if (declarative.cases.length !== 38) {
+    problems.push(`release mutation hybrid migrated cases must equal 38; found ${declarative.cases.length}`);
   }
 
   const frozenLegacyOrder = [...manifest.mutations].sort((left, right) => left.legacyOrder - right.legacyOrder);
-  const expectedLegacy = frozenLegacyOrder.filter((mutation) => !MIGRATED_REGISTRY_EVALUATOR_ID_SET.has(mutation.id));
+  const expectedLegacy = frozenLegacyOrder.filter((mutation) => !MIGRATED_REGISTRY_ID_SET.has(mutation.id));
   const legacyById = new Map<string, LegacyMutationCall>();
   const numericDeclarations = matrix.declarations;
   const stringDeclarations = matrix.declarations;
-  if (matrix.calls.length !== 524) {
-    problems.push(`release mutation hybrid remaining legacy calls must equal 524; found ${matrix.calls.length}`);
+  if (matrix.calls.length !== 522) {
+    problems.push(`release mutation hybrid remaining legacy calls must equal 522; found ${matrix.calls.length}`);
   }
   const comparableLength = Math.min(expectedLegacy.length, matrix.calls.length);
   for (let index = 0; index < comparableLength; index++) {
@@ -5429,7 +5494,7 @@ function validateHybridPartition(
   const legacyRoots = expectedLegacy.filter((mutation) => mutation.role === "root").length;
   const legacyDependencies = expectedLegacy.filter((mutation) => mutation.role === "dependency").length;
   const legacyCases = manifest.cases.filter(
-    (identityCase) => !MIGRATED_REGISTRY_EVALUATOR_ID_SET.has(identityCase.root)
+    (identityCase) => !MIGRATED_REGISTRY_ID_SET.has(identityCase.root)
   );
   const legacyChecks = legacyCases.reduce((total, identityCase) => total + identityCase.checks.length, 0);
   const legacyLeaves = legacyCases.reduce(
@@ -5438,18 +5503,18 @@ function validateHybridPartition(
     0
   );
   if (
-    expectedLegacy.length !== 524 ||
-    legacyFirst !== 505 ||
+    expectedLegacy.length !== 522 ||
+    legacyFirst !== 503 ||
     legacyAll !== 19 ||
-    legacyRoots !== 500 ||
+    legacyRoots !== 498 ||
     legacyDependencies !== 24 ||
-    legacyCases.length !== 500 ||
-    legacyChecks !== 505 ||
-    legacyLeaves !== 510
+    legacyCases.length !== 498 ||
+    legacyChecks !== 503 ||
+    legacyLeaves !== 508
   ) {
     problems.push(
-      `release mutation hybrid frozen partition must retain 524=505/19, 500 roots/cases, 24 dependencies, ` +
-        `505 checks and 510 leaves; found ${expectedLegacy.length}=${legacyFirst}/${legacyAll}, ` +
+      `release mutation hybrid frozen partition must retain 522=503/19, 498 roots/cases, 24 dependencies, ` +
+        `503 checks and 508 leaves; found ${expectedLegacy.length}=${legacyFirst}/${legacyAll}, ` +
         `${legacyRoots}/${legacyCases.length}, ${legacyDependencies}, ${legacyChecks}, ${legacyLeaves}`
     );
   }
@@ -5470,7 +5535,7 @@ function validateHybridPartition(
     expectedLegacyMultiplicity.set(key, (expectedLegacyMultiplicity.get(key) ?? 0) + 1);
   }
   for (const mutation of manifest.mutations) {
-    const migrated = MIGRATED_REGISTRY_EVALUATOR_ID_SET.has(mutation.id);
+    const migrated = MIGRATED_REGISTRY_ID_SET.has(mutation.id);
     const key = exactLegacyKey(mutation.mode, mutation.legacySpan.sha256);
     const observedMultiplicity = observedLegacyMultiplicity.get(key) ?? 0;
     const expectedMultiplicity = expectedLegacyMultiplicity.get(key) ?? 0;
@@ -5489,13 +5554,13 @@ function validateHybridPartition(
       mutation.replacementDependency
     ].filter((value): value is string => value !== null);
     for (const dependency of dependencies) {
-      if (MIGRATED_REGISTRY_EVALUATOR_ID_SET.has(dependency) !== migrated) {
+      if (MIGRATED_REGISTRY_ID_SET.has(dependency) !== migrated) {
         problems.push(
           `release mutation hybrid dependency edge ${dependency}->${mutation.id} crosses the freeze boundary`
         );
       }
     }
-    if (MIGRATED_REGISTRY_EVALUATOR_ID_SET.has(mutation.ownerRoot) !== migrated) {
+    if (MIGRATED_REGISTRY_ID_SET.has(mutation.ownerRoot) !== migrated) {
       problems.push(
         `release mutation hybrid owner root ${mutation.ownerRoot} for ${mutation.id} crosses the freeze boundary`
       );
@@ -6196,7 +6261,7 @@ function validateRemainingLegacyMatchers(
   let checks = 0;
   let leaves = 0;
   for (const identityCase of manifest.cases) {
-    if (MIGRATED_REGISTRY_EVALUATOR_ID_SET.has(identityCase.root)) continue;
+    if (MIGRATED_REGISTRY_ID_SET.has(identityCase.root)) continue;
     cases++;
     const rootCall = legacyById.get(identityCase.root)?.node;
     if (rootCall === undefined) {
@@ -6264,9 +6329,9 @@ function validateRemainingLegacyMatchers(
       });
     }
   }
-  if (cases !== 500 || checks !== 505 || leaves !== 510) {
+  if (cases !== 498 || checks !== 503 || leaves !== 508) {
     problems.push(
-      `release mutation hybrid remaining matcher census must be 500 cases / 505 checks / 510 leaves; ` +
+      `release mutation hybrid remaining matcher census must be 498 cases / 503 checks / 508 leaves; ` +
         `found ${cases} / ${checks} / ${leaves}`
     );
   }
@@ -6278,7 +6343,7 @@ function validateRemainingLegacyMatchers(
     manifest.cases.flatMap((identityCase) =>
       identityCase.checks.flatMap((check) =>
         check.matcherEvaluations.map((matcher) => ({
-          remainingLegacy: !MIGRATED_REGISTRY_EVALUATOR_ID_SET.has(identityCase.root),
+          remainingLegacy: !MIGRATED_REGISTRY_ID_SET.has(identityCase.root),
           span: matcher.assertionSpan
         }))
       )
@@ -6304,7 +6369,7 @@ function validateGlobalCaseExecutionOrder(
   problems: string[]
 ): void {
   const legacyCases = manifest.cases.filter(
-    (identityCase) => !MIGRATED_REGISTRY_EVALUATOR_ID_SET.has(identityCase.root)
+    (identityCase) => !MIGRATED_REGISTRY_ID_SET.has(identityCase.root)
   );
   // Matcher validation already owns missing or ambiguous legacy anchors. Do not
   // turn one binding failure into a second, misleading order failure.
@@ -6439,7 +6504,8 @@ const REGISTRY_BINDING_ASSIGNMENT_OPERATORS: ReadonlySet<ts.SyntaxKind> = new Se
 
 function validateRegistryOraclePins(matrix: MatrixScan, declarative: HybridDeclarativeScan, problems: string[]): void {
   const functionHashes = new Map<string, string[]>();
-  const problemConstantHashes: string[] = [];
+  const evaluatorProblemConstantHashes: string[] = [];
+  const workflowProblemConstantHashes: string[] = [];
   for (const statement of matrix.sourceFile.statements) {
     if (ts.isFunctionDeclaration(statement) && statement.name !== undefined) {
       const entries = functionHashes.get(statement.name.text) ?? [];
@@ -6449,7 +6515,10 @@ function validateRegistryOraclePins(matrix: MatrixScan, declarative: HybridDecla
     if (ts.isVariableStatement(statement)) {
       for (const declaration of statement.declarationList.declarations) {
         if (ts.isIdentifier(declaration.name) && declaration.name.text === "MCP_REGISTRY_EVALUATOR_CONTRACT_PROBLEM") {
-          problemConstantHashes.push(sha256(statement.getText(matrix.sourceFile)));
+          evaluatorProblemConstantHashes.push(sha256(statement.getText(matrix.sourceFile)));
+        }
+        if (ts.isIdentifier(declaration.name) && declaration.name.text === "MCP_REGISTRY_WORKFLOW_CONTRACT_PROBLEM") {
+          workflowProblemConstantHashes.push(sha256(statement.getText(matrix.sourceFile)));
         }
       }
     }
@@ -6462,11 +6531,24 @@ function validateRegistryOraclePins(matrix: MatrixScan, declarative: HybridDecla
   };
   exactNodeHash("mutationMatchCount", MUTATION_MATCH_COUNT_NODE_SHA256);
   exactNodeHash("mcpRegistryEvaluatorProblems", REGISTRY_EVALUATOR_DETECTOR_NODE_SHA256);
+  exactNodeHash("mcpRegistryStepProblems", REGISTRY_STEP_DETECTOR_NODE_SHA256);
   exactNodeHash("mcpRegistryRunProblems", REGISTRY_RUN_DETECTOR_NODE_SHA256);
-  if (problemConstantHashes.length !== 1 || problemConstantHashes[0] !== REGISTRY_EVALUATOR_PROBLEM_NODE_SHA256) {
+  if (
+    evaluatorProblemConstantHashes.length !== 1 ||
+    evaluatorProblemConstantHashes[0] !== REGISTRY_EVALUATOR_PROBLEM_NODE_SHA256
+  ) {
     problems.push(
       "release mutation hybrid pinned registry problem AST node must retain exact SHA-256 " +
         REGISTRY_EVALUATOR_PROBLEM_NODE_SHA256
+    );
+  }
+  if (
+    workflowProblemConstantHashes.length !== 1 ||
+    workflowProblemConstantHashes[0] !== REGISTRY_WORKFLOW_PROBLEM_NODE_SHA256
+  ) {
+    problems.push(
+      "release mutation hybrid pinned registry workflow problem AST node must retain exact SHA-256 " +
+        REGISTRY_WORKFLOW_PROBLEM_NODE_SHA256
     );
   }
 
@@ -6480,6 +6562,11 @@ function validateRegistryOraclePins(matrix: MatrixScan, declarative: HybridDecla
   let runAliases = 0;
   let runWrites = 0;
   let runOtherReferences = 0;
+  let stepDirectBindings = 0;
+  let stepShadowBindings = 0;
+  let stepAliases = 0;
+  let stepWrites = 0;
+  let stepOtherReferences = 0;
   let matchCountDirectBindings = 0;
   let matchCountShadowBindings = 0;
   let matchCountAliases = 0;
@@ -6490,6 +6577,7 @@ function validateRegistryOraclePins(matrix: MatrixScan, declarative: HybridDecla
   const recordShadowBinding = (name: ts.BindingName | ts.Identifier): void => {
     if (ts.isIdentifier(name)) {
       if (name.text === "mcpRegistryEvaluatorProblems") shadowBindings++;
+      if (name.text === "mcpRegistryStepProblems") stepShadowBindings++;
       if (name.text === "mcpRegistryRunProblems") runShadowBindings++;
       if (name.text === "mutationMatchCount") matchCountShadowBindings++;
       return;
@@ -6528,6 +6616,9 @@ function validateRegistryOraclePins(matrix: MatrixScan, declarative: HybridDecla
     if (ts.isFunctionDeclaration(node) && node.name?.text === "mcpRegistryEvaluatorProblems") {
       if (node.parent === matrix.sourceFile) directBindings++;
       else shadowBindings++;
+    } else if (ts.isFunctionDeclaration(node) && node.name?.text === "mcpRegistryStepProblems") {
+      if (node.parent === matrix.sourceFile) stepDirectBindings++;
+      else stepShadowBindings++;
     } else if (ts.isFunctionDeclaration(node) && node.name?.text === "mcpRegistryRunProblems") {
       if (node.parent === matrix.sourceFile) runDirectBindings++;
       else runShadowBindings++;
@@ -6550,6 +6641,7 @@ function validateRegistryOraclePins(matrix: MatrixScan, declarative: HybridDecla
     if (ts.isVariableDeclaration(node) && node.initializer !== undefined) {
       const initializer = unwrappedIdentifier(node.initializer);
       if (initializer?.text === "mcpRegistryEvaluatorProblems") aliases++;
+      if (initializer?.text === "mcpRegistryStepProblems") stepAliases++;
       if (initializer?.text === "mcpRegistryRunProblems") runAliases++;
       if (initializer?.text === "mutationMatchCount") matchCountAliases++;
     }
@@ -6559,6 +6651,13 @@ function validateRegistryOraclePins(matrix: MatrixScan, declarative: HybridDecla
       assignmentTargetContainsIdentifier(node.left, "mcpRegistryEvaluatorProblems")
     ) {
       writes++;
+    }
+    if (
+      ts.isBinaryExpression(node) &&
+      REGISTRY_BINDING_ASSIGNMENT_OPERATORS.has(node.operatorToken.kind) &&
+      assignmentTargetContainsIdentifier(node.left, "mcpRegistryStepProblems")
+    ) {
+      stepWrites++;
     }
     if (
       ts.isBinaryExpression(node) &&
@@ -6591,6 +6690,13 @@ function validateRegistryOraclePins(matrix: MatrixScan, declarative: HybridDecla
     if (
       (ts.isPrefixUnaryExpression(node) || ts.isPostfixUnaryExpression(node)) &&
       (node.operator === ts.SyntaxKind.PlusPlusToken || node.operator === ts.SyntaxKind.MinusMinusToken) &&
+      assignmentTargetContainsIdentifier(node.operand, "mcpRegistryStepProblems")
+    ) {
+      stepWrites++;
+    }
+    if (
+      (ts.isPrefixUnaryExpression(node) || ts.isPostfixUnaryExpression(node)) &&
+      (node.operator === ts.SyntaxKind.PlusPlusToken || node.operator === ts.SyntaxKind.MinusMinusToken) &&
       assignmentTargetContainsIdentifier(node.operand, "mcpRegistryRunProblems")
     ) {
       runWrites++;
@@ -6615,6 +6721,13 @@ function validateRegistryOraclePins(matrix: MatrixScan, declarative: HybridDecla
       assignmentTargetContainsIdentifier(node.initializer, "mcpRegistryEvaluatorProblems")
     ) {
       writes++;
+    }
+    if (
+      (ts.isForOfStatement(node) || ts.isForInStatement(node)) &&
+      !ts.isVariableDeclarationList(node.initializer) &&
+      assignmentTargetContainsIdentifier(node.initializer, "mcpRegistryStepProblems")
+    ) {
+      stepWrites++;
     }
     if (
       (ts.isForOfStatement(node) || ts.isForInStatement(node)) &&
@@ -6671,6 +6784,18 @@ function validateRegistryOraclePins(matrix: MatrixScan, declarative: HybridDecla
         otherReferences++;
       }
     }
+    if (ts.isIdentifier(node) && node.text === "mcpRegistryStepProblems") {
+      const parent = node.parent;
+      const exactDeclaration =
+        ts.isFunctionDeclaration(parent) && parent.name === node && parent.parent === matrix.sourceFile;
+      const exactDirectCall =
+        ts.isCallExpression(parent) &&
+        parent.expression === node &&
+        parent.questionDotToken === undefined &&
+        parent.typeArguments === undefined &&
+        parent.arguments.length === 2;
+      if (!exactDeclaration && !exactDirectCall) stepOtherReferences++;
+    }
     if (ts.isIdentifier(node) && node.text === "mcpRegistryRunProblems") {
       const parent = node.parent;
       const exactDeclaration =
@@ -6716,6 +6841,18 @@ function validateRegistryOraclePins(matrix: MatrixScan, declarative: HybridDecla
         `found ${aliases}/${writes}/${otherReferences}`
     );
   }
+  if (stepDirectBindings !== 1 || stepShadowBindings !== 0) {
+    problems.push(
+      `release mutation hybrid registry step binding must have one top-level declaration and no runtime ` +
+        `shadows; found ${stepDirectBindings}/${stepShadowBindings}`
+    );
+  }
+  if (stepAliases !== 0 || stepWrites !== 0 || stepOtherReferences !== 0) {
+    problems.push(
+      `release mutation hybrid registry step binding must have no aliases, writes, or indirect references; ` +
+        `found ${stepAliases}/${stepWrites}/${stepOtherReferences}`
+    );
+  }
   if (runDirectBindings !== 1 || runShadowBindings !== 0) {
     problems.push(
       `release mutation hybrid registry run binding must have one top-level declaration and no runtime ` +
@@ -6757,6 +6894,7 @@ function validateRegistryOraclePins(matrix: MatrixScan, declarative: HybridDecla
   }
 
   let baselineAssertions = 0;
+  let registryRunBaselineAssertions = 0;
   const visit = (node: ts.Node): void => {
     if (
       ts.isCallExpression(node) &&
@@ -6786,6 +6924,29 @@ function validateRegistryOraclePins(matrix: MatrixScan, declarative: HybridDecla
       ) {
         baselineAssertions++;
       }
+      if (
+        expectCall !== null &&
+        ts.isIdentifier(expectCall.expression) &&
+        expectCall.expression.text === "expect" &&
+        detector !== undefined &&
+        ts.isCallExpression(detector) &&
+        ts.isIdentifier(detector.expression) &&
+        detector.expression.text === "mcpRegistryRunProblems" &&
+        detector.arguments.length === 2 &&
+        detector.arguments[0] !== undefined &&
+        ts.isIdentifier(detector.arguments[0]) &&
+        detector.arguments[0].text === "registryRun" &&
+        detector.arguments[1] !== undefined &&
+        ts.isPropertyAccessExpression(detector.arguments[1]) &&
+        ts.isIdentifier(detector.arguments[1].expression) &&
+        detector.arguments[1].expression.text === "mcpbInputs" &&
+        detector.arguments[1].name.text === "integrity" &&
+        expected !== undefined &&
+        ts.isArrayLiteralExpression(expected) &&
+        expected.elements.length === 0
+      ) {
+        registryRunBaselineAssertions++;
+      }
     }
     ts.forEachChild(node, visit);
   };
@@ -6794,6 +6955,12 @@ function validateRegistryOraclePins(matrix: MatrixScan, declarative: HybridDecla
     problems.push(
       `release mutation hybrid registry evaluator requires one exact clean baseline assertion; ` +
         `found ${baselineAssertions}`
+    );
+  }
+  if (registryRunBaselineAssertions !== 1) {
+    problems.push(
+      `release mutation hybrid registry run requires one exact clean baseline assertion; ` +
+        `found ${registryRunBaselineAssertions}`
     );
   }
 }
@@ -7046,11 +7213,11 @@ export function releaseMutationExactLegacyIdentityAuditProblems(
  * The frozen fixture remains byte-identical authority. Current source offsets may move, while
  * separately reviewed digests pin the complete test source and mixed matrix slice at each migration
  * boundary. Every frozen mutation must remain in exactly one representation: its exact legacy node
- * text or the literal declarative Registry evaluator projection.
+ * text or the literal declarative Registry evaluator/raw-run projection.
  *
  * @param matrixSource - Complete current `tests/release-integrity.test.ts` source text.
  * @param manifestSource - Immutable generated schema-v2 manifest JSON bytes.
- * @returns Stable diagnostics; empty only for the exact m002-m037 hybrid boundary.
+ * @returns Stable diagnostics; empty only for the exact staged m002-m037 plus m109-m110 hybrid boundary.
  */
 export function releaseMutationIdentityAuditProblems(matrixSource: string, manifestSource: string): string[] {
   return createReleaseMutationIdentityAuditor(manifestSource).auditMatrix(matrixSource);

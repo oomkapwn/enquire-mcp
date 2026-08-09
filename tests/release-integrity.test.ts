@@ -8418,7 +8418,7 @@ describe("release identity and exact required-job gate", () => {
       oracleSource.slice(matrixBodyOffset)
     ].join("");
     expect(releaseMutationInventoryProblems(extraProjectMutation)).toContain(
-      "release mutation hybrid inventory expected 538 first / 22 all, found 539 first / 22 all (legacy 504/19; declarative 35/3; cases 38)"
+      "release mutation hybrid inventory expected 538 first / 22 all, found 539 first / 22 all (legacy 503/19; declarative 36/3; cases 39)"
     );
     const outsideMutation = `${oracleSource}\nvoid replaceAllExactly("inventory", "inventory", "mutant");\n`;
     expect(releaseMutationInventoryProblems(outsideMutation)).toContain(
@@ -8432,7 +8432,7 @@ describe("release identity and exact required-job gate", () => {
       oracleSource.slice(firstProjectCallOffset + "replaceExactly(".length)
     ].join("");
     expect(releaseMutationInventoryProblems(projectModeDrift)).toContain(
-      "release mutation hybrid inventory expected 538 first / 22 all, found 537 first / 23 all (legacy 502/20; declarative 35/3; cases 38)"
+      "release mutation hybrid inventory expected 538 first / 22 all, found 537 first / 23 all (legacy 501/20; declarative 36/3; cases 39)"
     );
     const hybridDeclarativeMutation = oracleSource;
     const declarativeBatchStartToken = "    const releaseIntegrityText = mcpbInputs.integrity;";
@@ -8881,7 +8881,7 @@ describe("release identity and exact required-job gate", () => {
         .join("legacyMigratedExactly(")
     ].join("");
     expect(releaseMutationInventoryProblems(legacyFreeMatrix)).toContain(
-      "release mutation final closed graph expected 560 unique descriptors / 536 cases and roots / 541 expectations / 24 dependency-only, found 38 descriptors / 38 cases / 38 roots / 38 expectations / 0 dependency-only"
+      "release mutation final closed graph expected 560 unique descriptors / 536 cases and roots / 541 expectations / 24 dependency-only, found 39 descriptors / 39 cases / 39 roots / 39 expectations / 0 dependency-only"
     );
     const loopGeneratedDeclarative = [
       oracleSource.slice(0, matrixBodyOffset),
@@ -9024,7 +9024,7 @@ describe("release identity and exact required-job gate", () => {
       expect.stringMatching(/must be one explicit straight-line case/)
     );
     expect(iterableLiteralProblems).toContain(
-      "release mutation hybrid inventory expected 538 first / 22 all, found 539 first / 22 all (legacy 504/19; declarative 35/3; cases 38)"
+      "release mutation hybrid inventory expected 538 first / 22 all, found 539 first / 22 all (legacy 503/19; declarative 36/3; cases 39)"
     );
     const nestedStraightLineMutation = [
       oracleSource.slice(0, matrixBodyOffset),
@@ -9036,7 +9036,7 @@ describe("release identity and exact required-job gate", () => {
       expect.stringMatching(/must be one explicit straight-line case/)
     );
     expect(nestedStraightLineProblems).toContain(
-      "release mutation hybrid inventory expected 538 first / 22 all, found 540 first / 22 all (legacy 505/19; declarative 35/3; cases 38)"
+      "release mutation hybrid inventory expected 538 first / 22 all, found 540 first / 22 all (legacy 504/19; declarative 36/3; cases 39)"
     );
     const earlyReturnMutation = [
       oracleSource.slice(0, matrixBodyOffset),
@@ -11114,12 +11114,12 @@ describe("release identity and exact required-job gate", () => {
 
     const releaseIntegrityText = mcpbInputs.integrity;
     const releaseMutationPlan = new ReleaseMutationPlan({
-      total: 38,
-      first: 35,
+      total: 39,
+      first: 36,
       all: 3,
-      cases: 38,
-      expectations: 38,
-      roots: 38,
+      cases: 39,
+      expectations: 39,
+      roots: 39,
       dependencyOnly: 0
     });
     const releaseIntegritySource = releaseMutationPlan.registerSource("script.release-integrity", releaseIntegrityText);
@@ -12356,6 +12356,39 @@ describe("release identity and exact required-job gate", () => {
         }
       ]
     });
+    const releaseMutationM111 = releaseMutationPlan.registerMutation("release.m111", {
+      mode: "first",
+      source: releaseIntegritySource,
+      needle: 'phase === "convergence" && (status === 429 || status >= 500)',
+      replacement: 'phase === "convergence"',
+      expectedOccurrences: 1,
+      witness: {
+        kind: "token",
+        anchor: 'phase === "convergence" && (status === 429 || status >= 500)',
+        before: 1,
+        after: 0
+      }
+    });
+    releaseMutationPlan.registerCase({
+      id: "release.case.m111",
+      root: releaseMutationM111,
+      checks: [
+        {
+          invoke: {
+            kind: "registry.step.integrity",
+            baseline: releaseIntegritySource,
+            mutant: releaseMutationM111,
+            run: registryPublishStepSource
+          },
+          expectation: {
+            id: "release.expectation.m111.primary",
+            kind: "problem",
+            problem:
+              "stable MCP Registry publication must bind exact source manifests, one pinned publisher write, and bounded readback"
+          }
+        }
+      ]
+    });
     const releaseMutationProblems = releaseMutationPlan.seal();
     expect(releaseMutationProblems).toEqual([]);
     releaseMutationPlan.executeThrough(releaseMutationM037, {
@@ -12905,18 +12938,8 @@ describe("release identity and exact required-job gate", () => {
     }
     releaseMutationPlan.executeRemaining();
     expect(releaseMutationPlan.phase).toBe("executed");
-    expect(releaseMutationPlan.caseExecutions).toBe(38);
-    expect(releaseMutationPlan.expectationExecutions).toBe(38);
-    expect(
-      mcpRegistryStepProblems(
-        registryStep,
-        replaceExactly(
-          mcpbInputs.integrity,
-          'phase === "convergence" && (status === 429 || status >= 500)',
-          'phase === "convergence"'
-        )
-      )
-    ).toContain(MCP_REGISTRY_WORKFLOW_CONTRACT_PROBLEM);
+    expect(releaseMutationPlan.caseExecutions).toBe(39);
+    expect(releaseMutationPlan.expectationExecutions).toBe(39);
     const provenanceWorkflowCompositionMutation = replaceExactly(
       mcpbInputs.release,
       NPM_PROVENANCE_CONTEXT_COMMAND,

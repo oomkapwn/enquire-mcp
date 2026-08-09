@@ -295,16 +295,30 @@ export type ReleaseOracleInvocation =
       readonly baseline: ReleaseSourceHandle | ReleaseMutationHandle;
       readonly mutant: ReleaseMutationHandle;
       readonly run: ReleaseSourceHandle;
+    }
+  | {
+      readonly kind: "npm.contract.release";
+      readonly baseline: ReleaseSourceHandle | ReleaseMutationHandle;
+      readonly mutant: ReleaseMutationHandle;
+      readonly integrity: ReleaseSourceHandle;
+    }
+  | {
+      readonly kind: "npm.contract.integrity";
+      readonly baseline: ReleaseSourceHandle | ReleaseMutationHandle;
+      readonly mutant: ReleaseMutationHandle;
+      readonly release: ReleaseSourceHandle;
     };
 
 /** Exact problem identities emitted by the closed fixtures and execution adapters. */
 export type ReleaseProblemIdentity =
   | "fixture.mutant-threw"
   | "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
-  | "stable MCP Registry publication must bind exact source manifests, one pinned publisher write, and bounded readback";
+  | "stable MCP Registry publication must bind exact source manifests, one pinned publisher write, and bounded readback"
+  | "npm provenance must bind the tag-push context before the sole publish and verify two exact attestations without credentials";
 
 type RegistryEvaluatorProblemsAdapter = (source: string) => readonly string[];
 type RegistryStepProblemsAdapter = (run: string, integrity: string) => readonly string[];
+type NpmContractProblemsAdapter = (release: string, integrity: string) => readonly string[];
 
 /**
  * Closed execution-only adapters used to evaluate planner-materialized production sources.
@@ -329,6 +343,15 @@ export interface ReleaseOracleAdapters {
    * @returns Closed problem identities observed for those exact bytes.
    */
   readonly registryStepProblems?: RegistryStepProblemsAdapter;
+
+  /**
+   * Evaluate one exact release workflow together with one exact release-integrity script.
+   *
+   * @param release - Planner-materialized clean companion or baseline/mutant release-workflow bytes.
+   * @param integrity - Planner-materialized clean companion or baseline/mutant release-integrity bytes.
+   * @returns Closed problem identities observed for those exact bytes.
+   */
+  readonly npmContractProblems?: NpmContractProblemsAdapter;
 }
 
 /** Named, allowlisted regular expressions available to closed expectations. */
@@ -443,6 +466,16 @@ type ReleaseOracleObservation =
       readonly kind: "registry.step.integrity";
       readonly baselineProblems: readonly ReleaseProblemIdentity[];
       readonly mutantProblems: readonly ReleaseProblemIdentity[];
+    }
+  | {
+      readonly kind: "npm.contract.release";
+      readonly baselineProblems: readonly ReleaseProblemIdentity[];
+      readonly mutantProblems: readonly ReleaseProblemIdentity[];
+    }
+  | {
+      readonly kind: "npm.contract.integrity";
+      readonly baselineProblems: readonly ReleaseProblemIdentity[];
+      readonly mutantProblems: readonly ReleaseProblemIdentity[];
     };
 
 type PreparedExpectation = ReleaseExpectation;
@@ -496,6 +529,8 @@ const MCP_REGISTRY_EVALUATOR_PROBLEM: ReleaseProblemIdentity =
   "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics";
 const MCP_REGISTRY_WORKFLOW_PROBLEM: ReleaseProblemIdentity =
   "stable MCP Registry publication must bind exact source manifests, one pinned publisher write, and bounded readback";
+const NPM_PROVENANCE_CONTRACT_PROBLEM: ReleaseProblemIdentity =
+  "npm provenance must bind the tag-push context before the sole publish and verify two exact attestations without credentials";
 
 function isPositiveSafeInteger(value: number): boolean {
   return numberIsSafeIntegerIntrinsic(value) && value > 0;
@@ -847,11 +882,13 @@ function materializeOracleValue(
 }
 
 interface ReleaseOracleAdapterRequirements {
+  readonly npmContractProblems: boolean;
   readonly registryEvaluatorProblems: boolean;
   readonly registryStepProblems: boolean;
 }
 
 function releaseOracleAdapterRequirements(cases: readonly PreparedCase[]): ReleaseOracleAdapterRequirements {
+  let npmContractProblems = false;
   let registryEvaluatorProblems = false;
   let registryStepProblems = false;
   for (let caseIndex = 0; caseIndex < cases.length; caseIndex++) {
@@ -872,6 +909,10 @@ function releaseOracleAdapterRequirements(cases: readonly PreparedCase[]): Relea
         case "registry.step.integrity":
           registryStepProblems = true;
           break;
+        case "npm.contract.release":
+        case "npm.contract.integrity":
+          npmContractProblems = true;
+          break;
         case "fixture.text":
         case "fixture.throw":
           break;
@@ -880,10 +921,31 @@ function releaseOracleAdapterRequirements(cases: readonly PreparedCase[]): Relea
       }
     }
   }
-  return freezeObject({ registryEvaluatorProblems, registryStepProblems });
+  return freezeObject({ npmContractProblems, registryEvaluatorProblems, registryStepProblems });
 }
 
 function releaseOracleAdapterShapeMessage(requirements: ReleaseOracleAdapterRequirements): string {
+  if (requirements.npmContractProblems) {
+    if (requirements.registryEvaluatorProblems && requirements.registryStepProblems) {
+      return (
+        "release oracle adapters must contain exactly enumerable npmContractProblems, " +
+        "registryEvaluatorProblems, and registryStepProblems data functions"
+      );
+    }
+    if (requirements.registryEvaluatorProblems) {
+      return (
+        "release oracle adapters must contain exactly enumerable npmContractProblems " +
+        "and registryEvaluatorProblems data functions"
+      );
+    }
+    if (requirements.registryStepProblems) {
+      return (
+        "release oracle adapters must contain exactly enumerable npmContractProblems " +
+        "and registryStepProblems data functions"
+      );
+    }
+    return "release oracle adapters must contain only an enumerable npmContractProblems data function";
+  }
   if (requirements.registryEvaluatorProblems && requirements.registryStepProblems) {
     return (
       "release oracle adapters must contain exactly enumerable registryEvaluatorProblems " +
@@ -904,7 +966,31 @@ function validateReleaseOracleAdapters(
   requirements: ReleaseOracleAdapterRequirements
 ): ReleaseOracleAdapters | undefined {
   if (value === undefined) {
-    if (!requirements.registryEvaluatorProblems && !requirements.registryStepProblems) return undefined;
+    if (
+      !requirements.npmContractProblems &&
+      !requirements.registryEvaluatorProblems &&
+      !requirements.registryStepProblems
+    ) {
+      return undefined;
+    }
+    if (requirements.npmContractProblems) {
+      if (requirements.registryEvaluatorProblems && requirements.registryStepProblems) {
+        throw new errorConstructor(
+          "registry evaluator, step, and npm contract cases require exact release oracle adapters at execute"
+        );
+      }
+      if (requirements.registryEvaluatorProblems) {
+        throw new errorConstructor(
+          "registry evaluator and npm contract cases require exact release oracle adapters at execute"
+        );
+      }
+      if (requirements.registryStepProblems) {
+        throw new errorConstructor(
+          "registry step and npm contract cases require exact release oracle adapters at execute"
+        );
+      }
+      throw new errorConstructor("npm.contract cases require exact release oracle adapters at execute");
+    }
     if (requirements.registryEvaluatorProblems && !requirements.registryStepProblems) {
       throw new errorConstructor("registry.evaluator cases require exact release oracle adapters at execute");
     }
@@ -913,7 +999,11 @@ function validateReleaseOracleAdapters(
     }
     throw new errorConstructor("registry evaluator and step cases require exact release oracle adapters at execute");
   }
-  if (!requirements.registryEvaluatorProblems && !requirements.registryStepProblems) {
+  if (
+    !requirements.npmContractProblems &&
+    !requirements.registryEvaluatorProblems &&
+    !requirements.registryStepProblems
+  ) {
     throw new errorConstructor(releaseOracleAdapterShapeMessage(requirements));
   }
   const object = objectValue(value);
@@ -937,6 +1027,7 @@ function validateReleaseOracleAdapters(
 
   const keys = ownKeysIntrinsic(descriptors);
   let expectedCount = 0;
+  if (requirements.npmContractProblems) expectedCount++;
   if (requirements.registryEvaluatorProblems) expectedCount++;
   if (requirements.registryStepProblems) expectedCount++;
   let exactKeys = keys.length === expectedCount;
@@ -944,7 +1035,8 @@ function validateReleaseOracleAdapters(
     const key = keys[index];
     if (
       key === undefined ||
-      (key !== "registryEvaluatorProblems" && key !== "registryStepProblems") ||
+      (key !== "npmContractProblems" && key !== "registryEvaluatorProblems" && key !== "registryStepProblems") ||
+      (key === "npmContractProblems" && !requirements.npmContractProblems) ||
       (key === "registryEvaluatorProblems" && !requirements.registryEvaluatorProblems) ||
       (key === "registryStepProblems" && !requirements.registryStepProblems)
     ) {
@@ -952,8 +1044,15 @@ function validateReleaseOracleAdapters(
     }
   }
 
+  const npmDescriptor = descriptors.npmContractProblems;
   const evaluatorDescriptor = descriptors.registryEvaluatorProblems;
   const stepDescriptor = descriptors.registryStepProblems;
+  const exactNpm =
+    !requirements.npmContractProblems ||
+    (npmDescriptor !== undefined &&
+      "value" in npmDescriptor &&
+      npmDescriptor.enumerable &&
+      typeof npmDescriptor.value === "function");
   const exactEvaluator =
     !requirements.registryEvaluatorProblems ||
     (evaluatorDescriptor !== undefined &&
@@ -966,14 +1065,23 @@ function validateReleaseOracleAdapters(
       "value" in stepDescriptor &&
       stepDescriptor.enumerable &&
       typeof stepDescriptor.value === "function");
-  if (!exactKeys || !exactEvaluator || !exactStep) {
+  if (!exactKeys || !exactNpm || !exactEvaluator || !exactStep) {
     throw new errorConstructor(releaseOracleAdapterShapeMessage(requirements));
   }
 
   const closed: {
+    npmContractProblems?: NpmContractProblemsAdapter;
     registryEvaluatorProblems?: RegistryEvaluatorProblemsAdapter;
     registryStepProblems?: RegistryStepProblemsAdapter;
   } = {};
+  if (requirements.npmContractProblems && npmDescriptor !== undefined && "value" in npmDescriptor) {
+    defineObjectPropertyIntrinsic(closed, "npmContractProblems", {
+      configurable: false,
+      enumerable: true,
+      value: npmDescriptor.value as NpmContractProblemsAdapter,
+      writable: false
+    });
+  }
   if (requirements.registryEvaluatorProblems && evaluatorDescriptor !== undefined && "value" in evaluatorDescriptor) {
     defineObjectPropertyIntrinsic(closed, "registryEvaluatorProblems", {
       configurable: false,
@@ -993,11 +1101,16 @@ function validateReleaseOracleAdapters(
   return freezeObject(closed);
 }
 
-type RegistryOracleInvocationKind = "registry.evaluator" | "registry.step.run" | "registry.step.integrity";
+type ProblemOracleInvocationKind =
+  | "registry.evaluator"
+  | "registry.step.run"
+  | "registry.step.integrity"
+  | "npm.contract.release"
+  | "npm.contract.integrity";
 
-function snapshotRegistryProblems(
+function snapshotOracleProblems(
   value: unknown,
-  invocationKind: RegistryOracleInvocationKind,
+  invocationKind: ProblemOracleInvocationKind,
   sourceKind: "baseline" | "mutant",
   expectedProblem: ReleaseProblemIdentity
 ): readonly ReleaseProblemIdentity[] {
@@ -1077,7 +1190,7 @@ function executeReleaseOracleInvocation(
 
       const baselineResult: unknown = applyFunction(registryEvaluatorProblems, undefined, [baseline]);
       assertAmbientIntrinsics();
-      const baselineProblems = snapshotRegistryProblems(
+      const baselineProblems = snapshotOracleProblems(
         baselineResult,
         "registry.evaluator",
         "baseline",
@@ -1086,7 +1199,7 @@ function executeReleaseOracleInvocation(
       assertAmbientIntrinsics();
       const mutantResult: unknown = applyFunction(registryEvaluatorProblems, undefined, [mutant]);
       assertAmbientIntrinsics();
-      const mutantProblems = snapshotRegistryProblems(
+      const mutantProblems = snapshotOracleProblems(
         mutantResult,
         "registry.evaluator",
         "mutant",
@@ -1113,7 +1226,7 @@ function executeReleaseOracleInvocation(
 
       const baselineResult: unknown = applyFunction(registryStepProblems, undefined, [baseline, integrity]);
       assertAmbientIntrinsics();
-      const baselineProblems = snapshotRegistryProblems(
+      const baselineProblems = snapshotOracleProblems(
         baselineResult,
         "registry.step.run",
         "baseline",
@@ -1122,7 +1235,7 @@ function executeReleaseOracleInvocation(
       assertAmbientIntrinsics();
       const mutantResult: unknown = applyFunction(registryStepProblems, undefined, [mutant, integrity]);
       assertAmbientIntrinsics();
-      const mutantProblems = snapshotRegistryProblems(
+      const mutantProblems = snapshotOracleProblems(
         mutantResult,
         "registry.step.run",
         "mutant",
@@ -1145,7 +1258,7 @@ function executeReleaseOracleInvocation(
 
       const baselineResult: unknown = applyFunction(registryStepProblems, undefined, [run, baseline]);
       assertAmbientIntrinsics();
-      const baselineProblems = snapshotRegistryProblems(
+      const baselineProblems = snapshotOracleProblems(
         baselineResult,
         "registry.step.integrity",
         "baseline",
@@ -1154,7 +1267,7 @@ function executeReleaseOracleInvocation(
       assertAmbientIntrinsics();
       const mutantResult: unknown = applyFunction(registryStepProblems, undefined, [run, mutant]);
       assertAmbientIntrinsics();
-      const mutantProblems = snapshotRegistryProblems(
+      const mutantProblems = snapshotOracleProblems(
         mutantResult,
         "registry.step.integrity",
         "mutant",
@@ -1162,6 +1275,70 @@ function executeReleaseOracleInvocation(
       );
       assertAmbientIntrinsics();
       return freezeObject({ kind: "registry.step.integrity", baselineProblems, mutantProblems });
+    }
+    case "npm.contract.release": {
+      const npmContractProblems = adapters?.npmContractProblems;
+      if (npmContractProblems === undefined) {
+        throw new errorConstructor("npm.contract.release invocation requires exact release oracle adapters");
+      }
+      const baseline = materializeOracleValue(invocation.baseline, sourceValues, prepared);
+      const mutant = materializeOracleValue(invocation.mutant, sourceValues, prepared);
+      const integrity = materializeOracleValue(invocation.integrity, sourceValues, prepared);
+      if (baseline === mutant) {
+        throw new errorConstructor("npm.contract.release clean baseline must differ from its mutant");
+      }
+
+      const baselineResult: unknown = applyFunction(npmContractProblems, undefined, [baseline, integrity]);
+      assertAmbientIntrinsics();
+      const baselineProblems = snapshotOracleProblems(
+        baselineResult,
+        "npm.contract.release",
+        "baseline",
+        NPM_PROVENANCE_CONTRACT_PROBLEM
+      );
+      assertAmbientIntrinsics();
+      const mutantResult: unknown = applyFunction(npmContractProblems, undefined, [mutant, integrity]);
+      assertAmbientIntrinsics();
+      const mutantProblems = snapshotOracleProblems(
+        mutantResult,
+        "npm.contract.release",
+        "mutant",
+        NPM_PROVENANCE_CONTRACT_PROBLEM
+      );
+      assertAmbientIntrinsics();
+      return freezeObject({ kind: "npm.contract.release", baselineProblems, mutantProblems });
+    }
+    case "npm.contract.integrity": {
+      const npmContractProblems = adapters?.npmContractProblems;
+      if (npmContractProblems === undefined) {
+        throw new errorConstructor("npm.contract.integrity invocation requires exact release oracle adapters");
+      }
+      const release = materializeOracleValue(invocation.release, sourceValues, prepared);
+      const baseline = materializeOracleValue(invocation.baseline, sourceValues, prepared);
+      const mutant = materializeOracleValue(invocation.mutant, sourceValues, prepared);
+      if (baseline === mutant) {
+        throw new errorConstructor("npm.contract.integrity clean baseline must differ from its mutant");
+      }
+
+      const baselineResult: unknown = applyFunction(npmContractProblems, undefined, [release, baseline]);
+      assertAmbientIntrinsics();
+      const baselineProblems = snapshotOracleProblems(
+        baselineResult,
+        "npm.contract.integrity",
+        "baseline",
+        NPM_PROVENANCE_CONTRACT_PROBLEM
+      );
+      assertAmbientIntrinsics();
+      const mutantResult: unknown = applyFunction(npmContractProblems, undefined, [release, mutant]);
+      assertAmbientIntrinsics();
+      const mutantProblems = snapshotOracleProblems(
+        mutantResult,
+        "npm.contract.integrity",
+        "mutant",
+        NPM_PROVENANCE_CONTRACT_PROBLEM
+      );
+      assertAmbientIntrinsics();
+      return freezeObject({ kind: "npm.contract.integrity", baselineProblems, mutantProblems });
     }
     default:
       return assertNever(invocation);
@@ -1195,6 +1372,10 @@ function sameOracleInvocation(left: ReleaseOracleInvocation, right: ReleaseOracl
       return right.kind === "registry.step.run" && left.integrity === right.integrity;
     case "registry.step.integrity":
       return right.kind === "registry.step.integrity" && left.run === right.run;
+    case "npm.contract.release":
+      return right.kind === "npm.contract.release" && left.integrity === right.integrity;
+    case "npm.contract.integrity":
+      return right.kind === "npm.contract.integrity" && left.release === right.release;
     default:
       return assertNever(left);
   }
@@ -2037,6 +2218,24 @@ export class ReleaseMutationPlan {
                   valid = false;
                 }
                 break;
+              case "npm.contract.release":
+              case "npm.contract.integrity":
+                if (expectation.kind !== "problem") {
+                  this.#addProblem(
+                    "expectation.type",
+                    id,
+                    `${closedInvocation.kind} requires exact problem expectations`
+                  );
+                  valid = false;
+                } else if (expectation.problem !== NPM_PROVENANCE_CONTRACT_PROBLEM) {
+                  this.#addProblem(
+                    "expectation.problem",
+                    id,
+                    `${closedInvocation.kind} requires its exact npm provenance problem identity`
+                  );
+                  valid = false;
+                }
+                break;
               default:
                 assertNever(closedInvocation);
             }
@@ -2082,7 +2281,9 @@ export class ReleaseMutationPlan {
       invocation?.kind === "fixture.throw" ||
       invocation?.kind === "registry.evaluator" ||
       invocation?.kind === "registry.step.run" ||
-      invocation?.kind === "registry.step.integrity"
+      invocation?.kind === "registry.step.integrity" ||
+      invocation?.kind === "npm.contract.release" ||
+      invocation?.kind === "npm.contract.integrity"
         ? invocation.kind
         : null;
     let valid = true;
@@ -2091,7 +2292,7 @@ export class ReleaseMutationPlan {
         "invocation.kind",
         id,
         "invocation kind must be fixture.text, fixture.throw, registry.evaluator, registry.step.run, " +
-          "or registry.step.integrity"
+          "registry.step.integrity, npm.contract.release, or npm.contract.integrity"
       );
       valid = false;
     } else {
@@ -2099,6 +2300,8 @@ export class ReleaseMutationPlan {
       if (kind === "fixture.throw") expectedKeys = ["kind", "baseline", "mutant", "message"];
       else if (kind === "registry.step.run") expectedKeys = ["kind", "baseline", "mutant", "integrity"];
       else if (kind === "registry.step.integrity") expectedKeys = ["kind", "baseline", "mutant", "run"];
+      else if (kind === "npm.contract.release") expectedKeys = ["kind", "baseline", "mutant", "integrity"];
+      else if (kind === "npm.contract.integrity") expectedKeys = ["kind", "baseline", "mutant", "release"];
       if (invocation === null || !hasExactKeys(invocation, expectedKeys)) {
         this.#addProblem("invocation.shape", id, `${kind} invocation has unexpected or missing fields`);
         valid = false;
@@ -2126,11 +2329,16 @@ export class ReleaseMutationPlan {
     }
 
     const integrity =
-      kind === "registry.step.run" ? this.#validateCaseCompanionSource(invocation?.integrity, id, "integrity") : null;
-    if (kind === "registry.step.run" && integrity === null) valid = false;
+      kind === "registry.step.run" || kind === "npm.contract.release"
+        ? this.#validateCaseCompanionSource(invocation?.integrity, id, "integrity")
+        : null;
+    if ((kind === "registry.step.run" || kind === "npm.contract.release") && integrity === null) valid = false;
     const run =
       kind === "registry.step.integrity" ? this.#validateCaseCompanionSource(invocation?.run, id, "run") : null;
     if (kind === "registry.step.integrity" && run === null) valid = false;
+    const release =
+      kind === "npm.contract.integrity" ? this.#validateCaseCompanionSource(invocation?.release, id, "release") : null;
+    if (kind === "npm.contract.integrity" && release === null) valid = false;
 
     let message: string | null = null;
     if (kind === "fixture.throw") {
@@ -2165,6 +2373,22 @@ export class ReleaseMutationPlan {
       run !== null
     ) {
       closedInvocation = freezeObject({ kind, baseline, mutant: invocationRoot, run });
+    } else if (
+      valid &&
+      baseline !== null &&
+      invocationRoot !== null &&
+      kind === "npm.contract.release" &&
+      integrity !== null
+    ) {
+      closedInvocation = freezeObject({ kind, baseline, mutant: invocationRoot, integrity });
+    } else if (
+      valid &&
+      baseline !== null &&
+      invocationRoot !== null &&
+      kind === "npm.contract.integrity" &&
+      release !== null
+    ) {
+      closedInvocation = freezeObject({ kind, baseline, mutant: invocationRoot, release });
     }
     return freezeObject({ kind, invocation: closedInvocation });
   }
@@ -2312,7 +2536,8 @@ export class ReleaseMutationPlan {
       if (
         expectation?.problem !== "fixture.mutant-threw" &&
         expectation?.problem !== MCP_REGISTRY_EVALUATOR_PROBLEM &&
-        expectation?.problem !== MCP_REGISTRY_WORKFLOW_PROBLEM
+        expectation?.problem !== MCP_REGISTRY_WORKFLOW_PROBLEM &&
+        expectation?.problem !== NPM_PROVENANCE_CONTRACT_PROBLEM
       ) {
         this.#addProblem("expectation.problem", caseId, `${id} has an unknown exact problem identity`);
         valid = false;
@@ -2493,11 +2718,13 @@ export class ReleaseMutationPlan {
       for (const check of releaseCase.checks) {
         const baseline = this.#materializeValue(check.invocation.baseline);
         const companion =
-          check.invocation.kind === "registry.step.run"
+          check.invocation.kind === "registry.step.run" || check.invocation.kind === "npm.contract.release"
             ? this.#materializeValue(check.invocation.integrity)
             : check.invocation.kind === "registry.step.integrity"
               ? this.#materializeValue(check.invocation.run)
-              : "not-required";
+              : check.invocation.kind === "npm.contract.integrity"
+                ? this.#materializeValue(check.invocation.release)
+                : "not-required";
         if (baseline === undefined || mutant === undefined) {
           executable = false;
         } else if (companion === undefined) {
@@ -2574,6 +2801,24 @@ export class ReleaseMutationPlan {
         case "registry.step.run":
         case "registry.step.integrity":
           if (expectation.problem !== MCP_REGISTRY_WORKFLOW_PROBLEM) {
+            throw new errorConstructor(
+              `release mutation case ${caseId} expectation ${expectation.id} observed an incompatible problem identity`
+            );
+          }
+          if (observation.baselineProblems.length !== 0) {
+            throw new errorConstructor(
+              `release mutation case ${caseId} expectation ${expectation.id} found a problem in the clean baseline`
+            );
+          }
+          if (observation.mutantProblems.length !== 1 || observation.mutantProblems[0] !== expectation.problem) {
+            throw new errorConstructor(
+              `release mutation case ${caseId} expectation ${expectation.id} missed the exact mutant problem`
+            );
+          }
+          return;
+        case "npm.contract.release":
+        case "npm.contract.integrity":
+          if (expectation.problem !== NPM_PROVENANCE_CONTRACT_PROBLEM) {
             throw new errorConstructor(
               `release mutation case ${caseId} expectation ${expectation.id} observed an incompatible problem identity`
             );

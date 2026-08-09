@@ -1139,20 +1139,12 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       '          \'[ "$MCP_PUBLISH_ATTEMPTED" != "true" ] && [ "$MCP_REGISTRY_CONFIRMED" != "true" ]\'',
       "        )"
     ].join("\n");
-    expect(sha256Text(legacyM109CallNode)).toBe(
-      "24c05d112a2d846080b17c7413f555c37b2c50a54975f16a985d8b1018b2d711"
-    );
-    expect(sha256Text(legacyM110CallNode)).toBe(
-      "69e2c8d2350a13c0b755c30190653e9d60a78c7eac7ca5996f624663a0d31c8d"
-    );
+    expect(sha256Text(legacyM109CallNode)).toBe("24c05d112a2d846080b17c7413f555c37b2c50a54975f16a985d8b1018b2d711");
+    expect(sha256Text(legacyM110CallNode)).toBe("69e2c8d2350a13c0b755c30190653e9d60a78c7eac7ca5996f624663a0d31c8d");
     const resurrectedRegistryRoots = replaceExactly(
       matrixSource,
       finalRequiredReleaseCheck,
-      [
-        `    void ${legacyM109CallNode};`,
-        `    void ${legacyM110CallNode};`,
-        finalRequiredReleaseCheck
-      ].join("\n")
+      [`    void ${legacyM109CallNode};`, `    void ${legacyM110CallNode};`, finalRequiredReleaseCheck].join("\n")
     );
     const resurrectedRegistryProblems = preparedAudit.auditMatrix(resurrectedRegistryRoots);
     expect(resurrectedRegistryProblems).toEqual(

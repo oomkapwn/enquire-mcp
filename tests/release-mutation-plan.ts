@@ -283,12 +283,28 @@ export type ReleaseOracleInvocation =
       readonly kind: "registry.evaluator";
       readonly baseline: ReleaseSourceHandle | ReleaseMutationHandle;
       readonly mutant: ReleaseMutationHandle;
+    }
+  | {
+      readonly kind: "registry.step.run";
+      readonly baseline: ReleaseSourceHandle | ReleaseMutationHandle;
+      readonly mutant: ReleaseMutationHandle;
+      readonly integrity: ReleaseSourceHandle;
+    }
+  | {
+      readonly kind: "registry.step.integrity";
+      readonly baseline: ReleaseSourceHandle | ReleaseMutationHandle;
+      readonly mutant: ReleaseMutationHandle;
+      readonly run: ReleaseSourceHandle;
     };
 
 /** Exact problem identities emitted by the closed fixtures and execution adapters. */
 export type ReleaseProblemIdentity =
   | "fixture.mutant-threw"
-  | "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics";
+  | "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics"
+  | "stable MCP Registry publication must bind exact source manifests, one pinned publisher write, and bounded readback";
+
+type RegistryEvaluatorProblemsAdapter = (source: string) => readonly string[];
+type RegistryStepProblemsAdapter = (run: string, integrity: string) => readonly string[];
 
 /**
  * Closed execution-only adapters used to evaluate planner-materialized production sources.
@@ -303,7 +319,16 @@ export interface ReleaseOracleAdapters {
    * @param source - Planner-materialized baseline or mutant source bytes.
    * @returns Closed problem identities observed for those exact bytes.
    */
-  readonly registryEvaluatorProblems: (source: string) => readonly string[];
+  readonly registryEvaluatorProblems?: RegistryEvaluatorProblemsAdapter;
+
+  /**
+   * Evaluate one exact MCP Registry publication-step run body with one exact integrity script.
+   *
+   * @param run - Planner-materialized clean companion or baseline/mutant workflow step run bytes.
+   * @param integrity - Planner-materialized clean companion or baseline/mutant release-integrity bytes.
+   * @returns Closed problem identities observed for those exact bytes.
+   */
+  readonly registryStepProblems?: RegistryStepProblemsAdapter;
 }
 
 /** Named, allowlisted regular expressions available to closed expectations. */
@@ -347,7 +372,15 @@ export type ReleaseMutationInventoryExpectation =
     };
 
 /** Lifecycle state of a release-mutation plan. */
-export type ReleaseMutationPlanState = "open" | "sealing" | "sealed" | "rejected" | "executing" | "executed" | "failed";
+export type ReleaseMutationPlanState =
+  | "open"
+  | "sealing"
+  | "sealed"
+  | "rejected"
+  | "executing"
+  | "partially-executed"
+  | "executed"
+  | "failed";
 
 type HandleKind = "source" | "mutation";
 
@@ -400,6 +433,16 @@ type ReleaseOracleObservation =
       readonly kind: "registry.evaluator";
       readonly baselineProblems: readonly ReleaseProblemIdentity[];
       readonly mutantProblems: readonly ReleaseProblemIdentity[];
+    }
+  | {
+      readonly kind: "registry.step.run";
+      readonly baselineProblems: readonly ReleaseProblemIdentity[];
+      readonly mutantProblems: readonly ReleaseProblemIdentity[];
+    }
+  | {
+      readonly kind: "registry.step.integrity";
+      readonly baselineProblems: readonly ReleaseProblemIdentity[];
+      readonly mutantProblems: readonly ReleaseProblemIdentity[];
     };
 
 type PreparedExpectation = ReleaseExpectation;
@@ -431,6 +474,12 @@ interface PreparedCase {
   readonly checks: readonly PreparedCheck[];
 }
 
+interface StagedExecution {
+  readonly adapters: ReleaseOracleAdapters | undefined;
+  readonly expectedNextCaseIndex: number;
+  readonly preparedCaseCount: number;
+}
+
 type RegistrationProblem = (code: string, path: string, detail: string) => void;
 
 interface SnapshotBudget {
@@ -445,6 +494,8 @@ const MAX_SNAPSHOT_ENTRIES = 10_000;
 const MAX_SNAPSHOT_OBJECTS = 50_000;
 const MCP_REGISTRY_EVALUATOR_PROBLEM: ReleaseProblemIdentity =
   "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics";
+const MCP_REGISTRY_WORKFLOW_PROBLEM: ReleaseProblemIdentity =
+  "stable MCP Registry publication must bind exact source manifests, one pinned publisher write, and bounded readback";
 
 function isPositiveSafeInteger(value: number): boolean {
   return numberIsSafeIntegerIntrinsic(value) && value > 0;
@@ -795,8 +846,76 @@ function materializeOracleValue(
   return value;
 }
 
-function validateReleaseOracleAdapters(value: unknown): ReleaseOracleAdapters | undefined {
-  if (value === undefined) return undefined;
+interface ReleaseOracleAdapterRequirements {
+  readonly registryEvaluatorProblems: boolean;
+  readonly registryStepProblems: boolean;
+}
+
+function releaseOracleAdapterRequirements(cases: readonly PreparedCase[]): ReleaseOracleAdapterRequirements {
+  let registryEvaluatorProblems = false;
+  let registryStepProblems = false;
+  for (let caseIndex = 0; caseIndex < cases.length; caseIndex++) {
+    const releaseCase = cases[caseIndex];
+    if (releaseCase === undefined) {
+      throw new errorConstructor(`release mutation prepared case ${caseIndex} is missing`);
+    }
+    for (let checkIndex = 0; checkIndex < releaseCase.checks.length; checkIndex++) {
+      const check = releaseCase.checks[checkIndex];
+      if (check === undefined) {
+        throw new errorConstructor(`release mutation prepared check ${caseIndex}:${checkIndex} is missing`);
+      }
+      switch (check.invocation.kind) {
+        case "registry.evaluator":
+          registryEvaluatorProblems = true;
+          break;
+        case "registry.step.run":
+        case "registry.step.integrity":
+          registryStepProblems = true;
+          break;
+        case "fixture.text":
+        case "fixture.throw":
+          break;
+        default:
+          assertNever(check.invocation);
+      }
+    }
+  }
+  return freezeObject({ registryEvaluatorProblems, registryStepProblems });
+}
+
+function releaseOracleAdapterShapeMessage(requirements: ReleaseOracleAdapterRequirements): string {
+  if (requirements.registryEvaluatorProblems && requirements.registryStepProblems) {
+    return (
+      "release oracle adapters must contain exactly enumerable registryEvaluatorProblems " +
+      "and registryStepProblems data functions"
+    );
+  }
+  if (requirements.registryEvaluatorProblems) {
+    return "release oracle adapters must contain only an enumerable registryEvaluatorProblems data function";
+  }
+  if (requirements.registryStepProblems) {
+    return "release oracle adapters must contain only an enumerable registryStepProblems data function";
+  }
+  return "release oracle adapters must be omitted when the sealed plan requires none";
+}
+
+function validateReleaseOracleAdapters(
+  value: unknown,
+  requirements: ReleaseOracleAdapterRequirements
+): ReleaseOracleAdapters | undefined {
+  if (value === undefined) {
+    if (!requirements.registryEvaluatorProblems && !requirements.registryStepProblems) return undefined;
+    if (requirements.registryEvaluatorProblems && !requirements.registryStepProblems) {
+      throw new errorConstructor("registry.evaluator cases require exact release oracle adapters at execute");
+    }
+    if (!requirements.registryEvaluatorProblems && requirements.registryStepProblems) {
+      throw new errorConstructor("registry.step cases require exact release oracle adapters at execute");
+    }
+    throw new errorConstructor("registry evaluator and step cases require exact release oracle adapters at execute");
+  }
+  if (!requirements.registryEvaluatorProblems && !requirements.registryStepProblems) {
+    throw new errorConstructor(releaseOracleAdapterShapeMessage(requirements));
+  }
   const object = objectValue(value);
   if (object === null) {
     throw new errorConstructor("release oracle adapters must be an exact plain object");
@@ -817,41 +936,83 @@ function validateReleaseOracleAdapters(value: unknown): ReleaseOracleAdapters | 
   }
 
   const keys = ownKeysIntrinsic(descriptors);
-  const detectorDescriptor = descriptors.registryEvaluatorProblems;
-  if (
-    keys.length !== 1 ||
-    keys[0] !== "registryEvaluatorProblems" ||
-    detectorDescriptor === undefined ||
-    !("value" in detectorDescriptor) ||
-    !detectorDescriptor.enumerable ||
-    typeof detectorDescriptor.value !== "function"
-  ) {
-    throw new errorConstructor(
-      "release oracle adapters must contain only an enumerable registryEvaluatorProblems data function"
-    );
+  let expectedCount = 0;
+  if (requirements.registryEvaluatorProblems) expectedCount++;
+  if (requirements.registryStepProblems) expectedCount++;
+  let exactKeys = keys.length === expectedCount;
+  for (let index = 0; index < keys.length; index++) {
+    const key = keys[index];
+    if (
+      key === undefined ||
+      (key !== "registryEvaluatorProblems" && key !== "registryStepProblems") ||
+      (key === "registryEvaluatorProblems" && !requirements.registryEvaluatorProblems) ||
+      (key === "registryStepProblems" && !requirements.registryStepProblems)
+    ) {
+      exactKeys = false;
+    }
   }
 
-  return freezeObject({
-    registryEvaluatorProblems: detectorDescriptor.value as ReleaseOracleAdapters["registryEvaluatorProblems"]
-  });
+  const evaluatorDescriptor = descriptors.registryEvaluatorProblems;
+  const stepDescriptor = descriptors.registryStepProblems;
+  const exactEvaluator =
+    !requirements.registryEvaluatorProblems ||
+    (evaluatorDescriptor !== undefined &&
+      "value" in evaluatorDescriptor &&
+      evaluatorDescriptor.enumerable &&
+      typeof evaluatorDescriptor.value === "function");
+  const exactStep =
+    !requirements.registryStepProblems ||
+    (stepDescriptor !== undefined &&
+      "value" in stepDescriptor &&
+      stepDescriptor.enumerable &&
+      typeof stepDescriptor.value === "function");
+  if (!exactKeys || !exactEvaluator || !exactStep) {
+    throw new errorConstructor(releaseOracleAdapterShapeMessage(requirements));
+  }
+
+  const closed: {
+    registryEvaluatorProblems?: RegistryEvaluatorProblemsAdapter;
+    registryStepProblems?: RegistryStepProblemsAdapter;
+  } = {};
+  if (requirements.registryEvaluatorProblems && evaluatorDescriptor !== undefined && "value" in evaluatorDescriptor) {
+    defineObjectPropertyIntrinsic(closed, "registryEvaluatorProblems", {
+      configurable: false,
+      enumerable: true,
+      value: evaluatorDescriptor.value as RegistryEvaluatorProblemsAdapter,
+      writable: false
+    });
+  }
+  if (requirements.registryStepProblems && stepDescriptor !== undefined && "value" in stepDescriptor) {
+    defineObjectPropertyIntrinsic(closed, "registryStepProblems", {
+      configurable: false,
+      enumerable: true,
+      value: stepDescriptor.value as RegistryStepProblemsAdapter,
+      writable: false
+    });
+  }
+  return freezeObject(closed);
 }
 
-function snapshotRegistryEvaluatorProblems(
+type RegistryOracleInvocationKind = "registry.evaluator" | "registry.step.run" | "registry.step.integrity";
+
+function snapshotRegistryProblems(
   value: unknown,
-  sourceKind: "baseline" | "mutant"
+  invocationKind: RegistryOracleInvocationKind,
+  sourceKind: "baseline" | "mutant",
+  expectedProblem: ReleaseProblemIdentity
 ): readonly ReleaseProblemIdentity[] {
   const structuralProblems: string[] = [];
-  const snapshot = snapshotPlainData(value, `registry.evaluator ${sourceKind} result`, (code, path, detail) => {
+  const snapshot = snapshotPlainData(value, `${invocationKind} ${sourceKind} result`, (code, path, detail) => {
     pushArrayValue(structuralProblems, `[${code}] ${path}: ${detail}`);
   });
   if (structuralProblems.length > 0) {
     const details = applyFunction(arrayJoinIntrinsic, structuralProblems, ["; "]) as string;
     throw new errorConstructor(
-      `registry.evaluator ${sourceKind} result must be a dense built-in string array (${details})`
+      `${invocationKind} ${sourceKind} result must be a dense built-in string array (${details})`
     );
   }
   if (!isArrayIntrinsic(snapshot)) {
-    throw new errorConstructor(`registry.evaluator ${sourceKind} result must be a dense built-in string array`);
+    throw new errorConstructor(`${invocationKind} ${sourceKind} result must be a dense built-in string array`);
   }
 
   const entries = snapshot as readonly unknown[];
@@ -859,25 +1020,16 @@ function snapshotRegistryEvaluatorProblems(
   const seen = new setConstructor<ReleaseProblemIdentity>();
   for (let index = 0; index < entries.length; index++) {
     const problem = entries[index];
-    if (problem !== MCP_REGISTRY_EVALUATOR_PROBLEM) {
-      throw new errorConstructor(`registry.evaluator ${sourceKind} result contains an unknown problem identity`);
+    if (problem !== expectedProblem) {
+      throw new errorConstructor(`${invocationKind} ${sourceKind} result contains an unknown problem identity`);
     }
     if (applyFunction(setHasIntrinsic, seen, [problem]) as boolean) {
-      throw new errorConstructor(`registry.evaluator ${sourceKind} result contains a duplicate problem identity`);
+      throw new errorConstructor(`${invocationKind} ${sourceKind} result contains a duplicate problem identity`);
     }
     applyFunction(setAddIntrinsic, seen, [problem]);
     pushArrayValue(problems, problem);
   }
   return freezeObject(problems);
-}
-
-function requiresRegistryEvaluatorAdapter(cases: readonly PreparedCase[]): boolean {
-  for (const releaseCase of cases) {
-    for (const check of releaseCase.checks) {
-      if (check.invocation.kind === "registry.evaluator") return true;
-    }
-  }
-  return false;
 }
 
 function executeReleaseOracleInvocation(
@@ -913,7 +1065,8 @@ function executeReleaseOracleInvocation(
       return { kind: "fixture.throw", baseline, problems: freezeObject(problems) };
     }
     case "registry.evaluator": {
-      if (adapters === undefined) {
+      const registryEvaluatorProblems = adapters?.registryEvaluatorProblems;
+      if (registryEvaluatorProblems === undefined) {
         throw new errorConstructor("registry.evaluator invocation requires exact release oracle adapters");
       }
       const baseline = materializeOracleValue(invocation.baseline, sourceValues, prepared);
@@ -922,17 +1075,93 @@ function executeReleaseOracleInvocation(
         throw new errorConstructor("registry.evaluator clean baseline must differ from its mutant");
       }
 
-      const baselineResult: unknown = applyFunction(adapters.registryEvaluatorProblems, undefined, [baseline]);
+      const baselineResult: unknown = applyFunction(registryEvaluatorProblems, undefined, [baseline]);
       assertAmbientIntrinsics();
-      const baselineProblems = snapshotRegistryEvaluatorProblems(baselineResult, "baseline");
-      const mutantResult: unknown = applyFunction(adapters.registryEvaluatorProblems, undefined, [mutant]);
+      const baselineProblems = snapshotRegistryProblems(
+        baselineResult,
+        "registry.evaluator",
+        "baseline",
+        MCP_REGISTRY_EVALUATOR_PROBLEM
+      );
       assertAmbientIntrinsics();
-      const mutantProblems = snapshotRegistryEvaluatorProblems(mutantResult, "mutant");
+      const mutantResult: unknown = applyFunction(registryEvaluatorProblems, undefined, [mutant]);
+      assertAmbientIntrinsics();
+      const mutantProblems = snapshotRegistryProblems(
+        mutantResult,
+        "registry.evaluator",
+        "mutant",
+        MCP_REGISTRY_EVALUATOR_PROBLEM
+      );
+      assertAmbientIntrinsics();
       return freezeObject({
         kind: "registry.evaluator",
         baselineProblems,
         mutantProblems
       });
+    }
+    case "registry.step.run": {
+      const registryStepProblems = adapters?.registryStepProblems;
+      if (registryStepProblems === undefined) {
+        throw new errorConstructor("registry.step.run invocation requires exact release oracle adapters");
+      }
+      const baseline = materializeOracleValue(invocation.baseline, sourceValues, prepared);
+      const mutant = materializeOracleValue(invocation.mutant, sourceValues, prepared);
+      const integrity = materializeOracleValue(invocation.integrity, sourceValues, prepared);
+      if (baseline === mutant) {
+        throw new errorConstructor("registry.step.run clean baseline must differ from its mutant");
+      }
+
+      const baselineResult: unknown = applyFunction(registryStepProblems, undefined, [baseline, integrity]);
+      assertAmbientIntrinsics();
+      const baselineProblems = snapshotRegistryProblems(
+        baselineResult,
+        "registry.step.run",
+        "baseline",
+        MCP_REGISTRY_WORKFLOW_PROBLEM
+      );
+      assertAmbientIntrinsics();
+      const mutantResult: unknown = applyFunction(registryStepProblems, undefined, [mutant, integrity]);
+      assertAmbientIntrinsics();
+      const mutantProblems = snapshotRegistryProblems(
+        mutantResult,
+        "registry.step.run",
+        "mutant",
+        MCP_REGISTRY_WORKFLOW_PROBLEM
+      );
+      assertAmbientIntrinsics();
+      return freezeObject({ kind: "registry.step.run", baselineProblems, mutantProblems });
+    }
+    case "registry.step.integrity": {
+      const registryStepProblems = adapters?.registryStepProblems;
+      if (registryStepProblems === undefined) {
+        throw new errorConstructor("registry.step.integrity invocation requires exact release oracle adapters");
+      }
+      const run = materializeOracleValue(invocation.run, sourceValues, prepared);
+      const baseline = materializeOracleValue(invocation.baseline, sourceValues, prepared);
+      const mutant = materializeOracleValue(invocation.mutant, sourceValues, prepared);
+      if (baseline === mutant) {
+        throw new errorConstructor("registry.step.integrity clean baseline must differ from its mutant");
+      }
+
+      const baselineResult: unknown = applyFunction(registryStepProblems, undefined, [run, baseline]);
+      assertAmbientIntrinsics();
+      const baselineProblems = snapshotRegistryProblems(
+        baselineResult,
+        "registry.step.integrity",
+        "baseline",
+        MCP_REGISTRY_WORKFLOW_PROBLEM
+      );
+      assertAmbientIntrinsics();
+      const mutantResult: unknown = applyFunction(registryStepProblems, undefined, [run, mutant]);
+      assertAmbientIntrinsics();
+      const mutantProblems = snapshotRegistryProblems(
+        mutantResult,
+        "registry.step.integrity",
+        "mutant",
+        MCP_REGISTRY_WORKFLOW_PROBLEM
+      );
+      assertAmbientIntrinsics();
+      return freezeObject({ kind: "registry.step.integrity", baselineProblems, mutantProblems });
     }
     default:
       return assertNever(invocation);
@@ -962,6 +1191,10 @@ function sameOracleInvocation(left: ReleaseOracleInvocation, right: ReleaseOracl
       return right.kind === "fixture.text";
     case "registry.evaluator":
       return right.kind === "registry.evaluator";
+    case "registry.step.run":
+      return right.kind === "registry.step.run" && left.integrity === right.integrity;
+    case "registry.step.integrity":
+      return right.kind === "registry.step.integrity" && left.run === right.run;
     default:
       return assertNever(left);
   }
@@ -985,8 +1218,9 @@ function errorMessage(error: unknown): string {
  * Closed, two-phase planner for the release-integrity mutation matrix.
  *
  * Registration is open-only. `seal()` validates and internally materializes the complete mutation
- * graph without executing a case. `execute()` materializes every ordered closed check internally,
- * invokes only its closed execution adapters, and applies that check's single data-only expectation.
+ * graph without executing a case. `execute()` runs every ordered check. `executeThrough()` instead
+ * validates and pins the exact adapter set for the complete sealed graph before the first detector,
+ * runs an inclusive case-root prefix, and leaves `executeRemaining()` to consume the pinned suffix.
  * Handles carry no public id or value.
  *
  * @example
@@ -1010,19 +1244,21 @@ function errorMessage(error: unknown): string {
  * });
  */
 export class ReleaseMutationPlan {
-  private readonly owner = freezeObject({});
-  private readonly sources: RegisteredSource[] = [];
-  private readonly mutations: RegisteredMutation[] = [];
-  private readonly cases: RegisteredCase[] = [];
-  private readonly sourceValues = new mapConstructor<ReleaseSourceHandle, string>();
-  private readonly prepared = new mapConstructor<ReleaseMutationHandle, PreparedMutation>();
-  private readonly preparedCases: PreparedCase[] = [];
-  private readonly problems: string[] = [];
-  private readonly expectedInventory: unknown;
-  private state: ReleaseMutationPlanState = "open";
-  private registrationActive = false;
-  private executedCases = 0;
-  private executedExpectations = 0;
+  readonly #owner = freezeObject({});
+  readonly #sources: RegisteredSource[] = [];
+  readonly #mutations: RegisteredMutation[] = [];
+  readonly #cases: RegisteredCase[] = [];
+  readonly #sourceValues = new mapConstructor<ReleaseSourceHandle, string>();
+  readonly #prepared = new mapConstructor<ReleaseMutationHandle, PreparedMutation>();
+  readonly #preparedCases: PreparedCase[] = [];
+  readonly #problems: string[] = [];
+  readonly #expectedInventory: unknown;
+  #state: ReleaseMutationPlanState = "open";
+  #registrationActive = false;
+  #nextCaseIndex = 0;
+  #stagedExecution: StagedExecution | undefined;
+  #executedCases = 0;
+  #executedExpectations = 0;
 
   /**
    * Create a planner, optionally pinning the mutation modes or complete graph topology.
@@ -1031,11 +1267,11 @@ export class ReleaseMutationPlan {
    */
   constructor(expectedInventory?: ReleaseMutationInventoryExpectation) {
     assertAmbientIntrinsics();
-    this.expectedInventory =
+    this.#expectedInventory =
       expectedInventory === undefined
         ? undefined
         : snapshotPlainData(expectedInventory, "inventory", (code, path, detail) => {
-            this.addProblem(code, "plan", `${path}: ${detail}`);
+            this.#addProblem(code, "plan", `${path}: ${detail}`);
           });
     assertAmbientIntrinsics();
     sealObject(this);
@@ -1043,22 +1279,22 @@ export class ReleaseMutationPlan {
 
   /** @returns Current lifecycle state, exposed for invariant controls. */
   get phase(): ReleaseMutationPlanState {
-    return this.state;
+    return this.#state;
   }
 
   /** @returns Number of cases whose first ordered check began execution. */
   get caseExecutions(): number {
-    return this.executedCases;
+    return this.#executedCases;
   }
 
   /** @returns Number of ordered checks whose single expectation evaluation began. */
   get expectationExecutions(): number {
-    return this.executedExpectations;
+    return this.#executedExpectations;
   }
 
   /** @returns Stable aggregate diagnostics produced by registration and the last seal attempt. */
   get diagnostics(): readonly string[] {
-    return [...this.problems];
+    return [...this.#problems];
   }
 
   /**
@@ -1070,20 +1306,20 @@ export class ReleaseMutationPlan {
    * @throws If registration has already closed.
    */
   registerSource(id: string, value: string): ReleaseSourceHandle {
-    this.requireOpen("register source");
-    this.registrationActive = true;
+    this.#requireOpen("register source");
+    this.#registrationActive = true;
     try {
       const rawId: unknown = id;
       const rawValue: unknown = value;
-      const displayId = displayIdentity(rawId, `<source-${this.sources.length + 1}>`);
-      const handle = createHandle<ReleaseSourceHandle>(this.owner, "source", displayId);
+      const displayId = displayIdentity(rawId, `<source-${this.#sources.length + 1}>`);
+      const handle = createHandle<ReleaseSourceHandle>(this.#owner, "source", displayId);
       const snapshot = snapshotPlainData(rawValue, `source ${displayId}`, (code, path, detail) => {
-        this.addProblem(code, displayId, `${path}: ${detail}`);
+        this.#addProblem(code, displayId, `${path}: ${detail}`);
       });
-      pushArrayValue(this.sources, { handle, id: rawId, value: snapshot });
+      pushArrayValue(this.#sources, { handle, id: rawId, value: snapshot });
       return handle;
     } finally {
-      this.registrationActive = false;
+      this.#registrationActive = false;
       assertAmbientIntrinsics();
     }
   }
@@ -1097,19 +1333,19 @@ export class ReleaseMutationPlan {
    * @throws If registration has already closed.
    */
   registerMutation(id: string, registration: ReleaseMutationRegistration): ReleaseMutationHandle {
-    this.requireOpen("register mutation");
-    this.registrationActive = true;
+    this.#requireOpen("register mutation");
+    this.#registrationActive = true;
     try {
       const rawId: unknown = id;
-      const displayId = displayIdentity(rawId, `<mutation-${this.mutations.length + 1}>`);
-      const handle = createHandle<ReleaseMutationHandle>(this.owner, "mutation", displayId);
+      const displayId = displayIdentity(rawId, `<mutation-${this.#mutations.length + 1}>`);
+      const handle = createHandle<ReleaseMutationHandle>(this.#owner, "mutation", displayId);
       const snapshot = snapshotPlainData(registration, `mutation ${displayId}`, (code, path, detail) => {
-        this.addProblem(code, displayId, `${path}: ${detail}`);
+        this.#addProblem(code, displayId, `${path}: ${detail}`);
       });
-      pushArrayValue(this.mutations, { handle, id: rawId, registration: snapshot });
+      pushArrayValue(this.#mutations, { handle, id: rawId, registration: snapshot });
       return handle;
     } finally {
-      this.registrationActive = false;
+      this.#registrationActive = false;
       assertAmbientIntrinsics();
     }
   }
@@ -1122,17 +1358,17 @@ export class ReleaseMutationPlan {
    * @throws If registration has already closed.
    */
   registerCase(registration: ReleaseMutationCase): this {
-    this.requireOpen("register case");
-    this.registrationActive = true;
+    this.#requireOpen("register case");
+    this.#registrationActive = true;
     try {
-      const caseNumber = this.cases.length + 1;
+      const caseNumber = this.#cases.length + 1;
       const snapshot = snapshotPlainData(registration, `case ${caseNumber}`, (code, path, detail) => {
-        this.addProblem(code, `<case-${caseNumber}>`, `${path}: ${detail}`);
+        this.#addProblem(code, `<case-${caseNumber}>`, `${path}: ${detail}`);
       });
-      pushArrayValue(this.cases, { registration: snapshot });
+      pushArrayValue(this.#cases, { registration: snapshot });
       return this;
     } finally {
-      this.registrationActive = false;
+      this.#registrationActive = false;
       assertAmbientIntrinsics();
     }
   }
@@ -1144,24 +1380,24 @@ export class ReleaseMutationPlan {
    * @throws If the plan is not open or validation aborts unexpectedly.
    */
   seal(): readonly string[] {
-    this.requireOpen("seal");
-    this.state = "sealing";
+    this.#requireOpen("seal");
+    this.#state = "sealing";
     try {
-      this.validateInventory();
-      const sourceValidation = this.validateSources();
-      const mutationRecords = this.validateMutationIdentities();
-      const mutationAnalyses = this.validateMutationDescriptors(sourceValidation, mutationRecords);
-      const caseAnalyses = this.validateCases(mutationRecords);
-      const cyclicMutations = this.validateCycles(mutationAnalyses);
-      this.prepareMutations(sourceValidation, mutationAnalyses, cyclicMutations);
-      const executableRoots = this.validatePreparedCaseValues(caseAnalyses);
-      this.validateReachability(mutationAnalyses, executableRoots);
+      this.#validateInventory();
+      const sourceValidation = this.#validateSources();
+      const mutationRecords = this.#validateMutationIdentities();
+      const mutationAnalyses = this.#validateMutationDescriptors(sourceValidation, mutationRecords);
+      const caseAnalyses = this.#validateCases(mutationRecords);
+      const cyclicMutations = this.#validateCycles(mutationAnalyses);
+      this.#prepareMutations(sourceValidation, mutationAnalyses, cyclicMutations);
+      const executableRoots = this.#validatePreparedCaseValues(caseAnalyses);
+      this.#validateReachability(mutationAnalyses, executableRoots);
       assertAmbientIntrinsics();
-      if (this.problems.length === 0) {
+      if (this.#problems.length === 0) {
         for (const analysis of caseAnalyses) {
           if (analysis.valid && analysis.root !== null && analysis.checks.length > 0) {
             pushArrayValue(
-              this.preparedCases,
+              this.#preparedCases,
               freezeObject({
                 id: analysis.id,
                 root: analysis.root,
@@ -1175,10 +1411,10 @@ export class ReleaseMutationPlan {
           }
         }
       }
-      this.state = this.problems.length === 0 ? "sealed" : "rejected";
+      this.#state = this.#problems.length === 0 ? "sealed" : "rejected";
       return this.diagnostics;
     } catch (error) {
-      this.state = "failed";
+      this.#state = "failed";
       throw error;
     }
   }
@@ -1192,70 +1428,184 @@ export class ReleaseMutationPlan {
    */
   execute(adapters?: ReleaseOracleAdapters): void {
     assertAmbientIntrinsics();
-    if (this.state !== "sealed") {
-      throw new errorConstructor(`release mutation plan execute requires sealed state; found ${this.state}`);
+    if (this.#state !== "sealed") {
+      throw new errorConstructor(`release mutation plan execute requires sealed state; found ${this.#state}`);
     }
-    this.state = "executing";
+    this.#state = "executing";
     try {
-      const closedAdapters = validateReleaseOracleAdapters(adapters);
-      if (requiresRegistryEvaluatorAdapter(this.preparedCases) && closedAdapters === undefined) {
-        throw new errorConstructor("registry.evaluator cases require exact release oracle adapters at execute");
-      }
-      for (let caseIndex = 0; caseIndex < this.preparedCases.length; caseIndex++) {
-        const releaseCase = this.preparedCases[caseIndex];
-        if (releaseCase === undefined) {
-          throw new errorConstructor(`release mutation prepared case ${caseIndex} is missing`);
-        }
-        this.executedCases++;
-        for (let checkIndex = 0; checkIndex < releaseCase.checks.length; checkIndex++) {
-          const check = releaseCase.checks[checkIndex];
-          if (check === undefined) {
-            throw new errorConstructor(`release mutation prepared check ${caseIndex}:${checkIndex} is missing`);
-          }
-          const observation = executeReleaseOracleInvocation(
-            check.invocation,
-            this.sourceValues,
-            this.prepared,
-            closedAdapters
-          );
-          this.executedExpectations++;
-          this.applyExpectation(releaseCase.id, check.expectation, observation);
-        }
-      }
+      const requirements = releaseOracleAdapterRequirements(this.#preparedCases);
+      const closedAdapters = validateReleaseOracleAdapters(adapters, requirements);
       assertAmbientIntrinsics();
-      this.state = "executed";
+      this.#executePreparedCasesThrough(this.#preparedCases.length, closedAdapters);
+      assertAmbientIntrinsics();
+      this.#state = "executed";
     } catch (error) {
-      this.state = "failed";
+      this.#state = "failed";
       throw error;
     }
   }
 
-  private requireOpen(action: string): void {
+  /**
+   * Execute an inclusive case-root prefix while atomically pinning all adapters needed by the sealed graph.
+   *
+   * @param root - Exact plan-owned case root that terminates the prefix.
+   * @param adapters - Exact complete adapter set required by every prepared case, including the deferred suffix.
+   * @returns Nothing. A remaining suffix moves the plan to `partially-executed`.
+   * @throws Before adapter inspection if the boundary is foreign, forged, a source, or dependency-only.
+   */
+  executeThrough(root: ReleaseMutationHandle, adapters?: ReleaseOracleAdapters): void {
     assertAmbientIntrinsics();
-    if (this.state !== "open") {
-      throw new errorConstructor(`cannot ${action} after release mutation plan entered ${this.state} state`);
+    if (this.#state !== "sealed") {
+      throw new errorConstructor(`release mutation plan executeThrough requires sealed state; found ${this.#state}`);
     }
-    if (this.registrationActive) {
+    this.#state = "executing";
+    try {
+      const boundaryIndex = this.#executionBoundaryIndex(root);
+      const requirements = releaseOracleAdapterRequirements(this.#preparedCases);
+      const closedAdapters = validateReleaseOracleAdapters(adapters, requirements);
+      assertAmbientIntrinsics();
+      const stagedExecution = freezeObject({
+        adapters: closedAdapters,
+        expectedNextCaseIndex: boundaryIndex + 1,
+        preparedCaseCount: this.#preparedCases.length
+      });
+      this.#stagedExecution = stagedExecution;
+      this.#executePreparedCasesThrough(boundaryIndex + 1, closedAdapters);
+      assertAmbientIntrinsics();
+      if (
+        this.#stagedExecution !== stagedExecution ||
+        this.#nextCaseIndex !== stagedExecution.expectedNextCaseIndex ||
+        this.#preparedCases.length !== stagedExecution.preparedCaseCount
+      ) {
+        throw new errorConstructor("release mutation staged execution capsule drifted during prefix execution");
+      }
+      if (this.#nextCaseIndex === this.#preparedCases.length) {
+        this.#stagedExecution = undefined;
+        this.#state = "executed";
+      } else {
+        this.#state = "partially-executed";
+      }
+    } catch (error) {
+      this.#stagedExecution = undefined;
+      this.#state = "failed";
+      throw error;
+    }
+  }
+
+  /**
+   * Execute the suffix after a successful `executeThrough()` using only its frozen adapter references.
+   *
+   * @returns Nothing. Successful completion moves the plan to `executed`.
+   * @throws If no prefix is pending, a detector fails, or an expectation fails.
+   */
+  executeRemaining(): void {
+    assertAmbientIntrinsics();
+    if (this.#state !== "partially-executed") {
+      throw new errorConstructor(
+        `release mutation plan executeRemaining requires partially-executed state; found ${this.#state}`
+      );
+    }
+    this.#state = "executing";
+    try {
+      const stagedExecution = this.#stagedExecution;
+      if (
+        stagedExecution === undefined ||
+        this.#nextCaseIndex !== stagedExecution.expectedNextCaseIndex ||
+        this.#preparedCases.length !== stagedExecution.preparedCaseCount
+      ) {
+        throw new errorConstructor("release mutation executeRemaining requires one intact staged execution capsule");
+      }
+      this.#executePreparedCasesThrough(stagedExecution.preparedCaseCount, stagedExecution.adapters);
+      assertAmbientIntrinsics();
+      if (
+        this.#stagedExecution !== stagedExecution ||
+        this.#nextCaseIndex !== stagedExecution.preparedCaseCount
+      ) {
+        throw new errorConstructor("release mutation staged execution capsule drifted during suffix execution");
+      }
+      this.#stagedExecution = undefined;
+      this.#state = "executed";
+    } catch (error) {
+      this.#stagedExecution = undefined;
+      this.#state = "failed";
+      throw error;
+    }
+  }
+
+  #executionBoundaryIndex(value: unknown): number {
+    const metadata = handleMetadata(value);
+    if (metadata === undefined) {
+      throw new errorConstructor(
+        "release mutation executeThrough boundary must be an unforgeable plan-owned case root"
+      );
+    }
+    if (metadata.owner !== this.#owner) {
+      throw new errorConstructor(
+        `release mutation executeThrough boundary uses a foreign-plan ${metadata.kind} handle`
+      );
+    }
+    if (metadata.kind !== "mutation") {
+      throw new errorConstructor("release mutation executeThrough boundary must not use a canonical source handle");
+    }
+    for (let index = 0; index < this.#preparedCases.length; index++) {
+      if (this.#preparedCases[index]?.root === value) return index;
+    }
+    throw new errorConstructor(
+      "release mutation executeThrough boundary must be a case root, not a dependency-only mutation"
+    );
+  }
+
+  #executePreparedCasesThrough(end: number, adapters: ReleaseOracleAdapters | undefined): void {
+    for (let caseIndex = this.#nextCaseIndex; caseIndex < end; caseIndex++) {
+      const releaseCase = this.#preparedCases[caseIndex];
+      if (releaseCase === undefined) {
+        throw new errorConstructor(`release mutation prepared case ${caseIndex} is missing`);
+      }
+      this.#executedCases++;
+      for (let checkIndex = 0; checkIndex < releaseCase.checks.length; checkIndex++) {
+        const check = releaseCase.checks[checkIndex];
+        if (check === undefined) {
+          throw new errorConstructor(`release mutation prepared check ${caseIndex}:${checkIndex} is missing`);
+        }
+        const observation = executeReleaseOracleInvocation(
+          check.invocation,
+          this.#sourceValues,
+          this.#prepared,
+          adapters
+        );
+        this.#executedExpectations++;
+        this.#applyExpectation(releaseCase.id, check.expectation, observation);
+      }
+      this.#nextCaseIndex = caseIndex + 1;
+    }
+  }
+
+  #requireOpen(action: string): void {
+    assertAmbientIntrinsics();
+    if (this.#state !== "open") {
+      throw new errorConstructor(`cannot ${action} after release mutation plan entered ${this.#state} state`);
+    }
+    if (this.#registrationActive) {
       throw new errorConstructor(`cannot ${action} during release mutation registration`);
     }
   }
 
-  private addProblem(code: string, id: string, detail: string): void {
-    pushArrayValue(this.problems, `[${code}] ${id}: ${detail}`);
+  #addProblem(code: string, id: string, detail: string): void {
+    pushArrayValue(this.#problems, `[${code}] ${id}: ${detail}`);
   }
 
-  private validateInventory(): void {
-    if (this.mutations.length === 0) {
-      this.addProblem("inventory.empty", "plan", "plan must register at least one mutation");
+  #validateInventory(): void {
+    if (this.#mutations.length === 0) {
+      this.#addProblem("inventory.empty", "plan", "plan must register at least one mutation");
     }
-    if (this.expectedInventory === undefined) return;
-    const inventory = plainRecord(this.expectedInventory);
+    if (this.#expectedInventory === undefined) return;
+    const inventory = plainRecord(this.#expectedInventory);
     const mutationKeys = ["total", "first", "all"] as const;
     const topologyKeys = ["total", "first", "all", "cases", "expectations", "roots", "dependencyOnly"] as const;
     const hasMutationInventory = inventory !== null && hasExactKeys(inventory, mutationKeys);
     const hasTopologyInventory = inventory !== null && hasExactKeys(inventory, topologyKeys);
     if (inventory === null || (!hasMutationInventory && !hasTopologyInventory)) {
-      this.addProblem(
+      this.#addProblem(
         "inventory.invalid",
         "plan",
         "expected inventory must be one exact total/first/all record with either zero or all topology fields"
@@ -1276,7 +1626,7 @@ export class ReleaseMutationPlan {
       expectedAll < 0 ||
       expectedFirst + expectedAll !== total
     ) {
-      this.addProblem("inventory.invalid", "plan", "expected inventory must be coherent safe integers");
+      this.#addProblem("inventory.invalid", "plan", "expected inventory must be coherent safe integers");
       return;
     }
     const expectedCases = inventory.cases;
@@ -1298,12 +1648,12 @@ export class ReleaseMutationPlan {
         expectedExpectations < expectedCases ||
         expectedRoots + expectedDependencyOnly !== total)
     ) {
-      this.addProblem("inventory.invalid", "plan", "expected topology inventory must be coherent safe integers");
+      this.#addProblem("inventory.invalid", "plan", "expected topology inventory must be coherent safe integers");
       return;
     }
     let first = 0;
     let all = 0;
-    for (const mutation of this.mutations) {
+    for (const mutation of this.#mutations) {
       const registration = plainRecord(mutation.registration);
       if (registration?.mode === "first") first++;
       if (registration?.mode === "all") all++;
@@ -1312,15 +1662,15 @@ export class ReleaseMutationPlan {
     let expectations = 0;
     const roots = new setConstructor<ReleaseMutationHandle>();
     let rootCount = 0;
-    const mutationHandles = new setConstructor(this.mutations.map((mutation) => mutation.handle));
-    for (const registeredCase of this.cases) {
+    const mutationHandles = new setConstructor(this.#mutations.map((mutation) => mutation.handle));
+    for (const registeredCase of this.#cases) {
       cases++;
       const registration = plainRecord(registeredCase.registration);
       if (isArrayIntrinsic(registration?.checks)) expectations += registration.checks.length;
       const root = registration?.root;
       const metadata = handleMetadata(root);
       if (
-        metadata?.owner === this.owner &&
+        metadata?.owner === this.#owner &&
         metadata.kind === "mutation" &&
         mutationHandles.has(root as ReleaseMutationHandle) &&
         !roots.has(root as ReleaseMutationHandle)
@@ -1329,8 +1679,8 @@ export class ReleaseMutationPlan {
         rootCount++;
       }
     }
-    const dependencyOnly = this.mutations.length - rootCount;
-    const mutationMismatch = this.mutations.length !== total || first !== expectedFirst || all !== expectedAll;
+    const dependencyOnly = this.#mutations.length - rootCount;
+    const mutationMismatch = this.#mutations.length !== total || first !== expectedFirst || all !== expectedAll;
     const topologyMismatch =
       hasTopologyInventory &&
       (cases !== expectedCases ||
@@ -1339,64 +1689,64 @@ export class ReleaseMutationPlan {
         dependencyOnly !== expectedDependencyOnly);
     if (!mutationMismatch && !topologyMismatch) return;
     const expectedMutation = `${total} total (${expectedFirst} first / ${expectedAll} all)`;
-    const foundMutation = `${this.mutations.length} total (${first} first / ${all} all)`;
+    const foundMutation = `${this.#mutations.length} total (${first} first / ${all} all)`;
     const expectedTopology = hasTopologyInventory
       ? `, ${expectedCases} cases / ${expectedExpectations} expectations / ${expectedRoots} roots / ${expectedDependencyOnly} dependency-only`
       : "";
     const foundTopology = hasTopologyInventory
       ? `, ${cases} cases / ${expectations} expectations / ${rootCount} roots / ${dependencyOnly} dependency-only`
       : "";
-    this.addProblem(
+    this.#addProblem(
       "inventory.mismatch",
       "plan",
       `expected ${expectedMutation}${expectedTopology}, found ${foundMutation}${foundTopology}`
     );
   }
 
-  private validateSources(): SourceValidation {
+  #validateSources(): SourceValidation {
     const byHandle = new mapConstructor<ReleaseSourceHandle, RegisteredSource>();
     const byId = new mapConstructor<string, RegisteredSource>();
     const invalid = new setConstructor<ReleaseSourceHandle>();
-    if (this.sources.length === 0) {
-      this.addProblem("source.none", "plan", "plan must register at least one canonical source");
+    if (this.#sources.length === 0) {
+      this.#addProblem("source.none", "plan", "plan must register at least one canonical source");
     }
-    for (const source of this.sources) {
+    for (const source of this.#sources) {
       byHandle.set(source.handle, source);
       const id = source.id;
       const displayId = handleMetadata(source.handle)?.id ?? "<source>";
       if (typeof id !== "string" || !testRegExp(ID_PATTERN, id)) {
-        this.addProblem("source.id", displayId, "id must be one lowercase token path without repeated separators");
+        this.#addProblem("source.id", displayId, "id must be one lowercase token path without repeated separators");
         invalid.add(source.handle);
       } else if (byId.has(id)) {
-        this.addProblem("source.duplicate", id, "source id is registered more than once");
+        this.#addProblem("source.duplicate", id, "source id is registered more than once");
         invalid.add(source.handle);
       } else {
         byId.set(id, source);
       }
       if (typeof source.value !== "string") {
-        this.addProblem("source.type", displayId, "canonical source must be a string");
+        this.#addProblem("source.type", displayId, "canonical source must be a string");
         invalid.add(source.handle);
       } else if (source.value.length === 0) {
-        this.addProblem("source.empty", displayId, "canonical source must not be empty");
+        this.#addProblem("source.empty", displayId, "canonical source must not be empty");
         invalid.add(source.handle);
       } else {
-        this.sourceValues.set(source.handle, source.value);
+        this.#sourceValues.set(source.handle, source.value);
       }
     }
     return { byHandle, invalid };
   }
 
-  private validateMutationIdentities(): ReadonlyMap<ReleaseMutationHandle, RegisteredMutation> {
+  #validateMutationIdentities(): ReadonlyMap<ReleaseMutationHandle, RegisteredMutation> {
     const byHandle = new mapConstructor<ReleaseMutationHandle, RegisteredMutation>();
     const byId = new mapConstructor<string, RegisteredMutation>();
-    for (const mutation of this.mutations) {
+    for (const mutation of this.#mutations) {
       byHandle.set(mutation.handle, mutation);
       const id = mutation.id;
       const displayId = handleMetadata(mutation.handle)?.id ?? "<mutation>";
       if (typeof id !== "string" || !testRegExp(ID_PATTERN, id)) {
-        this.addProblem("mutation.id", displayId, "id must be one lowercase token path without repeated separators");
+        this.#addProblem("mutation.id", displayId, "id must be one lowercase token path without repeated separators");
       } else if (byId.has(id)) {
-        this.addProblem("mutation.duplicate", id, "mutation id is registered more than once");
+        this.#addProblem("mutation.duplicate", id, "mutation id is registered more than once");
       } else {
         byId.set(id, mutation);
       }
@@ -1404,12 +1754,12 @@ export class ReleaseMutationPlan {
     return byHandle;
   }
 
-  private validateMutationDescriptors(
+  #validateMutationDescriptors(
     sources: SourceValidation,
     mutations: ReadonlyMap<ReleaseMutationHandle, RegisteredMutation>
   ): ReadonlyMap<ReleaseMutationHandle, MutationAnalysis> {
     const analyses = new mapConstructor<ReleaseMutationHandle, MutationAnalysis>();
-    for (const mutation of this.mutations) {
+    for (const mutation of this.#mutations) {
       const id = handleMetadata(mutation.handle)?.id ?? "<mutation>";
       const registration = plainRecord(mutation.registration);
       let valid = true;
@@ -1417,25 +1767,25 @@ export class ReleaseMutationPlan {
         registration === null ||
         !hasExactKeys(registration, ["mode", "source", "needle", "replacement", "expectedOccurrences", "witness"])
       ) {
-        this.addProblem("mutation.shape", id, "registration must contain only the six declared mutation fields");
+        this.#addProblem("mutation.shape", id, "registration must contain only the six declared mutation fields");
         valid = false;
       }
 
       const mode = registration?.mode === "first" || registration?.mode === "all" ? registration.mode : null;
       if (mode === null) {
-        this.addProblem("mutation.mode", id, "mode must be first or all");
+        this.#addProblem("mutation.mode", id, "mode must be first or all");
         valid = false;
       }
 
-      const source = this.validateValueHandle(registration?.source, id, "source", sources.byHandle, mutations);
+      const source = this.#validateValueHandle(registration?.source, id, "source", sources.byHandle, mutations);
       if (source === null) valid = false;
 
       const needle = typeof registration?.needle === "string" ? registration.needle : null;
       if (needle === null) {
-        this.addProblem("mutation.needle", id, "needle must be a string");
+        this.#addProblem("mutation.needle", id, "needle must be a string");
         valid = false;
       } else if (needle.length === 0) {
-        this.addProblem("mutation.needle", id, "needle must not be empty");
+        this.#addProblem("mutation.needle", id, "needle must not be empty");
         valid = false;
       }
 
@@ -1443,21 +1793,21 @@ export class ReleaseMutationPlan {
       if (typeof registration?.replacement === "string") {
         replacement = registration.replacement;
       } else {
-        replacement = this.validateMutationHandle(registration?.replacement, id, "replacement", mutations);
+        replacement = this.#validateMutationHandle(registration?.replacement, id, "replacement", mutations);
         if (replacement === null) valid = false;
       }
 
       const expectedOccurrences =
         typeof registration?.expectedOccurrences === "number" ? registration.expectedOccurrences : null;
       if (expectedOccurrences === null || !isPositiveSafeInteger(expectedOccurrences)) {
-        this.addProblem("mutation.count", id, "expectedOccurrences must be a positive safe integer");
+        this.#addProblem("mutation.count", id, "expectedOccurrences must be a positive safe integer");
         valid = false;
       }
 
       const witnessRecord = plainRecord(registration?.witness);
       let witness: ReleaseMutationWitness | null = null;
       if (witnessRecord === null || !hasExactKeys(witnessRecord, ["kind", "anchor", "before", "after"])) {
-        this.addProblem("witness.shape", id, "witness must contain only kind/anchor/before/after");
+        this.#addProblem("witness.shape", id, "witness must contain only kind/anchor/before/after");
         valid = false;
       } else {
         const kind = witnessRecord.kind;
@@ -1466,11 +1816,11 @@ export class ReleaseMutationPlan {
         const after = witnessRecord.after;
         let witnessValid = true;
         if (kind !== "token" && kind !== "line") {
-          this.addProblem("witness.kind", id, "positive witness kind must be token or line");
+          this.#addProblem("witness.kind", id, "positive witness kind must be token or line");
           witnessValid = false;
         }
         if (typeof anchor !== "string" || anchor.length === 0) {
-          this.addProblem("witness.anchor", id, "positive witness anchor must be a non-empty string");
+          this.#addProblem("witness.anchor", id, "positive witness anchor must be a non-empty string");
           witnessValid = false;
         }
         if (
@@ -1482,7 +1832,7 @@ export class ReleaseMutationPlan {
           after < 0 ||
           before === after
         ) {
-          this.addProblem("witness.count", id, "witness counts must be different non-negative safe integers");
+          this.#addProblem("witness.count", id, "witness counts must be different non-negative safe integers");
           witnessValid = false;
         }
         if (witnessValid) {
@@ -1502,7 +1852,7 @@ export class ReleaseMutationPlan {
         handleMetadata(source)?.kind === "source" &&
         sources.invalid.has(source as ReleaseSourceHandle)
       ) {
-        this.addProblem("mutation.blocked", id, "source handle refers to an invalid canonical source");
+        this.#addProblem("mutation.blocked", id, "source handle refers to an invalid canonical source");
         valid = false;
       }
 
@@ -1520,7 +1870,7 @@ export class ReleaseMutationPlan {
     return analyses;
   }
 
-  private validateValueHandle(
+  #validateValueHandle(
     value: unknown,
     id: string,
     field: string,
@@ -1529,30 +1879,30 @@ export class ReleaseMutationPlan {
   ): ReleaseSourceHandle | ReleaseMutationHandle | null {
     const metadata = handleMetadata(value);
     if (metadata === undefined) {
-      this.addProblem("dependency.handle", id, `${field} must be an unforgeable plan-owned handle`);
+      this.#addProblem("dependency.handle", id, `${field} must be an unforgeable plan-owned handle`);
       return null;
     }
-    if (metadata.owner !== this.owner) {
-      this.addProblem("dependency.handle", id, `${field} uses a foreign-plan ${metadata.kind} handle`);
+    if (metadata.owner !== this.#owner) {
+      this.#addProblem("dependency.handle", id, `${field} uses a foreign-plan ${metadata.kind} handle`);
       return null;
     }
     if (metadata.kind === "source") {
       const handle = value as ReleaseSourceHandle;
       if (!sources.has(handle)) {
-        this.addProblem("dependency.source", id, `${field} refers to an unknown source handle`);
+        this.#addProblem("dependency.source", id, `${field} refers to an unknown source handle`);
         return null;
       }
       return handle;
     }
     const handle = value as ReleaseMutationHandle;
     if (!mutations.has(handle)) {
-      this.addProblem("dependency.mutation", id, `${field} refers to an unknown mutation handle`);
+      this.#addProblem("dependency.mutation", id, `${field} refers to an unknown mutation handle`);
       return null;
     }
     return handle;
   }
 
-  private validateMutationHandle(
+  #validateMutationHandle(
     value: unknown,
     id: string,
     field: string,
@@ -1560,60 +1910,60 @@ export class ReleaseMutationPlan {
   ): ReleaseMutationHandle | null {
     const metadata = handleMetadata(value);
     if (metadata === undefined) {
-      this.addProblem("dependency.handle", id, `${field} must be an unforgeable plan-owned mutation handle`);
+      this.#addProblem("dependency.handle", id, `${field} must be an unforgeable plan-owned mutation handle`);
       return null;
     }
-    if (metadata.owner !== this.owner) {
-      this.addProblem("dependency.handle", id, `${field} uses a foreign-plan ${metadata.kind} handle`);
+    if (metadata.owner !== this.#owner) {
+      this.#addProblem("dependency.handle", id, `${field} uses a foreign-plan ${metadata.kind} handle`);
       return null;
     }
     if (metadata.kind !== "mutation") {
-      this.addProblem("dependency.kind", id, `${field} must be a mutation handle, found source handle`);
+      this.#addProblem("dependency.kind", id, `${field} must be a mutation handle, found source handle`);
       return null;
     }
     const handle = value as ReleaseMutationHandle;
     if (!mutations.has(handle)) {
-      this.addProblem("dependency.mutation", id, `${field} refers to an unknown mutation handle`);
+      this.#addProblem("dependency.mutation", id, `${field} refers to an unknown mutation handle`);
       return null;
     }
     return handle;
   }
 
-  private validateCases(mutations: ReadonlyMap<ReleaseMutationHandle, RegisteredMutation>): readonly CaseAnalysis[] {
+  #validateCases(mutations: ReadonlyMap<ReleaseMutationHandle, RegisteredMutation>): readonly CaseAnalysis[] {
     const analyses: CaseAnalysis[] = [];
     const caseIds = new setConstructor<string>();
     const expectationIds = new setConstructor<string>();
     const rootedBy = new mapConstructor<ReleaseMutationHandle, string>();
-    if (this.cases.length === 0) {
-      this.addProblem("case.none", "plan", "plan must register at least one closed case");
+    if (this.#cases.length === 0) {
+      this.#addProblem("case.none", "plan", "plan must register at least one closed case");
     }
-    for (const [caseIndex, registered] of this.cases.entries()) {
+    for (const [caseIndex, registered] of this.#cases.entries()) {
       const registration = plainRecord(registered.registration);
       const fallbackId = `<case-${caseIndex + 1}>`;
       const rawId = registration?.id;
       const id = displayIdentity(rawId, fallbackId);
       let valid = true;
       if (registration === null || !hasExactKeys(registration, ["id", "root", "checks"])) {
-        this.addProblem("case.shape", id, "case must contain only id/root/checks");
+        this.#addProblem("case.shape", id, "case must contain only id/root/checks");
         valid = false;
       }
       if (typeof rawId !== "string" || !testRegExp(ID_PATTERN, rawId)) {
-        this.addProblem("case.id", id, "id must be one lowercase token path without repeated separators");
+        this.#addProblem("case.id", id, "id must be one lowercase token path without repeated separators");
         valid = false;
       } else if (caseIds.has(rawId)) {
-        this.addProblem("case.duplicate", rawId, "case id is registered more than once");
+        this.#addProblem("case.duplicate", rawId, "case id is registered more than once");
         valid = false;
       } else {
         caseIds.add(rawId);
       }
 
-      const root = this.validateCaseRoot(registration?.root, id, "root", mutations);
+      const root = this.#validateCaseRoot(registration?.root, id, "root", mutations);
       if (root === null) {
         valid = false;
       } else {
         const previous = rootedBy.get(root);
         if (previous !== undefined) {
-          this.addProblem("case.root", id, `mutation root is already owned by case ${previous}`);
+          this.#addProblem("case.root", id, `mutation root is already owned by case ${previous}`);
           valid = false;
         } else {
           rootedBy.set(root, id);
@@ -1623,18 +1973,18 @@ export class ReleaseMutationPlan {
       const checksValue = registration?.checks;
       const checks: PreparedCheck[] = [];
       if (!isArrayIntrinsic(checksValue) || checksValue.length === 0) {
-        this.addProblem("expectation.none", id, "case must register at least one expectation");
+        this.#addProblem("expectation.none", id, "case must register at least one expectation");
         valid = false;
       } else {
         for (const [checkIndex, value] of checksValue.entries()) {
           const check = plainRecord(value);
           if (check === null || !hasExactKeys(check, ["invoke", "expectation"])) {
-            this.addProblem("check.shape", id, `check ${checkIndex + 1} must contain only invoke/expectation`);
+            this.#addProblem("check.shape", id, `check ${checkIndex + 1} must contain only invoke/expectation`);
             valid = false;
           }
 
-          const invocation = this.validateCaseInvocation(check?.invoke, id, root, mutations);
-          const expectation = this.validateExpectation(check?.expectation, id, checkIndex, expectationIds);
+          const invocation = this.#validateCaseInvocation(check?.invoke, id, root, mutations);
+          const expectation = this.#validateExpectation(check?.expectation, id, checkIndex, expectationIds);
           if (invocation.invocation === null || expectation === null) {
             valid = false;
           } else {
@@ -1642,16 +1992,16 @@ export class ReleaseMutationPlan {
             switch (closedInvocation.kind) {
               case "fixture.text":
                 if (expectation.kind === "problem") {
-                  this.addProblem("expectation.type", id, "fixture.text requires value expectations");
+                  this.#addProblem("expectation.type", id, "fixture.text requires value expectations");
                   valid = false;
                 }
                 break;
               case "fixture.throw":
                 if (expectation.kind !== "problem") {
-                  this.addProblem("expectation.type", id, "fixture.throw requires exact problem expectations");
+                  this.#addProblem("expectation.type", id, "fixture.throw requires exact problem expectations");
                   valid = false;
                 } else if (expectation.problem !== "fixture.mutant-threw") {
-                  this.addProblem(
+                  this.#addProblem(
                     "expectation.problem",
                     id,
                     "fixture.throw requires its exact fixture problem identity"
@@ -1661,13 +2011,31 @@ export class ReleaseMutationPlan {
                 break;
               case "registry.evaluator":
                 if (expectation.kind !== "problem") {
-                  this.addProblem("expectation.type", id, "registry.evaluator requires exact problem expectations");
+                  this.#addProblem("expectation.type", id, "registry.evaluator requires exact problem expectations");
                   valid = false;
                 } else if (expectation.problem !== MCP_REGISTRY_EVALUATOR_PROBLEM) {
-                  this.addProblem(
+                  this.#addProblem(
                     "expectation.problem",
                     id,
                     "registry.evaluator requires its exact MCP Registry problem identity"
+                  );
+                  valid = false;
+                }
+                break;
+              case "registry.step.run":
+              case "registry.step.integrity":
+                if (expectation.kind !== "problem") {
+                  this.#addProblem(
+                    "expectation.type",
+                    id,
+                    `${closedInvocation.kind} requires exact problem expectations`
+                  );
+                  valid = false;
+                } else if (expectation.problem !== MCP_REGISTRY_WORKFLOW_PROBLEM) {
+                  this.#addProblem(
+                    "expectation.problem",
+                    id,
+                    `${closedInvocation.kind} requires its exact MCP Registry workflow problem identity`
                   );
                   valid = false;
                 }
@@ -1684,7 +2052,7 @@ export class ReleaseMutationPlan {
                   expectationSemanticIdentity(preparedCheck.expectation) === semanticIdentity
               )
             ) {
-              this.addProblem(
+              this.#addProblem(
                 "expectation.redundant",
                 id,
                 `expectation ${expectation.id} duplicates another expectation in the same case`
@@ -1705,7 +2073,7 @@ export class ReleaseMutationPlan {
     return analyses;
   }
 
-  private validateCaseInvocation(
+  #validateCaseInvocation(
     value: unknown,
     id: string,
     root: ReleaseMutationHandle | null,
@@ -1715,52 +2083,64 @@ export class ReleaseMutationPlan {
     const kind =
       invocation?.kind === "fixture.text" ||
       invocation?.kind === "fixture.throw" ||
-      invocation?.kind === "registry.evaluator"
+      invocation?.kind === "registry.evaluator" ||
+      invocation?.kind === "registry.step.run" ||
+      invocation?.kind === "registry.step.integrity"
         ? invocation.kind
         : null;
     let valid = true;
     if (kind === null) {
-      this.addProblem(
+      this.#addProblem(
         "invocation.kind",
         id,
-        "invocation kind must be fixture.text, fixture.throw, or registry.evaluator"
+        "invocation kind must be fixture.text, fixture.throw, registry.evaluator, registry.step.run, " +
+          "or registry.step.integrity"
       );
       valid = false;
     } else {
-      const expectedKeys =
-        kind === "fixture.throw"
-          ? (["kind", "baseline", "mutant", "message"] as const)
-          : (["kind", "baseline", "mutant"] as const);
+      let expectedKeys: readonly string[] = ["kind", "baseline", "mutant"];
+      if (kind === "fixture.throw") expectedKeys = ["kind", "baseline", "mutant", "message"];
+      else if (kind === "registry.step.run") expectedKeys = ["kind", "baseline", "mutant", "integrity"];
+      else if (kind === "registry.step.integrity") expectedKeys = ["kind", "baseline", "mutant", "run"];
       if (invocation === null || !hasExactKeys(invocation, expectedKeys)) {
-        this.addProblem("invocation.shape", id, `${kind} invocation has unexpected or missing fields`);
+        this.#addProblem("invocation.shape", id, `${kind} invocation has unexpected or missing fields`);
         valid = false;
       }
     }
 
-    const invocationRoot = this.validateCaseRoot(invocation?.mutant, id, "invocation mutant", mutations);
+    const invocationRoot = this.#validateCaseRoot(invocation?.mutant, id, "invocation mutant", mutations);
     if (invocationRoot === null) {
       valid = false;
     } else if (root !== null && invocationRoot !== root) {
-      this.addProblem("case.root", id, "invocation must contain the case's exact explicit root handle");
+      this.#addProblem("case.root", id, "invocation must contain the case's exact explicit root handle");
       valid = false;
     }
-    const baseline = this.validateCaseBaseline(invocation?.baseline, id, mutations);
+    const baseline = this.#validateCaseBaseline(invocation?.baseline, id, mutations);
     if (baseline === null) {
       valid = false;
     } else if (root !== null) {
       if (baseline === root) {
-        this.addProblem("case.baseline", id, "clean baseline must not be the mutant root handle");
+        this.#addProblem("case.baseline", id, "clean baseline must not be the mutant root handle");
         valid = false;
-      } else if (!this.rootBaselineClosure(root, mutations).has(baseline)) {
-        this.addProblem("case.baseline", id, "clean baseline must belong to the root source lineage");
+      } else if (!this.#rootBaselineClosure(root, mutations).has(baseline)) {
+        this.#addProblem("case.baseline", id, "clean baseline must belong to the root source lineage");
         valid = false;
       }
     }
 
+    const integrity =
+      kind === "registry.step.run"
+        ? this.#validateCaseCompanionSource(invocation?.integrity, id, "integrity")
+        : null;
+    if (kind === "registry.step.run" && integrity === null) valid = false;
+    const run =
+      kind === "registry.step.integrity" ? this.#validateCaseCompanionSource(invocation?.run, id, "run") : null;
+    if (kind === "registry.step.integrity" && run === null) valid = false;
+
     let message: string | null = null;
     if (kind === "fixture.throw") {
       if (typeof invocation?.message !== "string" || invocation.message.length === 0) {
-        this.addProblem("invocation.message", id, "fixture.throw message must be a non-empty string");
+        this.#addProblem("invocation.message", id, "fixture.throw message must be a non-empty string");
         valid = false;
       } else {
         message = invocation.message;
@@ -1774,11 +2154,27 @@ export class ReleaseMutationPlan {
       closedInvocation = freezeObject({ kind, baseline, mutant: invocationRoot, message });
     } else if (valid && baseline !== null && invocationRoot !== null && kind === "registry.evaluator") {
       closedInvocation = freezeObject({ kind, baseline, mutant: invocationRoot });
+    } else if (
+      valid &&
+      baseline !== null &&
+      invocationRoot !== null &&
+      kind === "registry.step.run" &&
+      integrity !== null
+    ) {
+      closedInvocation = freezeObject({ kind, baseline, mutant: invocationRoot, integrity });
+    } else if (
+      valid &&
+      baseline !== null &&
+      invocationRoot !== null &&
+      kind === "registry.step.integrity" &&
+      run !== null
+    ) {
+      closedInvocation = freezeObject({ kind, baseline, mutant: invocationRoot, run });
     }
     return freezeObject({ kind, invocation: closedInvocation });
   }
 
-  private validateCaseRoot(
+  #validateCaseRoot(
     value: unknown,
     id: string,
     field: string,
@@ -1786,56 +2182,90 @@ export class ReleaseMutationPlan {
   ): ReleaseMutationHandle | null {
     const metadata = handleMetadata(value);
     if (metadata === undefined) {
-      this.addProblem("case.root", id, `${field} must be an unforgeable plan-owned mutation handle`);
+      this.#addProblem("case.root", id, `${field} must be an unforgeable plan-owned mutation handle`);
       return null;
     }
-    if (metadata.owner !== this.owner) {
-      this.addProblem("case.root", id, `${field} uses a foreign-plan ${metadata.kind} handle`);
+    if (metadata.owner !== this.#owner) {
+      this.#addProblem("case.root", id, `${field} uses a foreign-plan ${metadata.kind} handle`);
       return null;
     }
     if (metadata.kind !== "mutation") {
-      this.addProblem("case.root", id, `${field} must not use a canonical source handle`);
+      this.#addProblem("case.root", id, `${field} must not use a canonical source handle`);
       return null;
     }
     const handle = value as ReleaseMutationHandle;
     if (!mutations.has(handle)) {
-      this.addProblem("case.root", id, `${field} refers to an unknown mutation handle`);
+      this.#addProblem("case.root", id, `${field} refers to an unknown mutation handle`);
       return null;
     }
     return handle;
   }
 
-  private validateCaseBaseline(
+  #validateCaseBaseline(
     value: unknown,
     id: string,
     mutations: ReadonlyMap<ReleaseMutationHandle, RegisteredMutation>
   ): ReleaseSourceHandle | ReleaseMutationHandle | null {
     const metadata = handleMetadata(value);
     if (metadata === undefined) {
-      this.addProblem("case.baseline", id, "baseline must be an unforgeable plan-owned source or mutation handle");
+      this.#addProblem("case.baseline", id, "baseline must be an unforgeable plan-owned source or mutation handle");
       return null;
     }
-    if (metadata.owner !== this.owner) {
-      this.addProblem("case.baseline", id, `baseline uses a foreign-plan ${metadata.kind} handle`);
+    if (metadata.owner !== this.#owner) {
+      this.#addProblem("case.baseline", id, `baseline uses a foreign-plan ${metadata.kind} handle`);
       return null;
     }
     if (metadata.kind === "source") {
       const handle = value as ReleaseSourceHandle;
-      if (!this.sources.some((source) => source.handle === handle)) {
-        this.addProblem("case.baseline", id, "baseline refers to an unknown source handle");
+      if (!this.#sources.some((source) => source.handle === handle)) {
+        this.#addProblem("case.baseline", id, "baseline refers to an unknown source handle");
         return null;
       }
       return handle;
     }
     const handle = value as ReleaseMutationHandle;
     if (!mutations.has(handle)) {
-      this.addProblem("case.baseline", id, "baseline refers to an unknown mutation handle");
+      this.#addProblem("case.baseline", id, "baseline refers to an unknown mutation handle");
       return null;
     }
     return handle;
   }
 
-  private rootBaselineClosure(
+  #validateCaseCompanionSource(value: unknown, id: string, field: string): ReleaseSourceHandle | null {
+    const metadata = handleMetadata(value);
+    if (metadata === undefined) {
+      this.#addProblem(
+        "invocation.companion",
+        id,
+        `${field} must be an unforgeable plan-owned canonical source handle`
+      );
+      return null;
+    }
+    if (metadata.owner !== this.#owner) {
+      this.#addProblem(
+        "invocation.companion",
+        id,
+        `${field} uses a foreign-plan ${metadata.kind} handle`
+      );
+      return null;
+    }
+    if (metadata.kind !== "source") {
+      this.#addProblem(
+        "invocation.companion",
+        id,
+        `${field} must be a canonical source handle, found mutation handle`
+      );
+      return null;
+    }
+    const handle = value as ReleaseSourceHandle;
+    if (!this.#sources.some((source) => source.handle === handle)) {
+      this.#addProblem("invocation.companion", id, `${field} refers to an unknown canonical source handle`);
+      return null;
+    }
+    return handle;
+  }
+
+  #rootBaselineClosure(
     root: ReleaseMutationHandle,
     mutations: ReadonlyMap<ReleaseMutationHandle, RegisteredMutation>
   ): ReadonlySet<ReleaseSourceHandle | ReleaseMutationHandle> {
@@ -1847,7 +2277,7 @@ export class ReleaseMutationPlan {
       const registration = plainRecord(mutations.get(handle)?.registration);
       const source = registration?.source;
       const sourceMetadata = handleMetadata(source);
-      if (sourceMetadata?.owner === this.owner) {
+      if (sourceMetadata?.owner === this.#owner) {
         if (sourceMetadata.kind === "source") {
           closure.add(source as ReleaseSourceHandle);
         } else {
@@ -1862,7 +2292,7 @@ export class ReleaseMutationPlan {
     return closure;
   }
 
-  private validateExpectation(
+  #validateExpectation(
     value: unknown,
     caseId: string,
     index: number,
@@ -1873,14 +2303,14 @@ export class ReleaseMutationPlan {
     const id = displayIdentity(rawId, `<expectation-${index + 1}>`);
     let valid = true;
     if (containsHandle(value)) {
-      this.addProblem("expectation.handle", caseId, `${id} must not contain a source or mutation handle`);
+      this.#addProblem("expectation.handle", caseId, `${id} must not contain a source or mutation handle`);
       valid = false;
     }
     if (typeof rawId !== "string" || !testRegExp(ID_PATTERN, rawId)) {
-      this.addProblem("expectation.id", caseId, `${id} must be one lowercase token path without repeated separators`);
+      this.#addProblem("expectation.id", caseId, `${id} must be one lowercase token path without repeated separators`);
       valid = false;
     } else if (ids.has(rawId)) {
-      this.addProblem("expectation.duplicate", caseId, `expectation id ${rawId} is registered more than once`);
+      this.#addProblem("expectation.duplicate", caseId, `expectation id ${rawId} is registered more than once`);
       valid = false;
     } else {
       ids.add(rawId);
@@ -1888,17 +2318,21 @@ export class ReleaseMutationPlan {
 
     const kind = expectation?.kind;
     if (kind !== "problem" && kind !== "equal" && kind !== "not-equal" && kind !== "regex") {
-      this.addProblem("expectation.kind", caseId, `${id} has an unknown expectation kind`);
+      this.#addProblem("expectation.kind", caseId, `${id} has an unknown expectation kind`);
       return null;
     }
 
     if (kind === "problem") {
       if (expectation === null || !hasExactKeys(expectation, ["id", "kind", "problem"])) {
-        this.addProblem("expectation.shape", caseId, `${id} has unexpected or missing fields`);
+        this.#addProblem("expectation.shape", caseId, `${id} has unexpected or missing fields`);
         valid = false;
       }
-      if (expectation?.problem !== "fixture.mutant-threw" && expectation?.problem !== MCP_REGISTRY_EVALUATOR_PROBLEM) {
-        this.addProblem("expectation.problem", caseId, `${id} has an unknown exact problem identity`);
+      if (
+        expectation?.problem !== "fixture.mutant-threw" &&
+        expectation?.problem !== MCP_REGISTRY_EVALUATOR_PROBLEM &&
+        expectation?.problem !== MCP_REGISTRY_WORKFLOW_PROBLEM
+      ) {
+        this.#addProblem("expectation.problem", caseId, `${id} has an unknown exact problem identity`);
         valid = false;
       }
       return valid
@@ -1908,26 +2342,26 @@ export class ReleaseMutationPlan {
 
     if (kind === "equal" || kind === "not-equal") {
       if (expectation === null || !hasExactKeys(expectation, ["id", "kind", "value"])) {
-        this.addProblem("expectation.shape", caseId, `${id} has unexpected or missing fields`);
+        this.#addProblem("expectation.shape", caseId, `${id} has unexpected or missing fields`);
         valid = false;
       }
       if (handleMetadata(expectation?.value) !== undefined) {
-        this.addProblem("expectation.handle", caseId, `${id} must not contain a source or mutation handle`);
+        this.#addProblem("expectation.handle", caseId, `${id} must not contain a source or mutation handle`);
         valid = false;
       }
       if (typeof expectation?.value !== "string") {
-        this.addProblem("expectation.value", caseId, `${id} value must be a string`);
+        this.#addProblem("expectation.value", caseId, `${id} value must be a string`);
         valid = false;
       }
       return valid ? freezeObject({ id: rawId as string, kind, value: expectation?.value as string }) : null;
     }
 
     if (expectation === null || !hasExactKeys(expectation, ["id", "kind", "regex"])) {
-      this.addProblem("expectation.shape", caseId, `${id} has unexpected or missing fields`);
+      this.#addProblem("expectation.shape", caseId, `${id} has unexpected or missing fields`);
       valid = false;
     }
     if (expectation?.regex !== "fixture.omega-token") {
-      this.addProblem("expectation.regex", caseId, `${id} has an unknown named regex identity`);
+      this.#addProblem("expectation.regex", caseId, `${id} has an unknown named regex identity`);
       valid = false;
     }
     return valid
@@ -1935,7 +2369,7 @@ export class ReleaseMutationPlan {
       : null;
   }
 
-  private validateCycles(
+  #validateCycles(
     mutations: ReadonlyMap<ReleaseMutationHandle, MutationAnalysis>
   ): ReadonlySet<ReleaseMutationHandle> {
     const visiting = new setConstructor<ReleaseMutationHandle>();
@@ -1948,13 +2382,13 @@ export class ReleaseMutationPlan {
         const cycle = cycleStart === -1 ? [...path, handle] : [...path.slice(cycleStart), handle];
         for (const cycleHandle of cycle) cyclic.add(cycleHandle);
         const names = cycle.map((cycleHandle) => mutations.get(cycleHandle)?.id ?? "<mutation>");
-        this.addProblem("dependency.cycle", mutations.get(handle)?.id ?? "<mutation>", `cycle ${names.join(" -> ")}`);
+        this.#addProblem("dependency.cycle", mutations.get(handle)?.id ?? "<mutation>", `cycle ${names.join(" -> ")}`);
         return;
       }
       const mutation = mutations.get(handle);
       if (mutation === undefined) return;
       visiting.add(handle);
-      for (const dependency of this.mutationDependencies(mutation)) visit(dependency, [...path, handle]);
+      for (const dependency of this.#mutationDependencies(mutation)) visit(dependency, [...path, handle]);
       visiting.delete(handle);
       visited.add(handle);
     };
@@ -1962,7 +2396,7 @@ export class ReleaseMutationPlan {
     return cyclic;
   }
 
-  private mutationDependencies(mutation: MutationAnalysis): readonly ReleaseMutationHandle[] {
+  #mutationDependencies(mutation: MutationAnalysis): readonly ReleaseMutationHandle[] {
     const dependencies: ReleaseMutationHandle[] = [];
     if (mutation.source !== null && handleMetadata(mutation.source)?.kind === "mutation") {
       pushArrayValue(dependencies, mutation.source as ReleaseMutationHandle);
@@ -1973,7 +2407,7 @@ export class ReleaseMutationPlan {
     return dependencies;
   }
 
-  private prepareMutations(
+  #prepareMutations(
     sources: SourceValidation,
     mutations: ReadonlyMap<ReleaseMutationHandle, MutationAnalysis>,
     cyclic: ReadonlySet<ReleaseMutationHandle>
@@ -1985,7 +2419,7 @@ export class ReleaseMutationPlan {
     }
 
     const prepare = (handle: ReleaseMutationHandle): PreparedMutation | null => {
-      const alreadyPrepared = this.prepared.get(handle);
+      const alreadyPrepared = this.#prepared.get(handle);
       if (alreadyPrepared !== undefined) return alreadyPrepared;
       if (failed.has(handle) || preparing.has(handle)) return null;
       const mutation = mutations.get(handle);
@@ -2015,14 +2449,14 @@ export class ReleaseMutationPlan {
         typeof mutation.replacement === "string" ? mutation.replacement : prepare(mutation.replacement)?.output;
 
       if (source === undefined || replacement === undefined) {
-        const blockedBy = this.mutationDependencies(mutation)
+        const blockedBy = this.#mutationDependencies(mutation)
           .filter((dependency) => failed.has(dependency))
           .map((dependency) => mutations.get(dependency)?.id ?? "<mutation>");
         const detail =
           blockedBy.length > 0
             ? `blocked by failed mutation(s) ${[...new setConstructor(blockedBy)].join(", ")}`
             : "blocked by an invalid source or unresolved dependency";
-        this.addProblem("mutation.blocked", mutation.id, detail);
+        this.#addProblem("mutation.blocked", mutation.id, detail);
         failed.add(handle);
         preparing.delete(handle);
         return null;
@@ -2030,7 +2464,7 @@ export class ReleaseMutationPlan {
 
       const actualOccurrences = countOccurrences(source, mutation.needle);
       if (actualOccurrences !== mutation.expectedOccurrences) {
-        this.addProblem(
+        this.#addProblem(
           "mutation.cardinality",
           mutation.id,
           `needle expected ${mutation.expectedOccurrences} occurrence(s), found ${actualOccurrences}`
@@ -2042,7 +2476,7 @@ export class ReleaseMutationPlan {
 
       const output = applyLiteralMutation(source, mutation.needle, replacement, mutation.mode);
       if (output === source) {
-        this.addProblem("mutation.noop", mutation.id, "replacement did not change its source");
+        this.#addProblem("mutation.noop", mutation.id, "replacement did not change its source");
         failed.add(handle);
         preparing.delete(handle);
         return null;
@@ -2051,7 +2485,7 @@ export class ReleaseMutationPlan {
       const before = countWitnessOccurrences(source, mutation.witness);
       const after = countWitnessOccurrences(output, mutation.witness);
       if (before !== mutation.witness.before || after !== mutation.witness.after) {
-        this.addProblem(
+        this.#addProblem(
           "witness.boundary",
           mutation.id,
           `anchor expected ${mutation.witness.before} -> ${mutation.witness.after}, found ${before} -> ${after}`
@@ -2062,7 +2496,7 @@ export class ReleaseMutationPlan {
       }
 
       const prepared = freezeObject({ output });
-      this.prepared.set(handle, prepared);
+      this.#prepared.set(handle, prepared);
       preparing.delete(handle);
       return prepared;
     };
@@ -2070,18 +2504,26 @@ export class ReleaseMutationPlan {
     for (const handle of mutations.keys()) prepare(handle);
   }
 
-  private validatePreparedCaseValues(cases: readonly CaseAnalysis[]): ReadonlySet<ReleaseMutationHandle> {
+  #validatePreparedCaseValues(cases: readonly CaseAnalysis[]): ReadonlySet<ReleaseMutationHandle> {
     const executableRoots = new setConstructor<ReleaseMutationHandle>();
     for (const releaseCase of cases) {
       if (!releaseCase.valid || releaseCase.root === null || releaseCase.checks.length === 0) continue;
-      const mutant = this.materializeValue(releaseCase.root);
+      const mutant = this.#materializeValue(releaseCase.root);
       let executable = mutant !== undefined;
       for (const check of releaseCase.checks) {
-        const baseline = this.materializeValue(check.invocation.baseline);
+        const baseline = this.#materializeValue(check.invocation.baseline);
+        const companion =
+          check.invocation.kind === "registry.step.run"
+            ? this.#materializeValue(check.invocation.integrity)
+            : check.invocation.kind === "registry.step.integrity"
+              ? this.#materializeValue(check.invocation.run)
+              : "not-required";
         if (baseline === undefined || mutant === undefined) {
           executable = false;
+        } else if (companion === undefined) {
+          executable = false;
         } else if (baseline === mutant) {
-          this.addProblem("case.baseline", releaseCase.id, "clean baseline materializes to the mutant root output");
+          this.#addProblem("case.baseline", releaseCase.id, "clean baseline materializes to the mutant root output");
           executable = false;
         }
       }
@@ -2092,7 +2534,7 @@ export class ReleaseMutationPlan {
     return executableRoots;
   }
 
-  private validateReachability(
+  #validateReachability(
     mutations: ReadonlyMap<ReleaseMutationHandle, MutationAnalysis>,
     executableRoots: ReadonlySet<ReleaseMutationHandle>
   ): void {
@@ -2102,24 +2544,24 @@ export class ReleaseMutationPlan {
       const mutation = mutations.get(handle);
       if (mutation === undefined) return;
       reachable.add(handle);
-      for (const dependency of this.mutationDependencies(mutation)) mark(dependency);
+      for (const dependency of this.#mutationDependencies(mutation)) mark(dependency);
     };
     for (const root of executableRoots) mark(root);
     for (const [handle, mutation] of mutations) {
       if (!reachable.has(handle)) {
-        this.addProblem("mutation.orphan", mutation.id, "mutation is unreachable from every closed case");
+        this.#addProblem("mutation.orphan", mutation.id, "mutation is unreachable from every closed case");
       }
     }
   }
 
-  private materializeValue(handle: ReleaseSourceHandle | ReleaseMutationHandle): string | undefined {
+  #materializeValue(handle: ReleaseSourceHandle | ReleaseMutationHandle): string | undefined {
     const metadata = handleMetadata(handle);
     return metadata?.kind === "source"
-      ? this.sourceValues.get(handle as ReleaseSourceHandle)
-      : this.prepared.get(handle as ReleaseMutationHandle)?.output;
+      ? this.#sourceValues.get(handle as ReleaseSourceHandle)
+      : this.#prepared.get(handle as ReleaseMutationHandle)?.output;
   }
 
-  private applyExpectation(
+  #applyExpectation(
     caseId: string,
     expectation: PreparedExpectation,
     observation: ReleaseOracleObservation
@@ -2138,6 +2580,24 @@ export class ReleaseMutationPlan {
           return;
         case "registry.evaluator":
           if (expectation.problem !== MCP_REGISTRY_EVALUATOR_PROBLEM) {
+            throw new errorConstructor(
+              `release mutation case ${caseId} expectation ${expectation.id} observed an incompatible problem identity`
+            );
+          }
+          if (observation.baselineProblems.length !== 0) {
+            throw new errorConstructor(
+              `release mutation case ${caseId} expectation ${expectation.id} found a problem in the clean baseline`
+            );
+          }
+          if (observation.mutantProblems.length !== 1 || observation.mutantProblems[0] !== expectation.problem) {
+            throw new errorConstructor(
+              `release mutation case ${caseId} expectation ${expectation.id} missed the exact mutant problem`
+            );
+          }
+          return;
+        case "registry.step.run":
+        case "registry.step.integrity":
+          if (expectation.problem !== MCP_REGISTRY_WORKFLOW_PROBLEM) {
             throw new errorConstructor(
               `release mutation case ${caseId} expectation ${expectation.id} observed an incompatible problem identity`
             );

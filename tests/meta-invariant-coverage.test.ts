@@ -40,7 +40,10 @@ interface MutableIdentityControlManifest {
     readonly checks: Array<{
       readonly expectation: { regex?: string };
       readonly invoke: {
-        readonly inputs: { readonly arguments: unknown[]; callee: string };
+        readonly inputs: {
+          readonly arguments: Array<{ readonly id?: string; readonly kind: string; readonly slot: string }>;
+          callee: string;
+        };
         kind: string;
       };
     }>;
@@ -62,6 +65,19 @@ interface MutableIdentityControlManifest {
     readonly origin: unknown;
     semanticFingerprint: string;
   }>;
+}
+
+type MutableIdentityControlCheck = MutableIdentityControlManifest["cases"][number]["checks"][number];
+
+function identityControlCheck(
+  manifest: MutableIdentityControlManifest,
+  kind: string
+): MutableIdentityControlCheck {
+  const check = manifest.cases
+    .flatMap((identityCase) => identityCase.checks)
+    .find((entry) => entry.invoke.kind === kind);
+  if (check === undefined) throw new Error(`release identity fixture has no ${kind} invocation`);
+  return check;
 }
 
 function sha256Text(value: string): string {
@@ -975,6 +991,531 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       )
     ).toEqual([]);
 
+    // NEGATIVE control: an exact-text but root-unbound second physical matcher must
+    // fail the global span multiplicity check instead of borrowing a legacy root.
+    const sharedRegistryMatcherLoop = [
+      "    for (const weakenedRegistryStep of weakenedRegistrySteps) {",
+      "      expect(mcpRegistryStepProblems(weakenedRegistryStep, mcpbInputs.integrity)).toContain(",
+      "        MCP_REGISTRY_WORKFLOW_CONTRACT_PROBLEM",
+      "      );",
+      "    }"
+    ].join("\n");
+    const duplicateSharedRegistryMatcher = replaceExactly(
+      matrixSource,
+      sharedRegistryMatcherLoop,
+      [
+        sharedRegistryMatcherLoop,
+        "    void ((weakenedRegistryStep: YamlRecord) => {",
+        "      expect(mcpRegistryStepProblems(weakenedRegistryStep, mcpbInputs.integrity)).toContain(",
+        "        MCP_REGISTRY_WORKFLOW_CONTRACT_PROBLEM",
+        "      );",
+        "    });"
+      ].join("\n")
+    );
+    expect(preparedAudit.auditMatrix(duplicateSharedRegistryMatcher)).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/release mutation hybrid current source must retain exact SHA-256/),
+        expect.stringMatching(
+          /release mutation hybrid matcher 5e2815d5.*physical multiplicity must equal 1 .*found 2/
+        )
+      ])
+    );
+
+    // NEGATIVE control: a migrated-only frozen matcher hash must remain physically
+    // absent, even when an unrelated wrapper makes its exact node text parse again.
+    const resurrectedMigratedRegistryMatcher = replaceExactly(
+      matrixSource,
+      sharedRegistryMatcherLoop,
+      [
+        "    void ((weakenedMcpRegistryEvaluator: string) => {",
+        "      expect(mcpRegistryEvaluatorProblems(weakenedMcpRegistryEvaluator)).toContain(",
+        "        MCP_REGISTRY_EVALUATOR_CONTRACT_PROBLEM",
+        "      );",
+        "    });",
+        sharedRegistryMatcherLoop
+      ].join("\n")
+    );
+    expect(preparedAudit.auditMatrix(resurrectedMigratedRegistryMatcher)).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/release mutation hybrid current source must retain exact SHA-256/),
+        expect.stringMatching(/release mutation hybrid current matrix slice must retain exact SHA-256/),
+        expect.stringMatching(
+          /release mutation hybrid matcher 82cd3d8a.*physical multiplicity must equal 0 .*found 1/
+        )
+      ])
+    );
+
+    // NEGATIVE control: removing the one residual physical matcher must fail the
+    // same class invariant even though its 72 root mutations remain in place.
+    const missingSharedRegistryMatcher = replaceExactly(
+      matrixSource,
+      sharedRegistryMatcherLoop,
+      [
+        "    for (const weakenedRegistryStep of weakenedRegistrySteps) {",
+        "      void weakenedRegistryStep;",
+        "    }"
+      ].join("\n")
+    );
+    expect(preparedAudit.auditMatrix(missingSharedRegistryMatcher)).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/release mutation hybrid current source must retain exact SHA-256/),
+        expect.stringMatching(/release mutation hybrid current matrix slice must retain exact SHA-256/),
+        expect.stringMatching(
+          /release mutation hybrid matcher 5e2815d5.*physical multiplicity must equal 1 .*found 0/
+        )
+      ])
+    );
+
+    // NEGATIVE control: creation order is not runtime order if a named iterable
+    // is reversed between construction and its shared matcher loop.
+    const reversedSharedRegistryIterable = replaceExactly(
+      matrixSource,
+      sharedRegistryMatcherLoop,
+      ["    weakenedRegistrySteps.reverse();", sharedRegistryMatcherLoop].join("\n")
+    );
+    expect(preparedAudit.auditMatrix(reversedSharedRegistryIterable)).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/release mutation hybrid current source must retain exact SHA-256/),
+        expect.stringMatching(/release mutation hybrid current matrix slice must retain exact SHA-256/),
+        expect.stringMatching(
+          /release mutation hybrid shared primary matcher 5e2815d5.*exact closed iterable\/runtime topology for 72 frozen root/
+        )
+      ])
+    );
+
+    // NEGATIVE control: an alias can preserve the named array's bytes while
+    // inserting an unreviewed runtime hop between the frozen array and loop.
+    const aliasedSharedRegistryIterable = replaceExactly(
+      matrixSource,
+      sharedRegistryMatcherLoop,
+      [
+        "    const aliasedWeakenedRegistrySteps = weakenedRegistrySteps;",
+        "    for (const weakenedRegistryStep of aliasedWeakenedRegistrySteps) {",
+        "      expect(mcpRegistryStepProblems(weakenedRegistryStep, mcpbInputs.integrity)).toContain(",
+        "        MCP_REGISTRY_WORKFLOW_CONTRACT_PROBLEM",
+        "      );",
+        "    }"
+      ].join("\n")
+    );
+    expect(preparedAudit.auditMatrix(aliasedSharedRegistryIterable)).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/release mutation hybrid current source must retain exact SHA-256/),
+        expect.stringMatching(/release mutation hybrid current matrix slice must retain exact SHA-256/),
+        expect.stringMatching(
+          /release mutation hybrid shared primary matcher 5e2815d5.*exact closed iterable\/runtime topology for 72 frozen root/
+        )
+      ])
+    );
+
+    // NEGATIVE control: even a value-preserving alternate iterable is outside
+    // the exact named-array execution topology and could later hide filtering.
+    const copiedSharedRegistryIterable = replaceExactly(
+      matrixSource,
+      "    for (const weakenedRegistryStep of weakenedRegistrySteps) {",
+      "    for (const weakenedRegistryStep of weakenedRegistrySteps.slice()) {"
+    );
+    expect(preparedAudit.auditMatrix(copiedSharedRegistryIterable)).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/release mutation hybrid current source must retain exact SHA-256/),
+        expect.stringMatching(/release mutation hybrid current matrix slice must retain exact SHA-256/),
+        expect.stringMatching(
+          /release mutation hybrid shared primary matcher 5e2815d5.*exact closed iterable\/runtime topology for 72 frozen root/
+        )
+      ])
+    );
+
+    // NEGATIVE control: the exact loop cannot be made conditional, repeated or
+    // exception-dependent by placing it under another callback-body statement.
+    const wrappedSharedRegistryMatcher = replaceExactly(
+      matrixSource,
+      sharedRegistryMatcherLoop,
+      ["    if (false) {", sharedRegistryMatcherLoop, "    }"].join("\n")
+    );
+    expect(preparedAudit.auditMatrix(wrappedSharedRegistryMatcher)).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/release mutation hybrid current source must retain exact SHA-256/),
+        expect.stringMatching(/release mutation hybrid current matrix slice must retain exact SHA-256/),
+        expect.stringMatching(
+          /release mutation hybrid shared primary matcher 5e2815d5.*exact closed iterable\/runtime topology for 72 frozen root/
+        )
+      ])
+    );
+
+    // NEGATIVE control: a direct loop is still unreachable if the matrix callback
+    // returns first. Returns in nested helpers remain outside this callback guard.
+    const returnedBeforeSharedRegistryMatcher = replaceExactly(
+      matrixSource,
+      sharedRegistryMatcherLoop,
+      ["    if (true) return;", sharedRegistryMatcherLoop].join("\n")
+    );
+    expect(preparedAudit.auditMatrix(returnedBeforeSharedRegistryMatcher)).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/release mutation hybrid current source must retain exact SHA-256/),
+        expect.stringMatching(/release mutation hybrid current matrix slice must retain exact SHA-256/),
+        expect.stringMatching(/release mutation hybrid matrix callback must not return before all case executions/)
+      ])
+    );
+
+    // NEGATIVE control: the four non-manifest Registry mutations are not merely
+    // a count. Their exact reviewed expressions must remain inert until detection.
+    const poisonedRegistryOwnerlessPrefix = replaceExactly(
+      matrixSource,
+      '{ ...registryStep, if: "always()" }',
+      '(() => { throw new Error("ownerless-prefix-bypass"); })()'
+    );
+    expect(preparedAudit.auditMatrix(poisonedRegistryOwnerlessPrefix)).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/release mutation hybrid current source must retain exact SHA-256/),
+        expect.stringMatching(/release mutation hybrid current matrix slice must retain exact SHA-256/),
+        expect.stringMatching(
+          /release mutation hybrid shared primary matcher 5e2815d5.*exact closed iterable\/runtime topology for 72 frozen root/
+        )
+      ])
+    );
+
+    // NEGATIVE control: merely mentioning a carrier root is insufficient. The
+    // exact carrier value itself must be the sole Registry wrapper argument.
+    const discardedRegistryCarrier = replaceExactly(
+      matrixSource,
+      "      registryStepWithRun(fragmentedCurlWriteRun),",
+      "      (false ? registryStepWithRun(fragmentedCurlWriteRun) : registryStep),"
+    );
+    expect(preparedAudit.auditMatrix(discardedRegistryCarrier)).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/release mutation hybrid current source must retain exact SHA-256/),
+        expect.stringMatching(/release mutation hybrid current matrix slice must retain exact SHA-256/),
+        expect.stringMatching(
+          /release mutation hybrid shared primary matcher 5e2815d5.*exact closed iterable\/runtime topology for 72 frozen root/
+        )
+      ])
+    );
+
+    // NEGATIVE control: a direct Registry root cannot execute and then be
+    // discarded through a comma expression before registryStepWithRun receives it.
+    const discardedDirectRegistryRoot = replaceExactly(
+      matrixSource,
+      [
+        "      registryStepWithRun(",
+        "        replaceExactly(registryRun, 'GH_CONFIG_DIR=\"$WORK_ROOT/gh-config\"', " +
+          "'GH_CONFIG_DIR=\"$GITHUB_WORKSPACE\"')",
+        "      ),"
+      ].join("\n"),
+      [
+        "      registryStepWithRun(",
+        "        (replaceExactly(registryRun, 'GH_CONFIG_DIR=\"$WORK_ROOT/gh-config\"', " +
+          "'GH_CONFIG_DIR=\"$GITHUB_WORKSPACE\"'), registryRun)",
+        "      ),"
+      ].join("\n")
+    );
+    expect(preparedAudit.auditMatrix(discardedDirectRegistryRoot)).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/release mutation hybrid current source must retain exact SHA-256/),
+        expect.stringMatching(/release mutation hybrid current matrix slice must retain exact SHA-256/),
+        expect.stringMatching(
+          /release mutation hybrid shared primary matcher 5e2815d5.*exact closed iterable\/runtime topology for 72 frozen root/
+        )
+      ])
+    );
+
+    // NEGATIVE control: non-Registry shared arrays also require the root call's
+    // resulting mutant, not a comma expression that returns the clean source.
+    const discardedProvenanceRoot = replaceExactly(
+      matrixSource,
+      [
+        "      replaceExactly(",
+        "        mcpbInputs.release,",
+        "        'require_job_reserve 4500 \"npm publish\"',",
+        "        'require_job_reserve 2100 \"npm publish\"'",
+        "      ),"
+      ].join("\n"),
+      [
+        "      (",
+        "        replaceExactly(",
+        "          mcpbInputs.release,",
+        "          'require_job_reserve 4500 \"npm publish\"',",
+        "          'require_job_reserve 2100 \"npm publish\"'",
+        "        ),",
+        "        mcpbInputs.release",
+        "      ),"
+      ].join("\n")
+    );
+    expect(preparedAudit.auditMatrix(discardedProvenanceRoot)).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/release mutation hybrid current source must retain exact SHA-256/),
+        expect.stringMatching(/release mutation hybrid current matrix slice must retain exact SHA-256/),
+        expect.stringMatching(
+          /release mutation hybrid shared primary matcher 3df3ee2e.*exact closed iterable\/runtime topology for 36 frozen root/
+        )
+      ])
+    );
+
+    // NEGATIVE control: the shared matcher must execute unconditionally once for
+    // every iterable element; a continue path cannot preserve the certified trace.
+    const conditionallySkippedSharedRegistryMatcher = replaceExactly(
+      matrixSource,
+      sharedRegistryMatcherLoop,
+      [
+        "    for (const weakenedRegistryStep of weakenedRegistrySteps) {",
+        "      if (weakenedRegistryStep) continue;",
+        "      expect(mcpRegistryStepProblems(weakenedRegistryStep, mcpbInputs.integrity)).toContain(",
+        "        MCP_REGISTRY_WORKFLOW_CONTRACT_PROBLEM",
+        "      );",
+        "    }"
+      ].join("\n")
+    );
+    expect(preparedAudit.auditMatrix(conditionallySkippedSharedRegistryMatcher)).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/release mutation hybrid current source must retain exact SHA-256/),
+        expect.stringMatching(/release mutation hybrid current matrix slice must retain exact SHA-256/),
+        expect.stringMatching(
+          /release mutation hybrid shared primary matcher 5e2815d5.*exact closed iterable\/runtime topology for 72 frozen root/
+        )
+      ])
+    );
+
+    // NEGATIVE control: the indexed shared loop must consume its entire exact
+    // dense case array, not a shortened literal prefix.
+    const shortenedTransactionMutationLoop = replaceExactly(
+      matrixSource,
+      "    for (let mutationIndex = 0; mutationIndex < 76; mutationIndex++) {",
+      "    for (let mutationIndex = 0; mutationIndex < 75; mutationIndex++) {"
+    );
+    expect(preparedAudit.auditMatrix(shortenedTransactionMutationLoop)).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/release mutation hybrid current source must retain exact SHA-256/),
+        expect.stringMatching(/release mutation hybrid current matrix slice must retain exact SHA-256/),
+        expect.stringMatching(
+          /release mutation hybrid shared primary matcher df5a0075.*exact closed iterable\/runtime topology for 76 frozen root/
+        )
+      ])
+    );
+
+    // NEGATIVE control: object aliases can retain both field names and matcher
+    // text while routing the detector to expectedProblem instead of the mutant.
+    const swappedTransactionBindings = replaceExactly(
+      matrixSource,
+      "      const { mutant, expectedProblem } = releaseTransactionMutationCases[mutationIndex]!;",
+      "      const { mutant: expectedProblem, expectedProblem: mutant } = " +
+        "releaseTransactionMutationCases[mutationIndex]!;"
+    );
+    expect(preparedAudit.auditMatrix(swappedTransactionBindings)).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/release mutation hybrid current source must retain exact SHA-256/),
+        expect.stringMatching(/release mutation hybrid current matrix slice must retain exact SHA-256/),
+        expect.stringMatching(
+          /release mutation hybrid shared primary matcher df5a0075.*exact closed iterable\/runtime topology for 76 frozen root/
+        )
+      ])
+    );
+
+    // NEGATIVE control: tuple binding order is part of execution identity. The
+    // same matcher text must not consume the diagnostic label as release source.
+    const swappedTagIdentityBindings = replaceExactly(
+      matrixSource,
+      "    for (const [label, weakenedRelease] of [",
+      "    for (const [weakenedRelease, label] of ["
+    );
+    expect(preparedAudit.auditMatrix(swappedTagIdentityBindings)).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/release mutation hybrid current source must retain exact SHA-256/),
+        expect.stringMatching(/release mutation hybrid current matrix slice must retain exact SHA-256/),
+        expect.stringMatching(
+          /release mutation hybrid shared primary matcher 2392196b.*exact closed iterable\/runtime topology for 3 frozen root/
+        )
+      ])
+    );
+
+    const fullReleasePlanExecutionBlock = [
+      "    releaseMutationPlan.execute({ registryEvaluatorProblems: mcpRegistryEvaluatorProblems });",
+      '    expect(releaseMutationPlan.phase).toBe("executed");',
+      "    expect(releaseMutationPlan.caseExecutions).toBe(36);",
+      "    expect(releaseMutationPlan.expectationExecutions).toBe(36);"
+    ].join("\n");
+
+    const stagedReleasePlanExecutionBlock = [
+      "    releaseMutationPlan.executeThrough(releaseMutationM018, {",
+      "      registryEvaluatorProblems: mcpRegistryEvaluatorProblems",
+      "    });",
+      '    expect(releaseMutationPlan.phase).toBe("partially-executed");',
+      "    expect(releaseMutationPlan.caseExecutions).toBe(17);",
+      "    expect(releaseMutationPlan.expectationExecutions).toBe(17);",
+      "    releaseMutationPlan.executeRemaining();",
+      '    expect(releaseMutationPlan.phase).toBe("executed");',
+      "    expect(releaseMutationPlan.caseExecutions).toBe(36);",
+      "    expect(releaseMutationPlan.expectationExecutions).toBe(36);"
+    ].join("\n");
+    const stagedMatrixSource = replaceExactly(
+      matrixSource,
+      fullReleasePlanExecutionBlock,
+      stagedReleasePlanExecutionBlock
+    );
+
+    // POSITIVE control: the same exact 36-case graph may execute as an inclusive
+    // m018 prefix plus its plan-owned suffix. Only the deliberately moving source
+    // and matrix digests may differ from the reviewed full-execute source.
+    expect(preparedAudit.auditMatrix(stagedMatrixSource)).toEqual([
+      expect.stringMatching(/release mutation hybrid current source must retain exact SHA-256/),
+      expect.stringMatching(/release mutation hybrid current matrix slice must retain exact SHA-256/)
+    ]);
+
+    const stagedLifecycleProblem =
+      /release mutation hybrid lifecycle must be one clean seal followed by either one exact full execute or one exact executeThrough\/executeRemaining pair with derived phase and execution censuses/;
+
+    // NEGATIVE control: the prefix has its own phase and derived case/expectation
+    // census; final-state claims cannot be borrowed before the suffix executes.
+    const wrongStagedPrefixPhase = replaceExactly(
+      stagedMatrixSource,
+      '    expect(releaseMutationPlan.phase).toBe("partially-executed");',
+      '    expect(releaseMutationPlan.phase).toBe("executed");'
+    );
+    expect(preparedAudit.auditMatrix(wrongStagedPrefixPhase)).toEqual(
+      expect.arrayContaining([expect.stringMatching(stagedLifecycleProblem)])
+    );
+    const wrongStagedPrefixCaseCount = replaceExactly(
+      stagedMatrixSource,
+      "    expect(releaseMutationPlan.caseExecutions).toBe(17);",
+      "    expect(releaseMutationPlan.caseExecutions).toBe(16);"
+    );
+    const wrongStagedPrefixCensus = replaceExactly(
+      wrongStagedPrefixCaseCount,
+      "    expect(releaseMutationPlan.expectationExecutions).toBe(17);",
+      "    expect(releaseMutationPlan.expectationExecutions).toBe(16);"
+    );
+    expect(preparedAudit.auditMatrix(wrongStagedPrefixCensus)).toEqual(
+      expect.arrayContaining([expect.stringMatching(stagedLifecycleProblem)])
+    );
+
+    const stagedRemainingCall = "    releaseMutationPlan.executeRemaining();";
+    const missingStagedRemaining = replaceExactly(stagedMatrixSource, stagedRemainingCall, "");
+    expect(preparedAudit.auditMatrix(missingStagedRemaining)).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(stagedLifecycleProblem),
+        expect.stringMatching(/declarative execution schedule must terminate complete .*found prefix/)
+      ])
+    );
+
+    // NEGATIVE control: a second suffix call is a replay of a completed plan,
+    // regardless of whether it is adjacent to the first call or labelled a retry.
+    const replayedStagedRemaining = replaceExactly(
+      stagedMatrixSource,
+      stagedRemainingCall,
+      [stagedRemainingCall, stagedRemainingCall].join("\n")
+    );
+    expect(preparedAudit.auditMatrix(replayedStagedRemaining)).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(stagedLifecycleProblem),
+        expect.stringMatching(/declarative executeRemaining .*cannot replay a completed plan/)
+      ])
+    );
+
+    // NEGATIVE control: executeRemaining consumes only the adapters frozen by
+    // executeThrough; accepting another adapter would reopen suffix injection.
+    const reinjectedRemainingAdapter = replaceExactly(
+      stagedMatrixSource,
+      stagedRemainingCall,
+      "    releaseMutationPlan.executeRemaining({ registryEvaluatorProblems: mcpRegistryEvaluatorProblems });"
+    );
+    expect(preparedAudit.auditMatrix(reinjectedRemainingAdapter)).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(
+          /release mutation hybrid executeRemaining event must use the exact staged execution argument shape/
+        ),
+        expect.stringMatching(stagedLifecycleProblem)
+      ])
+    );
+
+    // NEGATIVE control: the prefix must preflight the complete adapter set needed
+    // by its suffix; an empty literal cannot satisfy even the evaluator-only graph.
+    const missingStagedAdapter = replaceExactly(
+      stagedMatrixSource,
+      [
+        "    releaseMutationPlan.executeThrough(releaseMutationM018, {",
+        "      registryEvaluatorProblems: mcpRegistryEvaluatorProblems",
+        "    });"
+      ].join("\n"),
+      "    releaseMutationPlan.executeThrough(releaseMutationM018, {});"
+    );
+    expect(preparedAudit.auditMatrix(missingStagedAdapter)).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(
+          /release mutation hybrid execute adapter must bind registryEvaluatorProblems exactly to mcpRegistryEvaluatorProblems/
+        ),
+        expect.stringMatching(stagedLifecycleProblem)
+      ])
+    );
+
+    // NEGATIVE controls: lifecycle calls cannot hide under control flow or behind
+    // computed property syntax while retaining a superficially valid method name.
+    const nestedStagedRemaining = replaceExactly(
+      stagedMatrixSource,
+      stagedRemainingCall,
+      ["    if (true) {", "      releaseMutationPlan.executeRemaining();", "    }"].join("\n")
+    );
+    expect(preparedAudit.auditMatrix(nestedStagedRemaining)).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/release mutation hybrid execution events must be exact direct top-level property calls/)
+      ])
+    );
+    const computedStagedRemaining = replaceExactly(
+      stagedMatrixSource,
+      stagedRemainingCall,
+      '    releaseMutationPlan["executeRemaining"]();'
+    );
+    expect(preparedAudit.auditMatrix(computedStagedRemaining)).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/release mutation hybrid execution events must be exact direct top-level property calls/)
+      ])
+    );
+
+    // NEGATIVE controls: executeThrough accepts one exact nonterminal case root,
+    // not an unknown identifier or a registered mutation left without a case root.
+    const unknownStagedBoundary = replaceExactly(
+      stagedMatrixSource,
+      "releaseMutationPlan.executeThrough(releaseMutationM018, {",
+      "releaseMutationPlan.executeThrough(releaseMutationUnknown, {"
+    );
+    expect(preparedAudit.auditMatrix(unknownStagedBoundary)).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/declarative executeThrough .*must name one exact root handle/),
+        expect.stringMatching(stagedLifecycleProblem)
+      ])
+    );
+    const dependencyOnlyStagedBoundary = replaceExactly(
+      stagedMatrixSource,
+      ['      id: "release.case.m018",', "      root: releaseMutationM018,"].join("\n"),
+      ['      id: "release.case.m018",', "      root: releaseMutationM017,"].join("\n")
+    );
+    expect(preparedAudit.auditMatrix(dependencyOnlyStagedBoundary)).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/declarative executeThrough .*must name one exact root handle/),
+        expect.stringMatching(stagedLifecycleProblem)
+      ])
+    );
+
+    // NEGATIVE control: the staged suffix may not move behind a legacy shared
+    // matcher; otherwise source order no longer equals the frozen oracle order.
+    const stagedRemainingBlock = [
+      stagedRemainingCall,
+      '    expect(releaseMutationPlan.phase).toBe("executed");',
+      "    expect(releaseMutationPlan.caseExecutions).toBe(36);",
+      "    expect(releaseMutationPlan.expectationExecutions).toBe(36);"
+    ].join("\n");
+    const stagedWithoutEarlyRemaining = replaceExactly(stagedMatrixSource, stagedRemainingBlock, "");
+    const lateStagedRemaining = replaceExactly(
+      stagedWithoutEarlyRemaining,
+      sharedRegistryMatcherLoop,
+      [sharedRegistryMatcherLoop, stagedRemainingBlock].join("\n")
+    );
+    expect(preparedAudit.auditMatrix(lateStagedRemaining)).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/release mutation hybrid current source must retain exact SHA-256/),
+        expect.stringMatching(/release mutation hybrid current matrix slice must retain exact SHA-256/),
+        expect.stringMatching(
+          /release mutation hybrid global case execution order must equal exact frozen primary-oracle order/
+        )
+      ])
+    );
+
     const uniqueHashSecondOccurrenceDrift = replaceExactly(
       matrixSource,
       [
@@ -1166,7 +1707,14 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
         '  "MCP Registry reconciliation must retain approximate identity, lifecycle, absence, and convergence semantics";'
       ].join("\n")
     );
-    const registryDetectorAliasDrift = `${registryProblemPreludeDrift}\nconst registryEvaluatorAlias = mcpRegistryEvaluatorProblems;\n`;
+    const registryRunBodyDrift = replaceExactly(
+      registryProblemPreludeDrift,
+      "function mcpRegistryRunProblems(run: string, integrity: string): string[] {",
+      "function mcpRegistryRunProblems(run: string, integrity: string): string[] { /* drift */"
+    );
+    const registryDetectorAliasDrift =
+      `${registryRunBodyDrift}\nconst registryEvaluatorAlias = mcpRegistryEvaluatorProblems;\n` +
+      "const registryRunAlias = mcpRegistryRunProblems;\n";
     expect(preparedAudit.auditMatrix(registryDetectorAliasDrift)).toEqual(
       expect.arrayContaining([
         expect.stringMatching(
@@ -1184,6 +1732,12 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
         expect.stringMatching(/release mutation hybrid pinned registry problem AST node must retain exact SHA-256/),
         expect.stringMatching(
           /release mutation hybrid registry evaluator binding must have no aliases, writes, or indirect references/
+        ),
+        expect.stringMatching(
+          /release mutation hybrid pinned mcpRegistryRunProblems AST node must retain exact SHA-256/
+        ),
+        expect.stringMatching(
+          /release mutation hybrid registry run binding must have no aliases, writes, or indirect references/
         )
       ])
     );
@@ -1290,6 +1844,37 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
     );
     expect(afterSourceCatalogueDrift.materializedGraphReuses).toBe(beforeSourceCatalogueDrift.materializedGraphReuses);
 
+    // The frozen Registry-step primary invocations are an ordered pair, not an
+    // unordered bag: the mutated slot comes first and its clean companion second.
+    const registryStepCompanionControl = JSON.parse(fixtureBefore) as MutableIdentityControlManifest;
+    const registryStepRunCheck = identityControlCheck(registryStepCompanionControl, "registry.step.run");
+    const registryStepIntegrityCheck = identityControlCheck(
+      registryStepCompanionControl,
+      "registry.step.integrity"
+    );
+    expect(registryStepRunCheck.invoke.inputs.arguments).toEqual([
+      { kind: "mutant", slot: "run" },
+      { id: "script.release-integrity", kind: "source", slot: "integrity" }
+    ]);
+    expect(registryStepIntegrityCheck.invoke.inputs.arguments).toEqual([
+      { id: "workflow.registry-publish-step", kind: "source", slot: "run" },
+      { kind: "mutant", slot: "integrity" }
+    ]);
+
+    // NEGATIVE control: swapping either companion order must fail both closed
+    // invocation signatures even though every individual source identity remains.
+    registryStepRunCheck.invoke.inputs.arguments.reverse();
+    registryStepIntegrityCheck.invoke.inputs.arguments.reverse();
+    expect(releaseMutationIdentityAuditProblems(matrixSource, JSON.stringify(registryStepCompanionControl))).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/release mutation identity fixture must remain byte-exact SHA-256/),
+        expect.stringMatching(/inputs\.arguments disagree with the exact registry\.step\.run detector signature/),
+        expect.stringMatching(
+          /inputs\.arguments disagree with the exact registry\.step\.integrity detector signature/
+        )
+      ])
+    );
+
     const tampered = JSON.parse(fixtureBefore) as MutableIdentityControlManifest;
     const firstSource = firstIdentityEntry(tampered.sources, "source identities");
     const unrelatedSource = tampered.sources[1];
@@ -1335,7 +1920,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
     expect(preparedAudit.telemetry()).toEqual({
       fixturePreparations: 1,
       materializedGraphEvaluations: 1,
-      materializedGraphReuses: 17,
+      materializedGraphReuses: 45,
       sourceCatalogueBypasses: 2,
       sourceProjectionBypasses: 0
     });

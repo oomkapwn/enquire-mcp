@@ -111,6 +111,11 @@ interface MatcherEvaluation {
   readonly operand: MatcherOperand;
 }
 
+interface FrozenMatcherSpanOwnership {
+  readonly remainingLegacy: boolean;
+  readonly span: IdentitySpan;
+}
+
 interface CheckIdentity {
   readonly assertionSpan: IdentitySpan;
   readonly expectation: ExpectationIdentity;
@@ -234,6 +239,9 @@ interface DeclarativeMutationIdentity {
 
 interface DeclarativeCaseIdentity {
   readonly baselineHandle: string;
+  readonly checkCount: number;
+  readonly companionHandle: null | string;
+  readonly companionSlot: "integrity" | null | "run";
   readonly expectationId: string;
   readonly handle: string;
   readonly id: string;
@@ -242,21 +250,72 @@ interface DeclarativeCaseIdentity {
   readonly problem: string;
 }
 
+interface DeclarativeInvocationIdentity {
+  readonly baselineHandle: string;
+  readonly companionHandle: null | string;
+  readonly companionSlot: "integrity" | null | "run";
+  readonly invocationKind: string;
+  readonly mutantHandle: string;
+}
+
+type ReleaseOracleAdapterProperty = "registryEvaluatorProblems" | "registryStepProblems";
+
+interface ReleaseOracleAdapterBinding {
+  readonly binding: "mcpRegistryEvaluatorProblems" | "mcpRegistryRunProblems";
+  readonly property: ReleaseOracleAdapterProperty;
+}
+
+type DeclarativeExecutionKind = "execute" | "executeRemaining" | "executeThrough";
+
+interface DeclarativeExecutionEvent {
+  readonly anchor: number;
+  readonly boundaryHandle: null | string;
+  readonly kind: DeclarativeExecutionKind;
+  readonly statementIndex: number;
+}
+
 interface HybridDeclarativeScan {
   readonly cases: readonly DeclarativeCaseIdentity[];
+  readonly executionEvents: readonly DeclarativeExecutionEvent[];
   readonly mutations: readonly DeclarativeMutationIdentity[];
+}
+
+interface AnchoredCaseExecution {
+  readonly anchor: number;
+  readonly caseId: string;
+  readonly rootId: string;
+  readonly tieBreaker: number;
+}
+
+interface ExpandedDeclarativeCaseExecution {
+  readonly anchor: number;
+  readonly identityCase: DeclarativeCaseIdentity;
+  readonly tieBreaker: number;
+}
+
+interface DeclarativeExecutionExpansion {
+  readonly executions: readonly ExpandedDeclarativeCaseExecution[];
+  readonly problems: readonly string[];
+}
+
+interface LegacyCaseExecutionAnchor {
+  readonly anchor: number;
+  readonly matcher: ts.CallExpression;
+  readonly rootAnchor: number;
+  readonly rootCall: ts.CallExpression;
 }
 
 const MATRIX_TITLE = "keeps release.yml wired to the shared evaluator and an exact mirrored inventory";
 const SOURCE_COMMIT = "8420e2fca3ed0dac994859a9e9a30b933d5ddf9e";
 const MATRIX_SOURCE_SHA256 = "3fa0b67411e2fc0f4d7c6bce6075ba91eb25edc19a210b5c2f8dd408def6e18b";
 const MATRIX_SLICE_SHA256 = "caca0093c744df9f6c6cdd0e8200fd8df45052e784297079887ea48686c5e07f";
-const CURRENT_HYBRID_SOURCE_SHA256 = "43f30cb0bd56c8ba7cdc30bf74cf39c0acd9fad6a28b9bbb56ebfe7063a1258e";
-const CURRENT_HYBRID_MATRIX_SLICE_SHA256 = "c4042d5a595094c8acdf160ba835cb7b1ab0fa0f6ae2c2c9e551a59ffd209093";
+const CURRENT_HYBRID_SOURCE_SHA256 = "7ac34185b2b26c731c100e38e2bd8e888e6b65410ec3f322f2d8962807545fb0";
+const CURRENT_HYBRID_MATRIX_SLICE_SHA256 = "c6ccc2b5546ec894b7fab0772b804c6423dfff0738ad51a25cbcf21d7b6ea9ee";
 const IDENTITY_FIXTURE_SHA256 = "b1bef74ea285f53f8acf3c78d942db4880f06648c50b051351e0e004c73253d3";
 const MUTATION_MATCH_COUNT_NODE_SHA256 = "5e57cd7a2f1dd60cc4bda3b10c4a7e906f7e5b9604902eff5e54f20bd0c8f49d";
 const REGISTRY_EVALUATOR_PROBLEM_NODE_SHA256 = "4c374cc179d7a95cdf25085358c62e482134824abca913b126167d3bb8397b26";
 const REGISTRY_EVALUATOR_DETECTOR_NODE_SHA256 = "b45c5aed44cf1bff818d5ddac4f80e8fb805e61300f93f77afc299d3e8f0047c";
+const REGISTRY_RUN_DETECTOR_NODE_SHA256 = "5b09ecbae41cfc47a6f66ff353e923ef511dd0007fba0a075d61de6e256935e6";
 const REGISTRY_EVALUATOR_PROBLEM =
   "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics";
 const MIGRATED_REGISTRY_EVALUATOR_IDS = [
@@ -1683,6 +1742,147 @@ function literalStringValue(value: ts.Expression | undefined): string | null {
     : null;
 }
 
+function declarativeInvocationKind(value: ts.Expression | undefined): string | null {
+  if (value === undefined || !ts.isObjectLiteralExpression(value)) return null;
+  const kindProperties = value.properties.filter(
+    (property): property is ts.PropertyAssignment =>
+      ts.isPropertyAssignment(property) &&
+      (ts.isIdentifier(property.name) || ts.isStringLiteral(property.name)) &&
+      property.name.text === "kind"
+  );
+  return kindProperties.length === 1 ? literalStringValue(kindProperties[0]?.initializer) : null;
+}
+
+function parseDeclarativeInvocation(
+  value: ts.Expression | undefined,
+  path: string,
+  problems: string[]
+): DeclarativeInvocationIdentity | null {
+  const provisionalKind = declarativeInvocationKind(value);
+  const companionSlot =
+    provisionalKind === "registry.step.run"
+      ? "integrity"
+      : provisionalKind === "registry.step.integrity"
+        ? "run"
+        : null;
+  const expectedKeys = [
+    "kind",
+    "baseline",
+    "mutant",
+    ...(companionSlot === null ? [] : [companionSlot]),
+    ...(provisionalKind === "fixture.throw" ? ["message"] : [])
+  ];
+  const invocation = exactObjectProperties(value, expectedKeys, path, problems);
+  if (invocation === null) return null;
+  const invocationKind = literalStringValue(invocation.get("kind"));
+  const baseline = invocation.get("baseline");
+  const mutant = invocation.get("mutant");
+  const companion = companionSlot === null ? undefined : invocation.get(companionSlot);
+  const message = provisionalKind === "fixture.throw" ? literalStringValue(invocation.get("message")) : null;
+  if (
+    invocationKind === null ||
+    baseline === undefined ||
+    !ts.isIdentifier(baseline) ||
+    mutant === undefined ||
+    !ts.isIdentifier(mutant) ||
+    (companionSlot !== null && (companion === undefined || !ts.isIdentifier(companion))) ||
+    (provisionalKind === "fixture.throw" && (message === null || message.length === 0))
+  ) {
+    problems.push(`${path} must retain exact kind-specific literal fields and direct handle bindings`);
+    return null;
+  }
+  return {
+    invocationKind,
+    baselineHandle: baseline.text,
+    mutantHandle: mutant.text,
+    companionSlot,
+    companionHandle: companion !== undefined && ts.isIdentifier(companion) ? companion.text : null
+  };
+}
+
+function requiredReleaseOracleAdapterBindings(
+  cases: readonly DeclarativeCaseIdentity[]
+): readonly ReleaseOracleAdapterBinding[] {
+  const requiresEvaluator = cases.some((identityCase) => identityCase.invocationKind === "registry.evaluator");
+  const requiresStep = cases.some(
+    (identityCase) =>
+      identityCase.invocationKind === "registry.step.run" || identityCase.invocationKind === "registry.step.integrity"
+  );
+  const bindings: ReleaseOracleAdapterBinding[] = [];
+  if (requiresEvaluator) {
+    bindings.push({
+      property: "registryEvaluatorProblems",
+      binding: "mcpRegistryEvaluatorProblems"
+    });
+  }
+  if (requiresStep) {
+    bindings.push({ property: "registryStepProblems", binding: "mcpRegistryRunProblems" });
+  }
+  return Object.freeze(bindings);
+}
+
+function exactReleaseOracleAdapterObject(
+  value: ts.Expression | undefined,
+  expectedBindings: readonly ReleaseOracleAdapterBinding[]
+): value is ts.ObjectLiteralExpression {
+  if (
+    expectedBindings.length < 1 ||
+    expectedBindings.length > 2 ||
+    value === undefined ||
+    !ts.isObjectLiteralExpression(value) ||
+    value.properties.length !== expectedBindings.length
+  ) {
+    return false;
+  }
+  const expectedByProperty = new Map(expectedBindings.map((binding) => [binding.property, binding.binding]));
+  const observedProperties = new Set<string>();
+  for (const property of value.properties) {
+    if (
+      !ts.isPropertyAssignment(property) ||
+      (!ts.isIdentifier(property.name) && !ts.isStringLiteral(property.name)) ||
+      !ts.isIdentifier(property.initializer)
+    ) {
+      return false;
+    }
+    const propertyName = property.name.text;
+    if (
+      observedProperties.has(propertyName) ||
+      property.initializer.text !== expectedByProperty.get(propertyName as ReleaseOracleAdapterProperty)
+    ) {
+      return false;
+    }
+    observedProperties.add(propertyName);
+  }
+  return observedProperties.size === expectedBindings.length;
+}
+
+function isExactReleaseOracleAdapterReference(
+  identifier: ts.Identifier,
+  expectedBindings: readonly ReleaseOracleAdapterBinding[]
+): boolean {
+  const property = identifier.parent;
+  if (
+    !ts.isPropertyAssignment(property) ||
+    property.initializer !== identifier ||
+    (!ts.isIdentifier(property.name) && !ts.isStringLiteral(property.name))
+  ) {
+    return false;
+  }
+  const propertyName = property.name.text;
+  const expectedBinding = expectedBindings.find((binding) => binding.property === propertyName);
+  if (expectedBinding === undefined || expectedBinding.binding !== identifier.text) return false;
+  const object = property.parent;
+  if (!exactReleaseOracleAdapterObject(object, expectedBindings)) return false;
+  const call = object.parent;
+  if (!ts.isCallExpression(call)) return false;
+  const fullCall = directPlanCall(call, "execute");
+  if (fullCall !== null) {
+    return fullCall.arguments.length === 1 && fullCall.arguments[0] === object;
+  }
+  const stagedCall = directPlanCall(call, "executeThrough");
+  return stagedCall !== null && stagedCall.arguments.length === 2 && stagedCall.arguments[1] === object;
+}
+
 function positiveIntegerLiteral(value: ts.Expression | undefined): number | null {
   if (value === undefined || !ts.isNumericLiteral(value)) return null;
   const observed = Number(value.text);
@@ -1737,18 +1937,323 @@ function exactPlanStatusAccess(value: ts.Expression, property: string): boolean 
   );
 }
 
+function expandDeclarativeExecutionEvents(
+  cases: readonly DeclarativeCaseIdentity[],
+  events: readonly DeclarativeExecutionEvent[]
+): DeclarativeExecutionExpansion {
+  const executions: ExpandedDeclarativeCaseExecution[] = [];
+  const problems: string[] = [];
+  let cursor = 0;
+  let state: "complete" | "initial" | "prefix" = "initial";
+  const appendThrough = (event: DeclarativeExecutionEvent, lastIndex: number): void => {
+    for (let index = cursor; index <= lastIndex; index++) {
+      const identityCase = cases[index];
+      if (identityCase === undefined) continue;
+      executions.push({ anchor: event.anchor, identityCase, tieBreaker: index });
+    }
+    cursor = lastIndex + 1;
+  };
+
+  for (const event of events) {
+    if (state === "complete") {
+      problems.push(
+        `release mutation hybrid declarative ${event.kind} at ${event.anchor} cannot replay a completed plan`
+      );
+      continue;
+    }
+    if (event.kind === "execute") {
+      if (state !== "initial") {
+        problems.push(
+          `release mutation hybrid declarative execute at ${event.anchor} must be the first and only execution event`
+        );
+        continue;
+      }
+      if (cases.length === 0) {
+        problems.push(`release mutation hybrid declarative execute at ${event.anchor} cannot replay an empty plan`);
+        continue;
+      }
+      appendThrough(event, cases.length - 1);
+      state = "complete";
+      continue;
+    }
+
+    if (event.kind === "executeRemaining") {
+      if (state !== "prefix") {
+        problems.push(
+          `release mutation hybrid declarative executeRemaining at ${event.anchor} must follow ` +
+            "one exact executeThrough prefix"
+        );
+        continue;
+      }
+      appendThrough(event, cases.length - 1);
+      state = "complete";
+      continue;
+    }
+
+    if (state !== "initial") {
+      problems.push(
+        `release mutation hybrid declarative executeThrough at ${event.anchor} cannot repeat or replay a staged prefix`
+      );
+      continue;
+    }
+    const boundaryIndexes = cases.flatMap((identityCase, index) =>
+      identityCase.handle === event.boundaryHandle ? [index] : []
+    );
+    if (event.boundaryHandle === null || boundaryIndexes.length !== 1) {
+      problems.push(
+        `release mutation hybrid declarative executeThrough at ${event.anchor} must name one exact root handle; ` +
+          `found ${event.boundaryHandle ?? "<invalid>"} with ${boundaryIndexes.length} match(es)`
+      );
+      continue;
+    }
+    const boundaryIndex = boundaryIndexes[0];
+    if (boundaryIndex === undefined) continue;
+    appendThrough(event, boundaryIndex);
+    state = cursor === cases.length ? "complete" : "prefix";
+  }
+
+  if (problems.length === 0 && (state !== "complete" || cursor !== cases.length)) {
+    problems.push(
+      `release mutation hybrid declarative execution schedule must terminate complete at cursor ${cases.length}; ` +
+        `found ${state} at ${cursor}`
+    );
+  }
+
+  return {
+    executions: Object.freeze(executions),
+    problems: Object.freeze(problems)
+  };
+}
+
+function validateDeclarativeExecutionExpansionSemantics(problems: string[]): void {
+  const cases: DeclarativeCaseIdentity[] = ["001", "002", "003"].map((suffix) => ({
+    baselineHandle: "baseline",
+    checkCount: 1,
+    companionHandle: null,
+    companionSlot: null,
+    expectationId: `expectation.${suffix}`,
+    handle: `root${suffix}`,
+    id: `case.${suffix}`,
+    invocationKind: "fixture.text",
+    mutantHandle: `root${suffix}`,
+    problem: "problem"
+  }));
+  const full = expandDeclarativeExecutionEvents(cases, [
+    { anchor: 10, boundaryHandle: null, kind: "execute", statementIndex: 10 }
+  ]);
+  const staged = expandDeclarativeExecutionEvents(cases, [
+    { anchor: 10, boundaryHandle: "root002", kind: "executeThrough", statementIndex: 10 },
+    { anchor: 20, boundaryHandle: null, kind: "executeRemaining", statementIndex: 20 }
+  ]);
+  const invalidBoundary = expandDeclarativeExecutionEvents(cases, [
+    { anchor: 10, boundaryHandle: "missing", kind: "executeThrough", statementIndex: 10 }
+  ]);
+  const remainingFirst = expandDeclarativeExecutionEvents(cases, [
+    { anchor: 10, boundaryHandle: null, kind: "executeRemaining", statementIndex: 10 }
+  ]);
+  const repeatedPrefix = expandDeclarativeExecutionEvents(cases, [
+    { anchor: 10, boundaryHandle: "root001", kind: "executeThrough", statementIndex: 10 },
+    { anchor: 20, boundaryHandle: "root002", kind: "executeThrough", statementIndex: 20 }
+  ]);
+  const replayAfterFull = expandDeclarativeExecutionEvents(cases, [
+    { anchor: 10, boundaryHandle: null, kind: "execute", statementIndex: 10 },
+    { anchor: 20, boundaryHandle: null, kind: "executeRemaining", statementIndex: 20 }
+  ]);
+  const missingAllExecution = expandDeclarativeExecutionEvents(cases, []);
+  const missingRemaining = expandDeclarativeExecutionEvents(cases, [
+    { anchor: 10, boundaryHandle: "root002", kind: "executeThrough", statementIndex: 10 }
+  ]);
+  const executionIds = (expansion: DeclarativeExecutionExpansion): readonly string[] =>
+    expansion.executions.map((execution) => execution.identityCase.id);
+  if (
+    full.problems.length !== 0 ||
+    JSON.stringify(executionIds(full)) !== JSON.stringify(["case.001", "case.002", "case.003"]) ||
+    staged.problems.length !== 0 ||
+    JSON.stringify(executionIds(staged)) !== JSON.stringify(["case.001", "case.002", "case.003"]) ||
+    JSON.stringify(staged.executions.map((execution) => execution.anchor)) !== JSON.stringify([10, 10, 20]) ||
+    invalidBoundary.problems.length !== 1 ||
+    !invalidBoundary.problems[0]?.includes("must name one exact root handle") ||
+    remainingFirst.problems.length !== 1 ||
+    !remainingFirst.problems[0]?.includes("must follow one exact executeThrough prefix") ||
+    repeatedPrefix.problems.length !== 1 ||
+    !repeatedPrefix.problems[0]?.includes("cannot repeat or replay a staged prefix") ||
+    replayAfterFull.problems.length !== 1 ||
+    !replayAfterFull.problems[0]?.includes("cannot replay a completed plan") ||
+    missingAllExecution.problems.length !== 1 ||
+    !missingAllExecution.problems[0]?.includes("must terminate complete at cursor 3; found initial at 0") ||
+    missingRemaining.problems.length !== 1 ||
+    !missingRemaining.problems[0]?.includes("must terminate complete at cursor 3; found prefix at 2")
+  ) {
+    problems.push(
+      "release mutation declarative execution expansion must preserve full, staged, " +
+        "invalid-boundary and replay semantics"
+    );
+  }
+}
+
+function syntheticConstInitializer(source: string): ts.Expression | undefined {
+  const sourceFile = ts.createSourceFile(
+    "release-mutation-identity-helper-control.ts",
+    `const candidate = ${source};`,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TS
+  );
+  const statement = sourceFile.statements[0];
+  if (
+    statement === undefined ||
+    !ts.isVariableStatement(statement) ||
+    statement.declarationList.declarations.length !== 1
+  ) {
+    return undefined;
+  }
+  return statement.declarationList.declarations[0]?.initializer;
+}
+
+function validateDeclarativeInvocationParsingSemantics(problems: string[]): void {
+  const parse = (
+    source: string
+  ): { readonly problems: readonly string[]; readonly value: DeclarativeInvocationIdentity | null } => {
+    const localProblems: string[] = [];
+    const value = parseDeclarativeInvocation(
+      syntheticConstInitializer(source),
+      "declarative invocation helper control",
+      localProblems
+    );
+    return { problems: localProblems, value };
+  };
+  const run = parse(
+    '{ kind: "registry.step.run", baseline: registryPublishStepSource, mutant: releaseMutationM043, ' +
+      "integrity: releaseIntegritySource }"
+  );
+  const integrity = parse(
+    '{ kind: "registry.step.integrity", baseline: releaseIntegritySource, mutant: releaseMutationM111, ' +
+      "run: registryPublishStepSource }"
+  );
+  const evaluator = parse(
+    '{ kind: "registry.evaluator", baseline: releaseIntegritySource, mutant: releaseMutationM002 }'
+  );
+  const reversedRunCompanion = parse(
+    '{ kind: "registry.step.run", baseline: registryPublishStepSource, mutant: releaseMutationM043, ' +
+      "run: releaseIntegritySource }"
+  );
+  const reversedIntegrityCompanion = parse(
+    '{ kind: "registry.step.integrity", baseline: releaseIntegritySource, mutant: releaseMutationM111, ' +
+      "integrity: registryPublishStepSource }"
+  );
+  const nonbindingCompanion = parse(
+    '{ kind: "registry.step.run", baseline: registryPublishStepSource, mutant: releaseMutationM043, ' +
+      'integrity: "releaseIntegritySource" }'
+  );
+  if (
+    run.problems.length !== 0 ||
+    run.value?.companionSlot !== "integrity" ||
+    run.value?.companionHandle !== "releaseIntegritySource" ||
+    integrity.problems.length !== 0 ||
+    integrity.value?.companionSlot !== "run" ||
+    integrity.value?.companionHandle !== "registryPublishStepSource" ||
+    evaluator.problems.length !== 0 ||
+    evaluator.value?.companionSlot !== null ||
+    evaluator.value?.companionHandle !== null ||
+    reversedRunCompanion.value !== null ||
+    reversedRunCompanion.problems.length === 0 ||
+    reversedIntegrityCompanion.value !== null ||
+    reversedIntegrityCompanion.problems.length === 0 ||
+    nonbindingCompanion.value !== null ||
+    nonbindingCompanion.problems.length === 0
+  ) {
+    problems.push(
+      "release mutation declarative invocation parser must preserve exact evaluator and bidirectional Registry-step companions"
+    );
+  }
+}
+
+function syntheticAdapterReferencesAreExact(
+  source: string,
+  expectedBindings: readonly ReleaseOracleAdapterBinding[]
+): boolean {
+  if (expectedBindings.length < 1 || expectedBindings.length > 2) return false;
+  const sourceFile = ts.createSourceFile(
+    "release-mutation-adapter-helper-control.ts",
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TS
+  );
+  const references = new Map(expectedBindings.map((binding) => [binding.binding, [] as ts.Identifier[]]));
+  const visit = (node: ts.Node): void => {
+    if (ts.isIdentifier(node)) {
+      references.get(node.text as ReleaseOracleAdapterBinding["binding"])?.push(node);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  return expectedBindings.every((binding) => {
+    const candidates = references.get(binding.binding) ?? [];
+    return (
+      candidates.length === 1 &&
+      candidates.every((candidate) => isExactReleaseOracleAdapterReference(candidate, expectedBindings))
+    );
+  });
+}
+
+function validateReleaseOracleAdapterReferenceSemantics(problems: string[]): void {
+  const evaluator: readonly ReleaseOracleAdapterBinding[] = [
+    { property: "registryEvaluatorProblems", binding: "mcpRegistryEvaluatorProblems" }
+  ];
+  const step: readonly ReleaseOracleAdapterBinding[] = [
+    { property: "registryStepProblems", binding: "mcpRegistryRunProblems" }
+  ];
+  const combined: readonly ReleaseOracleAdapterBinding[] = [...evaluator, ...step];
+  const combinedObject =
+    "{ registryEvaluatorProblems: mcpRegistryEvaluatorProblems, registryStepProblems: mcpRegistryRunProblems }";
+  if (
+    !syntheticAdapterReferencesAreExact(
+      "releaseMutationPlan.execute({ registryEvaluatorProblems: mcpRegistryEvaluatorProblems });",
+      evaluator
+    ) ||
+    !syntheticAdapterReferencesAreExact(
+      "releaseMutationPlan.executeThrough(root, { registryStepProblems: mcpRegistryRunProblems });",
+      step
+    ) ||
+    !syntheticAdapterReferencesAreExact(`releaseMutationPlan.execute(${combinedObject});`, combined) ||
+    !syntheticAdapterReferencesAreExact(
+      `releaseMutationPlan.executeThrough(root, ${combinedObject});`,
+      combined
+    ) ||
+    syntheticAdapterReferencesAreExact(
+      "releaseMutationPlan.execute({ registryEvaluatorProblems: mcpRegistryRunProblems, " +
+        "registryStepProblems: mcpRegistryEvaluatorProblems });",
+      combined
+    ) ||
+    syntheticAdapterReferencesAreExact(
+      "releaseMutationPlan.execute({ registryEvaluatorProblems: mcpRegistryEvaluatorProblems });",
+      combined
+    ) ||
+    syntheticAdapterReferencesAreExact("releaseMutationPlan.execute({});", []) ||
+    syntheticAdapterReferencesAreExact(`releaseMutationPlan.executeThrough(${combinedObject}, root);`, combined)
+  ) {
+    problems.push(
+      "release mutation adapter reference helper must admit only exact one- or two-adapter execute/executeThrough objects"
+    );
+  }
+}
+
 function scanHybridDeclarativeMatrix(matrix: MatrixScan, problems: string[]): HybridDeclarativeScan {
   const callbackBody = matrix.callback.body;
   if (!ts.isBlock(callbackBody)) {
     problems.push("release mutation hybrid callback must remain one literal block");
-    return { mutations: [], cases: [] };
+    return { mutations: [], cases: [], executionEvents: [] };
   }
   const statements = callbackBody.statements;
   const mutations: DeclarativeMutationIdentity[] = [];
   const cases: DeclarativeCaseIdentity[] = [];
+  const executionEvents: DeclarativeExecutionEvent[] = [];
+  const executionCalls: ts.CallExpression[] = [];
   let aliasCount = 0;
   let planCount = 0;
   let sourceCount = 0;
+  let planDeclarationIdentifier: ts.Identifier | null = null;
   let planStatementIndex = -1;
   let aliasStatementIndex = -1;
   let sourceStatementIndex = -1;
@@ -1785,6 +2290,7 @@ function scanHybridDeclarativeMatrix(matrix: MatrixScan, problems: string[]): Hy
     const plan = directTopLevelConst(statement, "releaseMutationPlan");
     if (plan !== null) {
       planCount++;
+      planDeclarationIdentifier = plan.name as ts.Identifier;
       planStatementIndex = statementIndex;
       const initializer = plan.initializer;
       if (
@@ -1962,9 +2468,8 @@ function scanHybridDeclarativeMatrix(matrix: MatrixScan, problems: string[]): Hy
               )
             : null;
         if (check === null) continue;
-        const invocation = exactObjectProperties(
+        const invocation = parseDeclarativeInvocation(
           check.get("invoke"),
-          ["kind", "baseline", "mutant"],
           `release mutation hybrid case ${id} invocation`,
           problems
         );
@@ -1975,34 +2480,40 @@ function scanHybridDeclarativeMatrix(matrix: MatrixScan, problems: string[]): Hy
           problems
         );
         if (invocation === null || expectation === null) continue;
-        const invocationKind = literalStringValue(invocation.get("kind"));
-        const baseline = invocation.get("baseline");
-        const mutant = invocation.get("mutant");
         const expectationId = literalStringValue(expectation.get("id"));
         const expectationKind = literalStringValue(expectation.get("kind"));
         const problem = literalStringValue(expectation.get("problem"));
-        if (
-          invocationKind === null ||
-          baseline === undefined ||
-          !ts.isIdentifier(baseline) ||
-          mutant === undefined ||
-          !ts.isIdentifier(mutant) ||
-          expectationId === null ||
-          expectationKind !== "problem" ||
-          problem === null
-        ) {
+        if (expectationId === null || expectationKind !== "problem" || problem === null) {
           problems.push(`release mutation hybrid case ${id} must contain one exact literal problem check`);
           continue;
         }
         cases.push({
           id,
           handle: root.text,
-          invocationKind,
-          baselineHandle: baseline.text,
-          mutantHandle: mutant.text,
+          invocationKind: invocation.invocationKind,
+          baselineHandle: invocation.baselineHandle,
+          companionHandle: invocation.companionHandle,
+          companionSlot: invocation.companionSlot,
+          checkCount: checks.elements.length,
+          mutantHandle: invocation.mutantHandle,
           expectationId,
           problem
         });
+      }
+
+      for (const kind of ["execute", "executeThrough", "executeRemaining"] as const) {
+        const executionCall = directPlanCall(statement.expression, kind);
+        if (executionCall === null) continue;
+        const boundary = executionCall.arguments[0];
+        const boundaryHandle =
+          kind === "executeThrough" && boundary !== undefined && ts.isIdentifier(boundary) ? boundary.text : null;
+        executionEvents.push({
+          anchor: executionCall.getStart(matrix.sourceFile),
+          boundaryHandle,
+          kind,
+          statementIndex
+        });
+        executionCalls.push(executionCall);
       }
     }
 
@@ -2021,8 +2532,29 @@ function scanHybridDeclarativeMatrix(matrix: MatrixScan, problems: string[]): Hy
   let allRegisterCaseCalls = 0;
   let allRegisterSourceCalls = 0;
   let allSealCalls = 0;
-  let allExecuteCalls = 0;
+  let allExecutionMemberReferences = 0;
+  let computedPlanMemberReferences = 0;
+  let indirectPlanReferences = 0;
+  const executionMethodNames = new Set<DeclarativeExecutionKind>([
+    "execute",
+    "executeRemaining",
+    "executeThrough"
+  ]);
   const visitRegistrations = (node: ts.Node): void => {
+    if (ts.isIdentifier(node) && node.text === "releaseMutationPlan") {
+      const parent = node.parent;
+      if (node === planDeclarationIdentifier) {
+        // The one reviewed declaration is the only allowed bare plan identifier.
+      } else if (ts.isPropertyAccessExpression(parent) && parent.expression === node) {
+        if (executionMethodNames.has(parent.name.text as DeclarativeExecutionKind)) {
+          allExecutionMemberReferences++;
+        }
+      } else if (ts.isElementAccessExpression(parent) && parent.expression === node) {
+        computedPlanMemberReferences++;
+      } else {
+        indirectPlanReferences++;
+      }
+    }
     if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)) {
       const receiver = node.expression.expression;
       if (ts.isIdentifier(receiver) && receiver.text === "releaseMutationPlan") {
@@ -2030,7 +2562,6 @@ function scanHybridDeclarativeMatrix(matrix: MatrixScan, problems: string[]): Hy
         if (node.expression.name.text === "registerCase") allRegisterCaseCalls++;
         if (node.expression.name.text === "registerSource") allRegisterSourceCalls++;
         if (node.expression.name.text === "seal") allSealCalls++;
-        if (node.expression.name.text === "execute") allExecuteCalls++;
       }
     }
     ts.forEachChild(node, visitRegistrations);
@@ -2042,6 +2573,13 @@ function scanHybridDeclarativeMatrix(matrix: MatrixScan, problems: string[]): Hy
     allRegisterSourceCalls !== topLevelRegisterSourceCalls
   ) {
     problems.push("release mutation hybrid registrations must all be direct top-level straight-line statements");
+  }
+  if (
+    allExecutionMemberReferences !== executionEvents.length ||
+    computedPlanMemberReferences !== 0 ||
+    indirectPlanReferences !== 0
+  ) {
+    problems.push("release mutation hybrid execution events must be exact direct top-level property calls");
   }
   if (aliasCount !== 1 || planCount !== 1 || sourceCount !== 1) {
     problems.push(
@@ -2103,68 +2641,191 @@ function scanHybridDeclarativeMatrix(matrix: MatrixScan, problems: string[]): Hy
   }
 
   const sealAssertion = exactExpectMatcher(statements[sealStatementIndex + 1], "toEqual");
-  const executeStatement = statements[sealStatementIndex + 2];
-  const phaseAssertion = exactExpectMatcher(statements[sealStatementIndex + 3], "toBe");
-  const caseCountAssertion = exactExpectMatcher(statements[sealStatementIndex + 4], "toBe");
-  const expectationCountAssertion = exactExpectMatcher(statements[sealStatementIndex + 5], "toBe");
-  const executeCall =
-    executeStatement !== undefined && ts.isExpressionStatement(executeStatement)
-      ? directPlanCall(executeStatement.expression, "execute")
-      : null;
-  const executeAdapters = exactObjectProperties(
-    executeCall?.arguments[0],
-    ["registryEvaluatorProblems"],
-    "release mutation hybrid execute adapters",
-    problems
-  );
-  const registryEvaluatorAdapter = executeAdapters?.get("registryEvaluatorProblems");
-  const exactExecute =
-    executeCall !== null &&
-    executeCall.arguments.length === 1 &&
-    registryEvaluatorAdapter !== undefined &&
-    ts.isIdentifier(registryEvaluatorAdapter) &&
-    registryEvaluatorAdapter.text === "mcpRegistryEvaluatorProblems";
-  if (!exactExecute) {
-    problems.push(
-      "release mutation hybrid execute adapter must bind registryEvaluatorProblems exactly to " +
-        "mcpRegistryEvaluatorProblems"
-    );
-  }
   const exactSealAssertion =
     sealAssertion !== null &&
     ts.isIdentifier(sealAssertion.actual) &&
     sealAssertion.actual.text === "releaseMutationProblems" &&
     ts.isArrayLiteralExpression(sealAssertion.expected) &&
     sealAssertion.expected.elements.length === 0;
-  const exactPhase =
-    phaseAssertion !== null &&
-    exactPlanStatusAccess(phaseAssertion.actual, "phase") &&
-    literalStringValue(phaseAssertion.expected) === "executed";
-  const exactCaseCount =
-    caseCountAssertion !== null &&
-    exactPlanStatusAccess(caseCountAssertion.actual, "caseExecutions") &&
-    positiveIntegerLiteral(caseCountAssertion.expected) === 36;
-  const exactExpectationCount =
-    expectationCountAssertion !== null &&
-    exactPlanStatusAccess(expectationCountAssertion.actual, "expectationExecutions") &&
-    positiveIntegerLiteral(expectationCountAssertion.expected) === 36;
-  if (
-    sealCount !== 1 ||
-    allSealCalls !== 1 ||
-    allExecuteCalls !== 1 ||
-    sealStatementIndex !== lastRegistrationIndex + 1 ||
-    !exactSealAssertion ||
-    !exactExecute ||
-    !exactPhase ||
-    !exactCaseCount ||
-    !exactExpectationCount
-  ) {
+  const exactPhaseAt = (statementIndex: number, phase: string): boolean => {
+    const assertion = exactExpectMatcher(statements[statementIndex], "toBe");
+    return (
+      assertion !== null &&
+      exactPlanStatusAccess(assertion.actual, "phase") &&
+      literalStringValue(assertion.expected) === phase
+    );
+  };
+  const exactExecutionCountAt = (statementIndex: number, property: string, expected: number): boolean => {
+    const assertion = exactExpectMatcher(statements[statementIndex], "toBe");
+    return (
+      assertion !== null &&
+      exactPlanStatusAccess(assertion.actual, property) &&
+      positiveIntegerLiteral(assertion.expected) === expected
+    );
+  };
+
+  let hasClosedInvocationKinds = true;
+  let requiresRegistryEvaluatorProblems = false;
+  let requiresRegistryStepProblems = false;
+  for (const identityCase of cases) {
+    switch (identityCase.invocationKind) {
+      case "registry.evaluator":
+        requiresRegistryEvaluatorProblems = true;
+        break;
+      case "registry.step.integrity":
+      case "registry.step.run":
+        requiresRegistryStepProblems = true;
+        break;
+      case "fixture.text":
+      case "fixture.throw":
+        break;
+      default:
+        hasClosedInvocationKinds = false;
+        problems.push(
+          `release mutation hybrid case ${identityCase.id} invocation kind must belong to the closed adapter inventory`
+        );
+    }
+  }
+  const requiredAdapterBindings = requiredReleaseOracleAdapterBindings(cases);
+  const requiredAdapterKeys = requiredAdapterBindings.map((binding) => binding.property);
+  const exactExecutionArguments = (
+    call: ts.CallExpression,
+    kind: DeclarativeExecutionKind,
+    adapterArgumentIndex: number
+  ): boolean => {
+    const expectedArgumentCount = adapterArgumentIndex + (requiredAdapterKeys.length === 0 ? 0 : 1);
+    let exact = call.arguments.length === expectedArgumentCount;
+    if (kind === "executeThrough") {
+      const boundary = call.arguments[0];
+      exact = exact && boundary !== undefined && ts.isIdentifier(boundary);
+    }
+    if (requiredAdapterKeys.length === 0) {
+      if (!exact) {
+        problems.push(`release mutation hybrid ${kind} event must use the exact staged execution argument shape`);
+      }
+      return exact;
+    }
+
+    const adapters = exactObjectProperties(
+      call.arguments[adapterArgumentIndex],
+      requiredAdapterKeys,
+      `release mutation hybrid ${kind} adapters`,
+      problems
+    );
+    exact =
+      exact &&
+      exactReleaseOracleAdapterObject(call.arguments[adapterArgumentIndex], requiredAdapterBindings);
+    if (requiresRegistryEvaluatorProblems) {
+      const adapter = adapters?.get("registryEvaluatorProblems");
+      const exactAdapter =
+        adapter !== undefined && ts.isIdentifier(adapter) && adapter.text === "mcpRegistryEvaluatorProblems";
+      if (!exactAdapter) {
+        problems.push(
+          "release mutation hybrid execute adapter must bind registryEvaluatorProblems exactly to " +
+            "mcpRegistryEvaluatorProblems"
+        );
+      }
+      exact = exact && exactAdapter;
+    }
+    if (requiresRegistryStepProblems) {
+      const adapter = adapters?.get("registryStepProblems");
+      const exactAdapter =
+        adapter !== undefined && ts.isIdentifier(adapter) && adapter.text === "mcpRegistryRunProblems";
+      if (!exactAdapter) {
+        problems.push(
+          "release mutation hybrid execute adapter must bind registryStepProblems exactly to mcpRegistryRunProblems"
+        );
+      }
+      exact = exact && exactAdapter;
+    }
+    if (!exact) {
+      problems.push(`release mutation hybrid ${kind} event must use the exact staged execution argument shape`);
+    }
+    return exact;
+  };
+  const exactExecuteRemainingArguments = (call: ts.CallExpression): boolean => {
+    const exact = call.arguments.length === 0;
+    if (!exact) {
+      problems.push(
+        "release mutation hybrid executeRemaining event must use the exact staged execution argument shape"
+      );
+    }
+    return exact;
+  };
+
+  const totalCaseCount = cases.length;
+  const totalExpectationCount = cases.reduce((total, identityCase) => total + identityCase.checkCount, 0);
+  const lifecycleStart = sealStatementIndex + 2;
+  const commonLifecycle =
+    sealCount === 1 &&
+    allSealCalls === 1 &&
+    sealStatementIndex === lastRegistrationIndex + 1 &&
+    exactSealAssertion;
+
+  let exactFullLifecycle = false;
+  if (executionEvents.length === 1 && executionCalls.length === 1) {
+    const event = executionEvents[0];
+    const call = executionCalls[0];
+    if (event !== undefined && call !== undefined && event.kind === "execute") {
+      exactFullLifecycle =
+        event.statementIndex === lifecycleStart &&
+        event.boundaryHandle === null &&
+        exactExecutionArguments(call, "execute", 0) &&
+        exactPhaseAt(lifecycleStart + 1, "executed") &&
+        exactExecutionCountAt(lifecycleStart + 2, "caseExecutions", totalCaseCount) &&
+        exactExecutionCountAt(lifecycleStart + 3, "expectationExecutions", totalExpectationCount);
+    }
+  }
+
+  let exactStagedLifecycle = false;
+  if (executionEvents.length === 2 && executionCalls.length === 2) {
+    const prefixEvent = executionEvents[0];
+    const remainingEvent = executionEvents[1];
+    const prefixCall = executionCalls[0];
+    const remainingCall = executionCalls[1];
+    if (
+      prefixEvent !== undefined &&
+      remainingEvent !== undefined &&
+      prefixCall !== undefined &&
+      remainingCall !== undefined &&
+      prefixEvent.kind === "executeThrough" &&
+      remainingEvent.kind === "executeRemaining"
+    ) {
+      const boundaryIndexes = cases.flatMap((identityCase, index) =>
+        identityCase.handle === prefixEvent.boundaryHandle ? [index] : []
+      );
+      const boundaryIndex = boundaryIndexes.length === 1 ? boundaryIndexes[0] : undefined;
+      const prefixCaseCount = boundaryIndex === undefined ? 0 : boundaryIndex + 1;
+      const prefixExpectationCount =
+        boundaryIndex === undefined
+          ? 0
+          : cases
+              .slice(0, boundaryIndex + 1)
+              .reduce((total, identityCase) => total + identityCase.checkCount, 0);
+      const remainingStatementIndex = remainingEvent.statementIndex;
+      exactStagedLifecycle =
+        boundaryIndex !== undefined &&
+        boundaryIndex < cases.length - 1 &&
+        prefixEvent.statementIndex === lifecycleStart &&
+        remainingStatementIndex > lifecycleStart + 3 &&
+        exactExecutionArguments(prefixCall, "executeThrough", 1) &&
+        exactExecuteRemainingArguments(remainingCall) &&
+        exactPhaseAt(lifecycleStart + 1, "partially-executed") &&
+        exactExecutionCountAt(lifecycleStart + 2, "caseExecutions", prefixCaseCount) &&
+        exactExecutionCountAt(lifecycleStart + 3, "expectationExecutions", prefixExpectationCount) &&
+        exactPhaseAt(remainingStatementIndex + 1, "executed") &&
+        exactExecutionCountAt(remainingStatementIndex + 2, "caseExecutions", totalCaseCount) &&
+        exactExecutionCountAt(remainingStatementIndex + 3, "expectationExecutions", totalExpectationCount);
+    }
+  }
+
+  if (!commonLifecycle || !hasClosedInvocationKinds || (!exactFullLifecycle && !exactStagedLifecycle)) {
     problems.push(
-      "release mutation hybrid lifecycle must be one clean seal, execute, phase and exact 36/36 " +
-        "execution census after every registration"
+      "release mutation hybrid lifecycle must be one clean seal followed by either one exact full execute or " +
+        "one exact executeThrough/executeRemaining pair with derived phase and execution censuses"
     );
   }
-  return { mutations, cases };
+  return { mutations, cases, executionEvents };
 }
 
 function validateProvenance(manifest: IdentityManifest, matrix: MatrixScan, problems: string[]): void {
@@ -4508,6 +5169,116 @@ function expectedMutationHandle(id: string): string {
   return `releaseMutationM${suffix}`;
 }
 
+function matchesFrozenDeclarativeInvocation(
+  manifest: IdentityManifest,
+  observed: DeclarativeInvocationIdentity,
+  rootId: string,
+  frozenCheck: CheckIdentity
+): boolean {
+  const contract = INVOCATION_CONTRACTS[frozenCheck.invoke.kind];
+  const inputs = frozenCheck.invoke.inputs;
+  const frozenInputArguments = inputs.arguments;
+  if (
+    contract === undefined ||
+    inputs.callee !== contract.callee ||
+    !Array.isArray(frozenInputArguments) ||
+    frozenCheck.invoke.mutant !== rootId
+  ) {
+    return false;
+  }
+  const argumentProblems: string[] = [];
+  const frozenArguments = frozenInputArguments
+    .map((argument, index) => invocationArgument(argument, `frozen invocation argument ${index}`, argumentProblems))
+    .filter((argument): argument is InvocationArgumentIdentity => argument !== null);
+  if (
+    argumentProblems.length !== 0 ||
+    JSON.stringify(frozenArguments) !== JSON.stringify(contract.arguments)
+  ) {
+    return false;
+  }
+  const sourceBindingById = new Map(manifest.sources.map((source) => [source.id, source.declarativeBinding]));
+  const expectedBaselineHandle = sourceBindingById.get(frozenCheck.invoke.baseline);
+  if (
+    expectedBaselineHandle === undefined ||
+    observed.invocationKind !== frozenCheck.invoke.kind ||
+    observed.baselineHandle !== expectedBaselineHandle ||
+    observed.mutantHandle !== expectedMutationHandle(rootId)
+  ) {
+    return false;
+  }
+  const frozenCompanions = frozenArguments.filter(
+    (argument): argument is InvocationArgumentIdentity & { readonly id: string; readonly kind: "source" } =>
+      argument.kind === "source"
+  );
+  if (frozenCheck.invoke.kind === "registry.evaluator") {
+    return (
+      frozenCompanions.length === 0 && observed.companionSlot === null && observed.companionHandle === null
+    );
+  }
+  const expectedCompanionSlot =
+    frozenCheck.invoke.kind === "registry.step.run"
+      ? "integrity"
+      : frozenCheck.invoke.kind === "registry.step.integrity"
+        ? "run"
+        : null;
+  const frozenCompanion = frozenCompanions.length === 1 ? frozenCompanions[0] : undefined;
+  const expectedCompanionHandle =
+    frozenCompanion === undefined ? undefined : sourceBindingById.get(frozenCompanion.id);
+  return (
+    expectedCompanionSlot !== null &&
+    frozenCompanion !== undefined &&
+    frozenCompanion.slot === expectedCompanionSlot &&
+    expectedCompanionHandle !== undefined &&
+    observed.companionSlot === expectedCompanionSlot &&
+    observed.companionHandle === expectedCompanionHandle
+  );
+}
+
+function validateFrozenDeclarativeInvocationMatchingSemantics(
+  manifest: IdentityManifest,
+  problems: string[]
+): void {
+  const caseByRoot = new Map(manifest.cases.map((identityCase) => [identityCase.root, identityCase]));
+  const matches = (rootId: string, observed: DeclarativeInvocationIdentity): boolean => {
+    const check = caseByRoot.get(rootId)?.checks[0];
+    return check !== undefined && matchesFrozenDeclarativeInvocation(manifest, observed, rootId, check);
+  };
+  const evaluator: DeclarativeInvocationIdentity = {
+    invocationKind: "registry.evaluator",
+    baselineHandle: "releaseIntegritySource",
+    mutantHandle: "releaseMutationM002",
+    companionSlot: null,
+    companionHandle: null
+  };
+  const run: DeclarativeInvocationIdentity = {
+    invocationKind: "registry.step.run",
+    baselineHandle: "registryPublishStepSource",
+    mutantHandle: "releaseMutationM043",
+    companionSlot: "integrity",
+    companionHandle: "releaseIntegritySource"
+  };
+  const integrity: DeclarativeInvocationIdentity = {
+    invocationKind: "registry.step.integrity",
+    baselineHandle: "releaseIntegritySource",
+    mutantHandle: "releaseMutationM111",
+    companionSlot: "run",
+    companionHandle: "registryPublishStepSource"
+  };
+  if (
+    !matches("release.m002", evaluator) ||
+    !matches("release.m043", run) ||
+    !matches("release.m111", integrity) ||
+    matches("release.m043", { ...run, companionSlot: "run" }) ||
+    matches("release.m043", { ...run, companionHandle: "registryPublishStepSource" }) ||
+    matches("release.m111", { ...integrity, companionSlot: "integrity" }) ||
+    matches("release.m111", { ...integrity, companionHandle: "releaseIntegritySource" })
+  ) {
+    problems.push(
+      "release mutation frozen declarative invocation matching must preserve both exact Registry-step companion directions"
+    );
+  }
+}
+
 function validateHybridPartition(
   manifest: IdentityManifest,
   matrix: MatrixScan,
@@ -4596,11 +5367,8 @@ function validateHybridPartition(
       rootId !== undefined &&
       frozenCheck !== undefined &&
       observed.invocationKind === "registry.evaluator" &&
-      observed.baselineHandle === "releaseIntegritySource" &&
-      observed.mutantHandle === observed.handle &&
       frozenCheck.invoke.kind === "registry.evaluator" &&
-      frozenCheck.invoke.baseline === "script.release-integrity" &&
-      frozenCheck.invoke.mutant === rootId;
+      matchesFrozenDeclarativeInvocation(manifest, observed, rootId, frozenCheck);
     if (!exactInvocation) {
       problems.push(
         `release mutation hybrid case ${observed.id} invocation must retain the exact registry.evaluator adapter`
@@ -4778,6 +5546,54 @@ function matcherCallsByNodeSha(matrix: MatrixScan): ReadonlyMap<string, readonly
   return calls;
 }
 
+function expectedPhysicalMatcherCountsByHash(
+  ownerships: Iterable<FrozenMatcherSpanOwnership>
+): ReadonlyMap<string, number> {
+  const remainingFrozenSpansByHash = new Map<string, Set<string>>();
+  for (const ownership of ownerships) {
+    const hash = ownership.span.sha256;
+    const spans = remainingFrozenSpansByHash.get(hash) ?? new Set<string>();
+    remainingFrozenSpansByHash.set(hash, spans);
+    if (ownership.remainingLegacy) {
+      spans.add(`${ownership.span.start}:${ownership.span.end}:${hash}`);
+    }
+  }
+  const expectedCountsByHash = new Map<string, number>();
+  for (const [hash, spans] of remainingFrozenSpansByHash) {
+    expectedCountsByHash.set(hash, spans.size);
+  }
+  return expectedCountsByHash;
+}
+
+function validateMatcherMultiplicitySemantics(problems: string[]): void {
+  const span = (start: number, end: number, hash: string): IdentitySpan => ({
+    start,
+    end,
+    line: 1,
+    column: 1,
+    sha256: hash
+  });
+  const sharedSpan = span(10, 20, "shared");
+  const observed = expectedPhysicalMatcherCountsByHash([
+    { remainingLegacy: true, span: sharedSpan },
+    { remainingLegacy: true, span: sharedSpan },
+    { remainingLegacy: false, span: sharedSpan },
+    { remainingLegacy: false, span: span(30, 40, "migrated-only") },
+    { remainingLegacy: true, span: span(50, 60, "identical-text-twins") },
+    { remainingLegacy: true, span: span(70, 80, "identical-text-twins") }
+  ]);
+  if (
+    observed.size !== 3 ||
+    observed.get("shared") !== 1 ||
+    observed.get("migrated-only") !== 0 ||
+    observed.get("identical-text-twins") !== 2
+  ) {
+    problems.push(
+      "release mutation matcher multiplicity must preserve mixed ownership, migrated zeroes and distinct spans"
+    );
+  }
+}
+
 function rootBoundToCurrentMatcher(
   rootCall: ts.CallExpression,
   matcherCall: ts.CallExpression,
@@ -4787,14 +5603,632 @@ function rootBoundToCurrentMatcher(
   return rootIsBoundToAssertion(rootCall, matcherCall, sourceFile, graph);
 }
 
+interface SharedLegacyPrimaryOwner {
+  readonly caseId: string;
+  readonly frozenRootAnchor: number;
+  readonly rootCall: ts.CallExpression;
+}
+
+const SHARED_REGISTRY_PRIMARY_MATCHER_SHA256 =
+  "5e2815d5e91972642e0cdafbaab958423ce7403d42923787ef09ba6cb4377f45";
+const SHARED_RELEASE_TRANSACTION_PRIMARY_MATCHER_SHA256 =
+  "df5a00757215359cc873505fc976de42141e1f27f55622b906f6a346203d6c4f";
+const SHARED_TAG_IDENTITY_PRIMARY_MATCHER_SHA256 =
+  "2392196bed7b80a20f9390166f389991da7ed6decb2db2073652fc860633666f";
+const SHARED_REGISTRY_OWNERLESS_PREFIX_SHA256 = Object.freeze([
+  "d72a02a11e021ddd52c7b8d2e4c6b23324f827b475f25b6bce1e1c428f5ce753",
+  "4bc602a330dceb4e0cbf4d49611d34f24de797de1e5e6e6bc3786d302ce85abe",
+  "dfefccf9dd2d5d0427555f71e8fec6ef7fcd107e27551d0af9c64e577600827b",
+  "739836016c0078b5b91102dac1f12c74f59029d1c18dd7b86f3bd6ca02e691c6"
+]);
+
+type SharedTopologyProjection =
+  | { readonly kind: "identity" }
+  | { readonly index: number; readonly kind: "tuple"; readonly length: number }
+  | {
+      readonly expectedProblemProperty: string;
+      readonly kind: "transaction-object";
+      readonly mutantProperty: string;
+    };
+
+function unwrapTopologyExpression(expression: ts.Expression): ts.Expression {
+  let current = expression;
+  while (
+    ts.isParenthesizedExpression(current) ||
+    ts.isAsExpression(current) ||
+    ts.isTypeAssertionExpression(current) ||
+    ts.isSatisfiesExpression(current) ||
+    ts.isNonNullExpression(current)
+  ) {
+    current = current.expression;
+  }
+  return current;
+}
+
+function symbolIdentifiers(
+  root: ts.Node,
+  symbol: ts.Symbol,
+  checker: ts.TypeChecker
+): readonly ts.Identifier[] {
+  const identifiers: ts.Identifier[] = [];
+  const visit = (node: ts.Node): void => {
+    if (ts.isIdentifier(node) && checker.getSymbolAtLocation(node) === symbol) identifiers.push(node);
+    ts.forEachChild(node, visit);
+  };
+  visit(root);
+  return identifiers;
+}
+
+function exactNamedTopologyArray(
+  identifier: ts.Identifier,
+  use: ts.Identifier,
+  matrix: MatrixScan,
+  graph: VariableBindingGraph
+): ts.ArrayLiteralExpression | null {
+  const symbol = graph.checker.getSymbolAtLocation(identifier);
+  const declaration = symbol?.valueDeclaration;
+  if (
+    symbol === undefined ||
+    declaration === undefined ||
+    !ts.isVariableDeclaration(declaration) ||
+    !ts.isIdentifier(declaration.name) ||
+    declaration.initializer === undefined
+  ) {
+    return null;
+  }
+  const declarationList = declaration.parent;
+  const statement = ts.isVariableDeclarationList(declarationList) ? declarationList.parent : undefined;
+  const array = unwrapTopologyExpression(declaration.initializer);
+  if (
+    !ts.isVariableDeclarationList(declarationList) ||
+    declarationList.declarations.length !== 1 ||
+    (declarationList.flags & ts.NodeFlags.Const) === 0 ||
+    statement === undefined ||
+    !ts.isVariableStatement(statement) ||
+    statement.parent !== matrix.callback.body ||
+    statement.getStart(matrix.sourceFile) >= use.getStart(matrix.sourceFile) ||
+    !ts.isArrayLiteralExpression(array)
+  ) {
+    return null;
+  }
+  const references = symbolIdentifiers(matrix.callback.body, symbol, graph.checker);
+  return references.length === 2 && references.includes(declaration.name) && references.includes(use)
+    ? array
+    : null;
+}
+
+function denseTopologyArray(array: ts.ArrayLiteralExpression): boolean {
+  return array.elements.every(
+    (element) => !ts.isOmittedExpression(element) && !ts.isSpreadElement(element)
+  );
+}
+
+function exactRegistryStepWrapperArgument(
+  expression: ts.Expression,
+  matrix: MatrixScan,
+  graph: VariableBindingGraph
+): ts.Expression | null {
+  const value = unwrapTopologyExpression(expression);
+  if (
+    !ts.isCallExpression(value) ||
+    value.questionDotToken !== undefined ||
+    value.typeArguments !== undefined ||
+    value.arguments.length !== 1 ||
+    !ts.isIdentifier(value.expression) ||
+    value.expression.text !== "registryStepWithRun"
+  ) {
+    return null;
+  }
+  const symbol = graph.checker.getSymbolAtLocation(value.expression);
+  const declaration = symbol?.valueDeclaration;
+  if (
+    declaration === undefined ||
+    !ts.isVariableDeclaration(declaration) ||
+    !ts.isIdentifier(declaration.name) ||
+    declaration.name.text !== "registryStepWithRun" ||
+    declaration.initializer === undefined ||
+    !ts.isArrowFunction(declaration.initializer)
+  ) {
+    return null;
+  }
+  const declarationList = declaration.parent;
+  const statement = ts.isVariableDeclarationList(declarationList) ? declarationList.parent : undefined;
+  const arrow = declaration.initializer;
+  const parameter = arrow.parameters[0];
+  const arrowBody = arrow.body;
+  if (
+    !ts.isVariableDeclarationList(declarationList) ||
+    declarationList.declarations.length !== 1 ||
+    (declarationList.flags & ts.NodeFlags.Const) === 0 ||
+    statement === undefined ||
+    !ts.isVariableStatement(statement) ||
+    statement.parent !== matrix.callback.body ||
+    statement.getStart(matrix.sourceFile) >= value.getStart(matrix.sourceFile) ||
+    (arrow.modifiers?.length ?? 0) !== 0 ||
+    (arrow.typeParameters?.length ?? 0) !== 0 ||
+    arrow.parameters.length !== 1 ||
+    parameter === undefined ||
+    parameter.dotDotDotToken !== undefined ||
+    parameter.initializer !== undefined ||
+    !ts.isIdentifier(parameter.name) ||
+    parameter.name.text !== "run" ||
+    ts.isBlock(arrowBody)
+  ) {
+    return null;
+  }
+  const body = unwrapTopologyExpression(arrowBody);
+  if (!ts.isObjectLiteralExpression(body) || body.properties.length !== 2) return null;
+  const registrySpread = body.properties[0];
+  const runProperty = body.properties[1];
+  if (
+    registrySpread === undefined ||
+    !ts.isSpreadAssignment(registrySpread) ||
+    !ts.isIdentifier(registrySpread.expression) ||
+    registrySpread.expression.text !== "registryStep" ||
+    runProperty === undefined ||
+    !ts.isShorthandPropertyAssignment(runProperty) ||
+    runProperty.objectAssignmentInitializer !== undefined ||
+    runProperty.name.text !== "run" ||
+    graph.checker.getSymbolAtLocation(parameter.name) === undefined ||
+    graph.checker.getSymbolAtLocation(parameter.name) !==
+      graph.checker.getShorthandAssignmentValueSymbol(runProperty)
+  ) {
+    return null;
+  }
+  return value.arguments[0] ?? null;
+}
+
+function exactDirectTopologyCarrierRoot(
+  identifier: ts.Identifier,
+  rootCall: ts.CallExpression,
+  matrix: MatrixScan,
+  graph: VariableBindingGraph
+): boolean {
+  const symbol = graph.checker.getSymbolAtLocation(identifier);
+  const declaration = symbol?.valueDeclaration;
+  if (
+    declaration === undefined ||
+    !ts.isVariableDeclaration(declaration) ||
+    !ts.isIdentifier(declaration.name) ||
+    declaration.initializer === undefined ||
+    unwrapTopologyExpression(declaration.initializer) !== rootCall
+  ) {
+    return false;
+  }
+  const declarationList = declaration.parent;
+  const statement = ts.isVariableDeclarationList(declarationList) ? declarationList.parent : undefined;
+  return (
+    ts.isVariableDeclarationList(declarationList) &&
+    declarationList.declarations.length === 1 &&
+    (declarationList.flags & ts.NodeFlags.Const) !== 0 &&
+    statement !== undefined &&
+    ts.isVariableStatement(statement) &&
+    statement.parent === matrix.callback.body &&
+    statement.getStart(matrix.sourceFile) < identifier.getStart(matrix.sourceFile)
+  );
+}
+
+function rootIsExactSharedTopologyValue(
+  rootCall: ts.CallExpression,
+  projected: ts.Expression,
+  matcherHash: string,
+  matrix: MatrixScan,
+  graph: VariableBindingGraph
+): boolean {
+  const value = unwrapTopologyExpression(projected);
+  if (matcherHash !== SHARED_REGISTRY_PRIMARY_MATCHER_SHA256) return value === rootCall;
+  const wrapped = exactRegistryStepWrapperArgument(value, matrix, graph);
+  if (wrapped === null) return false;
+  const run = unwrapTopologyExpression(wrapped);
+  return run === rootCall || (ts.isIdentifier(run) && exactDirectTopologyCarrierRoot(run, rootCall, matrix, graph));
+}
+
+function exactSharedTopologyMatcher(
+  matcher: ts.CallExpression
+): { readonly actual: ts.Expression; readonly expected: ts.Expression } | null {
+  if (
+    matcher.questionDotToken !== undefined ||
+    matcher.typeArguments !== undefined ||
+    matcher.arguments.length !== 1 ||
+    !ts.isPropertyAccessExpression(matcher.expression) ||
+    matcher.expression.questionDotToken !== undefined ||
+    matcher.expression.name.text !== "toContain" ||
+    !ts.isCallExpression(matcher.expression.expression)
+  ) {
+    return null;
+  }
+  const expectCall = matcher.expression.expression;
+  const actual = expectCall.arguments[0];
+  const expected = matcher.arguments[0];
+  if (
+    expectCall.questionDotToken !== undefined ||
+    expectCall.typeArguments !== undefined ||
+    !ts.isIdentifier(expectCall.expression) ||
+    expectCall.expression.text !== "expect" ||
+    (expectCall.arguments.length !== 1 && expectCall.arguments.length !== 2) ||
+    actual === undefined ||
+    expected === undefined
+  ) {
+    return null;
+  }
+  return { actual, expected };
+}
+
+function exactPlainBindingIdentifier(
+  element: ts.ArrayBindingElement | ts.BindingElement | undefined,
+  name: string
+): ts.Identifier | null {
+  return element !== undefined &&
+    !ts.isOmittedExpression(element) &&
+    element.dotDotDotToken === undefined &&
+    element.propertyName === undefined &&
+    element.initializer === undefined &&
+    ts.isIdentifier(element.name) &&
+    element.name.text === name
+    ? element.name
+    : null;
+}
+
+function bindingUsedExactly(
+  identifier: ts.Identifier,
+  node: ts.Node,
+  checker: ts.TypeChecker,
+  expectedOccurrences: number
+): boolean {
+  const symbol = checker.getSymbolAtLocation(identifier);
+  return symbol !== undefined && symbolIdentifiers(node, symbol, checker).length === expectedOccurrences;
+}
+
+function exactForOfProjection(
+  name: ts.BindingName,
+  matcher: ts.CallExpression,
+  matcherHash: string,
+  graph: VariableBindingGraph
+): SharedTopologyProjection | null {
+  const matcherParts = exactSharedTopologyMatcher(matcher);
+  if (matcherParts === null) return null;
+  if (ts.isIdentifier(name)) {
+    return bindingUsedExactly(name, matcherParts.actual, graph.checker, 1) &&
+      bindingUsedExactly(name, matcher, graph.checker, 1)
+      ? { kind: "identity" }
+      : null;
+  }
+  if (
+    matcherHash !== SHARED_TAG_IDENTITY_PRIMARY_MATCHER_SHA256 ||
+    !ts.isArrayBindingPattern(name) ||
+    name.elements.length !== 2
+  ) {
+    return null;
+  }
+  const label = exactPlainBindingIdentifier(name.elements[0], "label");
+  const weakenedRelease = exactPlainBindingIdentifier(name.elements[1], "weakenedRelease");
+  if (
+    label === null ||
+    weakenedRelease === null ||
+    !bindingUsedExactly(weakenedRelease, matcherParts.actual, graph.checker, 1) ||
+    !bindingUsedExactly(weakenedRelease, matcher, graph.checker, 1) ||
+    !bindingUsedExactly(label, matcher, graph.checker, 1)
+  ) {
+    return null;
+  }
+  return { index: 1, kind: "tuple", length: 2 };
+}
+
+function exactObjectPropertyInitializer(
+  object: ts.ObjectLiteralExpression,
+  name: string
+): ts.Expression | null {
+  const matching = object.properties.filter(
+    (property): property is ts.PropertyAssignment =>
+      ts.isPropertyAssignment(property) &&
+      (ts.isIdentifier(property.name) || ts.isStringLiteral(property.name)) &&
+      property.name.text === name
+  );
+  return matching.length === 1 ? (matching[0]?.initializer ?? null) : null;
+}
+
+function projectSharedTopologyElement(
+  element: ts.Expression,
+  projection: SharedTopologyProjection
+): ts.Expression | null {
+  const unwrapped = unwrapTopologyExpression(element);
+  if (projection.kind === "identity") return unwrapped;
+  if (projection.kind === "tuple") {
+    const label = ts.isArrayLiteralExpression(unwrapped) ? unwrapped.elements[0] : undefined;
+    if (
+      !ts.isArrayLiteralExpression(unwrapped) ||
+      !denseTopologyArray(unwrapped) ||
+      unwrapped.elements.length !== projection.length ||
+      label === undefined ||
+      ts.isOmittedExpression(label) ||
+      ts.isSpreadElement(label) ||
+      (!ts.isStringLiteral(label) && !ts.isNoSubstitutionTemplateLiteral(label))
+    ) {
+      return null;
+    }
+    const projected = unwrapped.elements[projection.index];
+    return projected === undefined || ts.isOmittedExpression(projected) || ts.isSpreadElement(projected)
+      ? null
+      : unwrapTopologyExpression(projected);
+  }
+  if (!ts.isObjectLiteralExpression(unwrapped) || unwrapped.properties.length !== 2) return null;
+  const mutant = exactObjectPropertyInitializer(unwrapped, projection.mutantProperty);
+  const expectedProblem = exactObjectPropertyInitializer(unwrapped, projection.expectedProblemProperty);
+  return mutant !== null && expectedProblem !== null && ts.isStringLiteralLike(expectedProblem)
+    ? unwrapTopologyExpression(mutant)
+    : null;
+}
+
+function exactSharedRootProjection(
+  array: ts.ArrayLiteralExpression,
+  owners: readonly SharedLegacyPrimaryOwner[],
+  matcherHash: string,
+  projection: SharedTopologyProjection,
+  matrix: MatrixScan,
+  graph: VariableBindingGraph
+): boolean {
+  if (!denseTopologyArray(array)) return false;
+  const ownerlessPrefix =
+    matcherHash === SHARED_REGISTRY_PRIMARY_MATCHER_SHA256 ? SHARED_REGISTRY_OWNERLESS_PREFIX_SHA256 : [];
+  if (array.elements.length !== owners.length + ownerlessPrefix.length) return false;
+  const expected = [...owners].sort((left, right) => left.frozenRootAnchor - right.frozenRootAnchor);
+  for (let index = 0; index < array.elements.length; index++) {
+    const element = array.elements[index];
+    if (element === undefined || ts.isOmittedExpression(element) || ts.isSpreadElement(element)) return false;
+    const projected = projectSharedTopologyElement(element, projection);
+    if (projected === null) return false;
+    const matches = owners.filter((owner) =>
+      rootIsExactSharedTopologyValue(owner.rootCall, projected, matcherHash, matrix, graph)
+    );
+    if (index < ownerlessPrefix.length) {
+      const expectedPrefixHash = ownerlessPrefix[index];
+      if (
+        matches.length !== 0 ||
+        expectedPrefixHash === undefined ||
+        sha256(element.getText(matrix.sourceFile)) !== expectedPrefixHash
+      ) {
+        return false;
+      }
+      continue;
+    }
+    const expectedOwner = expected[index - ownerlessPrefix.length];
+    if (matches.length !== 1 || expectedOwner === undefined || matches[0]?.caseId !== expectedOwner.caseId) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function exactForOfSharedTopology(
+  loop: ts.ForOfStatement,
+  matcher: ts.CallExpression,
+  owners: readonly SharedLegacyPrimaryOwner[],
+  matcherHash: string,
+  matrix: MatrixScan,
+  graph: VariableBindingGraph
+): boolean {
+  if (
+    loop.awaitModifier !== undefined ||
+    !ts.isVariableDeclarationList(loop.initializer) ||
+    loop.initializer.declarations.length !== 1 ||
+    (loop.initializer.flags & ts.NodeFlags.Const) === 0 ||
+    loop.initializer.declarations[0]?.initializer !== undefined ||
+    !ts.isBlock(loop.statement) ||
+    loop.statement.statements.length !== 1
+  ) {
+    return false;
+  }
+  const matcherStatement = loop.statement.statements[0];
+  if (
+    matcherStatement === undefined ||
+    !ts.isExpressionStatement(matcherStatement) ||
+    matcherStatement.expression !== matcher
+  ) {
+    return false;
+  }
+  const declaration = loop.initializer.declarations[0];
+  if (declaration === undefined) return false;
+  const projection = exactForOfProjection(declaration.name, matcher, matcherHash, graph);
+  if (projection === null) return false;
+
+  const iterable = unwrapTopologyExpression(loop.expression);
+  const array = ts.isArrayLiteralExpression(iterable)
+    ? iterable
+    : ts.isIdentifier(iterable)
+      ? exactNamedTopologyArray(iterable, iterable, matrix, graph)
+      : null;
+  return array !== null && exactSharedRootProjection(array, owners, matcherHash, projection, matrix, graph);
+}
+
+function sameSymbol(left: ts.Identifier, right: ts.Identifier, checker: ts.TypeChecker): boolean {
+  const leftSymbol = checker.getSymbolAtLocation(left);
+  return leftSymbol !== undefined && leftSymbol === checker.getSymbolAtLocation(right);
+}
+
+function exactNumericSharedTopology(
+  loop: ts.ForStatement,
+  matcher: ts.CallExpression,
+  owners: readonly SharedLegacyPrimaryOwner[],
+  matcherHash: string,
+  matrix: MatrixScan,
+  graph: VariableBindingGraph
+): boolean {
+  const initializer = loop.initializer;
+  if (
+    initializer === undefined ||
+    !ts.isVariableDeclarationList(initializer) ||
+    initializer.declarations.length !== 1 ||
+    (initializer.flags & ts.NodeFlags.Let) === 0 ||
+    !ts.isBlock(loop.statement) ||
+    loop.statement.statements.length !== 2
+  ) {
+    return false;
+  }
+  const indexDeclaration = initializer.declarations[0];
+  const indexInitializer = indexDeclaration?.initializer;
+  if (
+    indexDeclaration === undefined ||
+    !ts.isIdentifier(indexDeclaration.name) ||
+    indexInitializer === undefined ||
+    !ts.isNumericLiteral(indexInitializer) ||
+    indexInitializer.text !== "0"
+  ) {
+    return false;
+  }
+  const condition = loop.condition;
+  const incrementor = loop.incrementor;
+  if (
+    condition === undefined ||
+    !ts.isBinaryExpression(condition) ||
+    condition.operatorToken.kind !== ts.SyntaxKind.LessThanToken ||
+    !ts.isIdentifier(condition.left) ||
+    !sameSymbol(indexDeclaration.name, condition.left, graph.checker) ||
+    !ts.isNumericLiteral(condition.right) ||
+    incrementor === undefined ||
+    !ts.isPostfixUnaryExpression(incrementor) ||
+    incrementor.operator !== ts.SyntaxKind.PlusPlusToken ||
+    !ts.isIdentifier(incrementor.operand) ||
+    !sameSymbol(indexDeclaration.name, incrementor.operand, graph.checker)
+  ) {
+    return false;
+  }
+
+  const bindingStatement = loop.statement.statements[0];
+  const matcherStatement = loop.statement.statements[1];
+  if (
+    bindingStatement === undefined ||
+    matcherStatement === undefined ||
+    !ts.isVariableStatement(bindingStatement) ||
+    bindingStatement.declarationList.declarations.length !== 1 ||
+    (bindingStatement.declarationList.flags & ts.NodeFlags.Const) === 0 ||
+    !ts.isExpressionStatement(matcherStatement) ||
+    matcherStatement.expression !== matcher
+  ) {
+    return false;
+  }
+  const binding = bindingStatement.declarationList.declarations[0];
+  const bindingInitializer = binding?.initializer;
+  const indexed = bindingInitializer === undefined ? null : unwrapTopologyExpression(bindingInitializer);
+  const matcherParts = exactSharedTopologyMatcher(matcher);
+  if (
+    binding === undefined ||
+    !ts.isObjectBindingPattern(binding.name) ||
+    binding.name.elements.length !== 2 ||
+    matcherHash !== SHARED_RELEASE_TRANSACTION_PRIMARY_MATCHER_SHA256 ||
+    matcherParts === null ||
+    indexed === null ||
+    !ts.isElementAccessExpression(indexed) ||
+    !ts.isIdentifier(indexed.expression) ||
+    indexed.argumentExpression === undefined ||
+    !ts.isIdentifier(indexed.argumentExpression) ||
+    !sameSymbol(indexDeclaration.name, indexed.argumentExpression, graph.checker)
+  ) {
+    return false;
+  }
+  const mutant = exactPlainBindingIdentifier(binding.name.elements[0], "mutant");
+  const expectedProblem = exactPlainBindingIdentifier(binding.name.elements[1], "expectedProblem");
+  if (
+    mutant === null ||
+    expectedProblem === null ||
+    !bindingUsedExactly(mutant, matcherParts.actual, graph.checker, 1) ||
+    !bindingUsedExactly(mutant, matcher, graph.checker, 1) ||
+    !bindingUsedExactly(expectedProblem, matcherParts.expected, graph.checker, 1) ||
+    !bindingUsedExactly(expectedProblem, matcher, graph.checker, 1)
+  ) {
+    return false;
+  }
+  const array = exactNamedTopologyArray(indexed.expression, indexed.expression, matrix, graph);
+  const projection: SharedTopologyProjection = {
+    expectedProblemProperty: "expectedProblem",
+    kind: "transaction-object",
+    mutantProperty: "mutant"
+  };
+  return (
+    array !== null &&
+    Number(condition.right.text) === array.elements.length &&
+    exactSharedRootProjection(array, owners, matcherHash, projection, matrix, graph)
+  );
+}
+
+function enclosingSharedExecutionLoop(
+  matcher: ts.CallExpression,
+  callback: ts.ArrowFunction
+): ts.ForOfStatement | ts.ForStatement | null {
+  let current: ts.Node | undefined = matcher.parent;
+  while (current !== undefined && current !== callback) {
+    if (ts.isForOfStatement(current) || ts.isForStatement(current)) return current;
+    current = current.parent;
+  }
+  return null;
+}
+
+function validateMatrixCallbackNoReturns(matrix: MatrixScan, problems: string[]): void {
+  const returns: ts.ReturnStatement[] = [];
+  const visit = (node: ts.Node): void => {
+    if (ts.isFunctionLike(node)) return;
+    if (ts.isReturnStatement(node)) returns.push(node);
+    ts.forEachChild(node, visit);
+  };
+  visit(matrix.callback.body);
+  for (const statement of returns) {
+    const position = matrix.sourceFile.getLineAndCharacterOfPosition(statement.getStart(matrix.sourceFile));
+    problems.push(
+      "release mutation hybrid matrix callback must not return before all case executions; " +
+        `found return at ${position.line + 1}:${position.character + 1}`
+    );
+  }
+}
+
+function validateSharedLegacyPrimaryTopologies(
+  manifest: IdentityManifest,
+  matrix: MatrixScan,
+  anchors: Map<string, LegacyCaseExecutionAnchor>,
+  graph: VariableBindingGraph,
+  problems: string[]
+): void {
+  const mutationById = new Map(manifest.mutations.map((mutation) => [mutation.id, mutation]));
+  const ownersByMatcher = new Map<ts.CallExpression, SharedLegacyPrimaryOwner[]>();
+  for (const identityCase of manifest.cases) {
+    const anchor = anchors.get(identityCase.id);
+    const frozenRoot = mutationById.get(identityCase.root);
+    if (anchor === undefined || frozenRoot === undefined) continue;
+    const owners = ownersByMatcher.get(anchor.matcher) ?? [];
+    owners.push({
+      caseId: identityCase.id,
+      frozenRootAnchor: frozenRoot.legacySpan.start,
+      rootCall: anchor.rootCall
+    });
+    ownersByMatcher.set(anchor.matcher, owners);
+  }
+
+  for (const [matcher, owners] of ownersByMatcher) {
+    if (owners.length < 2) continue;
+    const matcherHash = sha256(matcher.getText(matrix.sourceFile));
+    const loop = enclosingSharedExecutionLoop(matcher, matrix.callback);
+    const valid =
+      loop !== null &&
+      loop.parent === matrix.callback.body &&
+      (ts.isForOfStatement(loop)
+        ? exactForOfSharedTopology(loop, matcher, owners, matcherHash, matrix, graph)
+        : exactNumericSharedTopology(loop, matcher, owners, matcherHash, matrix, graph));
+    if (valid) continue;
+    problems.push(
+      `release mutation hybrid shared primary matcher ${matcherHash} must retain one exact closed ` +
+        `iterable/runtime topology for ${owners.length} frozen root(s)`
+    );
+    for (const owner of owners) anchors.delete(owner.caseId);
+  }
+}
+
 function validateRemainingLegacyMatchers(
   manifest: IdentityManifest,
   matrix: MatrixScan,
   legacyById: ReadonlyMap<string, LegacyMutationCall>,
   problems: string[]
-): void {
+): ReadonlyMap<string, LegacyCaseExecutionAnchor> {
   const callsByHash = matcherCallsByNodeSha(matrix);
   const bindingGraph = variableBindingFlows(matrix.sourceFile);
+  const executionAnchors = new Map<string, LegacyCaseExecutionAnchor>();
   let cases = 0;
   let checks = 0;
   let leaves = 0;
@@ -4806,6 +6240,8 @@ function validateRemainingLegacyMatchers(
       problems.push(`release mutation hybrid legacy case ${identityCase.id} has no remaining root call`);
       continue;
     }
+    let exactCaseMatchers = true;
+    let primaryMatcher: ts.CallExpression | undefined;
     for (let checkIndex = 0; checkIndex < identityCase.checks.length; checkIndex++) {
       const check = identityCase.checks[checkIndex];
       if (check === undefined) continue;
@@ -4822,6 +6258,7 @@ function validateRemainingLegacyMatchers(
             rootBoundToCurrentMatcher(rootCall, candidate, matrix.sourceFile, bindingGraph)
         );
         if (candidates.length !== 1) {
+          exactCaseMatchers = false;
           problems.push(
             `release mutation hybrid legacy case ${identityCase.id} check ${checkIndex} leaf ${matcherIndex} ` +
               `must have one exact node-text/root-bound matcher; found ${candidates.length}`
@@ -4830,6 +6267,7 @@ function validateRemainingLegacyMatchers(
         }
         const candidate = candidates[0];
         if (candidate !== undefined) {
+          if (checkIndex === 0 && matcherIndex === 0) primaryMatcher = candidate;
           matched.push(candidate);
           previousStart = candidate.getStart(matrix.sourceFile);
         }
@@ -4845,11 +6283,22 @@ function validateRemainingLegacyMatchers(
           matrix.sourceFile.text.slice(firstMatcher.getStart(matrix.sourceFile), lastMatcher.end)
         );
         if (currentCheckHash !== check.assertionSpan.sha256) {
+          exactCaseMatchers = false;
           problems.push(
             `release mutation hybrid legacy case ${identityCase.id} check ${checkIndex} ordered matcher range drifted`
           );
         }
+      } else {
+        exactCaseMatchers = false;
       }
+    }
+    if (exactCaseMatchers && primaryMatcher !== undefined) {
+      executionAnchors.set(identityCase.id, {
+        anchor: primaryMatcher.getStart(matrix.sourceFile),
+        matcher: primaryMatcher,
+        rootAnchor: rootCall.getStart(matrix.sourceFile),
+        rootCall
+      });
     }
   }
   if (cases !== 500 || checks !== 505 || leaves !== 510) {
@@ -4858,18 +6307,116 @@ function validateRemainingLegacyMatchers(
         `found ${cases} / ${checks} / ${leaves}`
     );
   }
-  const migratedMatcherHashes = new Set(
-    manifest.cases
-      .filter((identityCase) => MIGRATED_REGISTRY_EVALUATOR_ID_SET.has(identityCase.root))
-      .flatMap((identityCase) =>
-        identityCase.checks.flatMap((check) => check.matcherEvaluations.map((matcher) => matcher.assertionSpan.sha256))
+  // One physical loop matcher can represent many frozen cases, including a hash whose
+  // logical owners straddle the legacy/declarative boundary. Frozen span identity
+  // distinguishes two physical calls with identical node text without comparing stale
+  // historical offsets to the shifted current AST.
+  const expectedCountsByHash = expectedPhysicalMatcherCountsByHash(
+    manifest.cases.flatMap((identityCase) =>
+      identityCase.checks.flatMap((check) =>
+        check.matcherEvaluations.map((matcher) => ({
+          remainingLegacy: !MIGRATED_REGISTRY_EVALUATOR_ID_SET.has(identityCase.root),
+          span: matcher.assertionSpan
+        }))
       )
+    )
   );
-  for (const hash of migratedMatcherHashes) {
-    if ((callsByHash.get(hash) ?? []).length !== 0) {
-      problems.push("release mutation hybrid migrated registry loop matcher must not remain beside declarative cases");
+  for (const [hash, expected] of expectedCountsByHash) {
+    const actual = (callsByHash.get(hash) ?? []).length;
+    if (actual !== expected) {
+      problems.push(
+        `release mutation hybrid matcher ${hash} physical multiplicity must equal ${expected} ` +
+          `distinct remaining frozen assertion span(s); found ${actual}`
+      );
     }
   }
+  validateSharedLegacyPrimaryTopologies(manifest, matrix, executionAnchors, bindingGraph, problems);
+  return executionAnchors;
+}
+
+function validateGlobalCaseExecutionOrder(
+  manifest: IdentityManifest,
+  declarative: HybridDeclarativeScan,
+  legacyExecutionAnchors: ReadonlyMap<string, LegacyCaseExecutionAnchor>,
+  problems: string[]
+): void {
+  const legacyCases = manifest.cases.filter(
+    (identityCase) => !MIGRATED_REGISTRY_EVALUATOR_ID_SET.has(identityCase.root)
+  );
+  // Matcher validation already owns missing or ambiguous legacy anchors. Do not
+  // turn one binding failure into a second, misleading order failure.
+  if (legacyExecutionAnchors.size !== legacyCases.length) return;
+
+  const expansion = expandDeclarativeExecutionEvents(declarative.cases, declarative.executionEvents);
+  problems.push(...expansion.problems);
+  if (expansion.problems.length !== 0) return;
+
+  const rootByHandle = new Map<string, string>();
+  for (const mutation of declarative.mutations) {
+    if (rootByHandle.has(mutation.handle)) return;
+    rootByHandle.set(mutation.handle, mutation.id);
+  }
+  const observed: AnchoredCaseExecution[] = [];
+  for (const execution of expansion.executions) {
+    const rootId = rootByHandle.get(execution.identityCase.handle);
+    if (rootId === undefined) return;
+    observed.push({
+      anchor: execution.anchor,
+      caseId: execution.identityCase.id,
+      rootId,
+      tieBreaker: execution.tieBreaker
+    });
+  }
+  for (const identityCase of legacyCases) {
+    const executionAnchor = legacyExecutionAnchors.get(identityCase.id);
+    if (executionAnchor === undefined) return;
+    observed.push({
+      anchor: executionAnchor.anchor,
+      caseId: identityCase.id,
+      rootId: identityCase.root,
+      tieBreaker: executionAnchor.rootAnchor
+    });
+  }
+  observed.sort(
+    (left, right) =>
+      left.anchor - right.anchor || left.tieBreaker - right.tieBreaker || left.caseId.localeCompare(right.caseId)
+  );
+  const mutationById = new Map(manifest.mutations.map((mutation) => [mutation.id, mutation]));
+  const expectedAnchored: AnchoredCaseExecution[] = [];
+  for (const identityCase of manifest.cases) {
+    const frozenPrimaryMatcher = identityCase.checks[0]?.matcherEvaluations[0];
+    const frozenRoot = mutationById.get(identityCase.root);
+    if (frozenPrimaryMatcher === undefined || frozenRoot === undefined) return;
+    expectedAnchored.push({
+      anchor: frozenPrimaryMatcher.assertionSpan.start,
+      caseId: identityCase.id,
+      rootId: identityCase.root,
+      tieBreaker: frozenRoot.legacySpan.start
+    });
+  }
+  expectedAnchored.sort(
+    (left, right) =>
+      left.anchor - right.anchor || left.tieBreaker - right.tieBreaker || left.caseId.localeCompare(right.caseId)
+  );
+  const expected = expectedAnchored.map(({ caseId, rootId }) => ({ caseId, rootId }));
+  const observedIdentity = observed.map(({ caseId, rootId }) => ({ caseId, rootId }));
+  if (JSON.stringify(observedIdentity) === JSON.stringify(expected)) return;
+
+  const comparableLength = Math.max(expected.length, observedIdentity.length);
+  let mismatchIndex = 0;
+  while (
+    mismatchIndex < comparableLength &&
+    JSON.stringify(expected[mismatchIndex]) === JSON.stringify(observedIdentity[mismatchIndex])
+  ) {
+    mismatchIndex++;
+  }
+  const render = (identity: { readonly caseId: string; readonly rootId: string } | undefined): string =>
+    identity === undefined ? "<missing>" : `${identity.caseId}(${identity.rootId})`;
+  problems.push(
+    "release mutation hybrid global case execution order must equal exact frozen primary-oracle order; " +
+      `first mismatch ${mismatchIndex + 1}: expected ${render(expected[mismatchIndex])}, ` +
+      `found ${render(observedIdentity[mismatchIndex])}; census ${observedIdentity.length}/${expected.length}`
+  );
 }
 
 function assignmentTargetContainsIdentifier(value: ts.Expression, identifier: string): boolean {
@@ -4908,7 +6455,7 @@ function assignmentTargetContainsIdentifier(value: ts.Expression, identifier: st
   return false;
 }
 
-const REGISTRY_EVALUATOR_ASSIGNMENT_OPERATORS: ReadonlySet<ts.SyntaxKind> = new Set([
+const REGISTRY_BINDING_ASSIGNMENT_OPERATORS: ReadonlySet<ts.SyntaxKind> = new Set([
   ts.SyntaxKind.EqualsToken,
   ts.SyntaxKind.PlusEqualsToken,
   ts.SyntaxKind.MinusEqualsToken,
@@ -4927,7 +6474,11 @@ const REGISTRY_EVALUATOR_ASSIGNMENT_OPERATORS: ReadonlySet<ts.SyntaxKind> = new 
   ts.SyntaxKind.QuestionQuestionEqualsToken
 ]);
 
-function validateRegistryEvaluatorPins(matrix: MatrixScan, problems: string[]): void {
+function validateRegistryOraclePins(
+  matrix: MatrixScan,
+  declarative: HybridDeclarativeScan,
+  problems: string[]
+): void {
   const functionHashes = new Map<string, string[]>();
   const problemConstantHashes: string[] = [];
   for (const statement of matrix.sourceFile.statements) {
@@ -4952,6 +6503,7 @@ function validateRegistryEvaluatorPins(matrix: MatrixScan, problems: string[]): 
   };
   exactNodeHash("mutationMatchCount", MUTATION_MATCH_COUNT_NODE_SHA256);
   exactNodeHash("mcpRegistryEvaluatorProblems", REGISTRY_EVALUATOR_DETECTOR_NODE_SHA256);
+  exactNodeHash("mcpRegistryRunProblems", REGISTRY_RUN_DETECTOR_NODE_SHA256);
   if (problemConstantHashes.length !== 1 || problemConstantHashes[0] !== REGISTRY_EVALUATOR_PROBLEM_NODE_SHA256) {
     problems.push(
       "release mutation hybrid pinned registry problem AST node must retain exact SHA-256 " +
@@ -4964,41 +6516,28 @@ function validateRegistryEvaluatorPins(matrix: MatrixScan, problems: string[]): 
   let aliases = 0;
   let writes = 0;
   let otherReferences = 0;
+  let runDirectBindings = 0;
+  let runShadowBindings = 0;
+  let runAliases = 0;
+  let runWrites = 0;
+  let runOtherReferences = 0;
   let matchCountDirectBindings = 0;
   let matchCountShadowBindings = 0;
   let matchCountAliases = 0;
   let matchCountWrites = 0;
   let matchCountOtherReferences = 0;
   let mcpbInputWrites = 0;
+  const requiredAdapterBindings = requiredReleaseOracleAdapterBindings(declarative.cases);
   const recordShadowBinding = (name: ts.BindingName | ts.Identifier): void => {
     if (ts.isIdentifier(name)) {
       if (name.text === "mcpRegistryEvaluatorProblems") shadowBindings++;
+      if (name.text === "mcpRegistryRunProblems") runShadowBindings++;
       if (name.text === "mutationMatchCount") matchCountShadowBindings++;
       return;
     }
     for (const element of name.elements) {
       if (ts.isBindingElement(element)) recordShadowBinding(element.name);
     }
-  };
-  const isExactAdapterReference = (identifier: ts.Identifier): boolean => {
-    const property = identifier.parent;
-    if (
-      !ts.isPropertyAssignment(property) ||
-      property.initializer !== identifier ||
-      (!ts.isIdentifier(property.name) && !ts.isStringLiteral(property.name)) ||
-      property.name.text !== "registryEvaluatorProblems"
-    ) {
-      return false;
-    }
-    const object = property.parent;
-    if (!ts.isObjectLiteralExpression(object) || object.properties.length !== 1) return false;
-    const call = object.parent;
-    return (
-      ts.isCallExpression(call) &&
-      call.arguments.length === 1 &&
-      call.arguments[0] === object &&
-      directPlanCall(call, "execute") !== null
-    );
   };
   const unwrappedIdentifier = (expression: ts.Expression): ts.Identifier | null => {
     let current = expression;
@@ -5030,6 +6569,9 @@ function validateRegistryEvaluatorPins(matrix: MatrixScan, problems: string[]): 
     if (ts.isFunctionDeclaration(node) && node.name?.text === "mcpRegistryEvaluatorProblems") {
       if (node.parent === matrix.sourceFile) directBindings++;
       else shadowBindings++;
+    } else if (ts.isFunctionDeclaration(node) && node.name?.text === "mcpRegistryRunProblems") {
+      if (node.parent === matrix.sourceFile) runDirectBindings++;
+      else runShadowBindings++;
     } else if (ts.isFunctionDeclaration(node) && node.name?.text === "mutationMatchCount") {
       if (node.parent === matrix.sourceFile) matchCountDirectBindings++;
       else matchCountShadowBindings++;
@@ -5049,25 +6591,33 @@ function validateRegistryEvaluatorPins(matrix: MatrixScan, problems: string[]): 
     if (ts.isVariableDeclaration(node) && node.initializer !== undefined) {
       const initializer = unwrappedIdentifier(node.initializer);
       if (initializer?.text === "mcpRegistryEvaluatorProblems") aliases++;
+      if (initializer?.text === "mcpRegistryRunProblems") runAliases++;
       if (initializer?.text === "mutationMatchCount") matchCountAliases++;
     }
     if (
       ts.isBinaryExpression(node) &&
-      REGISTRY_EVALUATOR_ASSIGNMENT_OPERATORS.has(node.operatorToken.kind) &&
+      REGISTRY_BINDING_ASSIGNMENT_OPERATORS.has(node.operatorToken.kind) &&
       assignmentTargetContainsIdentifier(node.left, "mcpRegistryEvaluatorProblems")
     ) {
       writes++;
     }
     if (
       ts.isBinaryExpression(node) &&
-      REGISTRY_EVALUATOR_ASSIGNMENT_OPERATORS.has(node.operatorToken.kind) &&
+      REGISTRY_BINDING_ASSIGNMENT_OPERATORS.has(node.operatorToken.kind) &&
+      assignmentTargetContainsIdentifier(node.left, "mcpRegistryRunProblems")
+    ) {
+      runWrites++;
+    }
+    if (
+      ts.isBinaryExpression(node) &&
+      REGISTRY_BINDING_ASSIGNMENT_OPERATORS.has(node.operatorToken.kind) &&
       assignmentTargetContainsIdentifier(node.left, "mutationMatchCount")
     ) {
       matchCountWrites++;
     }
     if (
       ts.isBinaryExpression(node) &&
-      REGISTRY_EVALUATOR_ASSIGNMENT_OPERATORS.has(node.operatorToken.kind) &&
+      REGISTRY_BINDING_ASSIGNMENT_OPERATORS.has(node.operatorToken.kind) &&
       assignmentTargetContainsIdentifier(node.left, "mcpbInputs")
     ) {
       mcpbInputWrites++;
@@ -5078,6 +6628,13 @@ function validateRegistryEvaluatorPins(matrix: MatrixScan, problems: string[]): 
       assignmentTargetContainsIdentifier(node.operand, "mcpRegistryEvaluatorProblems")
     ) {
       writes++;
+    }
+    if (
+      (ts.isPrefixUnaryExpression(node) || ts.isPostfixUnaryExpression(node)) &&
+      (node.operator === ts.SyntaxKind.PlusPlusToken || node.operator === ts.SyntaxKind.MinusMinusToken) &&
+      assignmentTargetContainsIdentifier(node.operand, "mcpRegistryRunProblems")
+    ) {
+      runWrites++;
     }
     if (
       (ts.isPrefixUnaryExpression(node) || ts.isPostfixUnaryExpression(node)) &&
@@ -5099,6 +6656,13 @@ function validateRegistryEvaluatorPins(matrix: MatrixScan, problems: string[]): 
       assignmentTargetContainsIdentifier(node.initializer, "mcpRegistryEvaluatorProblems")
     ) {
       writes++;
+    }
+    if (
+      (ts.isForOfStatement(node) || ts.isForInStatement(node)) &&
+      !ts.isVariableDeclarationList(node.initializer) &&
+      assignmentTargetContainsIdentifier(node.initializer, "mcpRegistryRunProblems")
+    ) {
+      runWrites++;
     }
     if (
       (ts.isForOfStatement(node) || ts.isForInStatement(node)) &&
@@ -5140,7 +6704,31 @@ function validateRegistryEvaluatorPins(matrix: MatrixScan, problems: string[]): 
         parent.questionDotToken === undefined &&
         parent.typeArguments === undefined &&
         parent.arguments.length === 1;
-      if (!exactDeclaration && !exactDirectCall && !isExactAdapterReference(node)) otherReferences++;
+      if (
+        !exactDeclaration &&
+        !exactDirectCall &&
+        !isExactReleaseOracleAdapterReference(node, requiredAdapterBindings)
+      ) {
+        otherReferences++;
+      }
+    }
+    if (ts.isIdentifier(node) && node.text === "mcpRegistryRunProblems") {
+      const parent = node.parent;
+      const exactDeclaration =
+        ts.isFunctionDeclaration(parent) && parent.name === node && parent.parent === matrix.sourceFile;
+      const exactDirectCall =
+        ts.isCallExpression(parent) &&
+        parent.expression === node &&
+        parent.questionDotToken === undefined &&
+        parent.typeArguments === undefined &&
+        parent.arguments.length === 2;
+      if (
+        !exactDeclaration &&
+        !exactDirectCall &&
+        !isExactReleaseOracleAdapterReference(node, requiredAdapterBindings)
+      ) {
+        runOtherReferences++;
+      }
     }
     if (ts.isIdentifier(node) && node.text === "mutationMatchCount") {
       const parent = node.parent;
@@ -5167,6 +6755,18 @@ function validateRegistryEvaluatorPins(matrix: MatrixScan, problems: string[]): 
     problems.push(
       `release mutation hybrid registry evaluator binding must have no aliases, writes, or indirect references; ` +
         `found ${aliases}/${writes}/${otherReferences}`
+    );
+  }
+  if (runDirectBindings !== 1 || runShadowBindings !== 0) {
+    problems.push(
+      `release mutation hybrid registry run binding must have one top-level declaration and no runtime ` +
+        `shadows; found ${runDirectBindings}/${runShadowBindings}`
+    );
+  }
+  if (runAliases !== 0 || runWrites !== 0 || runOtherReferences !== 0) {
+    problems.push(
+      `release mutation hybrid registry run binding must have no aliases, writes, or indirect references; ` +
+        `found ${runAliases}/${runWrites}/${runOtherReferences}`
     );
   }
   if (matchCountDirectBindings !== 1 || matchCountShadowBindings !== 0) {
@@ -5272,6 +6872,10 @@ function prepareReleaseMutationManifest(manifestSource: string): PreparedRelease
     validateWitnessCounterSemantics(problems);
     validateProjectionComparatorSemantics(problems);
     validateBindingClosureSemantics(problems);
+    validateMatcherMultiplicitySemantics(problems);
+    validateDeclarativeExecutionExpansionSemantics(problems);
+    validateDeclarativeInvocationParsingSemantics(problems);
+    validateReleaseOracleAdapterReferenceSemantics(problems);
   });
   const mutableParseProblems: string[] = [];
   const parsedManifest = parseManifest(manifestSource, mutableParseProblems);
@@ -5302,7 +6906,10 @@ function prepareReleaseMutationManifest(manifestSource: string): PreparedRelease
     provenanceProblems: collectProblems((problems) => validateFrozenProvenance(manifest, problems)),
     inventoryProblems: collectProblems((problems) => validateInventory(manifest, problems)),
     mutationTopologyProblems: collectProblems((problems) => validateFrozenManifestMutationTopology(manifest, problems)),
-    caseTopologyProblems: collectProblems((problems) => validateFrozenCaseTopology(manifest, problems)),
+    caseTopologyProblems: collectProblems((problems) => {
+      validateFrozenCaseTopology(manifest, problems);
+      validateFrozenDeclarativeInvocationMatchingSemantics(manifest, problems);
+    }),
     fingerprintProblems: collectProblems((problems) => validateSemanticFingerprints(manifest, problems))
   };
 }
@@ -5420,10 +7027,12 @@ export function createReleaseMutationIdentityAuditor(manifestSource: string): Re
       problems.push(...prepared.caseTopologyProblems);
       problems.push(...prepared.fingerprintProblems);
 
+      validateMatrixCallbackNoReturns(matrix, problems);
       const declarative = scanHybridDeclarativeMatrix(matrix, problems);
       const legacyById = validateHybridPartition(manifest, matrix, declarative, problems);
-      validateRemainingLegacyMatchers(manifest, matrix, legacyById, problems);
-      validateRegistryEvaluatorPins(matrix, problems);
+      const legacyExecutionAnchors = validateRemainingLegacyMatchers(manifest, matrix, legacyById, problems);
+      validateGlobalCaseExecutionOrder(manifest, declarative, legacyExecutionAnchors, problems);
+      validateRegistryOraclePins(matrix, declarative, problems);
       return problems;
     },
     telemetry(): Readonly<ReleaseMutationIdentityAuditTelemetry> {

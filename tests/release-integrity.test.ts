@@ -942,10 +942,15 @@ const RELEASE_MUTATION_PROJECT_ROOT_COUNT = 536;
 const RELEASE_MUTATION_PROJECT_EXPECTATION_COUNT = 541;
 const RELEASE_MUTATION_PROJECT_DEPENDENCY_ONLY_COUNT = 24;
 const RELEASE_MUTATION_REGISTRY_ADAPTER_PROPERTY = "registryEvaluatorProblems";
+const RELEASE_MUTATION_REGISTRY_STEP_ADAPTER_PROPERTY = "registryStepProblems";
 const RELEASE_MUTATION_REGISTRY_PROBLEM =
   "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics";
+const RELEASE_MUTATION_REGISTRY_WORKFLOW_PROBLEM =
+  "stable MCP Registry publication must bind exact source manifests, one pinned publisher write, and bounded readback";
 const RELEASE_MUTATION_DECLARATIVE_METHODS: ReadonlySet<string> = new Set([
   "execute",
+  "executeRemaining",
+  "executeThrough",
   "registerCase",
   "registerMutation",
   "registerSource",
@@ -1451,6 +1456,7 @@ function releaseMutationInventoryProblems(source: string): string[] {
   let otherItBindings = 0;
   let directReleaseMutationPlanImports = 0;
   let otherReleaseMutationPlanBindings = 0;
+  let exactExplosiveReleasePlanExtensions = 0;
   let exactVitestImportDeclarations = 0;
   let otherVitestImportDeclarations = 0;
   let exactReleasePlanImportDeclarations = 0;
@@ -1460,6 +1466,16 @@ function releaseMutationInventoryProblems(source: string): string[] {
   let registryEvaluatorAliasInitializers = 0;
   let registryEvaluatorWrites = 0;
   let otherRegistryEvaluatorReferences = 0;
+  let directRegistryStepDeclarations = 0;
+  let otherRegistryStepBindings = 0;
+  let registryStepAliasInitializers = 0;
+  let registryStepWrites = 0;
+  let otherRegistryStepReferences = 0;
+  let directRegistryRunDeclarations = 0;
+  let otherRegistryRunBindings = 0;
+  let registryRunAliasInitializers = 0;
+  let registryRunWrites = 0;
+  let otherRegistryRunReferences = 0;
   const recordOtherBinding = (name: ts.BindingName | ts.Identifier): void => {
     if (ts.isIdentifier(name)) {
       if (name.text === "describe") otherDescribeBindings++;
@@ -1467,6 +1483,8 @@ function releaseMutationInventoryProblems(source: string): string[] {
       if (name.text === "it") otherItBindings++;
       if (name.text === "ReleaseMutationPlan") otherReleaseMutationPlanBindings++;
       if (name.text === "mcpRegistryEvaluatorProblems") otherRegistryEvaluatorBindings++;
+      if (name.text === "mcpRegistryStepProblems") otherRegistryStepBindings++;
+      if (name.text === "mcpRegistryRunProblems") otherRegistryRunBindings++;
       return;
     }
     for (const element of name.elements) {
@@ -1489,33 +1507,75 @@ function releaseMutationInventoryProblems(source: string): string[] {
       )
     );
   };
-  const exactRegistryAdapterObject = (value: ts.Expression | undefined): value is ts.ObjectLiteralExpression => {
-    if (value === undefined || !ts.isObjectLiteralExpression(value) || value.properties.length !== 1) return false;
-    const property = value.properties[0];
-    return (
-      property !== undefined &&
-      ts.isPropertyAssignment(property) &&
-      ts.isIdentifier(property.name) &&
+  const registryAdapterIdentity = (
+    property: ts.ObjectLiteralElementLike
+  ): "registry.evaluator" | "registry.step" | null => {
+    if (!ts.isPropertyAssignment(property) || !ts.isIdentifier(property.name)) return null;
+    if (
       property.name.text === RELEASE_MUTATION_REGISTRY_ADAPTER_PROPERTY &&
       ts.isIdentifier(property.initializer) &&
       property.initializer.text === "mcpRegistryEvaluatorProblems"
-    );
+    ) {
+      return "registry.evaluator";
+    }
+    if (
+      property.name.text === RELEASE_MUTATION_REGISTRY_STEP_ADAPTER_PROPERTY &&
+      ts.isIdentifier(property.initializer) &&
+      property.initializer.text === "mcpRegistryRunProblems"
+    ) {
+      return "registry.step";
+    }
+    return null;
+  };
+  const closedRegistryAdapterObject = (value: ts.Expression | undefined): value is ts.ObjectLiteralExpression => {
+    if (
+      value === undefined ||
+      !ts.isObjectLiteralExpression(value) ||
+      value.properties.length < 1 ||
+      value.properties.length > 2
+    ) {
+      return false;
+    }
+    const identities = value.properties.map(registryAdapterIdentity);
+    return identities.every((identity) => identity !== null) && new Set(identities).size === identities.length;
+  };
+  const exactRegistryAdapterObject = (
+    value: ts.Expression | undefined,
+    requiresRegistryEvaluator: boolean,
+    requiresRegistryStep: boolean
+  ): value is ts.ObjectLiteralExpression => {
+    const expectedIdentities = [
+      ...(requiresRegistryEvaluator ? (["registry.evaluator"] as const) : []),
+      ...(requiresRegistryStep ? (["registry.step"] as const) : [])
+    ];
+    if (
+      expectedIdentities.length === 0 ||
+      !closedRegistryAdapterObject(value) ||
+      value.properties.length !== expectedIdentities.length
+    ) {
+      return false;
+    }
+    const identities = new Set(value.properties.map(registryAdapterIdentity));
+    return expectedIdentities.every((identity) => identities.has(identity));
   };
   const isExactRegistryAdapterInitializer = (node: ts.Identifier): boolean => {
     const property = node.parent;
     if (!ts.isPropertyAssignment(property) || property.initializer !== node) return false;
     const object = property.parent;
-    if (!exactRegistryAdapterObject(object)) return false;
+    if (!closedRegistryAdapterObject(object)) return false;
     const call = object.parent;
+    if (
+      !ts.isCallExpression(call) ||
+      !ts.isPropertyAccessExpression(call.expression) ||
+      call.expression.questionDotToken !== undefined ||
+      !ts.isIdentifier(call.expression.expression) ||
+      call.expression.expression.text !== "releaseMutationPlan"
+    ) {
+      return false;
+    }
     return (
-      ts.isCallExpression(call) &&
-      call.arguments.length === 1 &&
-      call.arguments[0] === object &&
-      ts.isPropertyAccessExpression(call.expression) &&
-      call.expression.questionDotToken === undefined &&
-      ts.isIdentifier(call.expression.expression) &&
-      call.expression.expression.text === "releaseMutationPlan" &&
-      call.expression.name.text === "execute"
+      (call.expression.name.text === "execute" && call.arguments.length === 1 && call.arguments[0] === object) ||
+      (call.expression.name.text === "executeThrough" && call.arguments.length === 2 && call.arguments[1] === object)
     );
   };
   const assignmentOperatorKinds: ReadonlySet<ts.SyntaxKind> = new Set([
@@ -1536,35 +1596,35 @@ function releaseMutationInventoryProblems(source: string): string[] {
     ts.SyntaxKind.AmpersandAmpersandEqualsToken,
     ts.SyntaxKind.QuestionQuestionEqualsToken
   ]);
-  const assignmentTargetContainsRegistryEvaluator = (value: ts.Expression): boolean => {
-    if (ts.isIdentifier(value)) return value.text === "mcpRegistryEvaluatorProblems";
+  const assignmentTargetContainsIdentifier = (value: ts.Expression, identifier: string): boolean => {
+    if (ts.isIdentifier(value)) return value.text === identifier;
     if (
       ts.isParenthesizedExpression(value) ||
       ts.isAsExpression(value) ||
       ts.isTypeAssertionExpression(value) ||
       ts.isNonNullExpression(value)
     ) {
-      return assignmentTargetContainsRegistryEvaluator(value.expression);
+      return assignmentTargetContainsIdentifier(value.expression, identifier);
     }
     if (ts.isArrayLiteralExpression(value)) {
       return value.elements.some(
-        (element) => !ts.isOmittedExpression(element) && assignmentTargetContainsRegistryEvaluator(element)
+        (element) => !ts.isOmittedExpression(element) && assignmentTargetContainsIdentifier(element, identifier)
       );
     }
     if (ts.isObjectLiteralExpression(value)) {
       return value.properties.some((property) => {
         if (ts.isShorthandPropertyAssignment(property)) {
-          return property.name.text === "mcpRegistryEvaluatorProblems";
+          return property.name.text === identifier;
         }
         if (ts.isPropertyAssignment(property)) {
-          return assignmentTargetContainsRegistryEvaluator(property.initializer);
+          return assignmentTargetContainsIdentifier(property.initializer, identifier);
         }
-        return ts.isSpreadAssignment(property) && assignmentTargetContainsRegistryEvaluator(property.expression);
+        return ts.isSpreadAssignment(property) && assignmentTargetContainsIdentifier(property.expression, identifier);
       });
     }
-    if (ts.isSpreadElement(value)) return assignmentTargetContainsRegistryEvaluator(value.expression);
+    if (ts.isSpreadElement(value)) return assignmentTargetContainsIdentifier(value.expression, identifier);
     if (ts.isBinaryExpression(value) && value.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
-      return assignmentTargetContainsRegistryEvaluator(value.left);
+      return assignmentTargetContainsIdentifier(value.left, identifier);
     }
     return false;
   };
@@ -1620,9 +1680,20 @@ function releaseMutationInventoryProblems(source: string): string[] {
   }
   const visitRuntimeBindings = (node: ts.Node): void => {
     if (ts.isImportDeclaration(node)) return;
-    if (ts.isFunctionDeclaration(node) && node.name?.text === "mcpRegistryEvaluatorProblems") {
-      if (node.parent === sourceFile) directRegistryEvaluatorDeclarations++;
-      else otherRegistryEvaluatorBindings++;
+    if (
+      ts.isFunctionDeclaration(node) &&
+      (node.name?.text === "mcpRegistryEvaluatorProblems" ||
+        node.name?.text === "mcpRegistryStepProblems" ||
+        node.name?.text === "mcpRegistryRunProblems")
+    ) {
+      if (node.name?.text === "mcpRegistryEvaluatorProblems") {
+        if (node.parent === sourceFile) directRegistryEvaluatorDeclarations++;
+        else otherRegistryEvaluatorBindings++;
+      } else if (node.name?.text === "mcpRegistryStepProblems") {
+        if (node.parent === sourceFile) directRegistryStepDeclarations++;
+        else otherRegistryStepBindings++;
+      } else if (node.parent === sourceFile) directRegistryRunDeclarations++;
+      else otherRegistryRunBindings++;
     } else if (ts.isVariableDeclaration(node) || ts.isParameter(node)) {
       recordOtherBinding(node.name);
     } else if (
@@ -1645,34 +1716,105 @@ function releaseMutationInventoryProblems(source: string): string[] {
       registryEvaluatorAliasInitializers++;
     }
     if (
+      ts.isVariableDeclaration(node) &&
+      node.initializer !== undefined &&
+      ts.isIdentifier(node.initializer) &&
+      node.initializer.text === "mcpRegistryStepProblems"
+    ) {
+      registryStepAliasInitializers++;
+    }
+    if (
+      ts.isVariableDeclaration(node) &&
+      node.initializer !== undefined &&
+      ts.isIdentifier(node.initializer) &&
+      node.initializer.text === "mcpRegistryRunProblems"
+    ) {
+      registryRunAliasInitializers++;
+    }
+    if (
       ts.isBinaryExpression(node) &&
       assignmentOperatorKinds.has(node.operatorToken.kind) &&
-      assignmentTargetContainsRegistryEvaluator(node.left)
+      assignmentTargetContainsIdentifier(node.left, "mcpRegistryEvaluatorProblems")
+    ) {
+      registryEvaluatorWrites++;
+    }
+    if (
+      ts.isBinaryExpression(node) &&
+      assignmentOperatorKinds.has(node.operatorToken.kind) &&
+      assignmentTargetContainsIdentifier(node.left, "mcpRegistryStepProblems")
+    ) {
+      registryStepWrites++;
+    }
+    if (
+      ts.isBinaryExpression(node) &&
+      assignmentOperatorKinds.has(node.operatorToken.kind) &&
+      assignmentTargetContainsIdentifier(node.left, "mcpRegistryRunProblems")
+    ) {
+      registryRunWrites++;
+    }
+    if (
+      (ts.isPrefixUnaryExpression(node) || ts.isPostfixUnaryExpression(node)) &&
+      (node.operator === ts.SyntaxKind.PlusPlusToken || node.operator === ts.SyntaxKind.MinusMinusToken) &&
+      assignmentTargetContainsIdentifier(node.operand, "mcpRegistryEvaluatorProblems")
     ) {
       registryEvaluatorWrites++;
     }
     if (
       (ts.isPrefixUnaryExpression(node) || ts.isPostfixUnaryExpression(node)) &&
       (node.operator === ts.SyntaxKind.PlusPlusToken || node.operator === ts.SyntaxKind.MinusMinusToken) &&
-      assignmentTargetContainsRegistryEvaluator(node.operand)
+      assignmentTargetContainsIdentifier(node.operand, "mcpRegistryStepProblems")
+    ) {
+      registryStepWrites++;
+    }
+    if (
+      (ts.isPrefixUnaryExpression(node) || ts.isPostfixUnaryExpression(node)) &&
+      (node.operator === ts.SyntaxKind.PlusPlusToken || node.operator === ts.SyntaxKind.MinusMinusToken) &&
+      assignmentTargetContainsIdentifier(node.operand, "mcpRegistryRunProblems")
+    ) {
+      registryRunWrites++;
+    }
+    if (
+      (ts.isForOfStatement(node) || ts.isForInStatement(node)) &&
+      !ts.isVariableDeclarationList(node.initializer) &&
+      assignmentTargetContainsIdentifier(node.initializer, "mcpRegistryEvaluatorProblems")
     ) {
       registryEvaluatorWrites++;
     }
     if (
       (ts.isForOfStatement(node) || ts.isForInStatement(node)) &&
       !ts.isVariableDeclarationList(node.initializer) &&
-      assignmentTargetContainsRegistryEvaluator(node.initializer)
+      assignmentTargetContainsIdentifier(node.initializer, "mcpRegistryStepProblems")
     ) {
-      registryEvaluatorWrites++;
+      registryStepWrites++;
+    }
+    if (
+      (ts.isForOfStatement(node) || ts.isForInStatement(node)) &&
+      !ts.isVariableDeclarationList(node.initializer) &&
+      assignmentTargetContainsIdentifier(node.initializer, "mcpRegistryRunProblems")
+    ) {
+      registryRunWrites++;
     }
     if (ts.isIdentifier(node) && node.text === "ReleaseMutationPlan") {
       const parent = node.parent;
       const exactConstructor = ts.isNewExpression(parent) && parent.expression === node;
       const exactTypeReference = ts.isTypeReferenceNode(parent) && parent.typeName === node;
-      if (!exactConstructor && !exactTypeReference) {
+      const exactExplosiveExtension =
+        ts.isExpressionWithTypeArguments(parent) &&
+        parent.expression === node &&
+        parent.typeArguments === undefined &&
+        ts.isHeritageClause(parent.parent) &&
+        parent.parent.token === ts.SyntaxKind.ExtendsKeyword &&
+        parent.parent.types.length === 1 &&
+        ts.isClassDeclaration(parent.parent.parent) &&
+        parent.parent.parent.name?.text === "ExplosiveDiagnosticsPlan" &&
+        parent.parent.parent.heritageClauses?.length === 1;
+      if (exactExplosiveExtension) {
+        exactExplosiveReleasePlanExtensions++;
+      } else if (!exactConstructor && !exactTypeReference) {
         const position = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile));
         problems.push(
-          `release mutation ReleaseMutationPlan may only be one direct constructor or a type reference at ${position.line + 1}:${position.character + 1}`
+          `release mutation ReleaseMutationPlan may only be one direct constructor, a type reference, or the exact ` +
+            `ExplosiveDiagnosticsPlan heritage use at ${position.line + 1}:${position.character + 1}`
         );
       }
     }
@@ -1687,6 +1829,32 @@ function releaseMutationInventoryProblems(source: string): string[] {
         parent.arguments.length === 1;
       if (!exactDeclaration && !exactDirectCall && !isExactRegistryAdapterInitializer(node)) {
         otherRegistryEvaluatorReferences++;
+      }
+    }
+    if (ts.isIdentifier(node) && node.text === "mcpRegistryStepProblems") {
+      const parent = node.parent;
+      const exactDeclaration = ts.isFunctionDeclaration(parent) && parent.name === node && parent.parent === sourceFile;
+      const exactDirectCall =
+        ts.isCallExpression(parent) &&
+        parent.expression === node &&
+        parent.questionDotToken === undefined &&
+        parent.typeArguments === undefined &&
+        parent.arguments.length === 2;
+      if (!exactDeclaration && !exactDirectCall && !isExactRegistryAdapterInitializer(node)) {
+        otherRegistryStepReferences++;
+      }
+    }
+    if (ts.isIdentifier(node) && node.text === "mcpRegistryRunProblems") {
+      const parent = node.parent;
+      const exactDeclaration = ts.isFunctionDeclaration(parent) && parent.name === node && parent.parent === sourceFile;
+      const exactDirectCall =
+        ts.isCallExpression(parent) &&
+        parent.expression === node &&
+        parent.questionDotToken === undefined &&
+        parent.typeArguments === undefined &&
+        parent.arguments.length === 2;
+      if (!exactDeclaration && !exactDirectCall && !isExactRegistryAdapterInitializer(node)) {
+        otherRegistryRunReferences++;
       }
     }
     ts.forEachChild(node, visitRuntimeBindings);
@@ -1719,6 +1887,11 @@ function releaseMutationInventoryProblems(source: string): string[] {
       `release mutation matrix requires one exact ReleaseMutationPlan import declaration and no other release-plan imports; found exact ${exactReleasePlanImportDeclarations}, other ${otherReleasePlanImportDeclarations}`
     );
   }
+  if (exactExplosiveReleasePlanExtensions !== 1) {
+    problems.push(
+      `release mutation matrix must retain exactly one reviewed ExplosiveDiagnosticsPlan heritage use; found ${exactExplosiveReleasePlanExtensions}`
+    );
+  }
   if (directRegistryEvaluatorDeclarations !== 1 || otherRegistryEvaluatorBindings !== 0) {
     problems.push(
       `release mutation registry evaluator must have one top-level function declaration and no other runtime bindings; found direct ${directRegistryEvaluatorDeclarations}, other ${otherRegistryEvaluatorBindings}`
@@ -1737,6 +1910,47 @@ function releaseMutationInventoryProblems(source: string): string[] {
   if (otherRegistryEvaluatorReferences !== 0) {
     problems.push(
       `release mutation registry evaluator may only be called directly or occupy the exact execute adapter slot; found ${otherRegistryEvaluatorReferences} other reference(s)`
+    );
+  }
+  // The raw-run adapter delegates to this step-object detector, so both bindings remain immutable trust anchors.
+  if (directRegistryStepDeclarations !== 1 || otherRegistryStepBindings !== 0) {
+    problems.push(
+      `release mutation registry step oracle must have one top-level function declaration and no other runtime bindings; found direct ${directRegistryStepDeclarations}, other ${otherRegistryStepBindings}`
+    );
+  }
+  if (registryStepAliasInitializers !== 0) {
+    problems.push(
+      `release mutation registry step oracle must not have alias initializers; found ${registryStepAliasInitializers}`
+    );
+  }
+  if (registryStepWrites !== 0) {
+    problems.push(
+      `release mutation registry step oracle binding must never be reassigned; found ${registryStepWrites} write(s)`
+    );
+  }
+  if (otherRegistryStepReferences !== 0) {
+    problems.push(
+      `release mutation registry step detector may only be called directly by its protected trust chain; found ${otherRegistryStepReferences} other reference(s)`
+    );
+  }
+  if (directRegistryRunDeclarations !== 1 || otherRegistryRunBindings !== 0) {
+    problems.push(
+      `release mutation registry run adapter must have one top-level function declaration and no other runtime bindings; found direct ${directRegistryRunDeclarations}, other ${otherRegistryRunBindings}`
+    );
+  }
+  if (registryRunAliasInitializers !== 0) {
+    problems.push(
+      `release mutation registry run adapter must not have alias initializers; found ${registryRunAliasInitializers}`
+    );
+  }
+  if (registryRunWrites !== 0) {
+    problems.push(
+      `release mutation registry run adapter binding must never be reassigned; found ${registryRunWrites} write(s)`
+    );
+  }
+  if (otherRegistryRunReferences !== 0) {
+    problems.push(
+      `release mutation registry run adapter may only be called directly or occupy the exact execute adapter slot; found ${otherRegistryRunReferences} other reference(s)`
     );
   }
   const matrixStartCount = mutationMatchCount(source, RELEASE_MUTATION_MATRIX_START);
@@ -1791,7 +2005,7 @@ function releaseMutationInventoryProblems(source: string): string[] {
             callback.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.AsyncKeyword) !== true &&
             node.arguments.length === 3 &&
             timeout !== undefined &&
-            timeout.getText(sourceFile) === "240_000" &&
+            timeout.getText(sourceFile) === "330_000" &&
             node.questionDotToken === undefined &&
             testStatement !== null &&
             suiteBlock !== null &&
@@ -1812,7 +2026,7 @@ function releaseMutationInventoryProblems(source: string): string[] {
             matrixSuiteCallback = suiteCallback;
           } else {
             problems.push(
-              "release mutation matrix must be one direct unskipped top-level describe/it registration with zero-argument block callbacks and the exact 240_000ms timeout"
+              "release mutation matrix must be one direct unskipped top-level describe/it registration with zero-argument block callbacks and the exact 330_000ms timeout"
             );
           }
         }
@@ -1862,9 +2076,22 @@ function releaseMutationInventoryProblems(source: string): string[] {
   const declarativeCaseDescriptors: ts.ObjectLiteralExpression[] = [];
   const declarativeSealCalls: ts.CallExpression[] = [];
   const declarativeExecuteCalls: ts.CallExpression[] = [];
+  const declarativeExecuteThroughCalls: ts.CallExpression[] = [];
+  const declarativeExecuteRemainingCalls: ts.CallExpression[] = [];
   const declarativePhaseReads: ts.PropertyAccessExpression[] = [];
   const declarativeCaseExecutionReads: ts.PropertyAccessExpression[] = [];
   const declarativeExpectationExecutionReads: ts.PropertyAccessExpression[] = [];
+  type DeclarativeInvocationKind =
+    | "fixture.text"
+    | "fixture.throw"
+    | "registry.evaluator"
+    | "registry.step.run"
+    | "registry.step.integrity";
+  const declarativeInvocationKinds = new Set<DeclarativeInvocationKind>();
+  const declarativeCaseExecutionProfiles: Array<{
+    readonly root: string;
+    readonly expectations: number;
+  }> = [];
   let lastDeclarativeRegistrationEnd = -1;
   const nonStraightLineAncestor = (node: ts.Node): ts.Node | null => {
     const isWithin = (container: ts.Node): boolean =>
@@ -2152,24 +2379,28 @@ function releaseMutationInventoryProblems(source: string): string[] {
             `release mutation declarative ${declarativeMethod} must be one explicit straight-line registration, not nested under ${ts.SyntaxKind[nonStraightLine.kind]} at ${position.line + 1}:${position.character + 1}`
           );
         }
-        if (declarativeMethod === "seal" || declarativeMethod === "execute") {
+        if (
+          declarativeMethod === "seal" ||
+          declarativeMethod === "execute" ||
+          declarativeMethod === "executeThrough" ||
+          declarativeMethod === "executeRemaining"
+        ) {
           if (declarativeMethod === "seal" && parent.arguments.length !== 0) {
             const position = sourceFile.getLineAndCharacterOfPosition(start);
             problems.push(
               `release mutation declarative seal requires zero arguments at ${position.line + 1}:${position.character + 1}`
             );
           }
-          if (
-            declarativeMethod === "execute" &&
-            (parent.arguments.length !== 1 || !exactRegistryAdapterObject(parent.arguments[0]))
-          ) {
+          if (declarativeMethod === "executeRemaining" && parent.arguments.length !== 0) {
             const position = sourceFile.getLineAndCharacterOfPosition(start);
             problems.push(
-              `release mutation declarative execute requires one exact literal registryEvaluatorProblems adapter at ${position.line + 1}:${position.character + 1}`
+              `release mutation declarative executeRemaining requires zero arguments at ${position.line + 1}:${position.character + 1}`
             );
           }
           if (declarativeMethod === "seal") declarativeSealCalls.push(parent);
-          else declarativeExecuteCalls.push(parent);
+          else if (declarativeMethod === "execute") declarativeExecuteCalls.push(parent);
+          else if (declarativeMethod === "executeThrough") declarativeExecuteThroughCalls.push(parent);
+          else declarativeExecuteRemainingCalls.push(parent);
         } else if (declarativeMethod === "registerSource") {
           declarativeSources++;
           lastDeclarativeRegistrationEnd = Math.max(lastDeclarativeRegistrationEnd, parent.end);
@@ -2509,6 +2740,9 @@ function releaseMutationInventoryProblems(source: string): string[] {
       );
       continue;
     }
+    if (rootHandle !== null) {
+      declarativeCaseExecutionProfiles.push({ root: rootHandle, expectations: checks.elements.length });
+    }
     const caseCheckSemantics = new Set<string>();
     for (const check of checks.elements) {
       if (!ts.isObjectLiteralExpression(check)) {
@@ -2542,7 +2776,7 @@ function releaseMutationInventoryProblems(source: string): string[] {
       }
       const invoke = checkProperty("invoke")[0]?.initializer;
       const expectation = checkProperty("expectation")[0]?.initializer;
-      let invocationKind: "fixture.text" | "fixture.throw" | "registry.evaluator" | null = null;
+      let invocationKind: DeclarativeInvocationKind | null = null;
       let invocationIdentity: string | null = null;
       if (checkProperty("invoke").length !== 1 || invoke === undefined || !ts.isObjectLiteralExpression(invoke)) {
         const position = sourceFile.getLineAndCharacterOfPosition(check.getStart(sourceFile));
@@ -2573,9 +2807,12 @@ function releaseMutationInventoryProblems(source: string): string[] {
         } else if (
           kind.text === "fixture.text" ||
           kind.text === "fixture.throw" ||
-          kind.text === "registry.evaluator"
+          kind.text === "registry.evaluator" ||
+          kind.text === "registry.step.run" ||
+          kind.text === "registry.step.integrity"
         ) {
           invocationKind = kind.text;
+          declarativeInvocationKinds.add(invocationKind);
         } else {
           const position = sourceFile.getLineAndCharacterOfPosition(kind.getStart(sourceFile));
           problems.push(
@@ -2587,7 +2824,11 @@ function releaseMutationInventoryProblems(source: string): string[] {
             ? ["kind", "baseline", "mutant"]
             : invocationKind === "fixture.throw"
               ? ["kind", "baseline", "mutant", "message"]
-              : null;
+              : invocationKind === "registry.step.run"
+                ? ["kind", "baseline", "mutant", "integrity"]
+                : invocationKind === "registry.step.integrity"
+                  ? ["kind", "baseline", "mutant", "run"]
+                  : null;
         if (
           invocationPropertyNames.some((name) => name === null) ||
           new Set(invocationPropertyNames).size !== invocationPropertyNames.length ||
@@ -2638,6 +2879,27 @@ function releaseMutationInventoryProblems(source: string): string[] {
             );
           }
         }
+        const companionName =
+          invocationKind === "registry.step.run"
+            ? "integrity"
+            : invocationKind === "registry.step.integrity"
+              ? "run"
+              : null;
+        const companion = companionName === null ? undefined : invocationProperties(companionName)[0]?.initializer;
+        let invocationCompanionHandle: string | null = null;
+        if (companionName !== null) {
+          if (
+            invocationProperties(companionName).length !== 1 ||
+            companion === undefined ||
+            !ts.isIdentifier(companion) ||
+            !declarativeSourceHandles.has(companion.text)
+          ) {
+            const position = sourceFile.getLineAndCharacterOfPosition(invoke.getStart(sourceFile));
+            problems.push(
+              `release mutation declarative ${invocationKind} invocation requires one exact registered source ${companionName} companion at ${position.line + 1}:${position.character + 1}`
+            );
+          } else invocationCompanionHandle = companion.text;
+        }
         const invocationMessage = invocationProperties("message")[0]?.initializer;
         if (
           invocationKind !== null &&
@@ -2647,6 +2909,8 @@ function releaseMutationInventoryProblems(source: string): string[] {
           ts.isIdentifier(mutant) &&
           (invocationKind === "fixture.text" ||
             invocationKind === "registry.evaluator" ||
+            ((invocationKind === "registry.step.run" || invocationKind === "registry.step.integrity") &&
+              invocationCompanionHandle !== null) ||
             (invocationMessage !== undefined &&
               ts.isStringLiteral(invocationMessage) &&
               invocationMessage.text.length > 0))
@@ -2659,7 +2923,8 @@ function releaseMutationInventoryProblems(source: string): string[] {
             invocationMessage !== undefined &&
             ts.isStringLiteral(invocationMessage)
               ? invocationMessage.text
-              : null
+              : null,
+            invocationCompanionHandle
           ]);
         }
       }
@@ -2735,9 +3000,11 @@ function releaseMutationInventoryProblems(source: string): string[] {
           const exactProblemIdentity =
             invocationKind === "registry.evaluator"
               ? RELEASE_MUTATION_REGISTRY_PROBLEM
-              : invocationKind === "fixture.throw"
-                ? "fixture.mutant-threw"
-                : null;
+              : invocationKind === "registry.step.run" || invocationKind === "registry.step.integrity"
+                ? RELEASE_MUTATION_REGISTRY_WORKFLOW_PROBLEM
+                : invocationKind === "fixture.throw"
+                  ? "fixture.mutant-threw"
+                  : null;
           if (
             expectationProperty("problem").length !== 1 ||
             problem === undefined ||
@@ -2781,7 +3048,7 @@ function releaseMutationInventoryProblems(source: string): string[] {
         }
         if (
           (invocationKind === "fixture.text" && kind.text === "problem") ||
-          ((invocationKind === "fixture.throw" || invocationKind === "registry.evaluator") && kind.text !== "problem")
+          (invocationKind !== null && invocationKind !== "fixture.text" && kind.text !== "problem")
         ) {
           const position = sourceFile.getLineAndCharacterOfPosition(expectation.getStart(sourceFile));
           problems.push(
@@ -2834,11 +3101,47 @@ function releaseMutationInventoryProblems(source: string): string[] {
       `release mutation declarative script.release-integrity alias must be one top-level const releaseIntegrityText = mcpbInputs.integrity; found ${releaseIntegrityAliasBindings} binding(s), ${exactReleaseIntegrityAliasBindings} exact`
     );
   }
+  const requiresRegistryEvaluatorAdapter = declarativeInvocationKinds.has("registry.evaluator");
+  const requiresRegistryStepAdapter =
+    declarativeInvocationKinds.has("registry.step.run") || declarativeInvocationKinds.has("registry.step.integrity");
+  const exactExecutionAdapterArguments = (call: ts.CallExpression, offset: number): boolean => {
+    if (!requiresRegistryEvaluatorAdapter && !requiresRegistryStepAdapter) {
+      return call.arguments.length === offset;
+    }
+    return (
+      call.arguments.length === offset + 1 &&
+      exactRegistryAdapterObject(call.arguments[offset], requiresRegistryEvaluatorAdapter, requiresRegistryStepAdapter)
+    );
+  };
+  const requiredAdapterDescription =
+    requiresRegistryEvaluatorAdapter && requiresRegistryStepAdapter
+      ? "one exact literal registryEvaluatorProblems/registryStepProblems adapter object"
+      : requiresRegistryEvaluatorAdapter
+        ? "one exact literal registryEvaluatorProblems adapter"
+        : requiresRegistryStepAdapter
+          ? "one exact literal registryStepProblems adapter"
+          : "zero adapter arguments without registry invocations";
+  for (const execute of declarativeExecuteCalls) {
+    if (!exactExecutionAdapterArguments(execute, 0)) {
+      const position = sourceFile.getLineAndCharacterOfPosition(execute.getStart(sourceFile));
+      problems.push(
+        `release mutation declarative execute requires ${requiredAdapterDescription} at ${position.line + 1}:${position.character + 1}`
+      );
+    }
+  }
+  for (const executeThrough of declarativeExecuteThroughCalls) {
+    const boundary = executeThrough.arguments[0];
+    if (boundary === undefined || !ts.isIdentifier(boundary) || !exactExecutionAdapterArguments(executeThrough, 1)) {
+      const position = sourceFile.getLineAndCharacterOfPosition(executeThrough.getStart(sourceFile));
+      problems.push(
+        `release mutation declarative executeThrough requires one literal case-root boundary and ${requiredAdapterDescription} at ${position.line + 1}:${position.character + 1}`
+      );
+    }
+  }
   if (declarativeRegistrations > 0) {
     const seal = declarativeSealCalls[0];
-    const execute = declarativeExecuteCalls[0];
-    let exactSealAndExecute = declarativeSealCalls.length === 1 && declarativeExecuteCalls.length === 1;
-    if (seal !== undefined && execute !== undefined && matrixCallback !== null && ts.isBlock(matrixCallback.body)) {
+    let exactLifecycle = declarativeSealCalls.length === 1;
+    if (seal !== undefined && matrixCallback !== null && ts.isBlock(matrixCallback.body)) {
       const sealDeclaration =
         ts.isVariableDeclaration(seal.parent) && seal.parent.initializer === seal ? seal.parent : null;
       const sealList =
@@ -2846,15 +3149,9 @@ function releaseMutationInventoryProblems(source: string): string[] {
           ? sealDeclaration.parent
           : null;
       const sealStatement = sealList !== null && ts.isVariableStatement(sealList.parent) ? sealList.parent : null;
-      const executeStatement =
-        ts.isExpressionStatement(execute.parent) && execute.parent.expression === execute ? execute.parent : null;
       const statements = matrixCallback.body.statements;
       const sealIndex = sealStatement === null ? -1 : statements.indexOf(sealStatement);
       const assertionStatement = sealIndex >= 0 ? statements[sealIndex + 1] : undefined;
-      const expectedExecuteStatement = sealIndex >= 0 ? statements[sealIndex + 2] : undefined;
-      const expectedPhaseStatement = sealIndex >= 0 ? statements[sealIndex + 3] : undefined;
-      const expectedCaseExecutionsStatement = sealIndex >= 0 ? statements[sealIndex + 4] : undefined;
-      const expectedExpectationExecutionsStatement = sealIndex >= 0 ? statements[sealIndex + 5] : undefined;
       const assertionCall =
         assertionStatement !== undefined &&
         ts.isExpressionStatement(assertionStatement) &&
@@ -2917,8 +3214,7 @@ function releaseMutationInventoryProblems(source: string): string[] {
           exactExpectedValue
         );
       };
-      exactSealAndExecute =
-        exactSealAndExecute &&
+      const exactSeal =
         sealDeclaration !== null &&
         ts.isIdentifier(sealDeclaration.name) &&
         sealDeclaration.name.text === "releaseMutationProblems" &&
@@ -2927,31 +3223,111 @@ function releaseMutationInventoryProblems(source: string): string[] {
         sealStatement !== null &&
         sealStatement.parent === matrixCallback.body &&
         seal.getStart(sourceFile) > lastDeclarativeRegistrationEnd &&
-        exactCleanSealAssertion &&
+        exactCleanSealAssertion;
+      const execute = declarativeExecuteCalls[0];
+      const executeStatement =
+        execute !== undefined && ts.isExpressionStatement(execute.parent) && execute.parent.expression === execute
+          ? execute.parent
+          : null;
+      const exactFullLifecycle =
+        declarativeExecuteCalls.length === 1 &&
+        declarativeExecuteThroughCalls.length === 0 &&
+        declarativeExecuteRemainingCalls.length === 0 &&
+        execute !== undefined &&
         executeStatement !== null &&
-        executeStatement === expectedExecuteStatement &&
+        executeStatement === statements[sealIndex + 2] &&
         execute.getStart(sourceFile) > seal.end &&
-        execute.arguments.length === 1 &&
-        exactRegistryAdapterObject(execute.arguments[0]) &&
+        exactExecutionAdapterArguments(execute, 0) &&
         declarativePhaseReads.length === 1 &&
-        exactStatusAssertion(expectedPhaseStatement, declarativePhaseReads[0], "executed") &&
+        exactStatusAssertion(statements[sealIndex + 3], declarativePhaseReads[0], "executed") &&
         declarativeCaseExecutionReads.length === 1 &&
-        exactStatusAssertion(expectedCaseExecutionsStatement, declarativeCaseExecutionReads[0], declarativeCases) &&
+        exactStatusAssertion(statements[sealIndex + 4], declarativeCaseExecutionReads[0], declarativeCases) &&
         declarativeExpectationExecutionReads.length === 1 &&
         exactStatusAssertion(
-          expectedExpectationExecutionsStatement,
+          statements[sealIndex + 5],
           declarativeExpectationExecutionReads[0],
           declarativeExpectationIds.size
         );
-    } else exactSealAndExecute = false;
-    if (!exactSealAndExecute) {
+      const executeThrough = declarativeExecuteThroughCalls[0];
+      const executeRemaining = declarativeExecuteRemainingCalls[0];
+      const executeThroughStatement =
+        executeThrough !== undefined &&
+        ts.isExpressionStatement(executeThrough.parent) &&
+        executeThrough.parent.expression === executeThrough
+          ? executeThrough.parent
+          : null;
+      const executeRemainingStatement =
+        executeRemaining !== undefined &&
+        ts.isExpressionStatement(executeRemaining.parent) &&
+        executeRemaining.parent.expression === executeRemaining
+          ? executeRemaining.parent
+          : null;
+      const executeRemainingIndex =
+        executeRemainingStatement === null ? -1 : statements.indexOf(executeRemainingStatement);
+      const boundary = executeThrough?.arguments[0];
+      const boundaryIndexes =
+        boundary !== undefined && ts.isIdentifier(boundary)
+          ? declarativeCaseExecutionProfiles.flatMap((profile, index) =>
+              profile.root === boundary.text ? [index] : []
+            )
+          : [];
+      const boundaryIndex = boundaryIndexes.length === 1 ? boundaryIndexes[0] : undefined;
+      const prefixExpectationExecutions =
+        boundaryIndex === undefined
+          ? -1
+          : declarativeCaseExecutionProfiles
+              .slice(0, boundaryIndex + 1)
+              .reduce((total, profile) => total + profile.expectations, 0);
+      const exactStagedLifecycle =
+        declarativeExecuteCalls.length === 0 &&
+        declarativeExecuteThroughCalls.length === 1 &&
+        declarativeExecuteRemainingCalls.length === 1 &&
+        declarativeCaseExecutionProfiles.length === declarativeCases &&
+        executeThrough !== undefined &&
+        executeThroughStatement !== null &&
+        executeThroughStatement === statements[sealIndex + 2] &&
+        executeThrough.getStart(sourceFile) > seal.end &&
+        exactExecutionAdapterArguments(executeThrough, 1) &&
+        boundaryIndex !== undefined &&
+        boundaryIndex < declarativeCaseExecutionProfiles.length - 1 &&
+        declarativePhaseReads.length === 2 &&
+        exactStatusAssertion(statements[sealIndex + 3], declarativePhaseReads[0], "partially-executed") &&
+        declarativeCaseExecutionReads.length === 2 &&
+        exactStatusAssertion(statements[sealIndex + 4], declarativeCaseExecutionReads[0], boundaryIndex + 1) &&
+        declarativeExpectationExecutionReads.length === 2 &&
+        exactStatusAssertion(
+          statements[sealIndex + 5],
+          declarativeExpectationExecutionReads[0],
+          prefixExpectationExecutions
+        ) &&
+        executeRemaining !== undefined &&
+        executeRemaining.arguments.length === 0 &&
+        executeRemainingStatement !== null &&
+        executeRemainingIndex > sealIndex + 5 &&
+        executeRemaining.getStart(sourceFile) > executeThrough.end &&
+        exactStatusAssertion(statements[executeRemainingIndex + 1], declarativePhaseReads[1], "executed") &&
+        exactStatusAssertion(
+          statements[executeRemainingIndex + 2],
+          declarativeCaseExecutionReads[1],
+          declarativeCases
+        ) &&
+        exactStatusAssertion(
+          statements[executeRemainingIndex + 3],
+          declarativeExpectationExecutionReads[1],
+          declarativeExpectationIds.size
+        );
+      exactLifecycle = exactLifecycle && exactSeal && (exactFullLifecycle || exactStagedLifecycle);
+    } else exactLifecycle = false;
+    if (!exactLifecycle) {
       problems.push(
-        "release mutation declarative plan requires one top-level clean seal assertion, one direct exact-adapter execute, then exact executed phase, case-count and expectation-count assertions after all registrations"
+        "release mutation declarative plan requires one top-level clean seal assertion and one exact full execute lifecycle or one exact nonterminal executeThrough/partial-status/executeRemaining/final-status lifecycle after all registrations"
       );
     }
   } else if (
     declarativeSealCalls.length !== 0 ||
     declarativeExecuteCalls.length !== 0 ||
+    declarativeExecuteThroughCalls.length !== 0 ||
+    declarativeExecuteRemainingCalls.length !== 0 ||
     declarativePhaseReads.length !== 0 ||
     declarativeCaseExecutionReads.length !== 0 ||
     declarativeExpectationExecutionReads.length !== 0
@@ -5129,6 +5505,45 @@ function mcpRegistryEvaluatorProblems(integrity: string): string[] {
 
 const MCP_REGISTRY_WORK_ROOT_INIT = 'WORK_ROOT=$(/usr/bin/mktemp -d "$RUNNER_TEMP/enquire-mcp-registry.XXXXXX")';
 const MCP_REGISTRY_HTTP_WRITE_OUT_ANSI_C = "$'%{http_code}\\n%{content_type}'";
+const MCP_REGISTRY_EXACT_STEP_ENV: Readonly<Record<string, string>> = Object.freeze({
+  BASH_ENV: "",
+  ENV: "",
+  SHELLOPTS: "",
+  PS4: "",
+  LD_PRELOAD: "",
+  LD_LIBRARY_PATH: "",
+  LD_AUDIT: "",
+  LD_DEBUG_OUTPUT: "",
+  LD_PROFILE: "",
+  GLIBC_TUNABLES: "",
+  TAR_OPTIONS: "",
+  OPENSSL_CONF: "",
+  NODE_DEBUG: "",
+  GODEBUG: "",
+  NODE_TLS_REJECT_UNAUTHORIZED: "1",
+  GH_HOST: "github.com",
+  GH_HTTP_UNIX_SOCKET: "",
+  HTTPS_PROXY: "",
+  HTTP_PROXY: "",
+  ALL_PROXY: "",
+  CURL_CA_BUNDLE: "",
+  SSL_CERT_FILE: "",
+  SSL_CERT_DIR: "",
+  NODE_EXTRA_CA_CERTS: "",
+  NODE_OPTIONS: "",
+  GH_TOKEN: `\${{ secrets.GITHUB_TOKEN }}`,
+  RELEASE_JOB_DEADLINE_EPOCH: `\${{ steps.deadline.outputs.epoch }}`,
+  EXPECTED_VERSION: `\${{ steps.npm_publication.outputs.version }}`,
+  EXPECTED_SOURCE_SHA: `\${{ steps.npm_publication.outputs.source_sha }}`,
+  EXPECTED_TAG: `\${{ steps.npm_publication.outputs.tag }}`,
+  NPM_PROVENANCE_VERIFIED: `\${{ steps.npm_provenance.outputs.verified }}`
+});
+const MCP_REGISTRY_EXACT_STEP_METADATA: Readonly<YamlRecord> = Object.freeze({
+  name: MCP_REGISTRY_STEP_NAME,
+  if: "steps.dist_tag.outputs.tag == 'latest'",
+  shell: "/bin/bash --noprofile --norc -p -e -o pipefail {0}",
+  env: MCP_REGISTRY_EXACT_STEP_ENV
+});
 
 function logicalShellLines(run: string): string[] {
   return run
@@ -5156,7 +5571,7 @@ function rawLogicalNodeTokenInventory(run: string): string[] {
   return logicalShellLines(run).filter((line) => /\bnode\b/u.test(conservativeShellLexicalLine(line)));
 }
 
-function hasExactEmptyEnvironmentReference(run: string, environment: Record<string, unknown>): boolean {
+function hasExactEmptyEnvironmentReference(run: string, environment: Readonly<Record<string, unknown>>): boolean {
   const exactEmptyNames = new Set(
     Object.entries(environment)
       .filter(([, value]) => value === "")
@@ -5226,44 +5641,11 @@ function hasForbiddenRegistryWriteArguments(run: string): boolean {
 function mcpRegistryStepProblems(step: YamlRecord | undefined, integrity: string): string[] {
   const run = runBody(step);
   const env = yamlRecord(step?.env);
-  const expectedEnv: Record<string, string> = {
-    BASH_ENV: "",
-    ENV: "",
-    SHELLOPTS: "",
-    PS4: "",
-    LD_PRELOAD: "",
-    LD_LIBRARY_PATH: "",
-    LD_AUDIT: "",
-    LD_DEBUG_OUTPUT: "",
-    LD_PROFILE: "",
-    GLIBC_TUNABLES: "",
-    TAR_OPTIONS: "",
-    OPENSSL_CONF: "",
-    NODE_DEBUG: "",
-    GODEBUG: "",
-    NODE_TLS_REJECT_UNAUTHORIZED: "1",
-    GH_HOST: "github.com",
-    GH_HTTP_UNIX_SOCKET: "",
-    HTTPS_PROXY: "",
-    HTTP_PROXY: "",
-    ALL_PROXY: "",
-    CURL_CA_BUNDLE: "",
-    SSL_CERT_FILE: "",
-    SSL_CERT_DIR: "",
-    NODE_EXTRA_CA_CERTS: "",
-    NODE_OPTIONS: "",
-    GH_TOKEN: `\${{ secrets.GITHUB_TOKEN }}`,
-    RELEASE_JOB_DEADLINE_EPOCH: `\${{ steps.deadline.outputs.epoch }}`,
-    EXPECTED_VERSION: `\${{ steps.npm_publication.outputs.version }}`,
-    EXPECTED_SOURCE_SHA: `\${{ steps.npm_publication.outputs.source_sha }}`,
-    EXPECTED_TAG: `\${{ steps.npm_publication.outputs.tag }}`,
-    NPM_PROVENANCE_VERIFIED: `\${{ steps.npm_provenance.outputs.verified }}`
-  };
   const envIsExact =
     env !== null &&
-    JSON.stringify(Object.keys(env).sort()) === JSON.stringify(Object.keys(expectedEnv).sort()) &&
-    Object.entries(expectedEnv).every(([key, value]) => env[key] === value);
-  const containsExactEmptyEnvironmentReference = hasExactEmptyEnvironmentReference(run, expectedEnv);
+    JSON.stringify(Object.keys(env).sort()) === JSON.stringify(Object.keys(MCP_REGISTRY_EXACT_STEP_ENV).sort()) &&
+    Object.entries(MCP_REGISTRY_EXACT_STEP_ENV).every(([key, value]) => env[key] === value);
+  const containsExactEmptyEnvironmentReference = hasExactEmptyEnvironmentReference(run, MCP_REGISTRY_EXACT_STEP_ENV);
   const capturePositiveInteger = (pattern: RegExp) => {
     const value = Number(pattern.exec(run)?.[1] ?? Number.NaN);
     return Number.isSafeInteger(value) && value > 0 ? value : Number.NaN;
@@ -5529,9 +5911,9 @@ function mcpRegistryStepProblems(step: YamlRecord | undefined, integrity: string
   const publishExitCaptureIndex = run.indexOf("MCP_PUBLISH_EXIT=$?", publishIndex);
   const publishSetMinusIndex = run.indexOf("set -e", publishExitCaptureIndex);
   const workflowIsExact =
-    step?.name === MCP_REGISTRY_STEP_NAME &&
-    step?.if === "steps.dist_tag.outputs.tag == 'latest'" &&
-    step?.shell === "/bin/bash --noprofile --norc -p -e -o pipefail {0}" &&
+    step?.name === MCP_REGISTRY_EXACT_STEP_METADATA.name &&
+    step?.if === MCP_REGISTRY_EXACT_STEP_METADATA.if &&
+    step?.shell === MCP_REGISTRY_EXACT_STEP_METADATA.shell &&
     envIsExact &&
     run.length > 0 &&
     run.length <= GITHUB_RUN_CHARACTER_LIMIT &&
@@ -5717,6 +6099,16 @@ function mcpRegistryStepProblems(step: YamlRecord | undefined, integrity: string
     !/(?:^|[ \t])(?:delete|deprecate|undeprecate)(?:[ \t]|$)/mu.test(run) &&
     mcpRegistryEvaluatorProblems(integrity).length === 0;
   return workflowIsExact ? [] : [MCP_REGISTRY_WORKFLOW_CONTRACT_PROBLEM];
+}
+
+function mcpRegistryRunProblems(run: string, integrity: string): string[] {
+  return mcpRegistryStepProblems(
+    Object.freeze({
+      ...MCP_REGISTRY_EXACT_STEP_METADATA,
+      run
+    }),
+    integrity
+  );
 }
 
 function mcpRegistryContractProblems(steps: YamlRecord[], integrity: string, permissions: YamlRecord): string[] {
@@ -7693,9 +8085,9 @@ describe("release identity and exact required-job gate", () => {
   });
 
   // This mutation oracle intentionally exercises thousands of structural checks.
-  // PR #439 exact-tree main coverage took 168-170s on two westus workers after
-  // the PR runner completed in 80s. Keep scoped 240s hang detection for the
-  // unchanged 560-case matrix without widening the global suite.
+  // PR #443's first full coverage run completed the expanded 560-case oracle in
+  // 217.8s, leaving too little headroom under the former 240s bound. Keep scoped
+  // 330s hang detection below the unchanged 10-minute job circuit breaker.
   it("keeps release.yml wired to the shared evaluator and an exact mirrored inventory", () => {
     assertMcpRegistryEvaluatorContract();
     assertNpmProvenanceEvaluatorContract();
@@ -7963,7 +8355,17 @@ describe("release identity and exact required-job gate", () => {
       oracleSource.slice(suiteStartOffset)
     ].join("");
     expect(releaseMutationInventoryProblems(mutableReleasePlanPrototype)).toContainEqual(
-      expect.stringMatching(/ReleaseMutationPlan may only be one direct constructor or a type reference/)
+      expect.stringMatching(
+        /ReleaseMutationPlan may only be one direct constructor, a type reference, or the exact ExplosiveDiagnosticsPlan heritage use/
+      )
+    );
+    const extraReleasePlanHeritage = [
+      oracleSource.slice(0, suiteStartOffset + suiteStart.length),
+      "\n  class AlternateDiagnosticsPlan extends ReleaseMutationPlan {}",
+      oracleSource.slice(suiteStartOffset + suiteStart.length)
+    ].join("");
+    expect(releaseMutationInventoryProblems(extraReleasePlanHeritage)).toContainEqual(
+      expect.stringMatching(/may only be one direct constructor, a type reference, or the exact/)
     );
     const skippedSuiteMutation = [
       oracleSource.slice(0, suiteStartOffset),
@@ -7971,7 +8373,7 @@ describe("release identity and exact required-job gate", () => {
       oracleSource.slice(suiteStartOffset + "describe(".length)
     ].join("");
     expect(releaseMutationInventoryProblems(skippedSuiteMutation)).toContain(
-      "release mutation matrix must be one direct unskipped top-level describe/it registration with zero-argument block callbacks and the exact 240_000ms timeout"
+      "release mutation matrix must be one direct unskipped top-level describe/it registration with zero-argument block callbacks and the exact 330_000ms timeout"
     );
     const outerReturnMutation = [
       oracleSource.slice(0, suiteStartOffset + suiteStart.length),
@@ -7990,7 +8392,7 @@ describe("release identity and exact required-job gate", () => {
       oracleSource.slice(matrixRegistrationOffset + "  it(".length)
     ].join("");
     expect(releaseMutationInventoryProblems(conditionalRegistrationMutation)).toContain(
-      "release mutation matrix must be one direct unskipped top-level describe/it registration with zero-argument block callbacks and the exact 240_000ms timeout"
+      "release mutation matrix must be one direct unskipped top-level describe/it registration with zero-argument block callbacks and the exact 330_000ms timeout"
     );
     const contextSkipMutation = [
       oracleSource.slice(0, matrixRegistrationOffset),
@@ -7998,17 +8400,17 @@ describe("release identity and exact required-job gate", () => {
       oracleSource.slice(matrixRegistrationOffset + matrixRegistrationStart.length)
     ].join("");
     expect(releaseMutationInventoryProblems(contextSkipMutation)).toContain(
-      "release mutation matrix must be one direct unskipped top-level describe/it registration with zero-argument block callbacks and the exact 240_000ms timeout"
+      "release mutation matrix must be one direct unskipped top-level describe/it registration with zero-argument block callbacks and the exact 330_000ms timeout"
     );
-    const matrixTimeoutOffset = oracleSource.lastIndexOf("  }, 240_000);");
+    const matrixTimeoutOffset = oracleSource.lastIndexOf("  }, 330_000);");
     expect(matrixTimeoutOffset).toBeGreaterThan(matrixRegistrationOffset);
     const loweredMatrixTimeoutMutation = [
       oracleSource.slice(0, matrixTimeoutOffset),
-      "  }, 120_000);",
-      oracleSource.slice(matrixTimeoutOffset + "  }, 240_000);".length)
+      "  }, 240_000);",
+      oracleSource.slice(matrixTimeoutOffset + "  }, 330_000);".length)
     ].join("");
     expect(releaseMutationInventoryProblems(loweredMatrixTimeoutMutation)).toContain(
-      "release mutation matrix must be one direct unskipped top-level describe/it registration with zero-argument block callbacks and the exact 240_000ms timeout"
+      "release mutation matrix must be one direct unskipped top-level describe/it registration with zero-argument block callbacks and the exact 330_000ms timeout"
     );
     const extraProjectMutation = [
       oracleSource.slice(0, matrixBodyOffset),
@@ -8219,7 +8621,7 @@ describe("release identity and exact required-job gate", () => {
     ].join("\n    ");
     const sealSequenceOffset = declarativeBatchOffset(sealSequence);
     const declarativeLifecycleProblem =
-      "release mutation declarative plan requires one top-level clean seal assertion, one direct exact-adapter execute, then exact executed phase, case-count and expectation-count assertions after all registrations";
+      "release mutation declarative plan requires one top-level clean seal assertion and one exact full execute lifecycle or one exact nonterminal executeThrough/partial-status/executeRemaining/final-status lifecycle after all registrations";
     const outerDynamicCodeMutation = [
       oracleSource.slice(0, suiteStartOffset),
       [
@@ -8372,6 +8774,32 @@ describe("release identity and exact required-job gate", () => {
     expect(releaseMutationInventoryProblems(reassignedRegistryEvaluator)).toContain(
       "release mutation registry evaluator binding must never be reassigned; found 1 write(s)"
     );
+    const aliasedRegistryRunAdapter = [
+      hybridDeclarativeMutation.slice(0, matrixBodyOffset),
+      "\n    const registryRunAlias = mcpRegistryRunProblems;",
+      hybridDeclarativeMutation.slice(matrixBodyOffset)
+    ].join("");
+    expect(releaseMutationInventoryProblems(aliasedRegistryRunAdapter)).toContain(
+      "release mutation registry run adapter must not have alias initializers; found 1"
+    );
+    const shadowedRegistryRunAdapter = [
+      hybridDeclarativeMutation.slice(0, matrixBodyOffset),
+      "\n    const mcpRegistryRunProblems = (_run: string, _integrity: string): string[] => [];",
+      hybridDeclarativeMutation.slice(matrixBodyOffset)
+    ].join("");
+    expect(releaseMutationInventoryProblems(shadowedRegistryRunAdapter)).toContainEqual(
+      expect.stringMatching(
+        /registry run adapter must have one top-level function declaration and no other runtime bindings/
+      )
+    );
+    const reassignedRegistryRunAdapter = [
+      hybridDeclarativeMutation.slice(0, matrixBodyOffset),
+      "\n    mcpRegistryRunProblems = (_run: string, _integrity: string): string[] => [];",
+      hybridDeclarativeMutation.slice(matrixBodyOffset)
+    ].join("");
+    expect(releaseMutationInventoryProblems(reassignedRegistryRunAdapter)).toContain(
+      "release mutation registry run adapter binding must never be reassigned; found 1 write(s)"
+    );
     const legacyFreeMatrix = [
       oracleSource.slice(0, matrixBodyOffset),
       oracleSource
@@ -8457,9 +8885,7 @@ describe("release identity and exact required-job gate", () => {
       ),
       expect.stringMatching(/registerCase requires one top-level expression call with an object and literal id/),
       expect.stringMatching(/literal mutation\/topology inventory matches the declarative subset/),
-      expect.stringMatching(
-        /requires one top-level clean seal assertion.*exact executed phase, case-count and expectation-count/
-      )
+      declarativeLifecycleProblem
     ]);
     const loopGeneratedMutation = [
       oracleSource.slice(0, matrixBodyOffset),
@@ -8828,6 +9254,9 @@ describe("release identity and exact required-job gate", () => {
     expect(Object.isFrozen(cleanPlan.constructor)).toBe(true);
     expect(Object.isFrozen(cleanPlanPrototype)).toBe(true);
     expect(Object.isSealed(cleanPlan)).toBe(true);
+    expect(Reflect.ownKeys(cleanPlan)).toEqual([]);
+    expect(Reflect.get(cleanPlanPrototype, "executePreparedCasesThrough")).toBeUndefined();
+    expect(Reflect.get(cleanPlanPrototype, "validateCases")).toBeUndefined();
     expect(Reflect.set(cleanPlanPrototype, "seal", () => [])).toBe(false);
     expect(Reflect.set(cleanPlan, "execute", () => undefined)).toBe(false);
     expect(Reflect.setPrototypeOf(cleanPlan, {})).toBe(false);
@@ -10000,7 +10429,12 @@ describe("release identity and exact required-job gate", () => {
     expect(snapshotPlan.caseExecutions).toBe(1);
     expect(snapshotPlan.expectationExecutions).toBe(1);
 
-    const explosivePlan = new ReleaseMutationPlan({ total: 1, first: 1, all: 0 });
+    class ExplosiveDiagnosticsPlan extends ReleaseMutationPlan {
+      override get diagnostics(): readonly string[] {
+        throw new Error("synthetic seal failure");
+      }
+    }
+    const explosivePlan = new ExplosiveDiagnosticsPlan({ total: 1, first: 1, all: 0 });
     const explosiveSource = explosivePlan.registerSource("fixture.explosive", "alpha");
     const explosiveRoot = registerFixtureMutation(explosivePlan, "mutation.explosive", {
       mode: "first",
@@ -10020,15 +10454,503 @@ describe("release identity and exact required-job gate", () => {
         }
       ]
     });
-    const explosivePlanView = new Proxy(explosivePlan, {
-      get: (target, property, receiver) => {
-        if (property === "mutations") throw new Error("synthetic seal failure");
-        return Reflect.get(target, property, receiver);
-      }
-    });
-    expect(() => explosivePlanView.seal()).toThrow("synthetic seal failure");
+    expect(() => explosivePlan.seal()).toThrow("synthetic seal failure");
     expect(explosivePlan.phase).toBe("failed");
     expect(() => explosivePlan.registerSource("fixture.after-failure", "late")).toThrow(/entered failed state/);
+
+    const createStagedRegistryPlan = () => {
+      const plan = new ReleaseMutationPlan({
+        total: 4,
+        first: 4,
+        all: 0,
+        cases: 3,
+        expectations: 3,
+        roots: 3,
+        dependencyOnly: 1
+      });
+      const evaluatorSource = plan.registerSource("fixture.staged-registry-evaluator", "registry-clean seed");
+      const evaluatorDependency = registerFixtureMutation(plan, "mutation.staged-registry-dependency", {
+        mode: "first",
+        source: evaluatorSource,
+        needle: "seed",
+        replacement: "ready",
+        expectedOccurrences: 1,
+        witness: { kind: "token", anchor: "seed", before: 1, after: 0 }
+      });
+      const evaluatorRoot = registerFixtureMutation(plan, "mutation.staged-registry-evaluator", {
+        mode: "first",
+        source: evaluatorDependency,
+        needle: "clean",
+        replacement: "mutant",
+        expectedOccurrences: 1,
+        witness: { kind: "token", anchor: "clean", before: 1, after: 0 }
+      });
+      const runSource = plan.registerSource("fixture.staged-registry-run", "run-clean");
+      const runRoot = registerFixtureMutation(plan, "mutation.staged-registry-run", {
+        mode: "first",
+        source: runSource,
+        needle: "clean",
+        replacement: "mutant",
+        expectedOccurrences: 1,
+        witness: { kind: "token", anchor: "clean", before: 1, after: 0 }
+      });
+      const integritySource = plan.registerSource("fixture.staged-registry-integrity", "integrity-clean");
+      const integrityRoot = registerFixtureMutation(plan, "mutation.staged-registry-integrity", {
+        mode: "first",
+        source: integritySource,
+        needle: "clean",
+        replacement: "mutant",
+        expectedOccurrences: 1,
+        witness: { kind: "token", anchor: "clean", before: 1, after: 0 }
+      });
+      plan.registerCase({
+        id: "case.staged-registry-evaluator",
+        root: evaluatorRoot,
+        checks: [
+          {
+            invoke: { kind: "registry.evaluator", baseline: evaluatorDependency, mutant: evaluatorRoot },
+            expectation: {
+              id: "expectation.staged-registry-evaluator",
+              kind: "problem",
+              problem: RELEASE_MUTATION_REGISTRY_PROBLEM
+            }
+          }
+        ]
+      });
+      plan.registerCase({
+        id: "case.staged-registry-run",
+        root: runRoot,
+        checks: [
+          {
+            invoke: {
+              kind: "registry.step.run",
+              baseline: runSource,
+              mutant: runRoot,
+              integrity: integritySource
+            },
+            expectation: {
+              id: "expectation.staged-registry-run",
+              kind: "problem",
+              problem: MCP_REGISTRY_WORKFLOW_CONTRACT_PROBLEM
+            }
+          }
+        ]
+      });
+      plan.registerCase({
+        id: "case.staged-registry-integrity",
+        root: integrityRoot,
+        checks: [
+          {
+            invoke: {
+              kind: "registry.step.integrity",
+              baseline: integritySource,
+              mutant: integrityRoot,
+              run: runSource
+            },
+            expectation: {
+              id: "expectation.staged-registry-integrity",
+              kind: "problem",
+              problem: MCP_REGISTRY_WORKFLOW_CONTRACT_PROBLEM
+            }
+          }
+        ]
+      });
+      return { evaluatorDependency, evaluatorRoot, integrityRoot, plan, runRoot };
+    };
+
+    const stagedRegistryPlan = createStagedRegistryPlan();
+    expect(stagedRegistryPlan.plan.seal()).toEqual([]);
+    expect(Reflect.ownKeys(stagedRegistryPlan.plan)).toEqual([]);
+    expect(() => stagedRegistryPlan.plan.executeRemaining()).toThrow(
+      /executeRemaining requires partially-executed state; found sealed/
+    );
+    expect(stagedRegistryPlan.plan.phase).toBe("sealed");
+    const stagedEvaluatorCalls: string[] = [];
+    const stagedStepCalls: Array<readonly [run: string, integrity: string]> = [];
+    let stagedInjectedStepCalls = 0;
+    let stagedReentrantMessage = "";
+    let stagedPrefixCursorPatchApplied: boolean | undefined;
+    let stagedPrefixCapsulePatchApplied: boolean | undefined;
+    let stagedPrefixStatePatchApplied: boolean | undefined;
+    const stagedAdapters = {
+      registryEvaluatorProblems: (source: string): readonly string[] => {
+        stagedEvaluatorCalls.push(source);
+        if (stagedEvaluatorCalls.length === 1) {
+          stagedPrefixCursorPatchApplied = Reflect.set(stagedRegistryPlan.plan, "nextCaseIndex", 3);
+          stagedPrefixCapsulePatchApplied = Reflect.set(stagedRegistryPlan.plan, "stagedExecution", {
+            adapters: {
+              registryEvaluatorProblems: () => {
+                stagedInjectedStepCalls++;
+                return [];
+              },
+              registryStepProblems: () => {
+                stagedInjectedStepCalls++;
+                return [];
+              }
+            },
+            expectedNextCaseIndex: 3,
+            preparedCaseCount: 3
+          });
+          stagedPrefixStatePatchApplied = Reflect.set(stagedRegistryPlan.plan, "state", "executed");
+        }
+        if (stagedReentrantMessage.length === 0) {
+          try {
+            stagedRegistryPlan.plan.executeRemaining();
+          } catch (error) {
+            stagedReentrantMessage = error instanceof Error ? error.message : String(error);
+          }
+        }
+        return source === "registry-clean ready" ? [] : [RELEASE_MUTATION_REGISTRY_PROBLEM];
+      },
+      registryStepProblems: (run: string, integrity: string): readonly string[] => {
+        stagedStepCalls.push([run, integrity]);
+        return run === "run-clean" && integrity === "integrity-clean" ? [] : [MCP_REGISTRY_WORKFLOW_CONTRACT_PROBLEM];
+      }
+    };
+    stagedRegistryPlan.plan.executeThrough(stagedRegistryPlan.evaluatorRoot, stagedAdapters);
+    expect(stagedReentrantMessage).toBe(
+      "release mutation plan executeRemaining requires partially-executed state; found executing"
+    );
+    expect(stagedEvaluatorCalls).toEqual(["registry-clean ready", "registry-mutant ready"]);
+    expect(stagedStepCalls).toEqual([]);
+    expect(stagedPrefixCursorPatchApplied).toBe(false);
+    expect(stagedPrefixCapsulePatchApplied).toBe(false);
+    expect(stagedPrefixStatePatchApplied).toBe(false);
+    expect(stagedRegistryPlan.plan.phase).toBe("partially-executed");
+    expect(stagedRegistryPlan.plan.caseExecutions).toBe(1);
+    expect(stagedRegistryPlan.plan.expectationExecutions).toBe(1);
+    expect(Reflect.set(stagedRegistryPlan.plan, "nextCaseIndex", 3)).toBe(false);
+    expect(Reflect.set(stagedRegistryPlan.plan, "stagedExecution", undefined)).toBe(false);
+    expect(Reflect.set(stagedRegistryPlan.plan, "state", "executed")).toBe(false);
+    expect(Reflect.set(stagedRegistryPlan.plan, "preparedCases", [])).toBe(false);
+    expect(stagedRegistryPlan.plan.phase).toBe("partially-executed");
+    expect(stagedRegistryPlan.plan.caseExecutions).toBe(1);
+    expect(stagedRegistryPlan.plan.expectationExecutions).toBe(1);
+    stagedAdapters.registryStepProblems = () => {
+      stagedInjectedStepCalls++;
+      return [];
+    };
+    Reflect.apply(stagedRegistryPlan.plan.executeRemaining, stagedRegistryPlan.plan, [
+      {
+        registryEvaluatorProblems: () => {
+          stagedInjectedStepCalls++;
+          return [];
+        },
+        registryStepProblems: () => {
+          stagedInjectedStepCalls++;
+          return [];
+        }
+      }
+    ]);
+    expect(stagedInjectedStepCalls).toBe(0);
+    expect(stagedStepCalls).toEqual([
+      ["run-clean", "integrity-clean"],
+      ["run-mutant", "integrity-clean"],
+      ["run-clean", "integrity-clean"],
+      ["run-clean", "integrity-mutant"]
+    ]);
+    expect(stagedRegistryPlan.plan.phase).toBe("executed");
+    expect(stagedRegistryPlan.plan.caseExecutions).toBe(3);
+    expect(stagedRegistryPlan.plan.expectationExecutions).toBe(3);
+    expect(Reflect.ownKeys(stagedRegistryPlan.plan)).toEqual([]);
+    expect(() => stagedRegistryPlan.plan.executeRemaining()).toThrow(
+      /executeRemaining requires partially-executed state; found executed/
+    );
+
+    const terminalBoundaryPlan = createStagedRegistryPlan();
+    expect(terminalBoundaryPlan.plan.seal()).toEqual([]);
+    terminalBoundaryPlan.plan.executeThrough(terminalBoundaryPlan.integrityRoot, {
+      registryEvaluatorProblems: (source) =>
+        source === "registry-clean ready" ? [] : [RELEASE_MUTATION_REGISTRY_PROBLEM],
+      registryStepProblems: (run, integrity) =>
+        run === "run-clean" && integrity === "integrity-clean" ? [] : [MCP_REGISTRY_WORKFLOW_CONTRACT_PROBLEM]
+    });
+    expect(terminalBoundaryPlan.plan.phase).toBe("executed");
+    expect(terminalBoundaryPlan.plan.caseExecutions).toBe(3);
+    expect(terminalBoundaryPlan.plan.expectationExecutions).toBe(3);
+    expect(Reflect.ownKeys(terminalBoundaryPlan.plan)).toEqual([]);
+
+    const mixedExecutePlan = createStagedRegistryPlan();
+    expect(mixedExecutePlan.plan.seal()).toEqual([]);
+    const mixedExecuteCalls: string[] = [];
+    mixedExecutePlan.plan.execute({
+      registryEvaluatorProblems: (source) => {
+        mixedExecuteCalls.push(`evaluator:${source}`);
+        return source === "registry-clean ready" ? [] : [RELEASE_MUTATION_REGISTRY_PROBLEM];
+      },
+      registryStepProblems: (run, integrity) => {
+        mixedExecuteCalls.push(`step:${run}:${integrity}`);
+        return run === "run-clean" && integrity === "integrity-clean" ? [] : [MCP_REGISTRY_WORKFLOW_CONTRACT_PROBLEM];
+      }
+    });
+    expect(mixedExecuteCalls).toEqual([
+      "evaluator:registry-clean ready",
+      "evaluator:registry-mutant ready",
+      "step:run-clean:integrity-clean",
+      "step:run-mutant:integrity-clean",
+      "step:run-clean:integrity-clean",
+      "step:run-clean:integrity-mutant"
+    ]);
+    expect(mixedExecutePlan.plan.phase).toBe("executed");
+    expect(mixedExecutePlan.plan.caseExecutions).toBe(3);
+    expect(mixedExecutePlan.plan.expectationExecutions).toBe(3);
+    expect(Reflect.ownKeys(mixedExecutePlan.plan)).toEqual([]);
+
+    const missingSuffixAdapterPlan = createStagedRegistryPlan();
+    expect(missingSuffixAdapterPlan.plan.seal()).toEqual([]);
+    let missingSuffixEvaluatorCalls = 0;
+    expect(() =>
+      missingSuffixAdapterPlan.plan.executeThrough(missingSuffixAdapterPlan.evaluatorRoot, {
+        registryEvaluatorProblems: () => {
+          missingSuffixEvaluatorCalls++;
+          return [];
+        }
+      })
+    ).toThrow(
+      "release oracle adapters must contain exactly enumerable registryEvaluatorProblems " +
+        "and registryStepProblems data functions"
+    );
+    expect(missingSuffixEvaluatorCalls).toBe(0);
+    expect(missingSuffixAdapterPlan.plan.phase).toBe("failed");
+    expect(missingSuffixAdapterPlan.plan.caseExecutions).toBe(0);
+    expect(missingSuffixAdapterPlan.plan.expectationExecutions).toBe(0);
+
+    const missingFullAdapterPlan = createStagedRegistryPlan();
+    expect(missingFullAdapterPlan.plan.seal()).toEqual([]);
+    let missingFullEvaluatorCalls = 0;
+    expect(() =>
+      missingFullAdapterPlan.plan.execute({
+        registryEvaluatorProblems: () => {
+          missingFullEvaluatorCalls++;
+          return [];
+        }
+      })
+    ).toThrow(
+      "release oracle adapters must contain exactly enumerable registryEvaluatorProblems " +
+        "and registryStepProblems data functions"
+    );
+    expect(missingFullEvaluatorCalls).toBe(0);
+    expect(missingFullAdapterPlan.plan.phase).toBe("failed");
+    expect(missingFullAdapterPlan.plan.caseExecutions).toBe(0);
+    expect(missingFullAdapterPlan.plan.expectationExecutions).toBe(0);
+
+    const adapterInspectionDriftPlan = createStagedRegistryPlan();
+    expect(adapterInspectionDriftPlan.plan.seal()).toEqual([]);
+    const stagedStringIncludesDescriptor = Object.getOwnPropertyDescriptor(String.prototype, "includes");
+    if (stagedStringIncludesDescriptor === undefined || !("value" in stagedStringIncludesDescriptor)) {
+      throw new Error("missing staged String.prototype.includes descriptor control");
+    }
+    let adapterInspectionDetectorCalls = 0;
+    let adapterInspectionDriftRestored = false;
+    const adapterInspectionDrift = new Proxy(
+      {
+        registryEvaluatorProblems: () => {
+          adapterInspectionDetectorCalls++;
+          return [];
+        },
+        registryStepProblems: () => {
+          adapterInspectionDetectorCalls++;
+          return [];
+        }
+      },
+      {
+        ownKeys: (target) => {
+          Object.defineProperty(String.prototype, "includes", {
+            ...stagedStringIncludesDescriptor,
+            value: () => false
+          });
+          return Reflect.ownKeys(target);
+        }
+      }
+    );
+    let adapterInspectionDriftMessage = "";
+    try {
+      try {
+        adapterInspectionDriftPlan.plan.executeThrough(
+          adapterInspectionDriftPlan.evaluatorRoot,
+          adapterInspectionDrift
+        );
+      } catch (error) {
+        adapterInspectionDriftMessage = error instanceof Error ? error.message : String(error);
+      }
+    } finally {
+      Object.defineProperty(String.prototype, "includes", stagedStringIncludesDescriptor);
+      adapterInspectionDriftRestored = true;
+    }
+    expect(adapterInspectionDriftMessage).toBe("release mutation ambient intrinsic drift");
+    expect(adapterInspectionDriftRestored).toBe(true);
+    expect(adapterInspectionDetectorCalls).toBe(0);
+    expect(adapterInspectionDriftPlan.plan.phase).toBe("failed");
+    expect(adapterInspectionDriftPlan.plan.caseExecutions).toBe(0);
+    expect(adapterInspectionDriftPlan.plan.expectationExecutions).toBe(0);
+
+    const resultInspectionDriftPlan = createStagedRegistryPlan();
+    expect(resultInspectionDriftPlan.plan.seal()).toEqual([]);
+    let resultInspectionBaselineCalls = 0;
+    let resultInspectionMutantCalls = 0;
+    let resultInspectionStepCalls = 0;
+    let resultInspectionDriftMessage = "";
+    let resultInspectionDriftRestored = false;
+    const poisonedBaselineProblems = new Proxy<string[]>([], {
+      ownKeys: (target) => {
+        Object.defineProperty(String.prototype, "includes", {
+          ...stagedStringIncludesDescriptor,
+          value: () => false
+        });
+        return Reflect.ownKeys(target);
+      }
+    });
+    try {
+      try {
+        resultInspectionDriftPlan.plan.executeThrough(resultInspectionDriftPlan.evaluatorRoot, {
+          registryEvaluatorProblems: (source) => {
+            if (source === "registry-clean ready") {
+              resultInspectionBaselineCalls++;
+              return poisonedBaselineProblems;
+            }
+            resultInspectionMutantCalls++;
+            return [RELEASE_MUTATION_REGISTRY_PROBLEM];
+          },
+          registryStepProblems: () => {
+            resultInspectionStepCalls++;
+            return [];
+          }
+        });
+      } catch (error) {
+        resultInspectionDriftMessage = error instanceof Error ? error.message : String(error);
+      }
+    } finally {
+      Object.defineProperty(String.prototype, "includes", stagedStringIncludesDescriptor);
+      resultInspectionDriftRestored = true;
+    }
+    expect(resultInspectionDriftMessage).toBe("release mutation ambient intrinsic drift");
+    expect(resultInspectionDriftRestored).toBe(true);
+    expect(resultInspectionBaselineCalls).toBe(1);
+    expect(resultInspectionMutantCalls).toBe(0);
+    expect(resultInspectionStepCalls).toBe(0);
+    expect(resultInspectionDriftPlan.plan.phase).toBe("failed");
+    expect(resultInspectionDriftPlan.plan.caseExecutions).toBe(1);
+    expect(resultInspectionDriftPlan.plan.expectationExecutions).toBe(0);
+    expect(Reflect.ownKeys(resultInspectionDriftPlan.plan)).toEqual([]);
+
+    const dependencyBoundaryPlan = createStagedRegistryPlan();
+    expect(dependencyBoundaryPlan.plan.seal()).toEqual([]);
+    let boundaryAdapterInspections = 0;
+    let boundaryAdapterCalls = 0;
+    const untouchedBoundaryAdapters = new Proxy(
+      {
+        registryEvaluatorProblems: () => {
+          boundaryAdapterCalls++;
+          return [];
+        },
+        registryStepProblems: () => {
+          boundaryAdapterCalls++;
+          return [];
+        }
+      },
+      {
+        ownKeys: (target) => {
+          boundaryAdapterInspections++;
+          return Reflect.ownKeys(target);
+        }
+      }
+    );
+    expect(() =>
+      dependencyBoundaryPlan.plan.executeThrough(dependencyBoundaryPlan.evaluatorDependency, untouchedBoundaryAdapters)
+    ).toThrow(/boundary must be a case root, not a dependency-only mutation/);
+    expect(boundaryAdapterInspections).toBe(0);
+    expect(boundaryAdapterCalls).toBe(0);
+    expect(dependencyBoundaryPlan.plan.phase).toBe("failed");
+    expect(dependencyBoundaryPlan.plan.caseExecutions).toBe(0);
+    expect(dependencyBoundaryPlan.plan.expectationExecutions).toBe(0);
+
+    const foreignBoundaryPlan = createStagedRegistryPlan();
+    expect(foreignBoundaryPlan.plan.seal()).toEqual([]);
+    expect(() =>
+      foreignBoundaryPlan.plan.executeThrough(dependencyBoundaryPlan.evaluatorRoot, untouchedBoundaryAdapters)
+    ).toThrow(/boundary uses a foreign-plan mutation handle/);
+    expect(boundaryAdapterInspections).toBe(0);
+    expect(boundaryAdapterCalls).toBe(0);
+    expect(foreignBoundaryPlan.plan.phase).toBe("failed");
+    expect(foreignBoundaryPlan.plan.caseExecutions).toBe(0);
+    expect(foreignBoundaryPlan.plan.expectationExecutions).toBe(0);
+
+    const sparseStepResult = Array<string>(1);
+    const sparseStepPlan = createStagedRegistryPlan();
+    expect(sparseStepPlan.plan.seal()).toEqual([]);
+    sparseStepPlan.plan.executeThrough(sparseStepPlan.evaluatorRoot, {
+      registryEvaluatorProblems: (source) =>
+        source === "registry-clean ready" ? [] : [RELEASE_MUTATION_REGISTRY_PROBLEM],
+      registryStepProblems: (run, integrity) =>
+        run === "run-clean" && integrity === "integrity-clean" ? [] : sparseStepResult
+    });
+    expect(sparseStepPlan.plan.phase).toBe("partially-executed");
+    expect(() => sparseStepPlan.plan.executeRemaining()).toThrow(
+      /registry\.step\.run mutant result must be a dense built-in string array/
+    );
+    expect(sparseStepPlan.plan.phase).toBe("failed");
+    expect(sparseStepPlan.plan.caseExecutions).toBe(2);
+    expect(sparseStepPlan.plan.expectationExecutions).toBe(1);
+    expect(Reflect.ownKeys(sparseStepPlan.plan)).toEqual([]);
+
+    const crossFamilyStepPlan = createStagedRegistryPlan();
+    expect(crossFamilyStepPlan.plan.seal()).toEqual([]);
+    crossFamilyStepPlan.plan.executeThrough(crossFamilyStepPlan.evaluatorRoot, {
+      registryEvaluatorProblems: (source) =>
+        source === "registry-clean ready" ? [] : [RELEASE_MUTATION_REGISTRY_PROBLEM],
+      registryStepProblems: (run, integrity) =>
+        run === "run-clean" && integrity === "integrity-clean" ? [] : [RELEASE_MUTATION_REGISTRY_PROBLEM]
+    });
+    expect(() => crossFamilyStepPlan.plan.executeRemaining()).toThrow(
+      "registry.step.run mutant result contains an unknown problem identity"
+    );
+    expect(crossFamilyStepPlan.plan.phase).toBe("failed");
+    expect(crossFamilyStepPlan.plan.caseExecutions).toBe(2);
+    expect(crossFamilyStepPlan.plan.expectationExecutions).toBe(1);
+
+    const invalidCompanionPlan = new ReleaseMutationPlan({
+      total: 1,
+      first: 1,
+      all: 0,
+      cases: 1,
+      expectations: 1,
+      roots: 1,
+      dependencyOnly: 0
+    });
+    const invalidCompanionSource = invalidCompanionPlan.registerSource("fixture.invalid-companion", "run-clean");
+    const invalidCompanionRoot = registerFixtureMutation(invalidCompanionPlan, "mutation.invalid-companion", {
+      mode: "first",
+      source: invalidCompanionSource,
+      needle: "clean",
+      replacement: "mutant",
+      expectedOccurrences: 1,
+      witness: { kind: "token", anchor: "clean", before: 1, after: 0 }
+    });
+    invalidCompanionPlan.registerCase({
+      id: "case.invalid-companion",
+      root: invalidCompanionRoot,
+      checks: [
+        {
+          invoke: {
+            kind: "registry.step.run",
+            baseline: invalidCompanionSource,
+            mutant: invalidCompanionRoot,
+            integrity: invalidCompanionRoot
+          },
+          expectation: {
+            id: "expectation.invalid-companion",
+            kind: "problem",
+            problem: MCP_REGISTRY_WORKFLOW_CONTRACT_PROBLEM
+          }
+        }
+      ]
+    } as never);
+    expect(invalidCompanionPlan.seal().filter((problem) => problem.startsWith("[invocation.companion]"))).toEqual([
+      "[invocation.companion] case.invalid-companion: integrity must be a canonical source handle, " +
+        "found mutation handle"
+    ]);
+    expect(invalidCompanionPlan.caseExecutions).toBe(0);
+    expect(invalidCompanionPlan.expectationExecutions).toBe(0);
 
     const releaseWorkflow = readFileSync(new URL("../.github/workflows/release.yml", import.meta.url), "utf8");
     const releaseTransaction = readFileSync(
@@ -11299,6 +12221,10 @@ describe("release identity and exact required-job gate", () => {
     expect(registryStep).toBeDefined();
     if (registryStep === undefined) throw new Error("MCP Registry release step is missing from the baseline");
     const registryRun = runBody(registryStep);
+    expect(Object.isFrozen(MCP_REGISTRY_EXACT_STEP_ENV)).toBe(true);
+    expect(Object.isFrozen(MCP_REGISTRY_EXACT_STEP_METADATA)).toBe(true);
+    expect(mcpRegistryRunProblems(registryRun, mcpbInputs.integrity)).toEqual([]);
+    expect(mcpRegistryRunProblems(registryRun, "")).toContain(MCP_REGISTRY_WORKFLOW_CONTRACT_PROBLEM);
     expect(canonicalLogicalShellIdentifierInventory(registryRun, "CURL_BIN")).toEqual(
       MCP_REGISTRY_CURL_LOGICAL_INVENTORY
     );
@@ -15264,5 +16190,5 @@ describe("release identity and exact required-job gate", () => {
       )
     ).toContain(dockerTimeoutProblem);
     expect(REQUIRED_RELEASE_CHECKS).not.toContain("test-windows");
-  }, 240_000);
+  }, 330_000);
 });

@@ -1143,8 +1143,8 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
     const legacyM111CallNode = [
       "replaceExactly(",
       "          mcpbInputs.integrity,",
-      '          \'phase === "convergence" && (status === 429 || status >= 500)\',',
-      '          \'phase === "convergence"\'',
+      "          'phase === \"convergence\" && (status === 429 || status >= 500)',",
+      "          'phase === \"convergence\"'",
       "        )"
     ].join("\n");
     expect(sha256Text(legacyM109CallNode)).toBe("24c05d112a2d846080b17c7413f555c37b2c50a54975f16a985d8b1018b2d711");
@@ -1320,9 +1320,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       finalRequiredReleaseCheck,
       [`    void ${legacyM111MatcherNode};`, finalRequiredReleaseCheck].join("\n")
     );
-    const resurrectedMigratedRegistryMatcherProblems = preparedAudit.auditMatrix(
-      resurrectedMigratedRegistryMatcher
-    );
+    const resurrectedMigratedRegistryMatcherProblems = preparedAudit.auditMatrix(resurrectedMigratedRegistryMatcher);
     expect(resurrectedMigratedRegistryMatcherProblems).toEqual(
       expect.arrayContaining([
         expect.stringMatching(/release mutation hybrid current source must retain exact SHA-256/),

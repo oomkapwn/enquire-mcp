@@ -2608,8 +2608,8 @@ function scanHybridDeclarativeMatrix(matrix: MatrixScan, problems: string[]): Hy
     ...MIGRATED_REGISTRY_EVALUATOR_IDS.flatMap((id) => [
       `mutation:${id}`,
       `case:${id.replace("release.", "release.case.")}`
-      ]),
-      "source:workflow.registry-publish-step:registryPublishStepSource",
+    ]),
+    "source:workflow.registry-publish-step:registryPublishStepSource",
     ...MIGRATED_REGISTRY_RUN_IDS.flatMap((id) => [`mutation:${id}`, `case:${id.replace("release.", "release.case.")}`])
   ];
   const evaluatorRegistrationCount = 1 + MIGRATED_REGISTRY_EVALUATOR_IDS.length * 2;

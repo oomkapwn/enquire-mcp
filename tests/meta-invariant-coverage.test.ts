@@ -1044,7 +1044,9 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
     );
     expect(preparedAudit.auditMatrix(duplicatedRegistryBaseline)).toEqual(
       expect.arrayContaining([
-        expect.stringMatching(/release mutation hybrid registry run requires one exact clean baseline assertion; found 2/)
+        expect.stringMatching(
+          /release mutation hybrid registry run requires one exact clean baseline assertion; found 2/
+        )
       ])
     );
 
@@ -1064,21 +1066,21 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
     );
     expect(preparedAudit.auditMatrix(positiveOnlyM109Witness)).toEqual(
       expect.arrayContaining([
-        expect.stringMatching(/release mutation hybrid descriptor release\.m109 disagrees with its exact frozen semantics/)
+        expect.stringMatching(
+          /release mutation hybrid descriptor release\.m109 disagrees with its exact frozen semantics/
+        )
       ])
     );
     const needleDerivedM109Witness = replaceExactly(
       matrixSource,
       m109Witness,
-      [
-        '        anchor: "MCP_REGISTRY_CONFIRMED=false",',
-        "        before: 0,",
-        "        after: 1"
-      ].join("\n")
+      ['        anchor: "MCP_REGISTRY_CONFIRMED=false",', "        before: 0,", "        after: 1"].join("\n")
     );
     expect(preparedAudit.auditMatrix(needleDerivedM109Witness)).toEqual(
       expect.arrayContaining([
-        expect.stringMatching(/release mutation hybrid descriptor release\.m109 disagrees with its exact frozen semantics/)
+        expect.stringMatching(
+          /release mutation hybrid descriptor release\.m109 disagrees with its exact frozen semantics/
+        )
       ])
     );
     const weakenedM110Replacement = replaceExactly(
@@ -1088,7 +1090,9 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
     );
     expect(preparedAudit.auditMatrix(weakenedM110Replacement)).toEqual(
       expect.arrayContaining([
-        expect.stringMatching(/release mutation hybrid descriptor release\.m110 disagrees with its exact frozen semantics/)
+        expect.stringMatching(
+          /release mutation hybrid descriptor release\.m110 disagrees with its exact frozen semantics/
+        )
       ])
     );
 
@@ -1110,7 +1114,9 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
     );
     expect(preparedAudit.auditMatrix(borrowedM109Problem)).toEqual(
       expect.arrayContaining([
-        expect.stringMatching(/release mutation hybrid case release\.case\.m109 disagrees with its exact frozen identity/)
+        expect.stringMatching(
+          /release mutation hybrid case release\.case\.m109 disagrees with its exact frozen identity/
+        )
       ])
     );
 
@@ -1712,9 +1718,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       ].join("\n")
     );
     expect(preparedAudit.auditMatrix(wrongKnownStagedBoundary)).toEqual(
-      expect.arrayContaining([
-        expect.stringMatching(stagedLifecycleProblem)
-      ])
+      expect.arrayContaining([expect.stringMatching(stagedLifecycleProblem)])
     );
 
     // NEGATIVE controls: the suffix executes exactly between the shared m038-m108

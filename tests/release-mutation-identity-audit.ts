@@ -2608,12 +2608,9 @@ function scanHybridDeclarativeMatrix(matrix: MatrixScan, problems: string[]): Hy
     ...MIGRATED_REGISTRY_EVALUATOR_IDS.flatMap((id) => [
       `mutation:${id}`,
       `case:${id.replace("release.", "release.case.")}`
-    ]),
-    "source:workflow.registry-publish-step:registryPublishStepSource",
-    ...MIGRATED_REGISTRY_RUN_IDS.flatMap((id) => [
-      `mutation:${id}`,
-      `case:${id.replace("release.", "release.case.")}`
-    ])
+      ]),
+      "source:workflow.registry-publish-step:registryPublishStepSource",
+    ...MIGRATED_REGISTRY_RUN_IDS.flatMap((id) => [`mutation:${id}`, `case:${id.replace("release.", "release.case.")}`])
   ];
   const evaluatorRegistrationCount = 1 + MIGRATED_REGISTRY_EVALUATOR_IDS.length * 2;
   const registryRunRegistrationCount = 1 + MIGRATED_REGISTRY_RUN_IDS.length * 2;
@@ -5493,9 +5490,7 @@ function validateHybridPartition(
   const legacyAll = expectedLegacy.filter((mutation) => mutation.mode === "all").length;
   const legacyRoots = expectedLegacy.filter((mutation) => mutation.role === "root").length;
   const legacyDependencies = expectedLegacy.filter((mutation) => mutation.role === "dependency").length;
-  const legacyCases = manifest.cases.filter(
-    (identityCase) => !MIGRATED_REGISTRY_ID_SET.has(identityCase.root)
-  );
+  const legacyCases = manifest.cases.filter((identityCase) => !MIGRATED_REGISTRY_ID_SET.has(identityCase.root));
   const legacyChecks = legacyCases.reduce((total, identityCase) => total + identityCase.checks.length, 0);
   const legacyLeaves = legacyCases.reduce(
     (total, identityCase) =>
@@ -6368,9 +6363,7 @@ function validateGlobalCaseExecutionOrder(
   legacyExecutionAnchors: ReadonlyMap<string, LegacyCaseExecutionAnchor>,
   problems: string[]
 ): void {
-  const legacyCases = manifest.cases.filter(
-    (identityCase) => !MIGRATED_REGISTRY_ID_SET.has(identityCase.root)
-  );
+  const legacyCases = manifest.cases.filter((identityCase) => !MIGRATED_REGISTRY_ID_SET.has(identityCase.root));
   // Matcher validation already owns missing or ambiguous legacy anchors. Do not
   // turn one binding failure into a second, misleading order failure.
   if (legacyExecutionAnchors.size !== legacyCases.length) return;

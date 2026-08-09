@@ -147,7 +147,11 @@ function canonicalJsonValue(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(canonicalJsonValue);
   const record = asRecord(value);
   if (record === undefined) return value;
-  return Object.fromEntries(Object.keys(record).sort().map((key) => [key, canonicalJsonValue(record[key])]));
+  return Object.fromEntries(
+    Object.keys(record)
+      .sort()
+      .map((key) => [key, canonicalJsonValue(record[key])])
+  );
 }
 
 function workflowStepFingerprints(steps: readonly UnknownRecord[] | undefined): string[] {
@@ -1358,8 +1362,7 @@ describe("Class A invariant — no test imports value from registration boilerpl
       "tests/release-integrity.test.ts value-imports production path src/vault.js"
     );
     const createRequireLoader =
-      'import { createRequire } from "node:module";\n' +
-      "const loadCoverageModule = createRequire(import.meta.url);";
+      'import { createRequire } from "node:module";\n' + "const loadCoverageModule = createRequire(import.meta.url);";
     expect(moduleProblems("tests/release-integrity.test.ts", createRequireLoader)).toContain(
       "tests/release-integrity.test.ts uses createRequire outside the reviewed static import graph"
     );

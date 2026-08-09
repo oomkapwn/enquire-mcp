@@ -230,14 +230,9 @@ function packageCoverageProblems(source: string): string[] {
 }
 
 function workflowSteps(job: UnknownRecord | undefined): UnknownRecord[] | undefined {
-  if (!Array.isArray(job?.steps)) return undefined;
-  const steps: UnknownRecord[] = [];
-  for (const value of job.steps) {
-    const step = asRecord(value);
-    if (step === undefined) return undefined;
-    steps.push(step);
-  }
-  return steps;
+  const steps = job?.steps;
+  if (!Array.isArray(steps) || steps.some((value) => asRecord(value) === undefined)) return undefined;
+  return steps as UnknownRecord[];
 }
 
 function jobHasOverride(job: UnknownRecord): boolean {
@@ -406,7 +401,7 @@ function vitestCoverageProblems(source: string, configFiles: readonly string[]):
   const exported = exportAssignment?.expression;
   const configArgument = exported !== undefined && ts.isCallExpression(exported) ? exported.arguments[0] : undefined;
   if (
-    exportAssignment?.isExportEquals !== false ||
+    exportAssignment?.isExportEquals === true ||
     exported === undefined ||
     !ts.isCallExpression(exported) ||
     !ts.isIdentifier(exported.expression) ||
@@ -1064,6 +1059,14 @@ describe("Class A invariant — no test imports value from registration boilerpl
     );
     expect(coverageIsolationProblems({ ...current, vitestConfig: vitestWithAliasedDefineConfig })).toContain(
       "vitest config must retain the exact unaliased defineConfig import"
+    );
+    const vitestWithExportEquals = replaceExactly(
+      current.vitestConfig,
+      "export default defineConfig(",
+      "export = defineConfig("
+    );
+    expect(coverageIsolationProblems({ ...current, vitestConfig: vitestWithExportEquals })).toContain(
+      "vitest config must remain one static default defineConfig object"
     );
     const vitestWithRootOverride = replaceExactly(
       current.vitestConfig,

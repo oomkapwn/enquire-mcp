@@ -1456,6 +1456,7 @@ function releaseMutationInventoryProblems(source: string): string[] {
   let otherItBindings = 0;
   let directReleaseMutationPlanImports = 0;
   let otherReleaseMutationPlanBindings = 0;
+  let exactExplosiveReleasePlanExtensions = 0;
   let exactVitestImportDeclarations = 0;
   let otherVitestImportDeclarations = 0;
   let exactReleasePlanImportDeclarations = 0;
@@ -1574,9 +1575,7 @@ function releaseMutationInventoryProblems(source: string): string[] {
     }
     return (
       (call.expression.name.text === "execute" && call.arguments.length === 1 && call.arguments[0] === object) ||
-      (call.expression.name.text === "executeThrough" &&
-        call.arguments.length === 2 &&
-        call.arguments[1] === object)
+      (call.expression.name.text === "executeThrough" && call.arguments.length === 2 && call.arguments[1] === object)
     );
   };
   const assignmentOperatorKinds: ReadonlySet<ts.SyntaxKind> = new Set([
@@ -1799,10 +1798,23 @@ function releaseMutationInventoryProblems(source: string): string[] {
       const parent = node.parent;
       const exactConstructor = ts.isNewExpression(parent) && parent.expression === node;
       const exactTypeReference = ts.isTypeReferenceNode(parent) && parent.typeName === node;
-      if (!exactConstructor && !exactTypeReference) {
+      const exactExplosiveExtension =
+        ts.isExpressionWithTypeArguments(parent) &&
+        parent.expression === node &&
+        parent.typeArguments === undefined &&
+        ts.isHeritageClause(parent.parent) &&
+        parent.parent.token === ts.SyntaxKind.ExtendsKeyword &&
+        parent.parent.types.length === 1 &&
+        ts.isClassDeclaration(parent.parent.parent) &&
+        parent.parent.parent.name?.text === "ExplosiveDiagnosticsPlan" &&
+        parent.parent.parent.heritageClauses?.length === 1;
+      if (exactExplosiveExtension) {
+        exactExplosiveReleasePlanExtensions++;
+      } else if (!exactConstructor && !exactTypeReference) {
         const position = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile));
         problems.push(
-          `release mutation ReleaseMutationPlan may only be one direct constructor or a type reference at ${position.line + 1}:${position.character + 1}`
+          `release mutation ReleaseMutationPlan may only be one direct constructor, a type reference, or the exact ` +
+            `ExplosiveDiagnosticsPlan heritage use at ${position.line + 1}:${position.character + 1}`
         );
       }
     }
@@ -1873,6 +1885,11 @@ function releaseMutationInventoryProblems(source: string): string[] {
   if (exactReleasePlanImportDeclarations !== 1 || otherReleasePlanImportDeclarations !== 0) {
     problems.push(
       `release mutation matrix requires one exact ReleaseMutationPlan import declaration and no other release-plan imports; found exact ${exactReleasePlanImportDeclarations}, other ${otherReleasePlanImportDeclarations}`
+    );
+  }
+  if (exactExplosiveReleasePlanExtensions !== 1) {
+    problems.push(
+      `release mutation matrix must retain exactly one reviewed ExplosiveDiagnosticsPlan heritage use; found ${exactExplosiveReleasePlanExtensions}`
     );
   }
   if (directRegistryEvaluatorDeclarations !== 1 || otherRegistryEvaluatorBindings !== 0) {
@@ -3093,11 +3110,7 @@ function releaseMutationInventoryProblems(source: string): string[] {
     }
     return (
       call.arguments.length === offset + 1 &&
-      exactRegistryAdapterObject(
-        call.arguments[offset],
-        requiresRegistryEvaluatorAdapter,
-        requiresRegistryStepAdapter
-      )
+      exactRegistryAdapterObject(call.arguments[offset], requiresRegistryEvaluatorAdapter, requiresRegistryStepAdapter)
     );
   };
   const requiredAdapterDescription =
@@ -5632,10 +5645,7 @@ function mcpRegistryStepProblems(step: YamlRecord | undefined, integrity: string
     env !== null &&
     JSON.stringify(Object.keys(env).sort()) === JSON.stringify(Object.keys(MCP_REGISTRY_EXACT_STEP_ENV).sort()) &&
     Object.entries(MCP_REGISTRY_EXACT_STEP_ENV).every(([key, value]) => env[key] === value);
-  const containsExactEmptyEnvironmentReference = hasExactEmptyEnvironmentReference(
-    run,
-    MCP_REGISTRY_EXACT_STEP_ENV
-  );
+  const containsExactEmptyEnvironmentReference = hasExactEmptyEnvironmentReference(run, MCP_REGISTRY_EXACT_STEP_ENV);
   const capturePositiveInteger = (pattern: RegExp) => {
     const value = Number(pattern.exec(run)?.[1] ?? Number.NaN);
     return Number.isSafeInteger(value) && value > 0 ? value : Number.NaN;
@@ -8345,7 +8355,17 @@ describe("release identity and exact required-job gate", () => {
       oracleSource.slice(suiteStartOffset)
     ].join("");
     expect(releaseMutationInventoryProblems(mutableReleasePlanPrototype)).toContainEqual(
-      expect.stringMatching(/ReleaseMutationPlan may only be one direct constructor or a type reference/)
+      expect.stringMatching(
+        /ReleaseMutationPlan may only be one direct constructor, a type reference, or the exact ExplosiveDiagnosticsPlan heritage use/
+      )
+    );
+    const extraReleasePlanHeritage = [
+      oracleSource.slice(0, suiteStartOffset + suiteStart.length),
+      "\n  class AlternateDiagnosticsPlan extends ReleaseMutationPlan {}",
+      oracleSource.slice(suiteStartOffset + suiteStart.length)
+    ].join("");
+    expect(releaseMutationInventoryProblems(extraReleasePlanHeritage)).toContainEqual(
+      expect.stringMatching(/may only be one direct constructor, a type reference, or the exact/)
     );
     const skippedSuiteMutation = [
       oracleSource.slice(0, suiteStartOffset),
@@ -10586,9 +10606,7 @@ describe("release identity and exact required-job gate", () => {
       },
       registryStepProblems: (run: string, integrity: string): readonly string[] => {
         stagedStepCalls.push([run, integrity]);
-        return run === "run-clean" && integrity === "integrity-clean"
-          ? []
-          : [MCP_REGISTRY_WORKFLOW_CONTRACT_PROBLEM];
+        return run === "run-clean" && integrity === "integrity-clean" ? [] : [MCP_REGISTRY_WORKFLOW_CONTRACT_PROBLEM];
       }
     };
     stagedRegistryPlan.plan.executeThrough(stagedRegistryPlan.evaluatorRoot, stagedAdapters);
@@ -10647,9 +10665,7 @@ describe("release identity and exact required-job gate", () => {
       registryEvaluatorProblems: (source) =>
         source === "registry-clean ready" ? [] : [RELEASE_MUTATION_REGISTRY_PROBLEM],
       registryStepProblems: (run, integrity) =>
-        run === "run-clean" && integrity === "integrity-clean"
-          ? []
-          : [MCP_REGISTRY_WORKFLOW_CONTRACT_PROBLEM]
+        run === "run-clean" && integrity === "integrity-clean" ? [] : [MCP_REGISTRY_WORKFLOW_CONTRACT_PROBLEM]
     });
     expect(terminalBoundaryPlan.plan.phase).toBe("executed");
     expect(terminalBoundaryPlan.plan.caseExecutions).toBe(3);
@@ -10666,9 +10682,7 @@ describe("release identity and exact required-job gate", () => {
       },
       registryStepProblems: (run, integrity) => {
         mixedExecuteCalls.push(`step:${run}:${integrity}`);
-        return run === "run-clean" && integrity === "integrity-clean"
-          ? []
-          : [MCP_REGISTRY_WORKFLOW_CONTRACT_PROBLEM];
+        return run === "run-clean" && integrity === "integrity-clean" ? [] : [MCP_REGISTRY_WORKFLOW_CONTRACT_PROBLEM];
       }
     });
     expect(mixedExecuteCalls).toEqual([
@@ -10844,10 +10858,7 @@ describe("release identity and exact required-job gate", () => {
       }
     );
     expect(() =>
-      dependencyBoundaryPlan.plan.executeThrough(
-        dependencyBoundaryPlan.evaluatorDependency,
-        untouchedBoundaryAdapters
-      )
+      dependencyBoundaryPlan.plan.executeThrough(dependencyBoundaryPlan.evaluatorDependency, untouchedBoundaryAdapters)
     ).toThrow(/boundary must be a case root, not a dependency-only mutation/);
     expect(boundaryAdapterInspections).toBe(0);
     expect(boundaryAdapterCalls).toBe(0);
@@ -10936,9 +10947,7 @@ describe("release identity and exact required-job gate", () => {
         }
       ]
     } as never);
-    expect(
-      invalidCompanionPlan.seal().filter((problem) => problem.startsWith("[invocation.companion]"))
-    ).toEqual([
+    expect(invalidCompanionPlan.seal().filter((problem) => problem.startsWith("[invocation.companion]"))).toEqual([
       "[invocation.companion] case.invalid-companion: integrity must be a canonical source handle, " +
         "found mutation handle"
     ]);
@@ -12217,6 +12226,7 @@ describe("release identity and exact required-job gate", () => {
     expect(Object.isFrozen(MCP_REGISTRY_EXACT_STEP_ENV)).toBe(true);
     expect(Object.isFrozen(MCP_REGISTRY_EXACT_STEP_METADATA)).toBe(true);
     expect(mcpRegistryRunProblems(registryRun, mcpbInputs.integrity)).toEqual([]);
+    expect(mcpRegistryRunProblems(registryRun, "")).toContain(MCP_REGISTRY_WORKFLOW_CONTRACT_PROBLEM);
     expect(canonicalLogicalShellIdentifierInventory(registryRun, "CURL_BIN")).toEqual(
       MCP_REGISTRY_CURL_LOGICAL_INVENTORY
     );
@@ -12771,17 +12781,16 @@ describe("release identity and exact required-job gate", () => {
         MCP_REGISTRY_WORKFLOW_CONTRACT_PROBLEM
       );
     }
-    const weakenedRegistryIntegrity = replaceExactly(
-      mcpbInputs.integrity,
-      'phase === "convergence" && (status === 429 || status >= 500)',
-      'phase === "convergence"'
-    );
-    expect(mcpRegistryStepProblems(registryStep, weakenedRegistryIntegrity)).toContain(
-      MCP_REGISTRY_WORKFLOW_CONTRACT_PROBLEM
-    );
-    expect(mcpRegistryRunProblems(registryRun, weakenedRegistryIntegrity)).toContain(
-      MCP_REGISTRY_WORKFLOW_CONTRACT_PROBLEM
-    );
+    expect(
+      mcpRegistryStepProblems(
+        registryStep,
+        replaceExactly(
+          mcpbInputs.integrity,
+          'phase === "convergence" && (status === 429 || status >= 500)',
+          'phase === "convergence"'
+        )
+      )
+    ).toContain(MCP_REGISTRY_WORKFLOW_CONTRACT_PROBLEM);
     const provenanceWorkflowCompositionMutation = replaceExactly(
       mcpbInputs.release,
       NPM_PROVENANCE_CONTEXT_COMMAND,

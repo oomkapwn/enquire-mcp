@@ -69,10 +69,7 @@ interface MutableIdentityControlManifest {
 
 type MutableIdentityControlCheck = MutableIdentityControlManifest["cases"][number]["checks"][number];
 
-function identityControlCheck(
-  manifest: MutableIdentityControlManifest,
-  kind: string
-): MutableIdentityControlCheck {
+function identityControlCheck(manifest: MutableIdentityControlManifest, kind: string): MutableIdentityControlCheck {
   const check = manifest.cases
     .flatMap((identityCase) => identityCase.checks)
     .find((entry) => entry.invoke.kind === kind);
@@ -1015,9 +1012,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
     expect(preparedAudit.auditMatrix(duplicateSharedRegistryMatcher)).toEqual(
       expect.arrayContaining([
         expect.stringMatching(/release mutation hybrid current source must retain exact SHA-256/),
-        expect.stringMatching(
-          /release mutation hybrid matcher 5e2815d5.*physical multiplicity must equal 1 .*found 2/
-        )
+        expect.stringMatching(/release mutation hybrid matcher 5e2815d5.*physical multiplicity must equal 1 .*found 2/)
       ])
     );
 
@@ -1039,9 +1034,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       expect.arrayContaining([
         expect.stringMatching(/release mutation hybrid current source must retain exact SHA-256/),
         expect.stringMatching(/release mutation hybrid current matrix slice must retain exact SHA-256/),
-        expect.stringMatching(
-          /release mutation hybrid matcher 82cd3d8a.*physical multiplicity must equal 0 .*found 1/
-        )
+        expect.stringMatching(/release mutation hybrid matcher 82cd3d8a.*physical multiplicity must equal 0 .*found 1/)
       ])
     );
 
@@ -1060,9 +1053,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       expect.arrayContaining([
         expect.stringMatching(/release mutation hybrid current source must retain exact SHA-256/),
         expect.stringMatching(/release mutation hybrid current matrix slice must retain exact SHA-256/),
-        expect.stringMatching(
-          /release mutation hybrid matcher 5e2815d5.*physical multiplicity must equal 1 .*found 0/
-        )
+        expect.stringMatching(/release mutation hybrid matcher 5e2815d5.*physical multiplicity must equal 1 .*found 0/)
       ])
     );
 
@@ -1848,10 +1839,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
     // unordered bag: the mutated slot comes first and its clean companion second.
     const registryStepCompanionControl = JSON.parse(fixtureBefore) as MutableIdentityControlManifest;
     const registryStepRunCheck = identityControlCheck(registryStepCompanionControl, "registry.step.run");
-    const registryStepIntegrityCheck = identityControlCheck(
-      registryStepCompanionControl,
-      "registry.step.integrity"
-    );
+    const registryStepIntegrityCheck = identityControlCheck(registryStepCompanionControl, "registry.step.integrity");
     expect(registryStepRunCheck.invoke.inputs.arguments).toEqual([
       { kind: "mutant", slot: "run" },
       { id: "script.release-integrity", kind: "source", slot: "integrity" }
@@ -1869,9 +1857,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       expect.arrayContaining([
         expect.stringMatching(/release mutation identity fixture must remain byte-exact SHA-256/),
         expect.stringMatching(/inputs\.arguments disagree with the exact registry\.step\.run detector signature/),
-        expect.stringMatching(
-          /inputs\.arguments disagree with the exact registry\.step\.integrity detector signature/
-        )
+        expect.stringMatching(/inputs\.arguments disagree with the exact registry\.step\.integrity detector signature/)
       ])
     );
 

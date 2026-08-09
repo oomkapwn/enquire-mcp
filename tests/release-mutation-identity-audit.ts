@@ -309,8 +309,8 @@ const MATRIX_TITLE = "keeps release.yml wired to the shared evaluator and an exa
 const SOURCE_COMMIT = "8420e2fca3ed0dac994859a9e9a30b933d5ddf9e";
 const MATRIX_SOURCE_SHA256 = "3fa0b67411e2fc0f4d7c6bce6075ba91eb25edc19a210b5c2f8dd408def6e18b";
 const MATRIX_SLICE_SHA256 = "caca0093c744df9f6c6cdd0e8200fd8df45052e784297079887ea48686c5e07f";
-const CURRENT_HYBRID_SOURCE_SHA256 = "7ac34185b2b26c731c100e38e2bd8e888e6b65410ec3f322f2d8962807545fb0";
-const CURRENT_HYBRID_MATRIX_SLICE_SHA256 = "c6ccc2b5546ec894b7fab0772b804c6423dfff0738ad51a25cbcf21d7b6ea9ee";
+const CURRENT_HYBRID_SOURCE_SHA256 = "0249b31bfce7b127a7ec0ff5074a10ba3e3ee90bbe32a3c987ec8869ea62dabd";
+const CURRENT_HYBRID_MATRIX_SLICE_SHA256 = "eed3871f5af94d3c524fa8cdf7bec2e41881dee2a745fcebd9f630e819830987";
 const IDENTITY_FIXTURE_SHA256 = "b1bef74ea285f53f8acf3c78d942db4880f06648c50b051351e0e004c73253d3";
 const MUTATION_MATCH_COUNT_NODE_SHA256 = "5e57cd7a2f1dd60cc4bda3b10c4a7e906f7e5b9604902eff5e54f20bd0c8f49d";
 const REGISTRY_EVALUATOR_PROBLEM_NODE_SHA256 = "4c374cc179d7a95cdf25085358c62e482134824abca913b126167d3bb8397b26";
@@ -2217,10 +2217,7 @@ function validateReleaseOracleAdapterReferenceSemantics(problems: string[]): voi
       step
     ) ||
     !syntheticAdapterReferencesAreExact(`releaseMutationPlan.execute(${combinedObject});`, combined) ||
-    !syntheticAdapterReferencesAreExact(
-      `releaseMutationPlan.executeThrough(root, ${combinedObject});`,
-      combined
-    ) ||
+    !syntheticAdapterReferencesAreExact(`releaseMutationPlan.executeThrough(root, ${combinedObject});`, combined) ||
     syntheticAdapterReferencesAreExact(
       "releaseMutationPlan.execute({ registryEvaluatorProblems: mcpRegistryRunProblems, " +
         "registryStepProblems: mcpRegistryEvaluatorProblems });",
@@ -2535,11 +2532,7 @@ function scanHybridDeclarativeMatrix(matrix: MatrixScan, problems: string[]): Hy
   let allExecutionMemberReferences = 0;
   let computedPlanMemberReferences = 0;
   let indirectPlanReferences = 0;
-  const executionMethodNames = new Set<DeclarativeExecutionKind>([
-    "execute",
-    "executeRemaining",
-    "executeThrough"
-  ]);
+  const executionMethodNames = new Set<DeclarativeExecutionKind>(["execute", "executeRemaining", "executeThrough"]);
   const visitRegistrations = (node: ts.Node): void => {
     if (ts.isIdentifier(node) && node.text === "releaseMutationPlan") {
       const parent = node.parent;
@@ -2712,9 +2705,7 @@ function scanHybridDeclarativeMatrix(matrix: MatrixScan, problems: string[]): Hy
       `release mutation hybrid ${kind} adapters`,
       problems
     );
-    exact =
-      exact &&
-      exactReleaseOracleAdapterObject(call.arguments[adapterArgumentIndex], requiredAdapterBindings);
+    exact = exact && exactReleaseOracleAdapterObject(call.arguments[adapterArgumentIndex], requiredAdapterBindings);
     if (requiresRegistryEvaluatorProblems) {
       const adapter = adapters?.get("registryEvaluatorProblems");
       const exactAdapter =
@@ -2757,10 +2748,7 @@ function scanHybridDeclarativeMatrix(matrix: MatrixScan, problems: string[]): Hy
   const totalExpectationCount = cases.reduce((total, identityCase) => total + identityCase.checkCount, 0);
   const lifecycleStart = sealStatementIndex + 2;
   const commonLifecycle =
-    sealCount === 1 &&
-    allSealCalls === 1 &&
-    sealStatementIndex === lastRegistrationIndex + 1 &&
-    exactSealAssertion;
+    sealCount === 1 && allSealCalls === 1 && sealStatementIndex === lastRegistrationIndex + 1 && exactSealAssertion;
 
   let exactFullLifecycle = false;
   if (executionEvents.length === 1 && executionCalls.length === 1) {
@@ -2799,9 +2787,7 @@ function scanHybridDeclarativeMatrix(matrix: MatrixScan, problems: string[]): Hy
       const prefixExpectationCount =
         boundaryIndex === undefined
           ? 0
-          : cases
-              .slice(0, boundaryIndex + 1)
-              .reduce((total, identityCase) => total + identityCase.checkCount, 0);
+          : cases.slice(0, boundaryIndex + 1).reduce((total, identityCase) => total + identityCase.checkCount, 0);
       const remainingStatementIndex = remainingEvent.statementIndex;
       exactStagedLifecycle =
         boundaryIndex !== undefined &&
@@ -5190,10 +5176,7 @@ function matchesFrozenDeclarativeInvocation(
   const frozenArguments = frozenInputArguments
     .map((argument, index) => invocationArgument(argument, `frozen invocation argument ${index}`, argumentProblems))
     .filter((argument): argument is InvocationArgumentIdentity => argument !== null);
-  if (
-    argumentProblems.length !== 0 ||
-    JSON.stringify(frozenArguments) !== JSON.stringify(contract.arguments)
-  ) {
+  if (argumentProblems.length !== 0 || JSON.stringify(frozenArguments) !== JSON.stringify(contract.arguments)) {
     return false;
   }
   const sourceBindingById = new Map(manifest.sources.map((source) => [source.id, source.declarativeBinding]));
@@ -5211,9 +5194,7 @@ function matchesFrozenDeclarativeInvocation(
       argument.kind === "source"
   );
   if (frozenCheck.invoke.kind === "registry.evaluator") {
-    return (
-      frozenCompanions.length === 0 && observed.companionSlot === null && observed.companionHandle === null
-    );
+    return frozenCompanions.length === 0 && observed.companionSlot === null && observed.companionHandle === null;
   }
   const expectedCompanionSlot =
     frozenCheck.invoke.kind === "registry.step.run"
@@ -5222,8 +5203,7 @@ function matchesFrozenDeclarativeInvocation(
         ? "run"
         : null;
   const frozenCompanion = frozenCompanions.length === 1 ? frozenCompanions[0] : undefined;
-  const expectedCompanionHandle =
-    frozenCompanion === undefined ? undefined : sourceBindingById.get(frozenCompanion.id);
+  const expectedCompanionHandle = frozenCompanion === undefined ? undefined : sourceBindingById.get(frozenCompanion.id);
   return (
     expectedCompanionSlot !== null &&
     frozenCompanion !== undefined &&
@@ -5234,10 +5214,7 @@ function matchesFrozenDeclarativeInvocation(
   );
 }
 
-function validateFrozenDeclarativeInvocationMatchingSemantics(
-  manifest: IdentityManifest,
-  problems: string[]
-): void {
+function validateFrozenDeclarativeInvocationMatchingSemantics(manifest: IdentityManifest, problems: string[]): void {
   const caseByRoot = new Map(manifest.cases.map((identityCase) => [identityCase.root, identityCase]));
   const matches = (rootId: string, observed: DeclarativeInvocationIdentity): boolean => {
     const check = caseByRoot.get(rootId)?.checks[0];
@@ -5609,12 +5586,10 @@ interface SharedLegacyPrimaryOwner {
   readonly rootCall: ts.CallExpression;
 }
 
-const SHARED_REGISTRY_PRIMARY_MATCHER_SHA256 =
-  "5e2815d5e91972642e0cdafbaab958423ce7403d42923787ef09ba6cb4377f45";
+const SHARED_REGISTRY_PRIMARY_MATCHER_SHA256 = "5e2815d5e91972642e0cdafbaab958423ce7403d42923787ef09ba6cb4377f45";
 const SHARED_RELEASE_TRANSACTION_PRIMARY_MATCHER_SHA256 =
   "df5a00757215359cc873505fc976de42141e1f27f55622b906f6a346203d6c4f";
-const SHARED_TAG_IDENTITY_PRIMARY_MATCHER_SHA256 =
-  "2392196bed7b80a20f9390166f389991da7ed6decb2db2073652fc860633666f";
+const SHARED_TAG_IDENTITY_PRIMARY_MATCHER_SHA256 = "2392196bed7b80a20f9390166f389991da7ed6decb2db2073652fc860633666f";
 const SHARED_REGISTRY_OWNERLESS_PREFIX_SHA256 = Object.freeze([
   "d72a02a11e021ddd52c7b8d2e4c6b23324f827b475f25b6bce1e1c428f5ce753",
   "4bc602a330dceb4e0cbf4d49611d34f24de797de1e5e6e6bc3786d302ce85abe",
@@ -5645,11 +5620,7 @@ function unwrapTopologyExpression(expression: ts.Expression): ts.Expression {
   return current;
 }
 
-function symbolIdentifiers(
-  root: ts.Node,
-  symbol: ts.Symbol,
-  checker: ts.TypeChecker
-): readonly ts.Identifier[] {
+function symbolIdentifiers(root: ts.Node, symbol: ts.Symbol, checker: ts.TypeChecker): readonly ts.Identifier[] {
   const identifiers: ts.Identifier[] = [];
   const visit = (node: ts.Node): void => {
     if (ts.isIdentifier(node) && checker.getSymbolAtLocation(node) === symbol) identifiers.push(node);
@@ -5692,15 +5663,11 @@ function exactNamedTopologyArray(
     return null;
   }
   const references = symbolIdentifiers(matrix.callback.body, symbol, graph.checker);
-  return references.length === 2 && references.includes(declaration.name) && references.includes(use)
-    ? array
-    : null;
+  return references.length === 2 && references.includes(declaration.name) && references.includes(use) ? array : null;
 }
 
 function denseTopologyArray(array: ts.ArrayLiteralExpression): boolean {
-  return array.elements.every(
-    (element) => !ts.isOmittedExpression(element) && !ts.isSpreadElement(element)
-  );
+  return array.elements.every((element) => !ts.isOmittedExpression(element) && !ts.isSpreadElement(element));
 }
 
 function exactRegistryStepWrapperArgument(
@@ -5770,8 +5737,7 @@ function exactRegistryStepWrapperArgument(
     runProperty.objectAssignmentInitializer !== undefined ||
     runProperty.name.text !== "run" ||
     graph.checker.getSymbolAtLocation(parameter.name) === undefined ||
-    graph.checker.getSymbolAtLocation(parameter.name) !==
-      graph.checker.getShorthandAssignmentValueSymbol(runProperty)
+    graph.checker.getSymbolAtLocation(parameter.name) !== graph.checker.getShorthandAssignmentValueSymbol(runProperty)
   ) {
     return null;
   }
@@ -5914,10 +5880,7 @@ function exactForOfProjection(
   return { index: 1, kind: "tuple", length: 2 };
 }
 
-function exactObjectPropertyInitializer(
-  object: ts.ObjectLiteralExpression,
-  name: string
-): ts.Expression | null {
+function exactObjectPropertyInitializer(object: ts.ObjectLiteralExpression, name: string): ts.Expression | null {
   const matching = object.properties.filter(
     (property): property is ts.PropertyAssignment =>
       ts.isPropertyAssignment(property) &&
@@ -6474,11 +6437,7 @@ const REGISTRY_BINDING_ASSIGNMENT_OPERATORS: ReadonlySet<ts.SyntaxKind> = new Se
   ts.SyntaxKind.QuestionQuestionEqualsToken
 ]);
 
-function validateRegistryOraclePins(
-  matrix: MatrixScan,
-  declarative: HybridDeclarativeScan,
-  problems: string[]
-): void {
+function validateRegistryOraclePins(matrix: MatrixScan, declarative: HybridDeclarativeScan, problems: string[]): void {
   const functionHashes = new Map<string, string[]>();
   const problemConstantHashes: string[] = [];
   for (const statement of matrix.sourceFile.statements) {

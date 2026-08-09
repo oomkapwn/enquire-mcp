@@ -1517,10 +1517,7 @@ export class ReleaseMutationPlan {
       }
       this.#executePreparedCasesThrough(stagedExecution.preparedCaseCount, stagedExecution.adapters);
       assertAmbientIntrinsics();
-      if (
-        this.#stagedExecution !== stagedExecution ||
-        this.#nextCaseIndex !== stagedExecution.preparedCaseCount
-      ) {
+      if (this.#stagedExecution !== stagedExecution || this.#nextCaseIndex !== stagedExecution.preparedCaseCount) {
         throw new errorConstructor("release mutation staged execution capsule drifted during suffix execution");
       }
       this.#stagedExecution = undefined;
@@ -2129,9 +2126,7 @@ export class ReleaseMutationPlan {
     }
 
     const integrity =
-      kind === "registry.step.run"
-        ? this.#validateCaseCompanionSource(invocation?.integrity, id, "integrity")
-        : null;
+      kind === "registry.step.run" ? this.#validateCaseCompanionSource(invocation?.integrity, id, "integrity") : null;
     if (kind === "registry.step.run" && integrity === null) valid = false;
     const run =
       kind === "registry.step.integrity" ? this.#validateCaseCompanionSource(invocation?.run, id, "run") : null;
@@ -2242,19 +2237,11 @@ export class ReleaseMutationPlan {
       return null;
     }
     if (metadata.owner !== this.#owner) {
-      this.#addProblem(
-        "invocation.companion",
-        id,
-        `${field} uses a foreign-plan ${metadata.kind} handle`
-      );
+      this.#addProblem("invocation.companion", id, `${field} uses a foreign-plan ${metadata.kind} handle`);
       return null;
     }
     if (metadata.kind !== "source") {
-      this.#addProblem(
-        "invocation.companion",
-        id,
-        `${field} must be a canonical source handle, found mutation handle`
-      );
+      this.#addProblem("invocation.companion", id, `${field} must be a canonical source handle, found mutation handle`);
       return null;
     }
     const handle = value as ReleaseSourceHandle;
@@ -2292,12 +2279,7 @@ export class ReleaseMutationPlan {
     return closure;
   }
 
-  #validateExpectation(
-    value: unknown,
-    caseId: string,
-    index: number,
-    ids: Set<string>
-  ): PreparedExpectation | null {
+  #validateExpectation(value: unknown, caseId: string, index: number, ids: Set<string>): PreparedExpectation | null {
     const expectation = plainRecord(value);
     const rawId = expectation?.id;
     const id = displayIdentity(rawId, `<expectation-${index + 1}>`);
@@ -2369,9 +2351,7 @@ export class ReleaseMutationPlan {
       : null;
   }
 
-  #validateCycles(
-    mutations: ReadonlyMap<ReleaseMutationHandle, MutationAnalysis>
-  ): ReadonlySet<ReleaseMutationHandle> {
+  #validateCycles(mutations: ReadonlyMap<ReleaseMutationHandle, MutationAnalysis>): ReadonlySet<ReleaseMutationHandle> {
     const visiting = new setConstructor<ReleaseMutationHandle>();
     const visited = new setConstructor<ReleaseMutationHandle>();
     const cyclic = new setConstructor<ReleaseMutationHandle>();
@@ -2561,11 +2541,7 @@ export class ReleaseMutationPlan {
       : this.#prepared.get(handle as ReleaseMutationHandle)?.output;
   }
 
-  #applyExpectation(
-    caseId: string,
-    expectation: PreparedExpectation,
-    observation: ReleaseOracleObservation
-  ): void {
+  #applyExpectation(caseId: string, expectation: PreparedExpectation, observation: ReleaseOracleObservation): void {
     if (expectation.kind === "problem") {
       switch (observation.kind) {
         case "fixture.throw":

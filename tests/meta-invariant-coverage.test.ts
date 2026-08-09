@@ -1120,30 +1120,55 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       ])
     );
 
+    // NEGATIVE control: append the two exact historical call-node byte spans after
+    // the frozen legacy tail. Earlier insertion would shift unrelated positional
+    // identities, while different inner indentation would not reproduce the pinned
+    // legacy span hashes and therefore would not exercise the XOR detector at all.
+    const finalRequiredReleaseCheck = '    expect(REQUIRED_RELEASE_CHECKS).not.toContain("test-windows");';
+    const legacyM109CallNode = [
+      "replaceExactly(",
+      "          registryRun,",
+      '          "MCP_REGISTRY_CONFIRMED=false",',
+      '          "MCP_REGISTRY_CONFIRMED=false\\nMCP_REGISTRY_CONFIRMED=true"',
+      "        )"
+    ].join("\n");
+    const legacyM110CallNode = [
+      "replaceExactly(",
+      "          registryRun,",
+      '          \'[ "$MCP_PUBLISH_ATTEMPTED" != "true" ] || [ "$MCP_REGISTRY_CONFIRMED" != "true" ]\',',
+      '          \'[ "$MCP_PUBLISH_ATTEMPTED" != "true" ] && [ "$MCP_REGISTRY_CONFIRMED" != "true" ]\'',
+      "        )"
+    ].join("\n");
+    expect(sha256Text(legacyM109CallNode)).toBe(
+      "24c05d112a2d846080b17c7413f555c37b2c50a54975f16a985d8b1018b2d711"
+    );
+    expect(sha256Text(legacyM110CallNode)).toBe(
+      "69e2c8d2350a13c0b755c30190653e9d60a78c7eac7ca5996f624663a0d31c8d"
+    );
     const resurrectedRegistryRoots = replaceExactly(
       matrixSource,
-      "    const weakenedRegistrySteps: YamlRecord[] = [",
+      finalRequiredReleaseCheck,
       [
-        "    void replaceExactly(",
-        "      registryRun,",
-        '      "MCP_REGISTRY_CONFIRMED=false",',
-        '      "MCP_REGISTRY_CONFIRMED=false\\nMCP_REGISTRY_CONFIRMED=true"',
-        "    );",
-        "    void replaceExactly(",
-        "      registryRun,",
-        '      \'[ "$MCP_PUBLISH_ATTEMPTED" != "true" ] || [ "$MCP_REGISTRY_CONFIRMED" != "true" ]\',',
-        '      \'[ "$MCP_PUBLISH_ATTEMPTED" != "true" ] && [ "$MCP_REGISTRY_CONFIRMED" != "true" ]\'',
-        "    );",
-        "    const weakenedRegistrySteps: YamlRecord[] = ["
+        `    void ${legacyM109CallNode};`,
+        `    void ${legacyM110CallNode};`,
+        finalRequiredReleaseCheck
       ].join("\n")
     );
-    expect(preparedAudit.auditMatrix(resurrectedRegistryRoots)).toEqual(
+    const resurrectedRegistryProblems = preparedAudit.auditMatrix(resurrectedRegistryRoots);
+    expect(resurrectedRegistryProblems).toEqual(
       expect.arrayContaining([
         expect.stringMatching(
           /release mutation hybrid frozen ID release\.m109 must exist in exactly one legacy XOR declarative representation; found 1\/1/
         ),
         expect.stringMatching(
           /release mutation hybrid frozen ID release\.m110 must exist in exactly one legacy XOR declarative representation; found 1\/1/
+        )
+      ])
+    );
+    expect(resurrectedRegistryProblems).not.toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(
+          /remaining legacy order|legacy case .* has no remaining root call|remaining matcher census/
         )
       ])
     );

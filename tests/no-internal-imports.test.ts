@@ -1044,9 +1044,7 @@ describe("Class A invariant — no test imports value from registration boilerpl
       vitestConfig: vitestWithGlobalExclusion,
       vitestConfigFiles: [...current.vitestConfigFiles, "vitest.workspace.ts"]
     });
-    expect(vitestAggregateProblems).toContain(
-      "vitest test config must retain its exact reviewed static key set"
-    );
+    expect(vitestAggregateProblems).toContain("vitest test config must retain its exact reviewed static key set");
     expect(vitestAggregateProblems).toContain("the repository must retain one canonical vitest.config.ts");
     const vitestWithHiddenExclusion = replaceExactly(
       current.vitestConfig,

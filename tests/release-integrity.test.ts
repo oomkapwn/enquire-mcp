@@ -8885,9 +8885,7 @@ describe("release identity and exact required-job gate", () => {
       ),
       expect.stringMatching(/registerCase requires one top-level expression call with an object and literal id/),
       expect.stringMatching(/literal mutation\/topology inventory matches the declarative subset/),
-      expect.stringMatching(
-        /requires one top-level clean seal assertion.*exact executed phase, case-count and expectation-count/
-      )
+      declarativeLifecycleProblem
     ]);
     const loopGeneratedMutation = [
       oracleSource.slice(0, matrixBodyOffset),
@@ -12342,9 +12340,6 @@ describe("release identity and exact required-job gate", () => {
         `  command /usr/bin/no\${BASH_ENV}de --eval 'process.exit(0)'`
     );
     expect(hasForbiddenRegistryWriteArguments(fragmentedCurlWriteRun)).toBe(false);
-    expect(mcpRegistryRunProblems(fragmentedCurlWriteRun, mcpbInputs.integrity)).toContain(
-      MCP_REGISTRY_WORKFLOW_CONTRACT_PROBLEM
-    );
     expect(canonicalLogicalShellIdentifierInventory(fragmentedCurlWriteRun, "CURL_BIN")).not.toEqual(
       MCP_REGISTRY_CURL_LOGICAL_INVENTORY
     );

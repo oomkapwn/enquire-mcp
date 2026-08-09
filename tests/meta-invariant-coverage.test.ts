@@ -887,16 +887,16 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
     // The immutable fixture remains historical authority after the current source deliberately
     // adopts a mixed legacy/declarative representation; it is never regenerated or rewritten here.
     expect(await fs.readFile(releaseMutationIdentityFixturePath, "utf8")).toBe(fixtureBefore);
-    const outsideSliceDetectorDrift = replaceExactly(
+    const outsideSliceCommentDrift = replaceExactly(
       matrixSource,
-      "            const folded = envKey.toLowerCase();",
-      "            const folded = envKey;"
+      "// @ts-expect-error — .mjs consumer helpers have no declaration file; the release invariant exercises cleanup behavior.",
+      "// @ts-expect-error — .mjs consumer helpers have no declaration file; the release invariant exercises owned cleanup behavior."
     );
     const preparedAudit = createReleaseMutationIdentityAuditor(fixtureBefore);
     // Seed the execution-scoped projection with a candidate whose matrix and all 30 materialized
     // sources remain exact, then prove that a clean baseline between two identical mutants cannot
     // inherit diagnostics or mutable caller state from either neighbour.
-    const firstRepeatedProblems = preparedAudit.auditMatrix(outsideSliceDetectorDrift);
+    const firstRepeatedProblems = preparedAudit.auditMatrix(outsideSliceCommentDrift);
     const stableRepeatedProblems = [...firstRepeatedProblems];
     expect(firstRepeatedProblems).toEqual([
       expect.stringMatching(/release mutation hybrid current source must retain exact SHA-256/)
@@ -1896,12 +1896,12 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
     );
 
     // Prepared execution is order-independent and returns fresh diagnostics on every call.
-    const secondRepeatedProblems = preparedAudit.auditMatrix(outsideSliceDetectorDrift);
+    const secondRepeatedProblems = preparedAudit.auditMatrix(outsideSliceCommentDrift);
     expect(secondRepeatedProblems).toEqual(stableRepeatedProblems);
     firstRepeatedProblems.push("caller-owned sentinel");
     expect(secondRepeatedProblems).toEqual(stableRepeatedProblems);
     expect(secondRepeatedProblems).toEqual(
-      releaseMutationIdentityAuditProblems(outsideSliceDetectorDrift, fixtureBefore)
+      releaseMutationIdentityAuditProblems(outsideSliceCommentDrift, fixtureBefore)
     );
     expect(preparedAudit.telemetry()).toEqual({
       fixturePreparations: 1,

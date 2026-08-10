@@ -323,8 +323,7 @@ const IDENTITY_FIXTURE_SHA256 = "fb431715ec32253b4474c4993a46acbc0c20749b9f3162b
 const MUTATION_MATCH_COUNT_NODE_SHA256 = "5e57cd7a2f1dd60cc4bda3b10c4a7e906f7e5b9604902eff5e54f20bd0c8f49d";
 const NPM_PROVENANCE_PROBLEM_NODE_SHA256 = "f6f47a5f8eb309db455cf684ca187c5c1ce6dadd0443e4c11475a779a5944334";
 const NPM_PROVENANCE_DETECTOR_NODE_SHA256 = "c453e6c43d71d042e8609997e13a461891e299b494d84242b02227a0b96a825f";
-const NPM_PROVENANCE_WORKFLOW_DETECTOR_NODE_SHA256 =
-  "1361143df29c345b53371ecd39f8fcc44b607a590ebb0068682303f19885c082";
+const NPM_PROVENANCE_WORKFLOW_DETECTOR_NODE_SHA256 = "1361143df29c345b53371ecd39f8fcc44b607a590ebb0068682303f19885c082";
 const REGISTRY_EVALUATOR_PROBLEM_NODE_SHA256 = "4c374cc179d7a95cdf25085358c62e482134824abca913b126167d3bb8397b26";
 const REGISTRY_EVALUATOR_DETECTOR_NODE_SHA256 = "b45c5aed44cf1bff818d5ddac4f80e8fb805e61300f93f77afc299d3e8f0047c";
 const REGISTRY_STEP_DETECTOR_NODE_SHA256 = "5dec02c19d724cf373acc0c9b65fba7309b4b3e5c4ca6cff5422ec5c64e12db6";
@@ -2764,10 +2763,7 @@ function scanHybridDeclarativeMatrix(matrix: MatrixScan, problems: string[]): Hy
       ...MIGRATED_NPM_CONTRACT_RELEASE_IDS,
       ...MIGRATED_NPM_CONTRACT_INTEGRITY_IDS,
       ...MIGRATED_NPM_WORKFLOW_IDS
-    ].flatMap((id) => [
-      `mutation:${id}`,
-      `case:${id.replace("release.", "release.case.")}`
-    ])
+    ].flatMap((id) => [`mutation:${id}`, `case:${id.replace("release.", "release.case.")}`])
   ];
   const evaluatorRegistrationCount = 1 + MIGRATED_REGISTRY_EVALUATOR_IDS.length * 2;
   const registryStepRegistrationCount =

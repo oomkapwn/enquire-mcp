@@ -8044,9 +8044,7 @@ describe("release identity and exact required-job gate", () => {
     const releaseSource = readFileSync(new URL("../.github/workflows/release.yml", import.meta.url), "utf8");
     expect(releaseTriggerProblems(releaseSource)).toEqual([]);
     expect(
-      releaseTriggerProblems(
-        'name: Release\non:\n  push:\n    tags: ["v*"]\n  workflow_dispatch:\njobs: {}\n'
-      )
+      releaseTriggerProblems('name: Release\non:\n  push:\n    tags: ["v*"]\n  workflow_dispatch:\njobs: {}\n')
     ).toEqual([RELEASE_TRIGGER_PROBLEM]);
     expect(releaseTriggerProblems('name: Release\non:\n  push:\n    tags: ["*"]\njobs: {}\n')).toEqual([
       RELEASE_TRIGGER_PROBLEM

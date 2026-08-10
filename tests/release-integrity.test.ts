@@ -8820,12 +8820,10 @@ describe("release identity and exact required-job gate", () => {
       "            mutant: releaseMutationM114"
     ].join("\n");
     const npmWorkflowM114InvocationOffset = declarativeBatchOffset(npmWorkflowM114InvocationToken);
-    const npmWorkflowInvocationKindRelativeOffset = npmWorkflowM114InvocationToken.indexOf(
-      npmWorkflowInvocationKindToken
-    );
+    const npmWorkflowInvocationKindRelativeOffset =
+      npmWorkflowM114InvocationToken.indexOf(npmWorkflowInvocationKindToken);
     expect(npmWorkflowInvocationKindRelativeOffset).toBeGreaterThanOrEqual(0);
-    const npmWorkflowInvocationKindOffset =
-      npmWorkflowM114InvocationOffset + npmWorkflowInvocationKindRelativeOffset;
+    const npmWorkflowInvocationKindOffset = npmWorkflowM114InvocationOffset + npmWorkflowInvocationKindRelativeOffset;
     const transplantedNpmWorkflowInvocation = [
       hybridDeclarativeMutation.slice(0, npmWorkflowInvocationKindOffset),
       'kind: "npm.contract.release"',

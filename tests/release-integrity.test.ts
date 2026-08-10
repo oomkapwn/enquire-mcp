@@ -8814,7 +8814,18 @@ describe("release identity and exact required-job gate", () => {
       expect.stringMatching(/case invocation has unexpected, missing, computed or duplicate properties/)
     );
     const npmWorkflowInvocationKindToken = 'kind: "npm.workflow"';
-    const npmWorkflowInvocationKindOffset = declarativeBatchOffset(npmWorkflowInvocationKindToken);
+    const npmWorkflowM114InvocationToken = [
+      '            kind: "npm.workflow",',
+      "            baseline: releaseWorkflowFixtureSource,",
+      "            mutant: releaseMutationM114"
+    ].join("\n");
+    const npmWorkflowM114InvocationOffset = declarativeBatchOffset(npmWorkflowM114InvocationToken);
+    const npmWorkflowInvocationKindRelativeOffset = npmWorkflowM114InvocationToken.indexOf(
+      npmWorkflowInvocationKindToken
+    );
+    expect(npmWorkflowInvocationKindRelativeOffset).toBeGreaterThanOrEqual(0);
+    const npmWorkflowInvocationKindOffset =
+      npmWorkflowM114InvocationOffset + npmWorkflowInvocationKindRelativeOffset;
     const transplantedNpmWorkflowInvocation = [
       hybridDeclarativeMutation.slice(0, npmWorkflowInvocationKindOffset),
       'kind: "npm.contract.release"',

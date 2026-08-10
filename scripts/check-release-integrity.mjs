@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+/** biome-ignore-all assist/source/organizeImports: Frozen release mutation identities require exact historical import anchors. */
 // Release preflight shared by release.yml and unit tests.
 //
 // Two properties are deliberately fail-closed:
@@ -12,9 +13,23 @@
 // run_attempt per required name.
 
 import { Buffer } from "node:buffer";
+import { createHash } from "node:crypto";
 import { X509Certificate } from "node:crypto";
+import {
+  closeSync,
+  constants as fsConstants,
+  fstatSync,
+  fsyncSync,
+  lstatSync,
+  openSync,
+  readSync,
+  realpathSync,
+  writeFileSync
+} from "node:fs";
 import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { TextDecoder } from "node:util";
 import { isEntrypoint } from "./lib/entrypoint.mjs";
 
 /** Exact GitHub Actions job names required before npm publication. */
@@ -1986,6 +2001,294 @@ export function evaluateMcpbCandidateRun(input) {
   return { state: "selected", artifactId, digest, runAttempt: producerAttempt };
 }
 
+const RELEASE_BODY_LIMIT = 125_000;
+
+function canonicalUtf8Text(input, label) {
+  if (!Buffer.isBuffer(input) && !(input instanceof Uint8Array)) {
+    throw new Error(`${label} must be UTF-8 bytes`);
+  }
+  let text;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true }).decode(input);
+  } catch {
+    throw new Error(`${label} must be canonical UTF-8`);
+  }
+  if (!Buffer.from(text, "utf8").equals(Buffer.from(input))) {
+    throw new Error(`${label} must round-trip as canonical UTF-8`);
+  }
+  return text;
+}
+
+function releaseBodyMetadata(path, bodyBytes, body) {
+  return {
+    path,
+    sha256: createHash("sha256").update(bodyBytes).digest("hex"),
+    bytes: bodyBytes.length,
+    chars: Array.from(body).length
+  };
+}
+
+function assertReleaseBodyBounds(body) {
+  if (body.length === 0 || body.trim().length === 0) {
+    throw new Error("release body must not be empty or whitespace-only");
+  }
+  if (body.includes("\0")) {
+    throw new Error("release body must not contain U+0000");
+  }
+  if (body.includes("\r") || body.endsWith("\n")) {
+    throw new Error("release body must use canonical LF lines without terminal LF bytes");
+  }
+  const bodyBytes = Buffer.from(body, "utf8");
+  if (bodyBytes.toString("utf8") !== body) {
+    throw new Error("release body must round-trip as canonical UTF-8");
+  }
+  const chars = Array.from(body).length;
+  if (bodyBytes.length > RELEASE_BODY_LIMIT || chars > RELEASE_BODY_LIMIT) {
+    throw new Error(`release body exceeds the ${RELEASE_BODY_LIMIT} byte or Unicode-character limit`);
+  }
+  return { bodyBytes, chars };
+}
+
+/**
+ * Extract one exact version section from CHANGELOG.md using the same terminal-
+ * newline semantics as POSIX shell command substitution.
+ *
+ * @param {unknown} changelog - Canonical LF-delimited CHANGELOG.md text.
+ * @param {unknown} version - Version read from package.json.
+ * @returns {string} The exact non-empty release body without terminal LF bytes.
+ */
+export function extractReleaseBody(changelog, version) {
+  if (typeof changelog !== "string") throw new Error("CHANGELOG input must be text");
+  if (changelog.includes("\r")) throw new Error("CHANGELOG input must use canonical LF line endings");
+  if (Buffer.from(changelog, "utf8").toString("utf8") !== changelog) {
+    throw new Error("CHANGELOG input must round-trip as canonical UTF-8");
+  }
+  const expectedVersion = assertMcpbAssetVersion(version);
+  const headingMarker = `## [${expectedVersion}]`;
+  const headingPrefix = `${headingMarker} — `;
+  const lines = changelog.split("\n");
+  const matchingHeadings = [];
+  for (const [index, line] of lines.entries()) {
+    if (!line.startsWith(headingMarker)) continue;
+    if (!line.startsWith(headingPrefix) || !/^\d{4}-\d{2}-\d{2}$/u.test(line.slice(headingPrefix.length))) {
+      throw new Error("target CHANGELOG heading is not exact");
+    }
+    matchingHeadings.push(index);
+  }
+  if (matchingHeadings.length === 0) throw new Error("target CHANGELOG heading is missing");
+  if (matchingHeadings.length !== 1) throw new Error("target CHANGELOG heading is duplicated");
+  const headingIndex = matchingHeadings[0];
+  const nextHeadingOffset = lines.slice(headingIndex + 1).findIndex((line) => line.startsWith("## ["));
+  const bodyEnd = nextHeadingOffset === -1 ? lines.length : headingIndex + 1 + nextHeadingOffset;
+  const captured = lines.slice(headingIndex + 1, bodyEnd).join("\n");
+  let terminalLfStart = captured.length;
+  while (terminalLfStart > 0 && captured.charCodeAt(terminalLfStart - 1) === 10) {
+    terminalLfStart--;
+  }
+  const body = captured.slice(0, terminalLfStart);
+  assertReleaseBodyBounds(body);
+  return body;
+}
+
+function currentReleaseBodyUid() {
+  if (typeof process.getuid !== "function") {
+    throw new Error("release-body file ownership checks require a POSIX runner");
+  }
+  const uid = process.getuid();
+  if (!Number.isSafeInteger(uid) || uid < 0) {
+    throw new Error("release-body file ownership identity is invalid");
+  }
+  return uid;
+}
+
+function canonicalReleaseBodyPath(path) {
+  if (
+    typeof path !== "string" ||
+    path.length === 0 ||
+    path.includes("\0") ||
+    path.includes("\n") ||
+    path.includes("\r")
+  ) {
+    throw new Error("release-body path must be one non-empty canonical absolute path");
+  }
+  const resolved = resolve(path);
+  if (resolved !== path) {
+    throw new Error("release-body path must be one canonical absolute path");
+  }
+  return resolved;
+}
+
+function assertOwnedReleaseBodyParent(path, uid, expectedIdentity) {
+  const parent = dirname(path);
+  const stat = lstatSync(parent);
+  if (stat.isSymbolicLink() || !stat.isDirectory() || stat.uid !== uid || (stat.mode & 0o077) !== 0) {
+    throw new Error("release-body parent must be one private owned real directory");
+  }
+  if (realpathSync(parent) !== parent) {
+    throw new Error("release-body parent must have one canonical non-symlink path");
+  }
+  if (
+    expectedIdentity &&
+    (stat.dev !== expectedIdentity.dev || stat.ino !== expectedIdentity.ino || stat.mode !== expectedIdentity.mode)
+  ) {
+    throw new Error("release-body parent identity changed during file access");
+  }
+  return { dev: stat.dev, ino: stat.ino, mode: stat.mode };
+}
+
+function releaseBodyNoFollowFlag() {
+  if (!Number.isInteger(fsConstants.O_NOFOLLOW) || fsConstants.O_NOFOLLOW <= 0) {
+    throw new Error("release-body file checks require O_NOFOLLOW support");
+  }
+  return fsConstants.O_NOFOLLOW;
+}
+
+function assertOwnedReleaseBodyFile(stat, pathStat, uid) {
+  if (
+    !stat.isFile() ||
+    !pathStat.isFile() ||
+    pathStat.isSymbolicLink() ||
+    stat.uid !== uid ||
+    pathStat.uid !== uid ||
+    stat.nlink !== 1 ||
+    pathStat.nlink !== 1 ||
+    (stat.mode & 0o777) !== 0o600 ||
+    (pathStat.mode & 0o777) !== 0o600 ||
+    stat.dev !== pathStat.dev ||
+    stat.ino !== pathStat.ino
+  ) {
+    throw new Error("release-body file must be one owned mode-0600 regular non-symlink file");
+  }
+}
+
+function releaseBodyCount(value, label) {
+  const text = typeof value === "number" ? String(value) : value;
+  if (typeof text !== "string" || !/^[1-9]\d*$/u.test(text)) {
+    throw new Error(`${label} must be one canonical positive safe integer`);
+  }
+  const parsed = Number(text);
+  if (!Number.isSafeInteger(parsed) || String(parsed) !== text || parsed > RELEASE_BODY_LIMIT) {
+    throw new Error(`${label} must be at most ${RELEASE_BODY_LIMIT}`);
+  }
+  return parsed;
+}
+
+function releaseBodyReceipt(path, sha256, bytes, chars) {
+  const canonicalPath = canonicalReleaseBodyPath(path);
+  if (typeof sha256 !== "string" || !/^[0-9a-f]{64}$/u.test(sha256)) {
+    throw new Error("release-body SHA-256 must be exactly 64 lowercase hexadecimal characters");
+  }
+  const expectedBytes = releaseBodyCount(bytes, "release-body byte count");
+  const expectedChars = releaseBodyCount(chars, "release-body Unicode-character count");
+  if (expectedChars > expectedBytes) {
+    throw new Error("release-body receipt has an impossible byte and Unicode-character count");
+  }
+  return { path: canonicalPath, sha256, bytes: expectedBytes, chars: expectedChars };
+}
+
+function sameReleaseBodyFile(left, right) {
+  return ["dev", "ino", "size", "mode", "uid", "nlink", "mtimeMs", "ctimeMs"].every(
+    (field) => left[field] === right[field]
+  );
+}
+
+function readAuditedReleaseBodyFile(path, sha256, bytes, chars) {
+  const expected = releaseBodyReceipt(path, sha256, bytes, chars);
+  const uid = currentReleaseBodyUid();
+  const parentIdentity = assertOwnedReleaseBodyParent(expected.path, uid);
+  const beforePath = lstatSync(expected.path);
+  const descriptor = openSync(expected.path, fsConstants.O_RDONLY | releaseBodyNoFollowFlag());
+  try {
+    const before = fstatSync(descriptor);
+    assertOwnedReleaseBodyFile(before, beforePath, uid);
+    if (before.size !== expected.bytes) {
+      throw new Error("release-body file byte count differs from its receipt");
+    }
+    const bounded = Buffer.alloc(expected.bytes + 1);
+    let offset = 0;
+    while (offset < bounded.length) {
+      const read = readSync(descriptor, bounded, offset, bounded.length - offset, null);
+      if (read === 0) break;
+      offset += read;
+    }
+    if (offset !== expected.bytes) {
+      throw new Error("release-body file byte count changed during audit");
+    }
+    const bodyBytes = bounded.subarray(0, offset);
+    const body = canonicalUtf8Text(bodyBytes, "release-body file");
+    const bounds = assertReleaseBodyBounds(body);
+    const actual = releaseBodyMetadata(expected.path, bodyBytes, body);
+    if (
+      actual.sha256 !== expected.sha256 ||
+      actual.bytes !== expected.bytes ||
+      actual.chars !== expected.chars ||
+      bounds.bodyBytes.length !== actual.bytes ||
+      bounds.chars !== actual.chars
+    ) {
+      throw new Error("release-body file differs from its immutable receipt");
+    }
+    const after = fstatSync(descriptor);
+    const afterPath = lstatSync(expected.path);
+    assertOwnedReleaseBodyFile(after, afterPath, uid);
+    if (!sameReleaseBodyFile(before, after)) {
+      throw new Error("release-body file identity or content changed during audit");
+    }
+    assertOwnedReleaseBodyParent(expected.path, uid, parentIdentity);
+    return { metadata: actual, body };
+  } finally {
+    closeSync(descriptor);
+  }
+}
+
+/**
+ * Create one exclusive owned release-body file from an exact CHANGELOG section.
+ *
+ * @param {unknown} changelog - Canonical LF-delimited CHANGELOG.md text.
+ * @param {unknown} version - Version read from package.json.
+ * @param {unknown} outputPath - Canonical absolute path in an owned real directory.
+ * @returns {{path:string,sha256:string,bytes:number,chars:number}} Content-free receipt metadata.
+ */
+export function createReleaseBodyFile(changelog, version, outputPath) {
+  const body = extractReleaseBody(changelog, version);
+  const bodyBytes = Buffer.from(body, "utf8");
+  const path = canonicalReleaseBodyPath(outputPath);
+  const uid = currentReleaseBodyUid();
+  const parentIdentity = assertOwnedReleaseBodyParent(path, uid);
+  const descriptor = openSync(
+    path,
+    fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_WRONLY | releaseBodyNoFollowFlag(),
+    0o600
+  );
+  try {
+    writeFileSync(descriptor, bodyBytes);
+    fsyncSync(descriptor);
+    const stat = fstatSync(descriptor);
+    const pathStat = lstatSync(path);
+    assertOwnedReleaseBodyFile(stat, pathStat, uid);
+    if (stat.size !== bodyBytes.length) {
+      throw new Error("release-body file write was incomplete");
+    }
+    assertOwnedReleaseBodyParent(path, uid, parentIdentity);
+  } finally {
+    closeSync(descriptor);
+  }
+  const metadata = releaseBodyMetadata(path, bodyBytes, body);
+  return readAuditedReleaseBodyFile(path, metadata.sha256, metadata.bytes, metadata.chars).metadata;
+}
+
+/**
+ * Audit one owned release-body file against immutable content-free receipt fields.
+ *
+ * @param {unknown} path - Canonical absolute path to the owned regular file.
+ * @param {unknown} sha256 - Exact lowercase SHA-256 recorded at creation.
+ * @param {unknown} bytes - Exact canonical positive UTF-8 byte count.
+ * @param {unknown} chars - Exact canonical positive Unicode code-point count.
+ * @returns {{path:string,sha256:string,bytes:number,chars:number}} Verified receipt metadata.
+ */
+export function auditReleaseBodyFile(path, sha256, bytes, chars) {
+  return readAuditedReleaseBodyFile(path, sha256, bytes, chars).metadata;
+}
+
 function npmProvenanceContextFromEnvironment() {
   const declared = {};
   const runtime = {};
@@ -2003,6 +2306,7 @@ function usage() {
     "assert-tag <tag> <version> | asset-version <version> | channel-advance <candidate> <current> <channel> |",
     "checks <source-sha> | flatten-pages <release|asset> | flatten-field <workflow_runs|jobs|artifacts> |",
     "npm-state <source-sha> <sha512-sri> <version> <channel> | release-state | visibility |",
+    "release-body-create <version> <path> | release-body-audit <path> <sha256> <bytes> <chars> |",
     "npm-provenance-context <source-sha> <tag> |",
     "npm-provenance <name> <version> <sha512-sri> <source-sha> <tag> <publish-attempted> <run-id> <run-attempt> |",
     "mcp-registry-state <preflight|convergence> | candidate-runs <source-sha> | candidate <source-sha>"
@@ -2054,19 +2358,43 @@ if (isEntrypoint(import.meta.url)) {
           })
         )
       );
+    } else if (mode === "release-body-create") {
+      if (process.argv.length !== 5) {
+        throw new Error("release-body-create requires exactly <version> <path>");
+      }
+      const changelogBytes = readFileSync(0);
+      const changelog = canonicalUtf8Text(changelogBytes, "CHANGELOG input");
+      console.log(JSON.stringify(createReleaseBodyFile(changelog, first, second)));
+    } else if (mode === "release-body-audit") {
+      if (process.argv.length !== 7) {
+        throw new Error("release-body-audit requires exactly <path> <sha256> <bytes> <chars>");
+      }
+      console.log(JSON.stringify(auditReleaseBodyFile(first, second, process.argv[5], process.argv[6])));
     } else if (mode === "release-state") {
       const [tag, prerelease, ...assetNames] = process.argv.slice(3);
       if (prerelease !== "true" && prerelease !== "false") {
         throw new Error("expected GitHub prerelease state must be exactly true or false");
       }
       const payload = JSON.parse(readFileSync(0, "utf8"));
+      const releaseBodyPathConfig = {
+        body: process.env.EXPECTED_RELEASE_BODY,
+        sha256: process.env.EXPECTED_RELEASE_BODY_SHA256,
+        bytes: process.env.EXPECTED_RELEASE_BODY_BYTES,
+        chars: process.env.EXPECTED_RELEASE_BODY_CHARS
+      };
+      const releaseBody = readAuditedReleaseBodyFile(
+        releaseBodyPathConfig.body,
+        releaseBodyPathConfig.sha256,
+        releaseBodyPathConfig.bytes,
+        releaseBodyPathConfig.chars
+      ).body;
       console.log(
         JSON.stringify(
           evaluateMcpbReleaseState(payload, {
             tag,
             prerelease: prerelease === "true",
             name: process.env.EXPECTED_RELEASE_NAME,
-            body: process.env.EXPECTED_RELEASE_BODY,
+            body: releaseBody,
             assetNames
           })
         )

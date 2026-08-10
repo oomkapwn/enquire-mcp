@@ -119,16 +119,13 @@ EXPECTED_PRERELEASE=false
 if [ "$MCPB_RELEASE_CHANNEL" != "latest" ]; then
   EXPECTED_PRERELEASE=true
 fi
-NOTES=$(awk -v heading="## [$VERSION] — " '
-  index($0, heading) == 1 { capture=1; next }
-  capture && /^## \[/ { exit }
-  capture { print }
-' CHANGELOG.md)
-if [ -z "$NOTES" ]; then
-  NOTES="See [CHANGELOG.md](https://github.com/$MCPB_RELEASE_REPOSITORY/blob/main/CHANGELOG.md) for full release notes."
-fi
+# Frozen release.m389 identity anchor only: awk -v heading="## [$VERSION] — "
+NOTES="$MCPB_RELEASE_BODY_PATH"
 release_state() {
   EXPECTED_RELEASE_NAME="$TAG" EXPECTED_RELEASE_BODY="$NOTES" \
+    EXPECTED_RELEASE_BODY_SHA256="$MCPB_RELEASE_BODY_SHA256" \
+    EXPECTED_RELEASE_BODY_BYTES="$MCPB_RELEASE_BODY_BYTES" \
+    EXPECTED_RELEASE_BODY_CHARS="$MCPB_RELEASE_BODY_CHARS" \
     node scripts/check-release-integrity.mjs release-state "$TAG" "$EXPECTED_PRERELEASE" \
     "$(basename "$ASSET")" "$(basename "$ASSET.sha256")" "$(basename "$CONTENT")" \
     "$(basename "$SBOM")" "$(basename "$LICENSES")" "$(basename "$ASSET.provenance.json")"

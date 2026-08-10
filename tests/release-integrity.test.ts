@@ -746,6 +746,32 @@ function githubWorkflowSchemaProblems(source: string): string[] {
   return problems;
 }
 
+const RELEASE_TRIGGER_PROBLEM = "release workflow must be tag-push-only for the exact v* namespace";
+
+function releaseTriggerProblems(workflow: string): string[] {
+  let document: YamlRecord | null = null;
+  try {
+    document = yamlRecord(load(workflow));
+  } catch {
+    return ["release.yml must be valid YAML"];
+  }
+  const trigger = yamlRecord(document?.on);
+  const push = yamlRecord(trigger?.push);
+  const tags = push?.tags;
+  if (
+    trigger === null ||
+    JSON.stringify(Object.keys(trigger).sort()) !== JSON.stringify(["push"]) ||
+    push === null ||
+    JSON.stringify(Object.keys(push).sort()) !== JSON.stringify(["tags"]) ||
+    !Array.isArray(tags) ||
+    tags.length !== 1 ||
+    tags[0] !== "v*"
+  ) {
+    return [RELEASE_TRIGGER_PROBLEM];
+  }
+  return [];
+}
+
 function hasRunLine(step: YamlRecord | undefined, command: string): boolean {
   return runBody(step)
     .split("\n")
@@ -4307,6 +4333,8 @@ function releasePollProblems(workflow: string): string[] {
   } catch {
     return ["release.yml must be valid YAML"];
   }
+  const triggerProblems = releaseTriggerProblems(workflow);
+  if (triggerProblems.length > 0) return triggerProblems;
   const permissions = yamlRecord(document?.permissions) ?? {};
   if (permissions.actions !== "read" || "checks" in permissions) {
     return ["release must grant read-only Actions API access for the exact-SHA MCPB artifact"];
@@ -8013,6 +8041,16 @@ function assertNpmProvenanceEvaluatorContract() {
 describe("release identity and exact required-job gate", () => {
   it("accepts only the tag derived from package.json version", () => {
     expect(assertReleaseTagMatchesVersion("v3.12.0-rc.10", "3.12.0-rc.10")).toBe("v3.12.0-rc.10");
+    const releaseSource = readFileSync(new URL("../.github/workflows/release.yml", import.meta.url), "utf8");
+    expect(releaseTriggerProblems(releaseSource)).toEqual([]);
+    expect(
+      releaseTriggerProblems(
+        'name: Release\non:\n  push:\n    tags: ["v*"]\n  workflow_dispatch:\njobs: {}\n'
+      )
+    ).toEqual([RELEASE_TRIGGER_PROBLEM]);
+    expect(releaseTriggerProblems('name: Release\non:\n  push:\n    tags: ["*"]\njobs: {}\n')).toEqual([
+      RELEASE_TRIGGER_PROBLEM
+    ]);
   });
 
   it("rejects a different or missing trigger tag (NEGATIVE control)", () => {

@@ -97,7 +97,7 @@ enquire-mcp serve --vault ~/Documents/Obsidian\ Vault
 
 ### レビュー可能なデスクトップバンドルなら MCPB Basic
 
-[GitHub Release `v4.0.0-rc.2`](https://github.com/oomkapwn/enquire-mcp/releases/tag/v4.0.0-rc.2) では `enquire-mcp-basic-4.0.0-rc.2.mcpb` と checksum、inventory、SBOM、notices、provenance を提供します。バンドルにはサーバー JavaScript と通常の依存関係が含まれ、対応 MCPB ホスト側で Node.js 22.13 以降を提供する必要があります。
+[GitHub Release `v4.0.0-rc.3`](https://github.com/oomkapwn/enquire-mcp/releases/tag/v4.0.0-rc.3) では `enquire-mcp-basic-4.0.0-rc.3.mcpb` と checksum、inventory、SBOM、notices、provenance を提供します。バンドルにはサーバー JavaScript と通常の依存関係が含まれ、対応 MCPB ホスト側で Node.js 22.13 以降を提供する必要があります。
 
 Basic は **13 個の読み取り専用ツール**と **0 プロンプト**に固定され、書き込み、永続インデックス、モデル、PDF/OCR、watcher はありません。実際のデスクトップ GUI、署名、ディレクトリ承認、カタログはメンテナーによる検証が未完了です。enquire は serve 中に外向き通信を開始しませんが、要求されたノート本文は接続した MCP クライアントへ渡り、そのプライバシー条件に従います。
 
@@ -106,7 +106,7 @@ Basic は **13 個の読み取り専用ツール**と **0 プロンプト**に�
 **完全なハイブリッドの威力が欲しい？** ハイブリッドの事前確認を完了してから起動します：
 
 ```bash
-npm install -g @oomkapwn/enquire-mcp@4.0.0-rc.2      # exact prerelease package
+npm install -g @oomkapwn/enquire-mcp@4.0.0-rc.3      # exact prerelease package
 enquire-mcp --version
 # recommended: preview first, then explicitly apply the same package-coherent plan
 enquire-mcp first-run --tier hybrid --client claude-desktop --vault <path>

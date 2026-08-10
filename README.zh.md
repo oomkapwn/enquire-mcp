@@ -97,7 +97,7 @@ enquire-mcp serve --vault ~/Documents/Obsidian\ Vault
 
 ### 想要可审查的桌面包？MCPB Basic
 
-[GitHub Release `v4.0.0-rc.2`](https://github.com/oomkapwn/enquire-mcp/releases/tag/v4.0.0-rc.2) 提供 `enquire-mcp-basic-4.0.0-rc.2.mcpb`，以及校验和、清单、SBOM、许可声明和来源证明。包内包含服务器 JavaScript 和普通依赖；兼容的 MCPB 主机必须提供 Node.js 22.13 或更高版本。
+[GitHub Release `v4.0.0-rc.3`](https://github.com/oomkapwn/enquire-mcp/releases/tag/v4.0.0-rc.3) 提供 `enquire-mcp-basic-4.0.0-rc.3.mcpb`，以及校验和、清单、SBOM、许可声明和来源证明。包内包含服务器 JavaScript 和普通依赖；兼容的 MCPB 主机必须提供 Node.js 22.13 或更高版本。
 
 Basic 固定为 **13 个只读工具**和 **0 个提示词**：不含写入、持久索引、模型、PDF/OCR 或 watcher。真实桌面 GUI、签名、目录授权和目录上架仍需维护者验证。enquire 在服务期间不会主动发起外部请求，但被请求的笔记文本会进入已连接的 MCP 客户端，并受该客户端的隐私条款约束。
 
@@ -106,7 +106,7 @@ Basic 固定为 **13 个只读工具**和 **0 个提示词**：不含写入、�
 **想要完整的混合检索能力？** 完成混合模式预检后再启动：
 
 ```bash
-npm install -g @oomkapwn/enquire-mcp@4.0.0-rc.2      # exact prerelease package
+npm install -g @oomkapwn/enquire-mcp@4.0.0-rc.3      # exact prerelease package
 enquire-mcp --version
 # recommended: preview first, then explicitly apply the same package-coherent plan
 enquire-mcp first-run --tier hybrid --client claude-desktop --vault <path>

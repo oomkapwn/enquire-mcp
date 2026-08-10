@@ -8657,7 +8657,7 @@ describe("release identity and exact required-job gate", () => {
       oracleSource.slice(matrixBodyOffset)
     ].join("");
     expect(releaseMutationInventoryProblems(extraProjectMutation)).toContain(
-      "release mutation hybrid inventory expected 538 first / 22 all, found 539 first / 22 all (legacy 497/19; declarative 42/3; cases 44)"
+      "release mutation hybrid inventory expected 538 first / 22 all, found 539 first / 22 all (legacy 496/19; declarative 43/3; cases 45)"
     );
     const outsideMutation = `${oracleSource}\nvoid replaceAllExactly("inventory", "inventory", "mutant");\n`;
     expect(releaseMutationInventoryProblems(outsideMutation)).toContain(
@@ -8671,7 +8671,7 @@ describe("release identity and exact required-job gate", () => {
       oracleSource.slice(firstProjectCallOffset + "replaceExactly(".length)
     ].join("");
     expect(releaseMutationInventoryProblems(projectModeDrift)).toContain(
-      "release mutation hybrid inventory expected 538 first / 22 all, found 537 first / 23 all (legacy 495/20; declarative 42/3; cases 44)"
+      "release mutation hybrid inventory expected 538 first / 22 all, found 537 first / 23 all (legacy 494/20; declarative 43/3; cases 45)"
     );
     const hybridDeclarativeMutation = oracleSource;
     const declarativeBatchStartToken = "    const releaseIntegrityText = mcpbInputs.integrity;";
@@ -8759,6 +8759,43 @@ describe("release identity and exact required-job gate", () => {
     ].join("");
     expect(releaseMutationInventoryProblems(spreadDeclarativeDescriptor)).toContainEqual(
       expect.stringMatching(/descriptor requires exact passive/)
+    );
+    const githubShaExpression = ["$", "{{ github.sha }}"].join("");
+    const githubWorkflowShaExpression = ["$", "{{ github.workflow_sha }}"].join("");
+    const escapedGithubShaExpression = `\\${githubShaExpression}`;
+    const escapedGithubWorkflowShaExpression = `\\${githubWorkflowShaExpression}`;
+    const m116NeedleLiteralToken = `      needle: "PROVENANCE_SHA: ${githubShaExpression}",`;
+    const m116ReplacementLiteralToken = `      replacement: "PROVENANCE_SHA: ${githubWorkflowShaExpression}",`;
+    const m116AnchorLiteralToken = `        anchor: "PROVENANCE_SHA: ${githubShaExpression}",`;
+    const m116NeedleTemplateToken = `      needle: \`PROVENANCE_SHA: ${escapedGithubShaExpression}\`,`;
+    const m116ReplacementTemplateToken = `      replacement: \`PROVENANCE_SHA: ${escapedGithubWorkflowShaExpression}\`,`;
+    const m116AnchorTemplateToken = `        anchor: \`PROVENANCE_SHA: ${escapedGithubShaExpression}\`,`;
+    const m116NeedleLiteralOffset = declarativeBatchOffset(m116NeedleLiteralToken);
+    const m116ReplacementLiteralOffset = declarativeBatchOffset(m116ReplacementLiteralToken);
+    const m116AnchorLiteralOffset = declarativeBatchOffset(m116AnchorLiteralToken);
+    expect(m116ReplacementLiteralOffset).toBeGreaterThan(m116NeedleLiteralOffset);
+    expect(m116AnchorLiteralOffset).toBeGreaterThan(m116ReplacementLiteralOffset);
+    const templateValuedM116Descriptor = [
+      hybridDeclarativeMutation.slice(0, m116NeedleLiteralOffset),
+      m116NeedleTemplateToken,
+      hybridDeclarativeMutation.slice(
+        m116NeedleLiteralOffset + m116NeedleLiteralToken.length,
+        m116ReplacementLiteralOffset
+      ),
+      m116ReplacementTemplateToken,
+      hybridDeclarativeMutation.slice(
+        m116ReplacementLiteralOffset + m116ReplacementLiteralToken.length,
+        m116AnchorLiteralOffset
+      ),
+      m116AnchorTemplateToken,
+      hybridDeclarativeMutation.slice(m116AnchorLiteralOffset + m116AnchorLiteralToken.length)
+    ].join("");
+    expect(releaseMutationInventoryProblems(templateValuedM116Descriptor)).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/descriptor needle must be one passive identifier\/string value/),
+        expect.stringMatching(/descriptor replacement must be one passive string value or mutation handle/),
+        expect.stringMatching(/witness anchor must be one passive identifier\/string value/)
+      ])
     );
     const caseRootToken = 'id: "release.case.m002",\n      root: releaseMutationM002';
     const caseRootOffset = firstCaseOffset(caseRootToken);
@@ -9311,7 +9348,7 @@ describe("release identity and exact required-job gate", () => {
         .join("legacyMigratedExactly(")
     ].join("");
     expect(releaseMutationInventoryProblems(legacyFreeMatrix)).toContain(
-      "release mutation final closed graph expected 560 unique descriptors / 536 cases and roots / 541 expectations / 24 dependency-only, found 45 descriptors / 44 cases / 44 roots / 44 expectations / 1 dependency-only"
+      "release mutation final closed graph expected 560 unique descriptors / 536 cases and roots / 541 expectations / 24 dependency-only, found 46 descriptors / 45 cases / 45 roots / 45 expectations / 1 dependency-only"
     );
     const loopGeneratedDeclarative = [
       oracleSource.slice(0, matrixBodyOffset),
@@ -9454,7 +9491,7 @@ describe("release identity and exact required-job gate", () => {
       expect.stringMatching(/must be one explicit straight-line case/)
     );
     expect(iterableLiteralProblems).toContain(
-      "release mutation hybrid inventory expected 538 first / 22 all, found 539 first / 22 all (legacy 497/19; declarative 42/3; cases 44)"
+      "release mutation hybrid inventory expected 538 first / 22 all, found 539 first / 22 all (legacy 496/19; declarative 43/3; cases 45)"
     );
     const nestedStraightLineMutation = [
       oracleSource.slice(0, matrixBodyOffset),
@@ -9466,7 +9503,7 @@ describe("release identity and exact required-job gate", () => {
       expect.stringMatching(/must be one explicit straight-line case/)
     );
     expect(nestedStraightLineProblems).toContain(
-      "release mutation hybrid inventory expected 538 first / 22 all, found 540 first / 22 all (legacy 498/19; declarative 42/3; cases 44)"
+      "release mutation hybrid inventory expected 538 first / 22 all, found 540 first / 22 all (legacy 497/19; declarative 43/3; cases 45)"
     );
     const earlyReturnMutation = [
       oracleSource.slice(0, matrixBodyOffset),
@@ -11745,12 +11782,12 @@ describe("release identity and exact required-job gate", () => {
 
     const releaseIntegrityText = mcpbInputs.integrity;
     const releaseMutationPlan = new ReleaseMutationPlan({
-      total: 45,
-      first: 42,
+      total: 46,
+      first: 43,
       all: 3,
-      cases: 44,
-      expectations: 44,
-      roots: 44,
+      cases: 45,
+      expectations: 45,
+      roots: 45,
       dependencyOnly: 1
     });
     const releaseIntegritySource = releaseMutationPlan.registerSource("script.release-integrity", releaseIntegrityText);
@@ -13200,6 +13237,41 @@ describe("release identity and exact required-job gate", () => {
         }
       ]
     });
+    const releaseMutationM116 = releaseMutationPlan.registerMutation("release.m116", {
+      mode: "first",
+      source: releaseWorkflowFixtureSource,
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: GitHub expression must remain a literal StringLiteral.
+      needle: "PROVENANCE_SHA: ${{ github.sha }}",
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: GitHub expression must remain a literal StringLiteral.
+      replacement: "PROVENANCE_SHA: ${{ github.workflow_sha }}",
+      expectedOccurrences: 1,
+      witness: {
+        kind: "token",
+        // biome-ignore lint/suspicious/noTemplateCurlyInString: GitHub expression must remain a literal StringLiteral.
+        anchor: "PROVENANCE_SHA: ${{ github.sha }}",
+        before: 1,
+        after: 0
+      }
+    });
+    releaseMutationPlan.registerCase({
+      id: "release.case.m116",
+      root: releaseMutationM116,
+      checks: [
+        {
+          invoke: {
+            kind: "npm.workflow",
+            baseline: releaseWorkflowFixtureSource,
+            mutant: releaseMutationM116
+          },
+          expectation: {
+            id: "release.expectation.m116.primary",
+            kind: "problem",
+            problem:
+              "npm provenance must bind the tag-push context before the sole publish and verify two exact attestations without credentials"
+          }
+        }
+      ]
+    });
     const releaseMutationProblems = releaseMutationPlan.seal();
     expect(releaseMutationProblems).toEqual([]);
     releaseMutationPlan.executeThrough(releaseMutationM037, {
@@ -13740,16 +13812,11 @@ describe("release identity and exact required-job gate", () => {
     }
     releaseMutationPlan.executeRemaining();
     expect(releaseMutationPlan.phase).toBe("executed");
-    expect(releaseMutationPlan.caseExecutions).toBe(44);
-    expect(releaseMutationPlan.expectationExecutions).toBe(44);
+    expect(releaseMutationPlan.caseExecutions).toBe(45);
+    expect(releaseMutationPlan.expectationExecutions).toBe(45);
 
     // Mutation oracle: workflow ordering, token isolation, exact verifier pin, and read-only convergence.
     for (const weakenedProvenanceWorkflow of [
-      replaceExactly(
-        mcpbInputs.release,
-        `PROVENANCE_SHA: \${{ github.sha }}`,
-        `PROVENANCE_SHA: \${{ github.workflow_sha }}`
-      ),
       replaceExactly(
         mcpbInputs.release,
         `      - name: ${NPM_PROVENANCE_STEP_NAME}`,

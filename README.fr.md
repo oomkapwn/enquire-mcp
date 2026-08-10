@@ -102,7 +102,7 @@ Connectez-le à n'importe quel client MCP :
 
 ### Un bundle desktop vérifiable ? MCPB Basic
 
-La [GitHub Release `v4.0.0-rc.2`](https://github.com/oomkapwn/enquire-mcp/releases/tag/v4.0.0-rc.2) fournit `enquire-mcp-basic-4.0.0-rc.2.mcpb` avec sa somme de contrôle, son inventaire, son SBOM, ses notices et sa provenance. Le bundle contient le JavaScript serveur et les dépendances ordinaires ; l'hôte MCPB compatible doit fournir Node.js 22.13 ou plus récent.
+La [GitHub Release `v4.0.0-rc.3`](https://github.com/oomkapwn/enquire-mcp/releases/tag/v4.0.0-rc.3) fournit `enquire-mcp-basic-4.0.0-rc.3.mcpb` avec sa somme de contrôle, son inventaire, son SBOM, ses notices et sa provenance. Le bundle contient le JavaScript serveur et les dépendances ordinaires ; l'hôte MCPB compatible doit fournir Node.js 22.13 ou plus récent.
 
 Basic est limité à **13 outils en lecture seule** et **0 prompt** : aucune écriture, aucun index persistant, modèle, PDF/OCR ou watcher. Les essais réels de GUI desktop, signature, autorisation du dossier et annuaire restent à valider par le mainteneur. enquire n'émet aucun appel sortant pendant le service, mais le texte demandé est transmis au client MCP connecté et relève ensuite de ses conditions de confidentialité.
 
@@ -111,7 +111,7 @@ Basic est limité à **13 outils en lecture seule** et **0 prompt** : aucune éc
 **Vous voulez toute la puissance hybride ?** Exécutez le preflight hybride, puis démarrez le serveur :
 
 ```bash
-npm install -g @oomkapwn/enquire-mcp@4.0.0-rc.2      # exact prerelease package
+npm install -g @oomkapwn/enquire-mcp@4.0.0-rc.3      # exact prerelease package
 enquire-mcp --version
 # recommended: preview first, then explicitly apply the same package-coherent plan
 enquire-mcp first-run --tier hybrid --client claude-desktop --vault <path>

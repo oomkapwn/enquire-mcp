@@ -4,12 +4,6 @@ on:
   push:
     tags:
       - "v*"
-  workflow_dispatch:
-    inputs:
-      tag:
-        description: "Tag to release (e.g. v0.12.0). Must already exist."
-        required: true
-        type: string
 
 concurrency:
   group: release-publication
@@ -68,9 +62,9 @@ jobs:
       # Within this exact workflow revision we assert the tagged SHA is on main
       # before executing repository-owned code, then use that proven-main
       # evaluator to require exact-SHA CI success before publication.
-      # The current tag/manual triggers can still select release.yml from their
-      # own ref; preventing a repository writer from replacing this gate itself
-      # requires a default-branch-only dispatch trigger or protected tag rules.
+      # This workflow now starts only from a v* tag push. Repository tag
+      # rulesets must restrict v* creation and prohibit update/deletion; verify
+      # their live enforcement before creating each release tag.
       - name: Assert tag is on main and required CI checks passed
         shell: /bin/bash --noprofile --norc -p -e -o pipefail {0}
         env:

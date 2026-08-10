@@ -132,15 +132,50 @@ describe("persistent cache", () => {
     expect(stat.mode & 0o777).toBe(0o600);
   });
 
-  it("re-saves cache after deleted-note entries are dropped on load (audit P2-2)", async () => {
-    // Seed cache with 2 entries.
+  it("re-saves cache after deleted or restricted entries are dropped on load (audit P2-2)", async () => {
+    // Seed cache with three entries.
     const v1 = new Vault(root, { persistentCache: true, cacheFile });
     await v1.ensureExists();
     await v1.readNote(path.join(root, "Hello.md"));
     await v1.readNote(path.join(root, "World.md"));
+    const directoryReplacementPath = path.join(root, "Directory.md");
+    await fs.writeFile(directoryReplacementPath, "directory-shaped stale body");
+    await v1.readNote(directoryReplacementPath);
     await v1.saveDiskCache();
     const beforeBody = await fs.readFile(cacheFile, "utf8");
     expect(beforeBody).toContain("Hello body");
+
+    // A body that was public when read must not be persisted after the source
+    // is moved under a hidden name before the next flush.
+    const transientPath = path.join(root, "Transient.md");
+    await fs.writeFile(transientPath, "transient body must be dropped");
+    await v1.readNote(transientPath);
+    await fs.rename(transientPath, path.join(root, ".Transient.md"));
+    await v1.saveDiskCache();
+    expect(await fs.readFile(cacheFile, "utf8")).not.toContain("transient body must be dropped");
+    const liveCache = v1 as unknown as { cache: Map<string, unknown> };
+    expect([...liveCache.cache.keys()].some((key) => key.endsWith("Transient.md"))).toBe(false);
+
+    // Simulate a cache written by an older release that admitted a hidden
+    // path. The source exists and every cache field is otherwise valid, so
+    // only the central vault visibility policy can reject this entry.
+    const hiddenPath = path.join(root, ".secret.md");
+    await fs.writeFile(hiddenPath, "hidden cached body");
+    const hiddenStat = await fs.stat(hiddenPath);
+    const crafted = JSON.parse(beforeBody);
+    await fs.unlink(directoryReplacementPath);
+    await fs.mkdir(directoryReplacementPath);
+    const replacementDirectoryStat = await fs.stat(directoryReplacementPath);
+    const directoryEntry = crafted.entries.find((entry: { relPath: string }) => entry.relPath === "Directory.md");
+    if (!directoryEntry) throw new Error("Directory.md cache fixture is missing");
+    directoryEntry.mtimeMs = replacementDirectoryStat.mtimeMs;
+    crafted.entries.push({
+      relPath: ".secret.md",
+      mtimeMs: hiddenStat.mtimeMs,
+      content: "hidden cached body",
+      parsed: { frontmatter: {}, body: "hidden cached body", wikilinks: [], embeds: [], tags: [] }
+    });
+    await fs.writeFile(cacheFile, JSON.stringify(crafted));
 
     // Delete World.md from the vault.
     await fs.unlink(path.join(root, "World.md"));
@@ -151,6 +186,8 @@ describe("persistent cache", () => {
     await v2.saveDiskCache();
     const afterBody = await fs.readFile(cacheFile, "utf8");
     expect(afterBody).not.toContain("World note");
+    expect(afterBody).not.toContain("hidden cached body");
+    expect(afterBody).not.toContain("directory-shaped stale body");
     expect(afterBody).toContain("Hello body");
   });
 

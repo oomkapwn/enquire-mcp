@@ -300,6 +300,7 @@ describe("searchHybrid — kind flag (v2.8.0)", () => {
     blendRoot = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-hybrid-kind-"));
     // One markdown note + one synthetic PDF — both contain "Apollo".
     await fs.writeFile(path.join(blendRoot, "notes.md"), "Apollo program notes from 1969.\n");
+    await fs.writeFile(path.join(blendRoot, "apollo.pdf"), "synthetic PDF source fixture");
     blendIdx = new FtsIndex({
       file: path.join(blendRoot, ".cache", "test.fts5.db"),
       vaultRoot: blendRoot,

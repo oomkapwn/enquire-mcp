@@ -15,6 +15,7 @@ import {
   createNote,
   dataviewQuery,
   embeddingsSearch,
+  filterLiveVaultHits,
   findPath,
   findSimilar,
   frontmatterGet,
@@ -163,7 +164,12 @@ export function registerFtsTools(server: McpServer, idx: FtsIndex, vault: Vault)
         tag: args.tag,
         sinceMtimeMs
       });
-      const matches = rawMatches.filter((m) => !vault.isExcluded(m.rel_path)).slice(0, userLimit);
+      const matches = await filterLiveVaultHits(
+        vault,
+        rawMatches.filter((match) => !vault.isExcluded(match.rel_path)),
+        (match) => match.rel_path,
+        userLimit
+      );
       return textResult({
         query: args.query,
         total_chunks: idx.totalChunks(),
@@ -1576,6 +1582,16 @@ export function registerChunkResource(server: McpServer, idx: FtsIndex, vault: V
       // same "not found" framing the FTS5 search uses post-filter, so the
       // attacker can't distinguish "doesn't exist" from "exists but excluded".
       if (vault.isExcluded(decoded)) {
+        throw new Error(`Chunk not found: ${decoded}#${chunkIndex}`);
+      }
+      // The index is derived state: a once-visible key may outlive a local
+      // rename or an in-vault symlink swap. Re-admit the live lexical and
+      // physical path before returning stored bytes so a visible alias that
+      // now resolves into a hidden/reserved path cannot expose a stale chunk.
+      try {
+        const stat = await vault.stat(decoded);
+        if (!stat.isFile) throw new Error("source is not a regular file");
+      } catch {
         throw new Error(`Chunk not found: ${decoded}#${chunkIndex}`);
       }
       const chunk = idx.getChunk(decoded, chunkIndex);

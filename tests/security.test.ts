@@ -3,6 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { defaultIndexFile, FtsIndex } from "../src/fts5.js";
+import { registerChunkResource, registerFtsTools } from "../src/tool-registry.js";
 import {
   appendToNote,
   archiveNote,
@@ -11,11 +12,13 @@ import {
   readNote,
   renameNote,
   replaceInNotes,
-  searchHybrid
+  searchHybrid,
+  validateNoteProposal
 } from "../src/tools/index.js";
 // v3.10.0-rc.22 (audit M8) — the REAL embed-hit privacy filter (was reimplemented
 // inline below; now exercised so search.ts's embeddingsSearch filter is covered).
-import { filterExcludedEmbedHits } from "../src/tools/search.js";
+import { filterExcludedEmbedHits, filterLiveVaultHits } from "../src/tools/search.js";
+import { restrictedVaultPathReason } from "../src/vault-path-policy.js";
 import { compileGlob, MAX_GLOB_PATTERN_LEN, Vault } from "../src/vault.js";
 
 let root: string;
@@ -213,6 +216,46 @@ describe("Vault — internal symlinks", () => {
     const titles = (await listNotes(v, {})).map((n) => n.title);
     expect(titles).toContain("Target-internal");
     expect(titles).not.toContain("Link-internal");
+    const hiddenDir = path.join(root, ".hidden-target");
+    const visibleDirAlias = path.join(root, "Visible-alias");
+    const hiddenFileAlias = path.join(root, ".hidden-alias.md");
+    await fs.mkdir(hiddenDir, { recursive: true });
+    await fs.writeFile(path.join(hiddenDir, "Secret.md"), "hidden physical target");
+    await fs.symlink(hiddenDir, visibleDirAlias);
+    await fs.symlink(target, hiddenFileAlias);
+    await expect(v.readNote("Visible-alias/Secret.md")).rejects.toThrow(/hidden or reserved vault path/);
+    await expect(v.stat("Visible-alias/Missing.md")).rejects.toThrow(/hidden or reserved vault path/);
+    await expect(v.stat("Visible-missing.md")).rejects.toThrow(/ENOENT|no such file/i);
+    await expect(v.readNote(".hidden-alias.md")).rejects.toThrow(/hidden or reserved vault path/);
+    const writable = new Vault(root, { enableWrite: true });
+    await writable.ensureExists();
+    await expect(writable.writeNote("Visible-alias/New.md", "must not write")).rejects.toThrow(
+      /hidden or reserved vault path/
+    );
+    await expect(writable.appendNote("Visible-alias/Secret.md", "\nmust not append")).rejects.toThrow(
+      /hidden or reserved vault path/
+    );
+    const renameSource = path.join(root, "Visible-rename-source.md");
+    await fs.writeFile(renameSource, "must remain visible");
+    await expect(writable.renameFile("Visible-rename-source.md", "Visible-alias/Renamed.md")).rejects.toThrow(
+      /hidden or reserved vault path/
+    );
+    await expect(
+      validateNoteProposal(writable, { path: "Visible-alias/Proposed.md", content: "must not validate" })
+    ).resolves.toMatchObject({
+      ok: false,
+      errors: expect.arrayContaining([expect.objectContaining({ kind: "path-excluded" })])
+    });
+    expect(await fs.readFile(renameSource, "utf8")).toBe("must remain visible");
+    expect(await fs.readFile(path.join(hiddenDir, "Secret.md"), "utf8")).toBe("hidden physical target");
+    await expect(writable.writeNote("Visible-control.md", "admitted control")).resolves.toMatchObject({
+      relPath: "Visible-control.md"
+    });
+    await fs.unlink(path.join(root, "Visible-control.md"));
+    await fs.unlink(renameSource);
+    await fs.unlink(visibleDirAlias).catch(() => {});
+    await fs.unlink(hiddenFileAlias).catch(() => {});
+    await fs.rm(hiddenDir, { recursive: true, force: true });
     await fs.unlink(link).catch(() => {});
     await fs.unlink(target).catch(() => {});
   });
@@ -329,6 +372,21 @@ describe("Vault — --exclude-glob privacy filter (v0.11 P1)", () => {
   });
 
   it("listNotes hides paths matching --exclude-glob", async () => {
+    await fs.mkdir(path.join(vroot, ".private"), { recursive: true });
+    await fs.mkdir(path.join(vroot, "Node_Modules"), { recursive: true });
+    await fs.writeFile(path.join(vroot, ".secret.md"), "root hidden");
+    await fs.writeFile(path.join(vroot, ".private", "nested.md"), "nested hidden");
+    await fs.writeFile(path.join(vroot, "Node_Modules", "package.md"), "reserved hidden");
+    const defaultV = new Vault(vroot);
+    await defaultV.ensureExists();
+    const defaultListed = (await defaultV.listMarkdown()).map((entry) => entry.relPath);
+    expect(defaultListed).not.toContain(".secret.md");
+    expect(defaultListed).not.toContain(".private/nested.md");
+    expect(defaultListed).not.toContain("Node_Modules/package.md");
+    expect(await defaultV.listMarkdown(".private")).toEqual([]);
+    expect(await defaultV.listFilesByExtension(".md", "Node_Modules")).toEqual([]);
+    await expect(defaultV.readFile(".secret.md")).rejects.toThrow(/hidden or reserved vault path/);
+
     const v = new Vault(vroot, { excludeGlobs: ["Personal/**"] });
     await v.ensureExists();
     const out = await listNotes(v, {});
@@ -338,9 +396,37 @@ describe("Vault — --exclude-glob privacy filter (v0.11 P1)", () => {
   });
 
   it("readNote refuses to surface excluded content even by direct path", async () => {
+    await fs.mkdir(path.join(vroot, ".private"), { recursive: true });
+    await fs.mkdir(path.join(vroot, "Node_Modules"), { recursive: true });
+    await fs.mkdir(path.join(vroot, "Project.v2"), { recursive: true });
+    await fs.writeFile(path.join(vroot, ".secret.md"), "root hidden");
+    await fs.writeFile(path.join(vroot, ".private", "nested.md"), "nested hidden");
+    await fs.writeFile(path.join(vroot, "Node_Modules", "package.md"), "reserved hidden");
+    await fs.writeFile(path.join(vroot, "Thumbs.db"), "system metadata");
+    await fs.writeFile(path.join(vroot, "Project.v2", "note.v2.md"), "visible dotted names");
     const v = new Vault(vroot, { excludeGlobs: ["Personal/**"] });
     await v.ensureExists();
     await expect(readNote(v, { path: "Personal/diary.md" })).rejects.toThrow(/excluded by --exclude-glob/);
+    for (const hidden of [".secret.md", ".private/nested.md", "Node_Modules/package.md"]) {
+      await expect(readNote(v, { path: hidden })).rejects.toThrow(/excluded by hidden or reserved vault path/);
+    }
+    await expect(v.readFile(".secret.md")).rejects.toThrow(/hidden or reserved vault path/);
+    await expect(v.readBinaryFile("Thumbs.db")).rejects.toThrow(/hidden or reserved vault path/);
+    await expect(v.stat(".missing.md")).rejects.toThrow(/hidden or reserved vault path/);
+
+    const listed = (await v.listMarkdown()).map((entry) => entry.relPath);
+    expect(listed).not.toContain(".secret.md");
+    expect(listed).not.toContain(".private/nested.md");
+    expect(listed).not.toContain("Node_Modules/package.md");
+    expect(listed).toContain("Project.v2/note.v2.md");
+    await expect(readNote(v, { path: "Project.v2/note.v2.md" })).resolves.toMatchObject({
+      path: "Project.v2/note.v2.md"
+    });
+
+    expect(restrictedVaultPathReason("Nested\\.Secrets\\note.md")).toBe("hidden or reserved vault path");
+    expect(restrictedVaultPathReason("Nested/.Git./config")).toBe("hidden or reserved vault path");
+    expect(restrictedVaultPathReason("nested/THUMBS.DB ")).toBe("hidden or reserved vault path");
+    expect(restrictedVaultPathReason("Project.v2/my-node_modules-notes.md")).toBeNull();
   });
 
   it("multiple exclude patterns AND'd correctly (any match → excluded)", async () => {
@@ -400,6 +486,16 @@ describe("Vault — --exclude-glob privacy filter (v0.11 P1)", () => {
     await expect(createNote(v, { path: "", content: "x" })).rejects.toThrow(/empty or dot-only/);
     await expect(createNote(v, { path: "   ", content: "x" })).rejects.toThrow(/empty or dot-only/);
     await expect(createNote(v, { path: ".md", content: "x" })).rejects.toThrow(/empty or dot-only/);
+    for (const hidden of [".secret", "nested/.secret", "NODE_MODULES/package", ".git./config", "nested\\.private"]) {
+      await expect(createNote(v, { path: hidden, content: "x" })).rejects.toThrow(
+        /excluded by hidden or reserved vault path/
+      );
+    }
+    await expect(fs.stat(path.join(vroot, ".secret.md"))).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.stat(path.join(vroot, "NODE_MODULES"))).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(createNote(v, { path: "Project.v2/note.v2", content: "visible" })).resolves.toMatchObject({
+      path: "Project.v2/note.v2.md"
+    });
   });
 });
 
@@ -425,11 +521,16 @@ describe("Vault — write-tool privacy boundary (v2.0.0-beta.2)", () => {
   // appendToNote — already routed through resolveSafePath which gates,
   // but no test asserted it before v2.0.0-beta.2.
   it("appendToNote refuses excluded path (--exclude-glob)", async () => {
+    await fs.writeFile(path.join(wroot, ".append.md"), "do not change");
     const v = new Vault(wroot, { enableWrite: true, excludeGlobs: ["Personal/**"] });
     await v.ensureExists();
     await expect(appendToNote(v, { path: "Personal/diary.md", content: "leak" })).rejects.toThrow(
       /excluded by --exclude-glob/
     );
+    await expect(appendToNote(v, { path: ".append.md", content: "leak" })).rejects.toThrow(
+      /hidden or reserved vault path/
+    );
+    expect(await fs.readFile(path.join(wroot, ".append.md"), "utf8")).toBe("do not change");
   });
 
   it("appendToNote refuses path outside --read-paths allowlist", async () => {
@@ -457,9 +558,15 @@ describe("Vault — write-tool privacy boundary (v2.0.0-beta.2)", () => {
   // renameNote — source-side gate via resolveSafePath; destination-side
   // gate explicit in renameFile (we just fixed it to distinguish allowlist).
   it("renameNote refuses excluded source", async () => {
+    await fs.writeFile(path.join(wroot, ".source.md"), "hidden source");
     const v = new Vault(wroot, { enableWrite: true, excludeGlobs: ["Personal/**"] });
     await v.ensureExists();
     await expect(renameNote(v, { from: "Personal/diary.md", to: "Public/d.md" })).rejects.toThrow(/excluded/);
+    await expect(renameNote(v, { from: ".source.md", to: "Public/source.md" })).rejects.toThrow(
+      /hidden or reserved vault path/
+    );
+    expect(await fs.readFile(path.join(wroot, ".source.md"), "utf8")).toBe("hidden source");
+    await expect(fs.stat(path.join(wroot, "Public", "source.md"))).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("renameNote destination-side error names --read-paths when allowlist rejects", async () => {
@@ -468,6 +575,11 @@ describe("Vault — write-tool privacy boundary (v2.0.0-beta.2)", () => {
     const v = new Vault(wroot, { enableWrite: true, readPaths: ["Public/**"] });
     await v.ensureExists();
     await expect(renameNote(v, { from: "Public/p.md", to: "Private/p.md" })).rejects.toThrow(/--read-paths allowlist/);
+    await expect(renameNote(v, { from: "Public/p.md", to: ".private/p.md" })).rejects.toThrow(
+      /hidden or reserved vault path/
+    );
+    expect(await fs.readFile(path.join(wroot, "Public", "p.md"), "utf8")).toBe("public content");
+    await expect(fs.stat(path.join(wroot, ".private"))).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   // replaceInNotes — denylist case (v2.0.0-beta.1 only tested allowlist).
@@ -515,11 +627,53 @@ describe("Persistent indexes — search-time privacy filter (v2.0.0-beta.2)", ()
         const targets = note.parsed.wikilinks.map((w) => w.target).filter((t) => t.length > 0);
         idx.reindexFile(e.relPath, e.mtimeMs, note.content, targets, note.parsed.tags);
       }
+      idx.reindexFile(".secret.md", 1000, "ultrasecret hidden index row", [], []);
+      const hiddenTarget = path.join(proot, ".hidden-target");
+      const visibleAlias = path.join(proot, "VisibleAlias");
+      await fs.mkdir(hiddenTarget, { recursive: true });
+      await fs.writeFile(path.join(hiddenTarget, "note.md"), "hidden physical target");
+      const aliasCreated = await fs
+        .symlink(hiddenTarget, visibleAlias)
+        .then(() => true)
+        .catch(() => false);
+      if (process.env.CI) expect(aliasCreated, "CI must exercise stale chunk physical admission").toBe(true);
+      idx.reindexFile("VisibleAlias/note.md", 1000, "stale visible alias row", [], []);
+      const replacedPath = path.join(proot, "Replaced.md");
+      await fs.writeFile(replacedPath, "once a regular indexed file");
+      idx.reindexFile("Replaced.md", 1000, "stale replaced file row", [], []);
+      await fs.unlink(replacedPath);
+      await fs.mkdir(replacedPath);
+      expect(idx.search("ultrasecret", { limit: 10 }).some((hit) => hit.rel_path === ".secret.md")).toBe(true);
+      expect(idx.search("replaced", { limit: 10 }).some((hit) => hit.rel_path === "Replaced.md")).toBe(true);
+      if (aliasCreated) {
+        expect(idx.search("stale", { limit: 10 }).some((hit) => hit.rel_path === "VisibleAlias/note.md")).toBe(true);
+      }
 
       // Now serve the SAME .fts5.db with exclusion flags — Personal/ should
       // be invisible to obsidian_search even though FTS5 db still has it.
       const vServe = new Vault(proot, { excludeGlobs: ["Personal/**"] });
       await vServe.ensureExists();
+      type FtsHandler = (args: { query: string; limit?: number }) => Promise<{ content: Array<{ text: string }> }>;
+      let ftsHandler: FtsHandler | undefined;
+      const fakeFtsServer = {
+        registerTool: (...registration: unknown[]) => {
+          ftsHandler = registration[2] as FtsHandler;
+        }
+      };
+      registerFtsTools(fakeFtsServer as never, idx, vServe);
+      if (!ftsHandler) throw new Error("FTS handler was not registered");
+      const callFts = async (query: string) => {
+        const response = await ftsHandler?.({ query, limit: 10 });
+        if (!response) throw new Error("FTS handler disappeared");
+        return JSON.parse(response.content[0]?.text ?? "{}") as { matches?: Array<{ rel_path: string }> };
+      };
+      const publicFts = await callFts("authentication");
+      expect(publicFts.matches?.some((match) => match.rel_path === "Public/auth.md")).toBe(true);
+      expect(publicFts.matches?.every((match) => !match.rel_path.startsWith("Personal/"))).toBe(true);
+      expect((await callFts("ultrasecret")).matches).toEqual([]);
+      expect((await callFts("replaced")).matches).toEqual([]);
+      if (aliasCreated) expect((await callFts("stale")).matches).toEqual([]);
+
       const result = await searchHybrid(
         vServe,
         { query: "authentication tokens", limit: 10 },
@@ -529,6 +683,58 @@ describe("Persistent indexes — search-time privacy filter (v2.0.0-beta.2)", ()
       expect(result.matches.every((m) => !m.path.startsWith("Personal/"))).toBe(true);
       // Public/auth.md should still appear.
       expect(result.matches.some((m) => m.path === "Public/auth.md")).toBe(true);
+      const hiddenResult = await searchHybrid(
+        vServe,
+        { query: "ultrasecret", limit: 10 },
+        { ftsIndex: idx, embedFile: path.join(proot, "nonexistent.embed.db") }
+      );
+      expect(hiddenResult.matches.every((m) => m.path !== ".secret.md")).toBe(true);
+      const replacedResult = await searchHybrid(
+        vServe,
+        { query: "replaced", limit: 10 },
+        { ftsIndex: idx, embedFile: path.join(proot, "nonexistent.embed.db") }
+      );
+      expect(replacedResult.matches.every((match) => match.path !== "Replaced.md")).toBe(true);
+      if (aliasCreated) {
+        const aliasResult = await searchHybrid(
+          vServe,
+          { query: "stale", limit: 10 },
+          { ftsIndex: idx, embedFile: path.join(proot, "nonexistent.embed.db") }
+        );
+        expect(aliasResult.matches.every((match) => match.path !== "VisibleAlias/note.md")).toBe(true);
+      }
+
+      type ChunkHandler = (
+        uri: URL,
+        params: { chunkIndex?: string; notePath?: string | string[] }
+      ) => Promise<unknown>;
+      let chunkHandler: ChunkHandler | undefined;
+      const fakeServer = {
+        registerResource: (...registration: unknown[]) => {
+          chunkHandler = registration[3] as ChunkHandler;
+        }
+      };
+      registerChunkResource(fakeServer as never, idx, vServe);
+      if (!chunkHandler) throw new Error("chunk resource handler was not registered");
+      const publicChunk = await chunkHandler(new URL("obsidian://chunk/0/Public/auth.md"), {
+        chunkIndex: "0",
+        notePath: "Public/auth.md"
+      });
+      expect(JSON.stringify(publicChunk)).toContain("public OAuth authentication notes");
+      await expect(
+        chunkHandler(new URL("obsidian://chunk/0/.secret.md"), { chunkIndex: "0", notePath: ".secret.md" })
+      ).rejects.toThrow(/Chunk not found/);
+      await expect(
+        chunkHandler(new URL("obsidian://chunk/0/Replaced.md"), { chunkIndex: "0", notePath: "Replaced.md" })
+      ).rejects.toThrow(/Chunk not found/);
+      if (aliasCreated) {
+        await expect(
+          chunkHandler(new URL("obsidian://chunk/0/VisibleAlias/note.md"), {
+            chunkIndex: "0",
+            notePath: "VisibleAlias/note.md"
+          })
+        ).rejects.toThrow(/Chunk not found/);
+      }
     } finally {
       idx.close();
     }
@@ -552,6 +758,25 @@ describe("Persistent indexes — search-time privacy filter (v2.0.0-beta.2)", ()
     db.upsertNote("Public/auth.md", 1000, [
       { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "public auth", vector: l2([0.99, 0.14, 0, 0]) }
     ]);
+    db.upsertNote(".secret.md", 1000, [
+      { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "hidden row", vector: l2([1, 0, 0, 0]) }
+    ]);
+    const hiddenTarget = path.join(proot, ".hidden-embed-target");
+    const visibleAlias = path.join(proot, "VisibleEmbedAlias");
+    await fs.mkdir(hiddenTarget, { recursive: true });
+    await fs.writeFile(path.join(hiddenTarget, "note.md"), "hidden physical target");
+    const aliasCreated = await fs
+      .symlink(hiddenTarget, visibleAlias)
+      .then(() => true)
+      .catch(() => false);
+    if (process.env.CI) expect(aliasCreated, "CI must exercise stale embed physical admission").toBe(true);
+    db.upsertNote("VisibleEmbedAlias/note.md", 1000, [
+      { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "stale alias row", vector: l2([1, 0, 0, 0]) }
+    ]);
+    await fs.mkdir(path.join(proot, "Replaced.md"));
+    db.upsertNote("Replaced.md", 1000, [
+      { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "stale directory row", vector: l2([1, 0, 0, 0]) }
+    ]);
     db.close();
 
     // Vault with exclusion. embeddingsSearch should NOT return Personal/.
@@ -567,13 +792,18 @@ describe("Persistent indexes — search-time privacy filter (v2.0.0-beta.2)", ()
     await db2.open();
     try {
       const rawHits = db2.search(l2([1, 0, 0, 0]), 10);
-      expect(rawHits.length).toBe(2); // db has both
+      expect(rawHits.length).toBe(5); // public, two hidden classes, physical-hidden alias, stale directory
       // v3.10.0-rc.22 (audit M8) — call the ACTUAL helper embeddingsSearch
       // applies (search.ts:~1100/1106), not an inline reimplementation. If the
       // real filter regresses, this now fails (it was vacuous theater before).
       const filtered = filterExcludedEmbedHits(rawHits, (p) => vServe.isExcluded(p));
-      expect(filtered.length).toBe(1);
-      expect(filtered[0]?.rel_path).toBe("Public/auth.md");
+      expect(filtered.map((hit) => hit.rel_path).sort()).toEqual([
+        "Public/auth.md",
+        "Replaced.md",
+        "VisibleEmbedAlias/note.md"
+      ]);
+      const liveFiltered = await filterLiveVaultHits(vServe, filtered, (hit) => hit.rel_path, 10);
+      expect(liveFiltered.map((hit) => hit.rel_path)).toEqual(["Public/auth.md"]);
     } finally {
       db2.close();
     }
@@ -635,6 +865,12 @@ describe("Vault — periodic-alias resolver respects exclusions (v1.11.1)", () =
   });
 
   it("readNote(title:'today') surfaces exclusion error instead of falling through", async () => {
+    const defaultV = new Vault(vroot);
+    await defaultV.ensureExists();
+    await expect(readNote(defaultV, { title: "today" })).resolves.toMatchObject({
+      path: expect.stringMatching(/^Daily Notes\/\d{4}-\d{2}-\d{2}\.md$/u)
+    });
+
     const v = new Vault(vroot, { excludeGlobs: ["Daily Notes/**"] });
     await v.ensureExists();
     // Pre-1.11.1: bare catch{} swallowed the exclusion error and fell through

@@ -55,7 +55,6 @@ export interface WatcherSearchHealth {
   hnswUsable: boolean;
 }
 
-const SKIP_DIRS = [".git", ".obsidian", ".trash", "node_modules", ".DS_Store"];
 const DEFAULT_ACTIVATION_PATH_LIMIT = 50_000;
 const ACTIVATION_REPLAY_CONCURRENCY = 4;
 const ACTIVATION_MAX_GENERATIONS = 16;
@@ -910,6 +909,9 @@ export class VaultWatcher {
     if (!nativeRelPath || nativeRelPath.startsWith("..") || path.isAbsolute(nativeRelPath)) {
       return { purge: [], upsert: null };
     }
+    if (this.vault.isExcluded(nativeRelPath)) {
+      return { purge: [absPath], upsert: null };
+    }
     try {
       // Never let final-state reconciliation follow a symlink or junction.
       // lstat observes the captured leaf itself; canonicalization below is
@@ -1109,12 +1111,9 @@ export class VaultWatcher {
           const isPdf = lower.endsWith(".pdf");
           if (!isMd && !(this.includePdfs && isPdf)) return true;
         }
-        // Skip well-known directories.
-        for (const skip of SKIP_DIRS) {
-          if (p.includes(`${path.sep}${skip}${path.sep}`) || p.endsWith(`${path.sep}${skip}`)) return true;
-        }
-        // Skip excluded-by-glob paths so the watcher doesn't reveal note
-        // existence or trigger reindex of files the user marked private.
+        // Use the Vault's single visibility policy for hidden/reserved paths
+        // and configured globs. Keeping this after the no-stats return lets
+        // unlink events reach cleanup and purge stale index rows.
         const rel = path.relative(root, p);
         if (rel && this.vault.isExcluded(rel)) return true;
         return false;
@@ -1242,6 +1241,7 @@ export class VaultWatcher {
     if (!nativeRelPath || nativeRelPath.startsWith("..") || path.isAbsolute(nativeRelPath)) {
       return { state: "purge" };
     }
+    if (this.vault.isExcluded(nativeRelPath)) return { state: "purge" };
 
     let generation: FileGeneration;
     try {

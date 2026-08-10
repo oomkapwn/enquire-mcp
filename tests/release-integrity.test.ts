@@ -4342,6 +4342,8 @@ const PAGINATION_LOOP_FORBIDDEN_TOKENS = [
   " --request PUT",
   " --request DELETE"
 ] as const;
+const SHELL_BREAK_TOKEN = /(?:^|[\s;&|(){}<>])break(?=$|[\s;&|(){}<>])/u;
+const SHELL_EXIT_ZERO_TOKEN = /(?:^|[\s;&|(){}<>])exit 0(?=$|[\s;&|(){}<>])/u;
 
 interface RetryBoundPaginationSpec {
   loop: string;
@@ -4419,18 +4421,18 @@ function retryBoundPaginationPairProblems(source: string, spec: RetryBoundPagina
     decoderCloseIndex <= continueIndex ||
     consumeIndex <= decoderCloseIndex ||
     loopExitIndex <= consumeIndex ||
-    compact.slice(readPrefixIndex + readPrefix.length, readIndex).includes(" break ") ||
+    SHELL_BREAK_TOKEN.test(compact.slice(readPrefixIndex + readPrefix.length, readIndex)) ||
     compact.slice(readPrefixIndex + readPrefix.length, readIndex).includes("continue") ||
-    compact.slice(readPrefixIndex + readPrefix.length, readIndex).includes(" exit 0 ") ||
+    SHELL_EXIT_ZERO_TOKEN.test(compact.slice(readPrefixIndex + readPrefix.length, readIndex)) ||
     compact.slice(readIndex + spec.read.length, readTerminalIndex).includes(" fi ") ||
-    compact.slice(readIndex, readCloseIndex).includes(" break ") ||
-    compact.slice(readIndex, readCloseIndex).includes(" exit 0 ") ||
+    SHELL_BREAK_TOKEN.test(compact.slice(readIndex, readCloseIndex)) ||
+    SHELL_EXIT_ZERO_TOKEN.test(compact.slice(readIndex, readCloseIndex)) ||
     compact.slice(readTerminalCloseIndex + 4, readContinueIndex).includes(" fi ") ||
     compact.slice(readCloseIndex + 4, decodeIndex).trim().length !== 0 ||
     compact.slice(decodeIndex + spec.decode.length, terminalIndex).includes(" fi ") ||
     compact.slice(terminalCloseIndex + 4, continueIndex).includes(" fi ") ||
-    compact.slice(decodeIndex, decoderCloseIndex).includes(" break ") ||
-    compact.slice(decodeIndex, decoderCloseIndex).includes(" exit 0 ") ||
+    SHELL_BREAK_TOKEN.test(compact.slice(decodeIndex, decoderCloseIndex)) ||
+    SHELL_EXIT_ZERO_TOKEN.test(compact.slice(decodeIndex, decoderCloseIndex)) ||
     compact.slice(decoderCloseIndex + 4, consumeIndex).trim().length !== 0 ||
     PAGINATION_LOOP_FORBIDDEN_TOKENS.some((forbidden) => loopSlice.includes(forbidden))
   ) {
@@ -4494,17 +4496,17 @@ function paginationFixedPointProblems(source: string, spec: PaginationFixedPoint
     loopExitIndex <= consumeIndex ||
     resetCount !== spec.exactLoopResets ||
     compact.slice(observationIndex + spec.observation.length, projectionIndex).includes("continue") ||
-    compact.slice(observationIndex + spec.observation.length, projectionIndex).includes(" break ") ||
-    compact.slice(observationIndex + spec.observation.length, projectionIndex).includes(" exit 0 ") ||
+    SHELL_BREAK_TOKEN.test(compact.slice(observationIndex + spec.observation.length, projectionIndex)) ||
+    SHELL_EXIT_ZERO_TOKEN.test(compact.slice(observationIndex + spec.observation.length, projectionIndex)) ||
     (earlyConsumeIndex >= 0 && earlyConsumeIndex < branchCloseIndex) ||
     compact.slice(projectionIndex + spec.projection.length, compareIndex).trim().length !== 0 ||
     compact.slice(compareIndex + spec.compare.length, terminalIndex).includes(" fi ") ||
     compact.slice(terminalCloseIndex + 4, continueIndex).includes(" fi ") ||
-    compact.slice(loopIndex, branchCloseIndex).includes(" break ") ||
-    compact.slice(loopIndex, branchCloseIndex).includes(" exit 0 ") ||
+    SHELL_BREAK_TOKEN.test(compact.slice(loopIndex, branchCloseIndex)) ||
+    SHELL_EXIT_ZERO_TOKEN.test(compact.slice(loopIndex, branchCloseIndex)) ||
     compact.slice(branchCloseIndex + 4, consumeIndex).includes("continue") ||
-    compact.slice(branchCloseIndex + 4, consumeIndex).includes(" break ") ||
-    compact.slice(branchCloseIndex + 4, consumeIndex).includes(" exit 0 ") ||
+    SHELL_BREAK_TOKEN.test(compact.slice(branchCloseIndex + 4, consumeIndex)) ||
+    SHELL_EXIT_ZERO_TOKEN.test(compact.slice(branchCloseIndex + 4, consumeIndex)) ||
     PAGINATION_LOOP_FORBIDDEN_TOKENS.some((forbidden) => loopSlice.includes(forbidden))
   ) {
     return [WRITE_AWARE_PAGINATION_PROBLEM];
@@ -4551,8 +4553,8 @@ function compoundPaginationPairProblems(source: string, spec: CompoundPagination
     firstContinueIndex !== continueIndex ||
     branchCloseIndex <= continueIndex ||
     consumeIndex <= branchCloseIndex ||
-    compact.slice(decodeIndex, branchCloseIndex).includes(" break ") ||
-    compact.slice(decodeIndex, branchCloseIndex).includes(" exit 0 ") ||
+    SHELL_BREAK_TOKEN.test(compact.slice(decodeIndex, branchCloseIndex)) ||
+    SHELL_EXIT_ZERO_TOKEN.test(compact.slice(decodeIndex, branchCloseIndex)) ||
     compact.slice(branchCloseIndex + 4, consumeIndex).trim().length !== 0
   ) {
     return [WRITE_AWARE_PAGINATION_PROBLEM];
@@ -4590,12 +4592,12 @@ function releaseTagAmbiguityProblems(source: string, spec: ReleaseTagAmbiguitySp
     compact.slice(failureIndex + spec.failure.length, exitIndex).includes(" fi ") ||
     guardCloseIndex <= exitIndex ||
     projectionIndex <= guardCloseIndex ||
-    compact.slice(guardIndex, guardCloseIndex).includes(" exit 0 ") ||
+    SHELL_EXIT_ZERO_TOKEN.test(compact.slice(guardIndex, guardCloseIndex)) ||
     compact.slice(guardIndex, guardCloseIndex).includes("continue") ||
-    compact.slice(guardIndex, guardCloseIndex).includes(" break ") ||
+    SHELL_BREAK_TOKEN.test(compact.slice(guardIndex, guardCloseIndex)) ||
     compact.slice(guardCloseIndex + 4, projectionIndex).includes("continue") ||
-    compact.slice(guardCloseIndex + 4, projectionIndex).includes(" break ") ||
-    compact.slice(guardCloseIndex + 4, projectionIndex).includes(" exit 0 ")
+    SHELL_BREAK_TOKEN.test(compact.slice(guardCloseIndex + 4, projectionIndex)) ||
+    SHELL_EXIT_ZERO_TOKEN.test(compact.slice(guardCloseIndex + 4, projectionIndex))
   ) {
     return [WRITE_AWARE_PAGINATION_PROBLEM];
   }
@@ -4615,10 +4617,10 @@ function releasePaginationRetryProblems(
         loop: "for (( attempt=1; attempt<=120; attempt++ )); do",
         read: "if ! CI_RUN_PAGES=$(gh_read api --paginate --slurp",
         readFailure: "Exact ci.yml workflow run remained unreadable after 60 minutes",
-        readWait: "ci_wait \"CI workflow-run lookup failed",
+        readWait: 'ci_wait "CI workflow-run lookup failed',
         decode:
           "if ! CI_RUNS=$(printf '%s' \"$CI_RUN_PAGES\" | node scripts/check-release-integrity.mjs flatten-field workflow_runs); then",
-        decodeWait: "ci_wait \"CI workflow-run strict decode failed",
+        decodeWait: 'ci_wait "CI workflow-run strict decode failed',
         terminal: 'if [ "$attempt" -eq 120 ]; then',
         failure: "Exact ci.yml workflow-run pages remained unstable after 60 minutes",
         consume: "CI_RUN_COUNT=$(printf"
@@ -4632,10 +4634,10 @@ function releasePaginationRetryProblems(
           "WORKFLOW_RUN_ID=$(printf '%s' \"$WORKFLOW_RUN\" | jq -er '.id | select(type == \"number\" and . > 0 and floor == . and . <= 9007199254740991)')",
         read: "if ! JOB_PAGES=$(gh_read api --paginate --slurp",
         readFailure: "Exact CI workflow-run attempt jobs remained unreadable after 60 minutes",
-        readWait: "ci_wait \"CI workflow-run attempt job lookup failed",
+        readWait: 'ci_wait "CI workflow-run attempt job lookup failed',
         decode:
           "if ! JOBS=$(printf '%s' \"$JOB_PAGES\" | node scripts/check-release-integrity.mjs flatten-field jobs); then",
-        decodeWait: "ci_wait \"CI job strict decode failed",
+        decodeWait: 'ci_wait "CI job strict decode failed',
         terminal: 'if [ "$attempt" -eq 120 ]; then',
         failure: "Exact CI workflow-run job pages remained unstable after 60 minutes",
         consume: "JSON=$(jq"
@@ -4800,8 +4802,7 @@ function releasePaginationRetryProblems(
     ]
   ];
   const recoveryAssetPairProblems = compoundPaginationPairProblems(prepare, {
-    read:
-      'if ! RECOVERY_ASSET_PAGES=$(gh_read api --paginate --slurp "repos/${{ github.repository }}/releases/$RECOVERY_ID/assets?per_page=100")',
+    read: `if ! RECOVERY_ASSET_PAGES=$(gh_read api --paginate --slurp "repos/\${{ github.repository }}/releases/$RECOVERY_ID/assets?per_page=100")`,
     decode:
       "! RECOVERY_ASSETS=$(printf '%s' \"$RECOVERY_ASSET_PAGES\" | node scripts/check-release-integrity.mjs flatten-pages asset); then",
     terminal: 'if [ "$create_recovery_attempt" -eq 12 ]; then',
@@ -9171,7 +9172,7 @@ done`;
 
     const compoundPairSpec: CompoundPaginationPairSpec = {
       read: "if ! ASSET_PAGES=$(read_pages)",
-      decode: "! ASSETS=$(strict_decode \"$ASSET_PAGES\"); then",
+      decode: '! ASSETS=$(strict_decode "$ASSET_PAGES"); then',
       terminal: 'if [ "$page_attempt" -eq 2 ]; then',
       failure: "asset pages remained unstable",
       reset: 'PREVIOUS_INVENTORY=""',
@@ -9334,41 +9335,49 @@ done`;
     const fixedPointWriteReplay =
       'PREVIOUS_INVENTORY="" for (( page_attempt=1; page_attempt<=2; page_attempt++ )); do ' +
       'PREVIOUS_INVENTORY="" PREVIOUS_INVENTORY="" PREVIOUS_INVENTORY="" ' +
-      'COUNT=$(printf \'%s\' "$ITEMS" | jq \'length\') ' +
-      'INVENTORY=$(printf \'%s\' "$ITEMS" | jq -c \'[.[] | [.id]]\') ' +
+      "COUNT=$(printf '%s' \"$ITEMS\" | jq 'length') " +
+      "INVENTORY=$(printf '%s' \"$ITEMS\" | jq -c '[.[] | [.id]]') " +
       'if [ "$INVENTORY" != "$PREVIOUS_INVENTORY" ]; then PREVIOUS_INVENTORY="$INVENTORY" ' +
       'if [ "$page_attempt" -eq 2 ]; then echo "inventory did not stabilize" exit 1 fi ' +
       'sleep 1 continue fi release create "$TAG" if [ "$COUNT" -eq 1 ]; then break; fi done';
+    const fixedPointSemicolonBreak =
+      'PREVIOUS_INVENTORY="" for (( page_attempt=1; page_attempt<=2; page_attempt++ )); do ' +
+      'PREVIOUS_INVENTORY="" PREVIOUS_INVENTORY="" PREVIOUS_INVENTORY="" ' +
+      "COUNT=$(printf '%s' \"$ITEMS\" | jq 'length') " +
+      "INVENTORY=$(printf '%s' \"$ITEMS\" | jq -c '[.[] | [.id]]') " +
+      'if [ "$INVENTORY" != "$PREVIOUS_INVENTORY" ]; then PREVIOUS_INVENTORY="$INVENTORY" ' +
+      'if [ "$page_attempt" -eq 2 ]; then echo "inventory did not stabilize" exit 1 fi ' +
+      'sleep 1 continue; break; fi if [ "$COUNT" -eq 1 ]; then break; fi done';
     const fixedPointEarlyConsume =
       'PREVIOUS_INVENTORY="" for (( page_attempt=1; page_attempt<=2; page_attempt++ )); do ' +
       'PREVIOUS_INVENTORY="" PREVIOUS_INVENTORY="" PREVIOUS_INVENTORY="" ' +
-      'COUNT=$(printf \'%s\' "$ITEMS" | jq \'length\') ' +
-      'INVENTORY=$(printf \'%s\' "$ITEMS" | jq -c \'[.[] | [.id]]\') ' +
+      "COUNT=$(printf '%s' \"$ITEMS\" | jq 'length') " +
+      "INVENTORY=$(printf '%s' \"$ITEMS\" | jq -c '[.[] | [.id]]') " +
       'if [ "$COUNT" -eq 1 ]; then break; fi ' +
       'if [ "$INVENTORY" != "$PREVIOUS_INVENTORY" ]; then PREVIOUS_INVENTORY="$INVENTORY" ' +
       'if [ "$page_attempt" -eq 2 ]; then echo "inventory did not stabilize" exit 1 fi ' +
       'sleep 1 continue fi if [ "$COUNT" -eq 1 ]; then break; fi done';
     const fixedPointExitSuccess =
       'PREVIOUS_INVENTORY="" for (( page_attempt=1; page_attempt<=2; page_attempt++ )); do ' +
-      'PREVIOUS_INVENTORY="" PREVIOUS_INVENTORY="" PREVIOUS_INVENTORY="" exit 0 ' +
-      'COUNT=$(printf \'%s\' "$ITEMS" | jq \'length\') ' +
-      'INVENTORY=$(printf \'%s\' "$ITEMS" | jq -c \'[.[] | [.id]]\') ' +
+      'PREVIOUS_INVENTORY="" PREVIOUS_INVENTORY="" PREVIOUS_INVENTORY="" exit 0; ' +
+      "COUNT=$(printf '%s' \"$ITEMS\" | jq 'length') " +
+      "INVENTORY=$(printf '%s' \"$ITEMS\" | jq -c '[.[] | [.id]]') " +
       'if [ "$INVENTORY" != "$PREVIOUS_INVENTORY" ]; then PREVIOUS_INVENTORY="$INVENTORY" ' +
       'if [ "$page_attempt" -eq 2 ]; then echo "inventory did not stabilize" exit 1 fi ' +
       'sleep 1 continue fi if [ "$COUNT" -eq 1 ]; then break; fi done';
     const fixedPointObservationContinue =
       'PREVIOUS_INVENTORY="" for (( page_attempt=1; page_attempt<=2; page_attempt++ )); do ' +
       'PREVIOUS_INVENTORY="" PREVIOUS_INVENTORY="" PREVIOUS_INVENTORY="" ' +
-      'COUNT=$(printf \'%s\' "$ITEMS" | jq \'length\') continue ' +
-      'INVENTORY=$(printf \'%s\' "$ITEMS" | jq -c \'[.[] | [.id]]\') ' +
+      "COUNT=$(printf '%s' \"$ITEMS\" | jq 'length') continue " +
+      "INVENTORY=$(printf '%s' \"$ITEMS\" | jq -c '[.[] | [.id]]') " +
       'if [ "$INVENTORY" != "$PREVIOUS_INVENTORY" ]; then PREVIOUS_INVENTORY="$INVENTORY" ' +
       'if [ "$page_attempt" -eq 2 ]; then echo "inventory did not stabilize" exit 1 fi ' +
       'sleep 1 continue fi if [ "$COUNT" -eq 1 ]; then break; fi done';
     const fixedPointPostCompareContinue =
       'PREVIOUS_INVENTORY="" for (( page_attempt=1; page_attempt<=2; page_attempt++ )); do ' +
       'PREVIOUS_INVENTORY="" PREVIOUS_INVENTORY="" PREVIOUS_INVENTORY="" ' +
-      'COUNT=$(printf \'%s\' "$ITEMS" | jq \'length\') ' +
-      'INVENTORY=$(printf \'%s\' "$ITEMS" | jq -c \'[.[] | [.id]]\') ' +
+      "COUNT=$(printf '%s' \"$ITEMS\" | jq 'length') " +
+      "INVENTORY=$(printf '%s' \"$ITEMS\" | jq -c '[.[] | [.id]]') " +
       'if [ "$INVENTORY" != "$PREVIOUS_INVENTORY" ]; then PREVIOUS_INVENTORY="$INVENTORY" ' +
       'if [ "$page_attempt" -eq 2 ]; then echo "inventory did not stabilize" exit 1 fi ' +
       'sleep 1 continue fi continue if [ "$COUNT" -eq 1 ]; then break; fi done';
@@ -9377,6 +9386,7 @@ done`;
       fixedPointSingleObservation,
       fixedPointPrematureBreak,
       fixedPointWriteReplay,
+      fixedPointSemicolonBreak,
       fixedPointEarlyConsume,
       fixedPointExitSuccess,
       fixedPointObservationContinue,
@@ -9420,9 +9430,7 @@ done`;
 
     const conflictingRelease = { ...candidateRelease, id: candidateRelease.id + 1 };
     const conflictingInventory = flattenPaginatedArrays([[candidateRelease, conflictingRelease]], "release");
-    const conflictingTagMatches = conflictingInventory.filter(
-      (item) => item.tag_name === candidateRelease.tag_name
-    );
+    const conflictingTagMatches = conflictingInventory.filter((item) => item.tag_name === candidateRelease.tag_name);
     let stableTagAmbiguityFailure: string | null = null;
     if (conflictingTagMatches.length > 1) stableTagAmbiguityFailure = "duplicate releases for exact tag";
     expect(stableTagAmbiguityFailure).toMatch(/duplicate releases/);

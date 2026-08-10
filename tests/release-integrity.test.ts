@@ -8768,8 +8768,7 @@ describe("release identity and exact required-job gate", () => {
     const m116ReplacementLiteralToken = `      replacement: "PROVENANCE_SHA: ${githubWorkflowShaExpression}",`;
     const m116AnchorLiteralToken = `        anchor: "PROVENANCE_SHA: ${githubShaExpression}",`;
     const m116NeedleTemplateToken = `      needle: \`PROVENANCE_SHA: ${escapedGithubShaExpression}\`,`;
-    const m116ReplacementTemplateToken =
-      `      replacement: \`PROVENANCE_SHA: ${escapedGithubWorkflowShaExpression}\`,`;
+    const m116ReplacementTemplateToken = `      replacement: \`PROVENANCE_SHA: ${escapedGithubWorkflowShaExpression}\`,`;
     const m116AnchorTemplateToken = `        anchor: \`PROVENANCE_SHA: ${escapedGithubShaExpression}\`,`;
     const m116NeedleLiteralOffset = declarativeBatchOffset(m116NeedleLiteralToken);
     const m116ReplacementLiteralOffset = declarativeBatchOffset(m116ReplacementLiteralToken);

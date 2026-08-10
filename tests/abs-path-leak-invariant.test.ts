@@ -123,7 +123,7 @@ function mutationLeafProbeProblems(src: string): string[] {
   }
 
   const requiredCalls = new Map([
-    ["writeNote", 2],
+    ["writeNote", 3],
     ["canonicalRenameDestinationRelPublic", 1],
     ["renameFile", 1]
   ]);
@@ -205,7 +205,7 @@ describe("abs-path-leak inventory invariant (rc.49)", () => {
       realVault,
       'await this.assertMutationLeafNotSymlink(abs, "write");',
       "await fs.lstat(abs).catch(() => null);",
-      2
+      3
     );
     expect(mutationLeafProbeProblems(rawWriteProbe)).toContain(
       "writeNote must use the mutation leaf assertion at every required phase"

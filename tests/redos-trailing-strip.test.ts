@@ -58,6 +58,8 @@ describe("ReDoS — trailing-run strips are linear (CodeQL js/polynomial-redos #
       "src/fts5.ts",
       "src/embed-db.ts",
       "src/periodic.ts",
+      "src/prompts.ts",
+      "src/vault-path-policy.ts",
       "src/tools/search.ts",
       "src/tools/write.ts",
       "src/tools/read.ts"
@@ -65,7 +67,7 @@ describe("ReDoS — trailing-run strips are linear (CodeQL js/polynomial-redos #
     // The polynomial shape is a SINGLE char-class run anchored at end-of-string:
     // `.replace(/<class>+$/...)`. (A leading `^<class>+` is start-anchored → linear; a
     // two-part `#\d+$` fails fast; a global `\s+/g` has no `$` → linear. None match.)
-    const ANTI = /\.replace\(\/(?:\\\/|\\n|\\s|#)\+\$\/[gimsuy]*\s*,/;
+    const ANTI = /\.replace\(\/(?:\\\/|\\n|\\s|#|\[[^/]*\])\+\$\/[gimsuy]*\s*,/;
     const offenders: string[] = [];
     for (const rel of SINK_FILES) {
       const src = readFileSync(path.join(repoRoot, rel), "utf8");
@@ -81,11 +83,13 @@ describe("ReDoS — trailing-run strips are linear (CodeQL js/polynomial-redos #
     // The polynomial shape is a SINGLE char-class run anchored at end-of-string:
     // `.replace(/<class>+$/...)`. (A leading `^<class>+` is start-anchored → linear; a
     // two-part `#\d+$` fails fast; a global `\s+/g` has no `$` → linear. None match.)
-    const ANTI = /\.replace\(\/(?:\\\/|\\n|\\s|#)\+\$\/[gimsuy]*\s*,/;
+    const ANTI = /\.replace\(\/(?:\\\/|\\n|\\s|#|\[[^/]*\])\+\$\/[gimsuy]*\s*,/;
     // biome-ignore lint/suspicious/noTemplateCurlyInString: intentional — a SAMPLE of source code (a real `${…}` line) matched against the ANTI regex.
     expect('const p = `${opts.folder.replace(/\\/+$/, "")}/`;').toMatch(ANTI);
     expect('body.replace(/\\n+$/, "")').toMatch(ANTI);
+    expect('rawSegment.replace(/[. ]+$/u, "")').toMatch(ANTI);
     expect("stripTrailingSlashes(opts.folder)").not.toMatch(ANTI); // the fixed form is clean
+    expect("stripTrailingRun(rawSegment, isWindowsIgnoredSuffix)").not.toMatch(ANTI);
   });
 });
 

@@ -3,16 +3,17 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { defaultIndexFile, FtsIndex } from "../src/fts5.js";
-import { registerChunkResource, registerFtsTools } from "../src/tool-registry.js";
 import {
   appendToNote,
   archiveNote,
   createNote,
   listNotes,
+  readLiveFtsChunk,
   readNote,
   renameNote,
   replaceInNotes,
   searchHybrid,
+  searchLiveFts,
   validateNoteProposal
 } from "../src/tools/index.js";
 // v3.10.0-rc.22 (audit M8) — the REAL embed-hit privacy filter (was reimplemented
@@ -427,6 +428,9 @@ describe("Vault — --exclude-glob privacy filter (v0.11 P1)", () => {
     expect(restrictedVaultPathReason("Nested/.Git./config")).toBe("hidden or reserved vault path");
     expect(restrictedVaultPathReason("nested/THUMBS.DB ")).toBe("hidden or reserved vault path");
     expect(restrictedVaultPathReason("Project.v2/my-node_modules-notes.md")).toBeNull();
+    const longWindowsSuffix = `${".".repeat(4096)}${" ".repeat(4096)}`;
+    expect(restrictedVaultPathReason(`nested/THUMBS.DB${longWindowsSuffix}`)).toBe("hidden or reserved vault path");
+    expect(restrictedVaultPathReason(`nested/public${longWindowsSuffix}`)).toBeNull();
   });
 
   it("multiple exclude patterns AND'd correctly (any match → excluded)", async () => {
@@ -653,26 +657,13 @@ describe("Persistent indexes — search-time privacy filter (v2.0.0-beta.2)", ()
       // be invisible to obsidian_search even though FTS5 db still has it.
       const vServe = new Vault(proot, { excludeGlobs: ["Personal/**"] });
       await vServe.ensureExists();
-      type FtsHandler = (args: { query: string; limit?: number }) => Promise<{ content: Array<{ text: string }> }>;
-      let ftsHandler: FtsHandler | undefined;
-      const fakeFtsServer = {
-        registerTool: (...registration: unknown[]) => {
-          ftsHandler = registration[2] as FtsHandler;
-        }
-      };
-      registerFtsTools(fakeFtsServer as never, idx, vServe);
-      if (!ftsHandler) throw new Error("FTS handler was not registered");
-      const callFts = async (query: string) => {
-        const response = await ftsHandler?.({ query, limit: 10 });
-        if (!response) throw new Error("FTS handler disappeared");
-        return JSON.parse(response.content[0]?.text ?? "{}") as { matches?: Array<{ rel_path: string }> };
-      };
+      const callFts = (query: string) => searchLiveFts(vServe, idx, { query, limit: 10 });
       const publicFts = await callFts("authentication");
-      expect(publicFts.matches?.some((match) => match.rel_path === "Public/auth.md")).toBe(true);
-      expect(publicFts.matches?.every((match) => !match.rel_path.startsWith("Personal/"))).toBe(true);
-      expect((await callFts("ultrasecret")).matches).toEqual([]);
-      expect((await callFts("replaced")).matches).toEqual([]);
-      if (aliasCreated) expect((await callFts("stale")).matches).toEqual([]);
+      expect(publicFts.some((match) => match.rel_path === "Public/auth.md")).toBe(true);
+      expect(publicFts.every((match) => !match.rel_path.startsWith("Personal/"))).toBe(true);
+      expect(await callFts("ultrasecret")).toEqual([]);
+      expect(await callFts("replaced")).toEqual([]);
+      if (aliasCreated) expect(await callFts("stale")).toEqual([]);
 
       const result = await searchHybrid(
         vServe,
@@ -704,33 +695,12 @@ describe("Persistent indexes — search-time privacy filter (v2.0.0-beta.2)", ()
         expect(aliasResult.matches.every((match) => match.path !== "VisibleAlias/note.md")).toBe(true);
       }
 
-      type ChunkHandler = (uri: URL, params: { chunkIndex?: string; notePath?: string | string[] }) => Promise<unknown>;
-      let chunkHandler: ChunkHandler | undefined;
-      const fakeServer = {
-        registerResource: (...registration: unknown[]) => {
-          chunkHandler = registration[3] as ChunkHandler;
-        }
-      };
-      registerChunkResource(fakeServer as never, idx, vServe);
-      if (!chunkHandler) throw new Error("chunk resource handler was not registered");
-      const publicChunk = await chunkHandler(new URL("obsidian://chunk/0/Public/auth.md"), {
-        chunkIndex: "0",
-        notePath: "Public/auth.md"
-      });
-      expect(JSON.stringify(publicChunk)).toContain("public OAuth authentication notes");
-      await expect(
-        chunkHandler(new URL("obsidian://chunk/0/.secret.md"), { chunkIndex: "0", notePath: ".secret.md" })
-      ).rejects.toThrow(/Chunk not found/);
-      await expect(
-        chunkHandler(new URL("obsidian://chunk/0/Replaced.md"), { chunkIndex: "0", notePath: "Replaced.md" })
-      ).rejects.toThrow(/Chunk not found/);
+      const publicChunk = await readLiveFtsChunk(vServe, idx, "Public/auth.md", 0);
+      expect(publicChunk.content).toContain("public OAuth authentication notes");
+      await expect(readLiveFtsChunk(vServe, idx, ".secret.md", 0)).rejects.toThrow(/Chunk not found/);
+      await expect(readLiveFtsChunk(vServe, idx, "Replaced.md", 0)).rejects.toThrow(/Chunk not found/);
       if (aliasCreated) {
-        await expect(
-          chunkHandler(new URL("obsidian://chunk/0/VisibleAlias/note.md"), {
-            chunkIndex: "0",
-            notePath: "VisibleAlias/note.md"
-          })
-        ).rejects.toThrow(/Chunk not found/);
+        await expect(readLiveFtsChunk(vServe, idx, "VisibleAlias/note.md", 0)).rejects.toThrow(/Chunk not found/);
       }
     } finally {
       idx.close();
@@ -877,7 +847,7 @@ describe("Vault — periodic-alias resolver respects exclusions (v1.11.1)", () =
     await expect(readNote(v, { title: "today" })).rejects.toThrow(/excluded by --exclude-glob/);
   });
 
-  it("readNote(title:'daily') with --read-paths allowlist excluding .obsidian/ falls back to defaults silently (v2.0.0-beta.2 DiD)", async () => {
+  it("readNote(title:'daily') keeps periodic config private, then authorizes the public default target", async () => {
     // Pre-v2.0.0-beta.2: `.obsidian/daily-notes.json` was read regardless of
     // `--read-paths`, so the periodic resolver produced `Daily Notes/<today>.md`
     // and `vault.stat()` surfaced "excluded by --read-paths". That technically
@@ -885,13 +855,17 @@ describe("Vault — periodic-alias resolver respects exclusions (v1.11.1)", () =
     // configured (an attacker could time the difference between "no periodic
     // config" and "config but excluded").
     //
-    // v2.0.0-beta.2 DiD: when the user's allowlist excludes `.obsidian/**`,
-    // we silently fall back to v0.11 hard-coded defaults. The lookup then
-    // produces a `<basename>` that doesn't exist in any allowed folder, so
-    // the user sees a clean "No note found" — same response shape as if
-    // they didn't have Daily Notes installed at all.
+    // The trusted internal config read still respects the explicit user
+    // allowlist, so resolution falls back to the public root-date default.
+    // Authorization now runs before existence: the derived target is rejected
+    // consistently without exposing the configured "Daily Notes" folder.
     const v = new Vault(vroot, { readPaths: ["Work/**"] });
     await v.ensureExists();
-    await expect(readNote(v, { title: "daily" })).rejects.toThrow(/No note found/);
+    const error = await readNote(v, { title: "daily" }).catch((reason: unknown) => reason);
+    expect(error).toBeInstanceOf(Error);
+    if (!(error instanceof Error)) throw new Error("expected Error");
+    expect(error.message).toMatch(/Path is excluded by --read-paths allowlist/);
+    expect(error.message).toMatch(/\d{4}-\d{2}-\d{2}\.md$/u);
+    expect(error.message).not.toContain("Daily Notes");
   });
 });

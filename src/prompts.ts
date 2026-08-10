@@ -1,6 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { renderVaultResearchProtocol } from "./research-protocol.js";
+import { stripTrailingSlashes } from "./wildcard-match.js";
 
 /**
  * Canonicalize a vault-relative folder used repeatedly inside one prompt.
@@ -16,7 +17,7 @@ import { renderVaultResearchProtocol } from "./research-protocol.js";
  */
 function normalizePromptFolderScope(value: string | undefined, fallback: string): string {
   const raw = value ?? fallback;
-  const candidate = raw.replace(/\/+$/, "");
+  const candidate = stripTrailingSlashes(raw);
   const segments = candidate.split("/");
   const hasControlCharacter = [...candidate].some((char) => {
     const codePoint = char.codePointAt(0) ?? 0;

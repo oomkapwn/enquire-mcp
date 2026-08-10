@@ -1,4 +1,7 @@
+import { stripTrailingRun } from "./wildcard-match.js";
+
 const RESTRICTED_VAULT_SEGMENTS = new Set([".git", ".obsidian", ".trash", ".ds_store", "node_modules", "thumbs.db"]);
+const isWindowsIgnoredSuffix = (code: number): boolean => code === 0x2e || code === 0x20;
 
 /** Stable reason returned when a path is outside the public vault surface. */
 export type RestrictedVaultPathReason = "hidden or reserved vault path";
@@ -20,7 +23,7 @@ export function restrictedVaultPathReason(relPath: string): RestrictedVaultPathR
   const segments = relPath.replace(/\\/g, "/").split("/");
   for (const rawSegment of segments) {
     if (rawSegment.length === 0 || rawSegment === ".") continue;
-    const windowsCanonical = rawSegment.replace(/[. ]+$/u, "");
+    const windowsCanonical = stripTrailingRun(rawSegment, isWindowsIgnoredSuffix);
     if (rawSegment.startsWith(".") || RESTRICTED_VAULT_SEGMENTS.has(windowsCanonical.toLowerCase())) {
       return "hidden or reserved vault path";
     }

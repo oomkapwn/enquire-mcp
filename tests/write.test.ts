@@ -474,7 +474,7 @@ describe("appendToNote", () => {
       const v = new Vault(root, { enableWrite: true, readPaths: ["Public/**"] });
       await v.ensureExists();
       await expect(v.appendNote("Public/escaped.md", "outside-write")).rejects.toThrow(
-        /outside vault|does not exist|ENOENT|no such file/i
+        /canonical form escapes the vault/i
       );
       expect(await fs.stat(path.join(outside, "escaped.md")).catch(() => null)).toBeNull();
 

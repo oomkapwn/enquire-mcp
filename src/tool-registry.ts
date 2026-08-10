@@ -15,7 +15,6 @@ import {
   createNote,
   dataviewQuery,
   embeddingsSearch,
-  filterLiveVaultHits,
   findPath,
   findSimilar,
   frontmatterGet,
@@ -39,6 +38,7 @@ import {
   openInUi,
   paperAudit,
   readCanvas,
+  readLiveFtsChunk,
   readNote,
   readPdf,
   renameNote,
@@ -46,6 +46,7 @@ import {
   resolveWikilink,
   searchHybrid,
   searchHybridMulti,
+  searchLiveFts,
   searchText,
   semanticSearch,
   staleNotes,
@@ -151,25 +152,13 @@ export function registerFtsTools(server: McpServer, idx: FtsIndex, vault: Vault)
         if (Number.isFinite(t)) sinceMtimeMs = t;
         else throw new Error(`Invalid 'since' value (expected ISO date): ${args.since}`);
       }
-      // v2.0.0-beta.2 P0 fix: filter excluded paths from FTS5 hits before
-      // returning. The .fts5.db can contain entries from when the index was
-      // built without exclusion flags. Pre-fix, BM25 search leaked excluded
-      // chunks through `rel_path` and `snippet` (which contains the matched
-      // chunk text bracketed with «…»).
-      const userLimit = args.limit ?? 25;
-      const overFetch = userLimit * 2;
-      const rawMatches = idx.search(args.query, {
-        limit: overFetch,
+      const matches = await searchLiveFts(vault, idx, {
+        query: args.query,
         folder: args.folder,
         tag: args.tag,
-        sinceMtimeMs
+        sinceMtimeMs,
+        limit: args.limit
       });
-      const matches = await filterLiveVaultHits(
-        vault,
-        rawMatches.filter((match) => !vault.isExcluded(match.rel_path)),
-        (match) => match.rel_path,
-        userLimit
-      );
       return textResult({
         query: args.query,
         total_chunks: idx.totalChunks(),
@@ -1560,49 +1549,7 @@ export function registerChunkResource(server: McpServer, idx: FtsIndex, vault: V
       }
       const notePathRaw = Array.isArray(params.notePath) ? params.notePath.join("/") : (params.notePath as string);
       const decoded = decodeNotePath(notePathRaw);
-      // v3.7.20 R-9 — defense-in-depth: reject `..` / absolute-path inputs
-      // BEFORE the FTS5 lookup. Pre-3.7.20, a chunk URI like
-      // `obsidian://chunk/0/../../../etc/passwd` would not match anything
-      // in FTS5 (which only contains vault-relative paths) and return a
-      // generic "Chunk not found" — so privacy WAS preserved end-to-end,
-      // but the path-traversal attempt itself wasn't rejected at the
-      // input boundary. resolveInside() is the canonical path-traversal
-      // guard used across vault read/write surfaces; applying it here
-      // makes the error surface uniform AND prevents future regressions
-      // if someone ever indexes content keyed on non-vault-relative paths.
-      try {
-        vault.resolveInside(decoded);
-      } catch {
-        throw new Error(`Chunk not found: ${decoded}#${chunkIndex}`);
-      }
-      // v2.0.0-beta.2 P0 fix: enforce --read-paths / --exclude-glob on the
-      // chunk resource. The .fts5.db can contain entries from before the user
-      // added a privacy filter, so a stale URI returned earlier in the
-      // session would otherwise serve excluded content. We refuse with the
-      // same "not found" framing the FTS5 search uses post-filter, so the
-      // attacker can't distinguish "doesn't exist" from "exists but excluded".
-      if (vault.isExcluded(decoded)) {
-        throw new Error(`Chunk not found: ${decoded}#${chunkIndex}`);
-      }
-      // The index is derived state: a once-visible key may outlive a local
-      // rename or an in-vault symlink swap. Re-admit the live lexical and
-      // physical path before returning stored bytes so a visible alias that
-      // now resolves into a hidden/reserved path cannot expose a stale chunk.
-      try {
-        const stat = await vault.stat(decoded);
-        if (!stat.isFile) throw new Error("source is not a regular file");
-      } catch {
-        throw new Error(`Chunk not found: ${decoded}#${chunkIndex}`);
-      }
-      const chunk = idx.getChunk(decoded, chunkIndex);
-      if (!chunk) throw new Error(`Chunk not found: ${decoded}#${chunkIndex}`);
-      const payload = {
-        rel_path: decoded,
-        chunk_index: chunkIndex,
-        line_start: chunk.line_start,
-        line_end: chunk.line_end,
-        content: chunk.content
-      };
+      const payload = await readLiveFtsChunk(vault, idx, decoded, chunkIndex);
       return {
         contents: [{ uri: uri.href, mimeType: "application/json", text: JSON.stringify(payload, null, 2) }]
       };

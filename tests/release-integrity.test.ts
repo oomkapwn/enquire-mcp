@@ -944,6 +944,7 @@ const RELEASE_MUTATION_PROJECT_DEPENDENCY_ONLY_COUNT = 24;
 const RELEASE_MUTATION_REGISTRY_ADAPTER_PROPERTY = "registryEvaluatorProblems";
 const RELEASE_MUTATION_REGISTRY_STEP_ADAPTER_PROPERTY = "registryStepProblems";
 const RELEASE_MUTATION_NPM_ADAPTER_PROPERTY = "npmContractProblems";
+const RELEASE_MUTATION_NPM_WORKFLOW_ADAPTER_PROPERTY = "npmWorkflowProblems";
 const RELEASE_MUTATION_REGISTRY_PROBLEM =
   "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics";
 const RELEASE_MUTATION_REGISTRY_WORKFLOW_PROBLEM =
@@ -1484,6 +1485,11 @@ function releaseMutationInventoryProblems(source: string): string[] {
   let npmContractAliasInitializers = 0;
   let npmContractWrites = 0;
   let otherNpmContractReferences = 0;
+  let directNpmWorkflowDeclarations = 0;
+  let otherNpmWorkflowBindings = 0;
+  let npmWorkflowAliasInitializers = 0;
+  let npmWorkflowWrites = 0;
+  let otherNpmWorkflowReferences = 0;
   const recordOtherBinding = (name: ts.BindingName | ts.Identifier): void => {
     if (ts.isIdentifier(name)) {
       if (name.text === "describe") otherDescribeBindings++;
@@ -1494,6 +1500,7 @@ function releaseMutationInventoryProblems(source: string): string[] {
       if (name.text === "mcpRegistryStepProblems") otherRegistryStepBindings++;
       if (name.text === "mcpRegistryRunProblems") otherRegistryRunBindings++;
       if (name.text === "npmProvenanceContractProblems") otherNpmContractBindings++;
+      if (name.text === "npmProvenanceWorkflowProblems") otherNpmWorkflowBindings++;
       return;
     }
     for (const element of name.elements) {
@@ -1518,7 +1525,7 @@ function releaseMutationInventoryProblems(source: string): string[] {
   };
   const releaseOracleAdapterIdentity = (
     property: ts.ObjectLiteralElementLike
-  ): "npm.contract" | "registry.evaluator" | "registry.step" | null => {
+  ): "npm.contract" | "npm.workflow" | "registry.evaluator" | "registry.step" | null => {
     if (!ts.isPropertyAssignment(property) || !ts.isIdentifier(property.name)) return null;
     if (
       property.name.text === RELEASE_MUTATION_REGISTRY_ADAPTER_PROPERTY &&
@@ -1541,6 +1548,13 @@ function releaseMutationInventoryProblems(source: string): string[] {
     ) {
       return "npm.contract";
     }
+    if (
+      property.name.text === RELEASE_MUTATION_NPM_WORKFLOW_ADAPTER_PROPERTY &&
+      ts.isIdentifier(property.initializer) &&
+      property.initializer.text === "npmProvenanceWorkflowProblems"
+    ) {
+      return "npm.workflow";
+    }
     return null;
   };
   const closedReleaseOracleAdapterObject = (value: ts.Expression | undefined): value is ts.ObjectLiteralExpression => {
@@ -1548,7 +1562,7 @@ function releaseMutationInventoryProblems(source: string): string[] {
       value === undefined ||
       !ts.isObjectLiteralExpression(value) ||
       value.properties.length < 1 ||
-      value.properties.length > 3
+      value.properties.length > 4
     ) {
       return false;
     }
@@ -1559,12 +1573,14 @@ function releaseMutationInventoryProblems(source: string): string[] {
     value: ts.Expression | undefined,
     requiresRegistryEvaluator: boolean,
     requiresRegistryStep: boolean,
-    requiresNpmContract: boolean
+    requiresNpmContract: boolean,
+    requiresNpmWorkflow: boolean
   ): value is ts.ObjectLiteralExpression => {
     const expectedIdentities = [
       ...(requiresRegistryEvaluator ? (["registry.evaluator"] as const) : []),
       ...(requiresRegistryStep ? (["registry.step"] as const) : []),
-      ...(requiresNpmContract ? (["npm.contract"] as const) : [])
+      ...(requiresNpmContract ? (["npm.contract"] as const) : []),
+      ...(requiresNpmWorkflow ? (["npm.workflow"] as const) : [])
     ];
     if (
       expectedIdentities.length === 0 ||
@@ -1703,7 +1719,8 @@ function releaseMutationInventoryProblems(source: string): string[] {
       (node.name?.text === "mcpRegistryEvaluatorProblems" ||
         node.name?.text === "mcpRegistryStepProblems" ||
         node.name?.text === "mcpRegistryRunProblems" ||
-        node.name?.text === "npmProvenanceContractProblems")
+        node.name?.text === "npmProvenanceContractProblems" ||
+        node.name?.text === "npmProvenanceWorkflowProblems")
     ) {
       if (node.name?.text === "mcpRegistryEvaluatorProblems") {
         if (node.parent === sourceFile) directRegistryEvaluatorDeclarations++;
@@ -1714,8 +1731,11 @@ function releaseMutationInventoryProblems(source: string): string[] {
       } else if (node.name?.text === "mcpRegistryRunProblems") {
         if (node.parent === sourceFile) directRegistryRunDeclarations++;
         else otherRegistryRunBindings++;
-      } else if (node.parent === sourceFile) directNpmContractDeclarations++;
-      else otherNpmContractBindings++;
+      } else if (node.name?.text === "npmProvenanceContractProblems") {
+        if (node.parent === sourceFile) directNpmContractDeclarations++;
+        else otherNpmContractBindings++;
+      } else if (node.parent === sourceFile) directNpmWorkflowDeclarations++;
+      else otherNpmWorkflowBindings++;
     } else if (ts.isVariableDeclaration(node) || ts.isParameter(node)) {
       recordOtherBinding(node.name);
     } else if (
@@ -1762,6 +1782,14 @@ function releaseMutationInventoryProblems(source: string): string[] {
       npmContractAliasInitializers++;
     }
     if (
+      ts.isVariableDeclaration(node) &&
+      node.initializer !== undefined &&
+      ts.isIdentifier(node.initializer) &&
+      node.initializer.text === "npmProvenanceWorkflowProblems"
+    ) {
+      npmWorkflowAliasInitializers++;
+    }
+    if (
       ts.isBinaryExpression(node) &&
       assignmentOperatorKinds.has(node.operatorToken.kind) &&
       assignmentTargetContainsIdentifier(node.left, "mcpRegistryEvaluatorProblems")
@@ -1788,6 +1816,13 @@ function releaseMutationInventoryProblems(source: string): string[] {
       assignmentTargetContainsIdentifier(node.left, "npmProvenanceContractProblems")
     ) {
       npmContractWrites++;
+    }
+    if (
+      ts.isBinaryExpression(node) &&
+      assignmentOperatorKinds.has(node.operatorToken.kind) &&
+      assignmentTargetContainsIdentifier(node.left, "npmProvenanceWorkflowProblems")
+    ) {
+      npmWorkflowWrites++;
     }
     if (
       (ts.isPrefixUnaryExpression(node) || ts.isPostfixUnaryExpression(node)) &&
@@ -1818,6 +1853,13 @@ function releaseMutationInventoryProblems(source: string): string[] {
       npmContractWrites++;
     }
     if (
+      (ts.isPrefixUnaryExpression(node) || ts.isPostfixUnaryExpression(node)) &&
+      (node.operator === ts.SyntaxKind.PlusPlusToken || node.operator === ts.SyntaxKind.MinusMinusToken) &&
+      assignmentTargetContainsIdentifier(node.operand, "npmProvenanceWorkflowProblems")
+    ) {
+      npmWorkflowWrites++;
+    }
+    if (
       (ts.isForOfStatement(node) || ts.isForInStatement(node)) &&
       !ts.isVariableDeclarationList(node.initializer) &&
       assignmentTargetContainsIdentifier(node.initializer, "mcpRegistryEvaluatorProblems")
@@ -1844,6 +1886,13 @@ function releaseMutationInventoryProblems(source: string): string[] {
       assignmentTargetContainsIdentifier(node.initializer, "npmProvenanceContractProblems")
     ) {
       npmContractWrites++;
+    }
+    if (
+      (ts.isForOfStatement(node) || ts.isForInStatement(node)) &&
+      !ts.isVariableDeclarationList(node.initializer) &&
+      assignmentTargetContainsIdentifier(node.initializer, "npmProvenanceWorkflowProblems")
+    ) {
+      npmWorkflowWrites++;
     }
     if (ts.isIdentifier(node) && node.text === "ReleaseMutationPlan") {
       const parent = node.parent;
@@ -1919,6 +1968,19 @@ function releaseMutationInventoryProblems(source: string): string[] {
         parent.arguments.length === 2;
       if (!exactDeclaration && !exactDirectCall && !isExactReleaseOracleAdapterInitializer(node)) {
         otherNpmContractReferences++;
+      }
+    }
+    if (ts.isIdentifier(node) && node.text === "npmProvenanceWorkflowProblems") {
+      const parent = node.parent;
+      const exactDeclaration = ts.isFunctionDeclaration(parent) && parent.name === node && parent.parent === sourceFile;
+      const exactDirectCall =
+        ts.isCallExpression(parent) &&
+        parent.expression === node &&
+        parent.questionDotToken === undefined &&
+        parent.typeArguments === undefined &&
+        parent.arguments.length === 1;
+      if (!exactDeclaration && !exactDirectCall && !isExactReleaseOracleAdapterInitializer(node)) {
+        otherNpmWorkflowReferences++;
       }
     }
     ts.forEachChild(node, visitRuntimeBindings);
@@ -2035,6 +2097,26 @@ function releaseMutationInventoryProblems(source: string): string[] {
   if (otherNpmContractReferences !== 0) {
     problems.push(
       `release mutation npm contract adapter may only be called directly or occupy the exact execute adapter slot; found ${otherNpmContractReferences} other reference(s)`
+    );
+  }
+  if (directNpmWorkflowDeclarations !== 1 || otherNpmWorkflowBindings !== 0) {
+    problems.push(
+      `release mutation npm workflow adapter must have one top-level function declaration and no other runtime bindings; found direct ${directNpmWorkflowDeclarations}, other ${otherNpmWorkflowBindings}`
+    );
+  }
+  if (npmWorkflowAliasInitializers !== 0) {
+    problems.push(
+      `release mutation npm workflow adapter must not have alias initializers; found ${npmWorkflowAliasInitializers}`
+    );
+  }
+  if (npmWorkflowWrites !== 0) {
+    problems.push(
+      `release mutation npm workflow adapter binding must never be reassigned; found ${npmWorkflowWrites} write(s)`
+    );
+  }
+  if (otherNpmWorkflowReferences !== 0) {
+    problems.push(
+      `release mutation npm workflow adapter may only be called directly or occupy the exact execute adapter slot; found ${otherNpmWorkflowReferences} other reference(s)`
     );
   }
   const matrixStartCount = mutationMatchCount(source, RELEASE_MUTATION_MATRIX_START);
@@ -2170,6 +2252,7 @@ function releaseMutationInventoryProblems(source: string): string[] {
     | "fixture.throw"
     | "npm.contract.release"
     | "npm.contract.integrity"
+    | "npm.workflow"
     | "registry.evaluator"
     | "registry.step.run"
     | "registry.step.integrity";
@@ -2930,6 +3013,7 @@ function releaseMutationInventoryProblems(source: string): string[] {
           kind.text === "fixture.throw" ||
           kind.text === "npm.contract.release" ||
           kind.text === "npm.contract.integrity" ||
+          kind.text === "npm.workflow" ||
           kind.text === "registry.evaluator" ||
           kind.text === "registry.step.run" ||
           kind.text === "registry.step.integrity"
@@ -2943,7 +3027,9 @@ function releaseMutationInventoryProblems(source: string): string[] {
           );
         }
         const expectedInvocationProperties =
-          invocationKind === "fixture.text" || invocationKind === "registry.evaluator"
+          invocationKind === "fixture.text" ||
+          invocationKind === "npm.workflow" ||
+          invocationKind === "registry.evaluator"
             ? ["kind", "baseline", "mutant"]
             : invocationKind === "fixture.throw"
               ? ["kind", "baseline", "mutant", "message"]
@@ -3037,6 +3123,7 @@ function releaseMutationInventoryProblems(source: string): string[] {
           mutant !== undefined &&
           ts.isIdentifier(mutant) &&
           (invocationKind === "fixture.text" ||
+            invocationKind === "npm.workflow" ||
             invocationKind === "registry.evaluator" ||
             ((invocationKind === "registry.step.run" ||
               invocationKind === "registry.step.integrity" ||
@@ -3134,7 +3221,9 @@ function releaseMutationInventoryProblems(source: string): string[] {
               ? RELEASE_MUTATION_REGISTRY_PROBLEM
               : invocationKind === "registry.step.run" || invocationKind === "registry.step.integrity"
                 ? RELEASE_MUTATION_REGISTRY_WORKFLOW_PROBLEM
-                : invocationKind === "npm.contract.release" || invocationKind === "npm.contract.integrity"
+                : invocationKind === "npm.contract.release" ||
+                    invocationKind === "npm.contract.integrity" ||
+                    invocationKind === "npm.workflow"
                   ? RELEASE_MUTATION_NPM_PROBLEM
                   : invocationKind === "fixture.throw"
                     ? "fixture.mutant-threw"
@@ -3240,8 +3329,14 @@ function releaseMutationInventoryProblems(source: string): string[] {
     declarativeInvocationKinds.has("registry.step.run") || declarativeInvocationKinds.has("registry.step.integrity");
   const requiresNpmContractAdapter =
     declarativeInvocationKinds.has("npm.contract.release") || declarativeInvocationKinds.has("npm.contract.integrity");
+  const requiresNpmWorkflowAdapter = declarativeInvocationKinds.has("npm.workflow");
   const exactExecutionAdapterArguments = (call: ts.CallExpression, offset: number): boolean => {
-    if (!requiresRegistryEvaluatorAdapter && !requiresRegistryStepAdapter && !requiresNpmContractAdapter) {
+    if (
+      !requiresRegistryEvaluatorAdapter &&
+      !requiresRegistryStepAdapter &&
+      !requiresNpmContractAdapter &&
+      !requiresNpmWorkflowAdapter
+    ) {
       return call.arguments.length === offset;
     }
     return (
@@ -3250,14 +3345,16 @@ function releaseMutationInventoryProblems(source: string): string[] {
         call.arguments[offset],
         requiresRegistryEvaluatorAdapter,
         requiresRegistryStepAdapter,
-        requiresNpmContractAdapter
+        requiresNpmContractAdapter,
+        requiresNpmWorkflowAdapter
       )
     );
   };
   const requiredAdapterNames = [
     ...(requiresRegistryEvaluatorAdapter ? [RELEASE_MUTATION_REGISTRY_ADAPTER_PROPERTY] : []),
     ...(requiresRegistryStepAdapter ? [RELEASE_MUTATION_REGISTRY_STEP_ADAPTER_PROPERTY] : []),
-    ...(requiresNpmContractAdapter ? [RELEASE_MUTATION_NPM_ADAPTER_PROPERTY] : [])
+    ...(requiresNpmContractAdapter ? [RELEASE_MUTATION_NPM_ADAPTER_PROPERTY] : []),
+    ...(requiresNpmWorkflowAdapter ? [RELEASE_MUTATION_NPM_WORKFLOW_ADAPTER_PROPERTY] : [])
   ];
   const requiredAdapterDescription =
     requiredAdapterNames.length === 0
@@ -8560,7 +8657,7 @@ describe("release identity and exact required-job gate", () => {
       oracleSource.slice(matrixBodyOffset)
     ].join("");
     expect(releaseMutationInventoryProblems(extraProjectMutation)).toContain(
-      "release mutation hybrid inventory expected 538 first / 22 all, found 539 first / 22 all (legacy 499/19; declarative 40/3; cases 42)"
+      "release mutation hybrid inventory expected 538 first / 22 all, found 539 first / 22 all (legacy 498/19; declarative 41/3; cases 43)"
     );
     const outsideMutation = `${oracleSource}\nvoid replaceAllExactly("inventory", "inventory", "mutant");\n`;
     expect(releaseMutationInventoryProblems(outsideMutation)).toContain(
@@ -8574,7 +8671,7 @@ describe("release identity and exact required-job gate", () => {
       oracleSource.slice(firstProjectCallOffset + "replaceExactly(".length)
     ].join("");
     expect(releaseMutationInventoryProblems(projectModeDrift)).toContain(
-      "release mutation hybrid inventory expected 538 first / 22 all, found 537 first / 23 all (legacy 497/20; declarative 40/3; cases 42)"
+      "release mutation hybrid inventory expected 538 first / 22 all, found 537 first / 23 all (legacy 496/20; declarative 41/3; cases 43)"
     );
     const hybridDeclarativeMutation = oracleSource;
     const declarativeBatchStartToken = "    const releaseIntegrityText = mcpbInputs.integrity;";
@@ -8716,6 +8813,16 @@ describe("release identity and exact required-job gate", () => {
     expect(releaseMutationInventoryProblems(reversedNpmReleaseInvocation)).toContainEqual(
       expect.stringMatching(/case invocation has unexpected, missing, computed or duplicate properties/)
     );
+    const npmWorkflowInvocationKindToken = 'kind: "npm.workflow"';
+    const npmWorkflowInvocationKindOffset = declarativeBatchOffset(npmWorkflowInvocationKindToken);
+    const transplantedNpmWorkflowInvocation = [
+      hybridDeclarativeMutation.slice(0, npmWorkflowInvocationKindOffset),
+      'kind: "npm.contract.release"',
+      hybridDeclarativeMutation.slice(npmWorkflowInvocationKindOffset + npmWorkflowInvocationKindToken.length)
+    ].join("");
+    expect(releaseMutationInventoryProblems(transplantedNpmWorkflowInvocation)).toContainEqual(
+      expect.stringMatching(/case invocation has unexpected, missing, computed or duplicate properties/)
+    );
     const npmProblemExpectationToken = [
       'id: "release.expectation.m112.primary",',
       '            kind: "problem",',
@@ -8799,7 +8906,8 @@ describe("release identity and exact required-job gate", () => {
       "releaseMutationPlan.executeThrough(releaseMutationM037, {",
       "  registryEvaluatorProblems: mcpRegistryEvaluatorProblems,",
       "  registryStepProblems: mcpRegistryRunProblems,",
-      "  npmContractProblems: npmProvenanceContractProblems",
+      "  npmContractProblems: npmProvenanceContractProblems,",
+      "  npmWorkflowProblems: npmProvenanceWorkflowProblems",
       "});",
       'expect(releaseMutationPlan.phase).toBe("partially-executed");',
       "expect(releaseMutationPlan.caseExecutions).toBe(36);",
@@ -8864,7 +8972,8 @@ describe("release identity and exact required-job gate", () => {
       "releaseMutationPlan.executeThrough(releaseMutationM037, {",
       "  registryEvaluatorProblems: mcpRegistryEvaluatorProblems,",
       "  registryStepProblems: mcpRegistryRunProblems,",
-      "  npmContractProblems: npmProvenanceContractProblems",
+      "  npmContractProblems: npmProvenanceContractProblems,",
+      "  npmWorkflowProblems: npmProvenanceWorkflowProblems",
       "});"
     ].join("\n    ");
     const executeOffset = declarativeBatchOffset(executeToken);
@@ -8875,7 +8984,7 @@ describe("release identity and exact required-job gate", () => {
     ].join("");
     expect(releaseMutationInventoryProblems(missingReleaseOracleAdapters)).toContainEqual(
       expect.stringMatching(
-        /executeThrough requires one literal case-root boundary and one exact literal registryEvaluatorProblems\/registryStepProblems\/npmContractProblems adapter object/
+        /executeThrough requires one literal case-root boundary and one exact literal registryEvaluatorProblems\/registryStepProblems\/npmContractProblems\/npmWorkflowProblems adapter object/
       )
     );
     expect(releaseMutationInventoryProblems(missingReleaseOracleAdapters)).toContain(declarativeLifecycleProblem);
@@ -8884,14 +8993,15 @@ describe("release identity and exact required-job gate", () => {
       [
         "releaseMutationPlan.executeThrough(releaseMutationM037, {",
         "      registryEvaluatorProblems: mcpRegistryEvaluatorProblems,",
-        "      npmContractProblems: npmProvenanceContractProblems",
+        "      npmContractProblems: npmProvenanceContractProblems,",
+        "      npmWorkflowProblems: npmProvenanceWorkflowProblems",
         "    });"
       ].join("\n    "),
       hybridDeclarativeMutation.slice(executeOffset + executeToken.length)
     ].join("");
     expect(releaseMutationInventoryProblems(missingRegistryStepAdapter)).toContainEqual(
       expect.stringMatching(
-        /executeThrough requires one literal case-root boundary and one exact literal registryEvaluatorProblems\/registryStepProblems\/npmContractProblems adapter object/
+        /executeThrough requires one literal case-root boundary and one exact literal registryEvaluatorProblems\/registryStepProblems\/npmContractProblems\/npmWorkflowProblems adapter object/
       )
     );
     const missingNpmContractAdapter = [
@@ -8899,14 +9009,31 @@ describe("release identity and exact required-job gate", () => {
       [
         "releaseMutationPlan.executeThrough(releaseMutationM037, {",
         "      registryEvaluatorProblems: mcpRegistryEvaluatorProblems,",
-        "      registryStepProblems: mcpRegistryRunProblems",
+        "      registryStepProblems: mcpRegistryRunProblems,",
+        "      npmWorkflowProblems: npmProvenanceWorkflowProblems",
         "    });"
       ].join("\n    "),
       hybridDeclarativeMutation.slice(executeOffset + executeToken.length)
     ].join("");
     expect(releaseMutationInventoryProblems(missingNpmContractAdapter)).toContainEqual(
       expect.stringMatching(
-        /executeThrough requires one literal case-root boundary and one exact literal registryEvaluatorProblems\/registryStepProblems\/npmContractProblems adapter object/
+        /executeThrough requires one literal case-root boundary and one exact literal registryEvaluatorProblems\/registryStepProblems\/npmContractProblems\/npmWorkflowProblems adapter object/
+      )
+    );
+    const missingNpmWorkflowAdapter = [
+      hybridDeclarativeMutation.slice(0, executeOffset),
+      [
+        "releaseMutationPlan.executeThrough(releaseMutationM037, {",
+        "      registryEvaluatorProblems: mcpRegistryEvaluatorProblems,",
+        "      registryStepProblems: mcpRegistryRunProblems,",
+        "      npmContractProblems: npmProvenanceContractProblems",
+        "    });"
+      ].join("\n    "),
+      hybridDeclarativeMutation.slice(executeOffset + executeToken.length)
+    ].join("");
+    expect(releaseMutationInventoryProblems(missingNpmWorkflowAdapter)).toContainEqual(
+      expect.stringMatching(
+        /executeThrough requires one literal case-root boundary and one exact literal registryEvaluatorProblems\/registryStepProblems\/npmContractProblems\/npmWorkflowProblems adapter object/
       )
     );
     const transplantedNpmContractAdapter = [
@@ -8915,12 +9042,28 @@ describe("release identity and exact required-job gate", () => {
         "releaseMutationPlan.executeThrough(releaseMutationM037, {",
         "      registryEvaluatorProblems: mcpRegistryEvaluatorProblems,",
         "      registryStepProblems: mcpRegistryRunProblems,",
-        "      npmContractProblems: mcpRegistryRunProblems",
+        "      npmContractProblems: mcpRegistryRunProblems,",
+        "      npmWorkflowProblems: npmProvenanceWorkflowProblems",
         "    });"
       ].join("\n    "),
       hybridDeclarativeMutation.slice(executeOffset + executeToken.length)
     ].join("");
     expect(releaseMutationInventoryProblems(transplantedNpmContractAdapter)).toContainEqual(
+      expect.stringMatching(/executeThrough requires one literal case-root boundary and one exact literal/)
+    );
+    const transplantedNpmWorkflowAdapter = [
+      hybridDeclarativeMutation.slice(0, executeOffset),
+      [
+        "releaseMutationPlan.executeThrough(releaseMutationM037, {",
+        "      registryEvaluatorProblems: mcpRegistryEvaluatorProblems,",
+        "      registryStepProblems: mcpRegistryRunProblems,",
+        "      npmContractProblems: npmProvenanceContractProblems,",
+        "      npmWorkflowProblems: npmProvenanceContractProblems",
+        "    });"
+      ].join("\n    "),
+      hybridDeclarativeMutation.slice(executeOffset + executeToken.length)
+    ].join("");
+    expect(releaseMutationInventoryProblems(transplantedNpmWorkflowAdapter)).toContainEqual(
       expect.stringMatching(/executeThrough requires one literal case-root boundary and one exact literal/)
     );
     const extraRegistryAdapterProperty = [
@@ -8930,6 +9073,7 @@ describe("release identity and exact required-job gate", () => {
         "      registryEvaluatorProblems: mcpRegistryEvaluatorProblems,",
         "      registryStepProblems: mcpRegistryRunProblems,",
         "      npmContractProblems: npmProvenanceContractProblems,",
+        "      npmWorkflowProblems: npmProvenanceWorkflowProblems,",
         "      extra: true",
         "    });"
       ].join("\n    "),
@@ -8944,7 +9088,8 @@ describe("release identity and exact required-job gate", () => {
         "releaseMutationPlan.executeThrough(releaseMutationM037, {",
         '      ["registryEvaluatorProblems"]: mcpRegistryEvaluatorProblems,',
         "      registryStepProblems: mcpRegistryRunProblems,",
-        "      npmContractProblems: npmProvenanceContractProblems",
+        "      npmContractProblems: npmProvenanceContractProblems,",
+        "      npmWorkflowProblems: npmProvenanceWorkflowProblems",
         "    });"
       ].join("\n    "),
       hybridDeclarativeMutation.slice(executeOffset + executeToken.length)
@@ -8963,7 +9108,8 @@ describe("release identity and exact required-job gate", () => {
         "        return mcpRegistryEvaluatorProblems;",
         "      },",
         "      registryStepProblems: mcpRegistryRunProblems,",
-        "      npmContractProblems: npmProvenanceContractProblems",
+        "      npmContractProblems: npmProvenanceContractProblems,",
+        "      npmWorkflowProblems: npmProvenanceWorkflowProblems",
         "    });"
       ].join("\n    "),
       hybridDeclarativeMutation.slice(executeOffset + executeToken.length)
@@ -8980,7 +9126,8 @@ describe("release identity and exact required-job gate", () => {
         "releaseMutationPlan.executeThrough(releaseMutationM037, {",
         "      ...{ registryEvaluatorProblems: mcpRegistryEvaluatorProblems },",
         "      registryStepProblems: mcpRegistryRunProblems,",
-        "      npmContractProblems: npmProvenanceContractProblems",
+        "      npmContractProblems: npmProvenanceContractProblems,",
+        "      npmWorkflowProblems: npmProvenanceWorkflowProblems",
         "    });"
       ].join("\n    "),
       hybridDeclarativeMutation.slice(executeOffset + executeToken.length)
@@ -8994,7 +9141,8 @@ describe("release identity and exact required-job gate", () => {
         "releaseMutationPlan.executeThrough(releaseMutationM037, {",
         "      registryEvaluatorProblems: (source) => mcpRegistryEvaluatorProblems(source),",
         "      registryStepProblems: mcpRegistryRunProblems,",
-        "      npmContractProblems: npmProvenanceContractProblems",
+        "      npmContractProblems: npmProvenanceContractProblems,",
+        "      npmWorkflowProblems: npmProvenanceWorkflowProblems",
         "    });"
       ].join("\n    "),
       hybridDeclarativeMutation.slice(executeOffset + executeToken.length)
@@ -9009,7 +9157,8 @@ describe("release identity and exact required-job gate", () => {
         "    releaseMutationPlan.executeThrough(releaseMutationM037, {",
         "      registryEvaluatorProblems: registryEvaluatorAlias,",
         "      registryStepProblems: mcpRegistryRunProblems,",
-        "      npmContractProblems: npmProvenanceContractProblems",
+        "      npmContractProblems: npmProvenanceContractProblems,",
+        "      npmWorkflowProblems: npmProvenanceWorkflowProblems",
         "    });"
       ].join("\n    "),
       hybridDeclarativeMutation.slice(executeOffset + executeToken.length)
@@ -9117,6 +9266,32 @@ describe("release identity and exact required-job gate", () => {
     expect(releaseMutationInventoryProblems(reassignedNpmContractAdapter)).toContain(
       "release mutation npm contract adapter binding must never be reassigned; found 1 write(s)"
     );
+    const aliasedNpmWorkflowAdapter = [
+      hybridDeclarativeMutation.slice(0, matrixBodyOffset),
+      "\n    const npmWorkflowAlias = npmProvenanceWorkflowProblems;",
+      hybridDeclarativeMutation.slice(matrixBodyOffset)
+    ].join("");
+    expect(releaseMutationInventoryProblems(aliasedNpmWorkflowAdapter)).toContain(
+      "release mutation npm workflow adapter must not have alias initializers; found 1"
+    );
+    const shadowedNpmWorkflowAdapter = [
+      hybridDeclarativeMutation.slice(0, matrixBodyOffset),
+      "\n    const npmProvenanceWorkflowProblems = (_release: string): string[] => [];",
+      hybridDeclarativeMutation.slice(matrixBodyOffset)
+    ].join("");
+    expect(releaseMutationInventoryProblems(shadowedNpmWorkflowAdapter)).toContainEqual(
+      expect.stringMatching(
+        /npm workflow adapter must have one top-level function declaration and no other runtime bindings/
+      )
+    );
+    const reassignedNpmWorkflowAdapter = [
+      hybridDeclarativeMutation.slice(0, matrixBodyOffset),
+      "\n    npmProvenanceWorkflowProblems = (_release: string): string[] => [];",
+      hybridDeclarativeMutation.slice(matrixBodyOffset)
+    ].join("");
+    expect(releaseMutationInventoryProblems(reassignedNpmWorkflowAdapter)).toContain(
+      "release mutation npm workflow adapter binding must never be reassigned; found 1 write(s)"
+    );
     const legacyFreeMatrix = [
       oracleSource.slice(0, matrixBodyOffset),
       oracleSource
@@ -9127,7 +9302,7 @@ describe("release identity and exact required-job gate", () => {
         .join("legacyMigratedExactly(")
     ].join("");
     expect(releaseMutationInventoryProblems(legacyFreeMatrix)).toContain(
-      "release mutation final closed graph expected 560 unique descriptors / 536 cases and roots / 541 expectations / 24 dependency-only, found 43 descriptors / 42 cases / 42 roots / 42 expectations / 1 dependency-only"
+      "release mutation final closed graph expected 560 unique descriptors / 536 cases and roots / 541 expectations / 24 dependency-only, found 44 descriptors / 43 cases / 43 roots / 43 expectations / 1 dependency-only"
     );
     const loopGeneratedDeclarative = [
       oracleSource.slice(0, matrixBodyOffset),
@@ -9270,7 +9445,7 @@ describe("release identity and exact required-job gate", () => {
       expect.stringMatching(/must be one explicit straight-line case/)
     );
     expect(iterableLiteralProblems).toContain(
-      "release mutation hybrid inventory expected 538 first / 22 all, found 539 first / 22 all (legacy 499/19; declarative 40/3; cases 42)"
+      "release mutation hybrid inventory expected 538 first / 22 all, found 539 first / 22 all (legacy 498/19; declarative 41/3; cases 43)"
     );
     const nestedStraightLineMutation = [
       oracleSource.slice(0, matrixBodyOffset),
@@ -9282,7 +9457,7 @@ describe("release identity and exact required-job gate", () => {
       expect.stringMatching(/must be one explicit straight-line case/)
     );
     expect(nestedStraightLineProblems).toContain(
-      "release mutation hybrid inventory expected 538 first / 22 all, found 540 first / 22 all (legacy 500/19; declarative 40/3; cases 42)"
+      "release mutation hybrid inventory expected 538 first / 22 all, found 540 first / 22 all (legacy 499/19; declarative 41/3; cases 43)"
     );
     const earlyReturnMutation = [
       oracleSource.slice(0, matrixBodyOffset),
@@ -11388,6 +11563,88 @@ describe("release identity and exact required-job gate", () => {
     expect(npmDirtyBaselinePlan.caseExecutions).toBe(1);
     expect(npmDirtyBaselinePlan.expectationExecutions).toBe(1);
 
+    const createNpmWorkflowPlan = (): ReleaseMutationPlan => {
+      const plan = new ReleaseMutationPlan({
+        total: 1,
+        first: 1,
+        all: 0,
+        cases: 1,
+        expectations: 1,
+        roots: 1,
+        dependencyOnly: 0
+      });
+      const workflowSource = plan.registerSource("fixture.npm-workflow", "workflow-clean");
+      const workflowRoot = registerFixtureMutation(plan, "mutation.npm-workflow", {
+        mode: "first",
+        source: workflowSource,
+        needle: "clean",
+        replacement: "mutant",
+        expectedOccurrences: 1,
+        witness: { kind: "token", anchor: "clean", before: 1, after: 0 }
+      });
+      plan.registerCase({
+        id: "case.npm-workflow",
+        root: workflowRoot,
+        checks: [
+          {
+            invoke: {
+              kind: "npm.workflow",
+              baseline: workflowSource,
+              mutant: workflowRoot
+            },
+            expectation: {
+              id: "expectation.npm-workflow",
+              kind: "problem",
+              problem: RELEASE_MUTATION_NPM_PROBLEM
+            }
+          }
+        ]
+      });
+      return plan;
+    };
+
+    const npmWorkflowPositivePlan = createNpmWorkflowPlan();
+    expect(npmWorkflowPositivePlan.seal()).toEqual([]);
+    const npmWorkflowPositiveCalls: string[] = [];
+    npmWorkflowPositivePlan.execute({
+      npmWorkflowProblems: (release) => {
+        npmWorkflowPositiveCalls.push(release);
+        return release === "workflow-clean" ? [] : [RELEASE_MUTATION_NPM_PROBLEM];
+      }
+    });
+    expect(npmWorkflowPositiveCalls).toEqual(["workflow-clean", "workflow-mutant"]);
+    expect(npmWorkflowPositivePlan.phase).toBe("executed");
+    expect(npmWorkflowPositivePlan.caseExecutions).toBe(1);
+    expect(npmWorkflowPositivePlan.expectationExecutions).toBe(1);
+
+    const npmWorkflowMissingAdapterPlan = createNpmWorkflowPlan();
+    expect(npmWorkflowMissingAdapterPlan.seal()).toEqual([]);
+    expect(() => npmWorkflowMissingAdapterPlan.execute()).toThrow(
+      "npm.workflow cases require exact release oracle adapters at execute"
+    );
+    expect(npmWorkflowMissingAdapterPlan.phase).toBe("failed");
+    expect(npmWorkflowMissingAdapterPlan.caseExecutions).toBe(0);
+    expect(npmWorkflowMissingAdapterPlan.expectationExecutions).toBe(0);
+
+    const npmWorkflowDirtyBaselinePlan = createNpmWorkflowPlan();
+    expect(npmWorkflowDirtyBaselinePlan.seal()).toEqual([]);
+    const npmWorkflowDirtyBaselineCalls: string[] = [];
+    expect(() =>
+      npmWorkflowDirtyBaselinePlan.execute({
+        npmWorkflowProblems: (release) => {
+          npmWorkflowDirtyBaselineCalls.push(release);
+          return [RELEASE_MUTATION_NPM_PROBLEM];
+        }
+      })
+    ).toThrow(
+      "release mutation case case.npm-workflow expectation expectation.npm-workflow " +
+        "found a problem in the clean baseline"
+    );
+    expect(npmWorkflowDirtyBaselineCalls).toEqual(["workflow-clean", "workflow-mutant"]);
+    expect(npmWorkflowDirtyBaselinePlan.phase).toBe("failed");
+    expect(npmWorkflowDirtyBaselinePlan.caseExecutions).toBe(1);
+    expect(npmWorkflowDirtyBaselinePlan.expectationExecutions).toBe(1);
+
     const releaseWorkflow = readFileSync(new URL("../.github/workflows/release.yml", import.meta.url), "utf8");
     const releaseTransaction = readFileSync(
       new URL("../.github/scripts/release-mcpb-github-transaction.sh", import.meta.url),
@@ -11479,12 +11736,12 @@ describe("release identity and exact required-job gate", () => {
 
     const releaseIntegrityText = mcpbInputs.integrity;
     const releaseMutationPlan = new ReleaseMutationPlan({
-      total: 43,
-      first: 40,
+      total: 44,
+      first: 41,
       all: 3,
-      cases: 42,
-      expectations: 42,
-      roots: 42,
+      cases: 43,
+      expectations: 43,
+      roots: 43,
       dependencyOnly: 1
     });
     const releaseIntegritySource = releaseMutationPlan.registerSource("script.release-integrity", releaseIntegrityText);
@@ -12870,12 +13127,45 @@ describe("release identity and exact required-job gate", () => {
         }
       ]
     });
+    const releaseMutationM114 = releaseMutationPlan.registerMutation("release.m114", {
+      mode: "first",
+      source: releaseWorkflowFixtureSource,
+      needle: 'require_job_reserve 4500 "npm publish"',
+      replacement: 'require_job_reserve 2100 "npm publish"',
+      expectedOccurrences: 1,
+      witness: {
+        kind: "token",
+        anchor: 'require_job_reserve 4500 "npm publish"',
+        before: 1,
+        after: 0
+      }
+    });
+    releaseMutationPlan.registerCase({
+      id: "release.case.m114",
+      root: releaseMutationM114,
+      checks: [
+        {
+          invoke: {
+            kind: "npm.workflow",
+            baseline: releaseWorkflowFixtureSource,
+            mutant: releaseMutationM114
+          },
+          expectation: {
+            id: "release.expectation.m114.primary",
+            kind: "problem",
+            problem:
+              "npm provenance must bind the tag-push context before the sole publish and verify two exact attestations without credentials"
+          }
+        }
+      ]
+    });
     const releaseMutationProblems = releaseMutationPlan.seal();
     expect(releaseMutationProblems).toEqual([]);
     releaseMutationPlan.executeThrough(releaseMutationM037, {
       registryEvaluatorProblems: mcpRegistryEvaluatorProblems,
       registryStepProblems: mcpRegistryRunProblems,
-      npmContractProblems: npmProvenanceContractProblems
+      npmContractProblems: npmProvenanceContractProblems,
+      npmWorkflowProblems: npmProvenanceWorkflowProblems
     });
     expect(releaseMutationPlan.phase).toBe("partially-executed");
     expect(releaseMutationPlan.caseExecutions).toBe(36);
@@ -13409,16 +13699,11 @@ describe("release identity and exact required-job gate", () => {
     }
     releaseMutationPlan.executeRemaining();
     expect(releaseMutationPlan.phase).toBe("executed");
-    expect(releaseMutationPlan.caseExecutions).toBe(42);
-    expect(releaseMutationPlan.expectationExecutions).toBe(42);
+    expect(releaseMutationPlan.caseExecutions).toBe(43);
+    expect(releaseMutationPlan.expectationExecutions).toBe(43);
 
     // Mutation oracle: workflow ordering, token isolation, exact verifier pin, and read-only convergence.
     for (const weakenedProvenanceWorkflow of [
-      replaceExactly(
-        mcpbInputs.release,
-        'require_job_reserve 4500 "npm publish"',
-        'require_job_reserve 2100 "npm publish"'
-      ),
       replaceExactly(
         mcpbInputs.release,
         'require_job_reserve 2700 "token-free npm provenance verification"',

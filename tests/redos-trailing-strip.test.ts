@@ -28,6 +28,48 @@ function ms(fn: () => void): number {
   return Number(process.hrtime.bigint() - a) / 1e6;
 }
 
+function hasPolynomialTrailingRunReplace(line: string): boolean {
+  const callNeedle = ".replace(/";
+  let searchFrom = 0;
+  while (searchFrom < line.length) {
+    const call = line.indexOf(callNeedle, searchFrom);
+    if (call < 0) return false;
+    const patternStart = call + callNeedle.length;
+    let escaped = false;
+    let inClass = false;
+    let patternEnd = -1;
+    for (let i = patternStart; i < line.length; i += 1) {
+      const character = line[i];
+      if (character === undefined) break;
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (character === "\\") {
+        escaped = true;
+        continue;
+      }
+      if (character === "[") inClass = true;
+      else if (character === "]") inClass = false;
+      else if (character === "/" && !inClass) {
+        patternEnd = i;
+        break;
+      }
+    }
+    if (patternEnd >= 0 && /^[dgimsuvy]*\s*,/.test(line.slice(patternEnd + 1))) {
+      const pattern = line.slice(patternStart, patternEnd);
+      if (pattern.endsWith("+$")) {
+        const atom = pattern.slice(0, -2);
+        if (atom.length === 1 || (atom.length === 2 && atom.startsWith("\\")) || /^\[.*\]$/.test(atom)) {
+          return true;
+        }
+      }
+    }
+    searchFrom = patternStart;
+  }
+  return false;
+}
+
 describe("ReDoS — trailing-run strips are linear (CodeQL js/polynomial-redos #13)", () => {
   it("stripTrailingSlashes is byte-identical to the old /\\/+$/ regex (POSITIVE — correctness parity)", () => {
     for (const c of ["a/b/", "x///", "////", "", "no-slash", "/lead/trail///", "深/路径//"]) {
@@ -64,32 +106,33 @@ describe("ReDoS — trailing-run strips are linear (CodeQL js/polynomial-redos #
       "src/tools/write.ts",
       "src/tools/read.ts"
     ];
-    // The polynomial shape is a SINGLE char-class run anchored at end-of-string:
+    // The polynomial shape is a SINGLE literal, simple escape, or char-class run anchored at end-of-string:
     // `.replace(/<class>+$/...)`. (A leading `^<class>+` is start-anchored → linear; a
     // two-part `#\d+$` fails fast; a global `\s+/g` has no `$` → linear. None match.)
-    const ANTI = /\.replace\(\/(?:\\\/|\\n|\\s|#|\[[^/]*\])\+\$\/[gimsuy]*\s*,/;
     const offenders: string[] = [];
     for (const rel of SINK_FILES) {
       const src = readFileSync(path.join(repoRoot, rel), "utf8");
       for (const [i, line] of src.split("\n").entries()) {
         if (line.trimStart().startsWith("//")) continue; // skip comment lines
-        if (ANTI.test(line)) offenders.push(`${rel}:${i + 1}: ${line.trim()}`);
+        if (hasPolynomialTrailingRunReplace(line)) offenders.push(`${rel}:${i + 1}: ${line.trim()}`);
       }
     }
     expect(offenders, offenders.join("\n")).toEqual([]);
   });
 
   it("the static guard's detector actually fires on the pre-rc.14 anti-pattern (NEGATIVE control)", () => {
-    // The polynomial shape is a SINGLE char-class run anchored at end-of-string:
+    // The polynomial shape is a SINGLE literal, simple escape, or char-class run anchored at end-of-string:
     // `.replace(/<class>+$/...)`. (A leading `^<class>+` is start-anchored → linear; a
     // two-part `#\d+$` fails fast; a global `\s+/g` has no `$` → linear. None match.)
-    const ANTI = /\.replace\(\/(?:\\\/|\\n|\\s|#|\[[^/]*\])\+\$\/[gimsuy]*\s*,/;
-    // biome-ignore lint/suspicious/noTemplateCurlyInString: intentional — a SAMPLE of source code (a real `${…}` line) matched against the ANTI regex.
-    expect('const p = `${opts.folder.replace(/\\/+$/, "")}/`;').toMatch(ANTI);
-    expect('body.replace(/\\n+$/, "")').toMatch(ANTI);
-    expect('rawSegment.replace(/[. ]+$/u, "")').toMatch(ANTI);
-    expect("stripTrailingSlashes(opts.folder)").not.toMatch(ANTI); // the fixed form is clean
-    expect("stripTrailingRun(rawSegment, isWindowsIgnoredSuffix)").not.toMatch(ANTI);
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: intentional source-code sample for the detector.
+    expect(hasPolynomialTrailingRunReplace('const p = `${opts.folder.replace(/\\/+$/, "")}/`;')).toBe(true);
+    expect(hasPolynomialTrailingRunReplace('body.replace(/\\n+$/d, "")')).toBe(true);
+    expect(hasPolynomialTrailingRunReplace('rawSegment.replace(/[. ]+$/u, "")')).toBe(true);
+    expect(hasPolynomialTrailingRunReplace('rawSegment.replace(/[\\/.]+$/v, "")')).toBe(true);
+    expect(hasPolynomialTrailingRunReplace('id.replace(/#\\d+$/, "")')).toBe(false);
+    expect(hasPolynomialTrailingRunReplace('body.replace(/^\\/+$/, "")')).toBe(false);
+    expect(hasPolynomialTrailingRunReplace("stripTrailingSlashes(opts.folder)")).toBe(false); // fixed form
+    expect(hasPolynomialTrailingRunReplace("stripTrailingRun(rawSegment, isWindowsIgnoredSuffix)")).toBe(false);
   });
 });
 

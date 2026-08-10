@@ -3,7 +3,14 @@ import { stripTrailingRun } from "./wildcard-match.js";
 const RESTRICTED_VAULT_SEGMENTS = new Set([".git", ".obsidian", ".trash", ".ds_store", "node_modules", "thumbs.db"]);
 const isWindowsIgnoredSuffix = (code: number): boolean => code === 0x2e || code === 0x20;
 
-/** Stable reason returned when a path is outside the public vault surface. */
+/**
+ * Stable reason returned when a path is outside the public vault surface.
+ *
+ * @example
+ * ```ts
+ * const reason: RestrictedVaultPathReason = "hidden or reserved vault path";
+ * ```
+ */
 export type RestrictedVaultPathReason = "hidden or reserved vault path";
 
 /**
@@ -18,6 +25,11 @@ export type RestrictedVaultPathReason = "hidden or reserved vault path";
  *
  * @param relPath - A vault-relative path in platform-native or POSIX form.
  * @returns A stable exclusion reason, or `null` when the path is public.
+ * @example
+ * ```ts
+ * restrictedVaultPathReason("Projects/.private/note.md");
+ * // => "hidden or reserved vault path"
+ * ```
  */
 export function restrictedVaultPathReason(relPath: string): RestrictedVaultPathReason | null {
   const segments = relPath.replace(/\\/g, "/").split("/");

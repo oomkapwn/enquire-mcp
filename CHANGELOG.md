@@ -10,6 +10,16 @@ All notable changes to this project will be documented here. The format follows 
 
 ### Post-release main hardening — not included in immutable v4.0.0-rc.2
 
+#### Declarative npm-workflow reserve mutation m115
+
+> **TL;DR:** **The release-mutation identity graph moves `release.m115` from the shared legacy loop into the existing unary `npm.workflow` planner path without changing the frozen mutation, detector, expectation, fixture or historical execution order.** The case continues to reject weakening the token-free npm-provenance verification reserve from 2,700 to 1,200 seconds. The hybrid partition advances from 44 to 45 declarative mutations (`42 first + 3 all`) and from 516 to 515 legacy mutations (`496 first + 19 all`), with exactly 44 declarative cases, expectations and roots plus one declarative dependency; the frozen global graph remains 30 sources, 560 mutations, 536 roots/cases, 24 dependencies, 541 checks and 546 matcher leaves.
+>
+> **Method note:** `release.m115` reuses the unary `npmWorkflowProblems` adapter introduced by m114; no planner API or fifth adapter is added. Its declarative identity remains bound to `fixture.release-workflow`, the exact token witness, `npm.workflow`, the top-level `npmProvenanceWorkflowProblems` detector and the exact npm-provenance problem identity. The historical root remains pinned at SHA-256 `32f57ce2ec034103af6ada47d96577ac16df4c63e90c2ea31994b106f4955576`, while the shared matcher remains physical once for the 34 remaining m116+ legacy roots at SHA-256 `3df3ee2ebc3147bc3f2669b03a7d54b7dd8f5d4f2bf7a125e749d5a9fbb9c240`. The immutable fixture remains byte-identical at SHA-256 `fb431715ec32253b4474c4993a46acbc0c20749b9f3162b31985c3f8668513e9`. Under D-45 no local install, build, lint, test, coverage, smoke, OIA, package/client runtime, benchmark or evaluation workload runs on the maintainer MacBook; executable validation is required from GitHub-hosted CI on the exact candidate and squash-main SHAs.
+
+- **The existing unary contract gains one exact root.** The clean release-workflow baseline, m115 mutant, witness and problem identity remain explicit, while the adapter surface stays unchanged.
+- **Historical order remains explicit.** The m002–m037 prefix stays at 36 cases, `executeRemaining()` finishes at 44 cases/expectations, and the shared legacy npm-workflow loop now begins at m116.
+- **Release and product state remain out of scope.** No workflow, runtime/product code, package or lockfile, version, tag, publication state, dist-tag, fixture regeneration or cleanup action is changed by this boundary.
+
 #### Declarative npm-workflow canary m114
 
 > **TL;DR:** **The release-mutation identity graph moves `release.m114` into the closed declarative planner as the first unary `npm.workflow` canary without changing its mutation, detector, expectation, fixture or historical execution position.** The case still proves that the npm publish phase cannot weaken its exact 4,500-second reserve to 2,100 seconds. The hybrid partition advances from 43 to 44 declarative mutations (`41 first + 3 all`) and from 517 to 516 legacy mutations (`497 first + 19 all`), with exactly 43 declarative cases, expectations and roots plus one declarative dependency; the frozen global graph remains exactly 30 sources, 560 mutations, 536 roots/cases, 24 dependencies, 541 checks and 546 matcher leaves.

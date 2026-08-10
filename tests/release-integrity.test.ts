@@ -8657,7 +8657,7 @@ describe("release identity and exact required-job gate", () => {
       oracleSource.slice(matrixBodyOffset)
     ].join("");
     expect(releaseMutationInventoryProblems(extraProjectMutation)).toContain(
-      "release mutation hybrid inventory expected 538 first / 22 all, found 539 first / 22 all (legacy 498/19; declarative 41/3; cases 43)"
+      "release mutation hybrid inventory expected 538 first / 22 all, found 539 first / 22 all (legacy 497/19; declarative 42/3; cases 44)"
     );
     const outsideMutation = `${oracleSource}\nvoid replaceAllExactly("inventory", "inventory", "mutant");\n`;
     expect(releaseMutationInventoryProblems(outsideMutation)).toContain(
@@ -8671,7 +8671,7 @@ describe("release identity and exact required-job gate", () => {
       oracleSource.slice(firstProjectCallOffset + "replaceExactly(".length)
     ].join("");
     expect(releaseMutationInventoryProblems(projectModeDrift)).toContain(
-      "release mutation hybrid inventory expected 538 first / 22 all, found 537 first / 23 all (legacy 496/20; declarative 41/3; cases 43)"
+      "release mutation hybrid inventory expected 538 first / 22 all, found 537 first / 23 all (legacy 495/20; declarative 42/3; cases 44)"
     );
     const hybridDeclarativeMutation = oracleSource;
     const declarativeBatchStartToken = "    const releaseIntegrityText = mcpbInputs.integrity;";
@@ -8814,7 +8814,16 @@ describe("release identity and exact required-job gate", () => {
       expect.stringMatching(/case invocation has unexpected, missing, computed or duplicate properties/)
     );
     const npmWorkflowInvocationKindToken = 'kind: "npm.workflow"';
-    const npmWorkflowInvocationKindOffset = declarativeBatchOffset(npmWorkflowInvocationKindToken);
+    const npmWorkflowM114InvocationToken = [
+      '            kind: "npm.workflow",',
+      "            baseline: releaseWorkflowFixtureSource,",
+      "            mutant: releaseMutationM114"
+    ].join("\n");
+    const npmWorkflowM114InvocationOffset = declarativeBatchOffset(npmWorkflowM114InvocationToken);
+    const npmWorkflowInvocationKindRelativeOffset =
+      npmWorkflowM114InvocationToken.indexOf(npmWorkflowInvocationKindToken);
+    expect(npmWorkflowInvocationKindRelativeOffset).toBeGreaterThanOrEqual(0);
+    const npmWorkflowInvocationKindOffset = npmWorkflowM114InvocationOffset + npmWorkflowInvocationKindRelativeOffset;
     const transplantedNpmWorkflowInvocation = [
       hybridDeclarativeMutation.slice(0, npmWorkflowInvocationKindOffset),
       'kind: "npm.contract.release"',
@@ -9302,7 +9311,7 @@ describe("release identity and exact required-job gate", () => {
         .join("legacyMigratedExactly(")
     ].join("");
     expect(releaseMutationInventoryProblems(legacyFreeMatrix)).toContain(
-      "release mutation final closed graph expected 560 unique descriptors / 536 cases and roots / 541 expectations / 24 dependency-only, found 44 descriptors / 43 cases / 43 roots / 43 expectations / 1 dependency-only"
+      "release mutation final closed graph expected 560 unique descriptors / 536 cases and roots / 541 expectations / 24 dependency-only, found 45 descriptors / 44 cases / 44 roots / 44 expectations / 1 dependency-only"
     );
     const loopGeneratedDeclarative = [
       oracleSource.slice(0, matrixBodyOffset),
@@ -9445,7 +9454,7 @@ describe("release identity and exact required-job gate", () => {
       expect.stringMatching(/must be one explicit straight-line case/)
     );
     expect(iterableLiteralProblems).toContain(
-      "release mutation hybrid inventory expected 538 first / 22 all, found 539 first / 22 all (legacy 498/19; declarative 41/3; cases 43)"
+      "release mutation hybrid inventory expected 538 first / 22 all, found 539 first / 22 all (legacy 497/19; declarative 42/3; cases 44)"
     );
     const nestedStraightLineMutation = [
       oracleSource.slice(0, matrixBodyOffset),
@@ -9457,7 +9466,7 @@ describe("release identity and exact required-job gate", () => {
       expect.stringMatching(/must be one explicit straight-line case/)
     );
     expect(nestedStraightLineProblems).toContain(
-      "release mutation hybrid inventory expected 538 first / 22 all, found 540 first / 22 all (legacy 499/19; declarative 41/3; cases 43)"
+      "release mutation hybrid inventory expected 538 first / 22 all, found 540 first / 22 all (legacy 498/19; declarative 42/3; cases 44)"
     );
     const earlyReturnMutation = [
       oracleSource.slice(0, matrixBodyOffset),
@@ -11736,12 +11745,12 @@ describe("release identity and exact required-job gate", () => {
 
     const releaseIntegrityText = mcpbInputs.integrity;
     const releaseMutationPlan = new ReleaseMutationPlan({
-      total: 44,
-      first: 41,
+      total: 45,
+      first: 42,
       all: 3,
-      cases: 43,
-      expectations: 43,
-      roots: 43,
+      cases: 44,
+      expectations: 44,
+      roots: 44,
       dependencyOnly: 1
     });
     const releaseIntegritySource = releaseMutationPlan.registerSource("script.release-integrity", releaseIntegrityText);
@@ -13159,6 +13168,38 @@ describe("release identity and exact required-job gate", () => {
         }
       ]
     });
+    const releaseMutationM115 = releaseMutationPlan.registerMutation("release.m115", {
+      mode: "first",
+      source: releaseWorkflowFixtureSource,
+      needle: 'require_job_reserve 2700 "token-free npm provenance verification"',
+      replacement: 'require_job_reserve 1200 "token-free npm provenance verification"',
+      expectedOccurrences: 1,
+      witness: {
+        kind: "token",
+        anchor: 'require_job_reserve 2700 "token-free npm provenance verification"',
+        before: 1,
+        after: 0
+      }
+    });
+    releaseMutationPlan.registerCase({
+      id: "release.case.m115",
+      root: releaseMutationM115,
+      checks: [
+        {
+          invoke: {
+            kind: "npm.workflow",
+            baseline: releaseWorkflowFixtureSource,
+            mutant: releaseMutationM115
+          },
+          expectation: {
+            id: "release.expectation.m115.primary",
+            kind: "problem",
+            problem:
+              "npm provenance must bind the tag-push context before the sole publish and verify two exact attestations without credentials"
+          }
+        }
+      ]
+    });
     const releaseMutationProblems = releaseMutationPlan.seal();
     expect(releaseMutationProblems).toEqual([]);
     releaseMutationPlan.executeThrough(releaseMutationM037, {
@@ -13699,16 +13740,11 @@ describe("release identity and exact required-job gate", () => {
     }
     releaseMutationPlan.executeRemaining();
     expect(releaseMutationPlan.phase).toBe("executed");
-    expect(releaseMutationPlan.caseExecutions).toBe(43);
-    expect(releaseMutationPlan.expectationExecutions).toBe(43);
+    expect(releaseMutationPlan.caseExecutions).toBe(44);
+    expect(releaseMutationPlan.expectationExecutions).toBe(44);
 
     // Mutation oracle: workflow ordering, token isolation, exact verifier pin, and read-only convergence.
     for (const weakenedProvenanceWorkflow of [
-      replaceExactly(
-        mcpbInputs.release,
-        'require_job_reserve 2700 "token-free npm provenance verification"',
-        'require_job_reserve 1200 "token-free npm provenance verification"'
-      ),
       replaceExactly(
         mcpbInputs.release,
         `PROVENANCE_SHA: \${{ github.sha }}`,

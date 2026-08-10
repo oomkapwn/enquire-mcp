@@ -8760,6 +8760,36 @@ describe("release identity and exact required-job gate", () => {
     expect(releaseMutationInventoryProblems(spreadDeclarativeDescriptor)).toContainEqual(
       expect.stringMatching(/descriptor requires exact passive/)
     );
+    const m116NeedleLiteralToken = '      needle: "PROVENANCE_SHA: ${{ github.sha }}",';
+    const m116ReplacementLiteralToken = '      replacement: "PROVENANCE_SHA: ${{ github.workflow_sha }}",';
+    const m116AnchorLiteralToken = '        anchor: "PROVENANCE_SHA: ${{ github.sha }}",';
+    const m116NeedleLiteralOffset = declarativeBatchOffset(m116NeedleLiteralToken);
+    const m116ReplacementLiteralOffset = declarativeBatchOffset(m116ReplacementLiteralToken);
+    const m116AnchorLiteralOffset = declarativeBatchOffset(m116AnchorLiteralToken);
+    expect(m116ReplacementLiteralOffset).toBeGreaterThan(m116NeedleLiteralOffset);
+    expect(m116AnchorLiteralOffset).toBeGreaterThan(m116ReplacementLiteralOffset);
+    const templateValuedM116Descriptor = [
+      hybridDeclarativeMutation.slice(0, m116NeedleLiteralOffset),
+      "      needle: `PROVENANCE_SHA: \\${{ github.sha }}`,",
+      hybridDeclarativeMutation.slice(
+        m116NeedleLiteralOffset + m116NeedleLiteralToken.length,
+        m116ReplacementLiteralOffset
+      ),
+      "      replacement: `PROVENANCE_SHA: \\${{ github.workflow_sha }}`,",
+      hybridDeclarativeMutation.slice(
+        m116ReplacementLiteralOffset + m116ReplacementLiteralToken.length,
+        m116AnchorLiteralOffset
+      ),
+      "        anchor: `PROVENANCE_SHA: \\${{ github.sha }}`,",
+      hybridDeclarativeMutation.slice(m116AnchorLiteralOffset + m116AnchorLiteralToken.length)
+    ].join("");
+    expect(releaseMutationInventoryProblems(templateValuedM116Descriptor)).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/descriptor needle must be one passive identifier\/string value/),
+        expect.stringMatching(/descriptor replacement must be one passive string value or mutation handle/),
+        expect.stringMatching(/witness anchor must be one passive identifier\/string value/)
+      ])
+    );
     const caseRootToken = 'id: "release.case.m002",\n      root: releaseMutationM002';
     const caseRootOffset = firstCaseOffset(caseRootToken);
     const sourceRootDeclarativeCase = [
@@ -13203,12 +13233,12 @@ describe("release identity and exact required-job gate", () => {
     const releaseMutationM116 = releaseMutationPlan.registerMutation("release.m116", {
       mode: "first",
       source: releaseWorkflowFixtureSource,
-      needle: `PROVENANCE_SHA: \${{ github.sha }}`,
-      replacement: `PROVENANCE_SHA: \${{ github.workflow_sha }}`,
+      needle: "PROVENANCE_SHA: ${{ github.sha }}",
+      replacement: "PROVENANCE_SHA: ${{ github.workflow_sha }}",
       expectedOccurrences: 1,
       witness: {
         kind: "token",
-        anchor: `PROVENANCE_SHA: \${{ github.sha }}`,
+        anchor: "PROVENANCE_SHA: ${{ github.sha }}",
         before: 1,
         after: 0
       }

@@ -18,8 +18,8 @@ import {
 // v3.10.0-rc.22 (audit M8) — the REAL embed-hit privacy filter (was reimplemented
 // inline below; now exercised so search.ts's embeddingsSearch filter is covered).
 import { filterExcludedEmbedHits, filterLiveVaultHits } from "../src/tools/search.js";
-import { restrictedVaultPathReason } from "../src/vault-path-policy.js";
 import { compileGlob, MAX_GLOB_PATTERN_LEN, Vault } from "../src/vault.js";
+import { restrictedVaultPathReason } from "../src/vault-path-policy.js";
 
 let root: string;
 let outsideDir: string;
@@ -704,10 +704,7 @@ describe("Persistent indexes — search-time privacy filter (v2.0.0-beta.2)", ()
         expect(aliasResult.matches.every((match) => match.path !== "VisibleAlias/note.md")).toBe(true);
       }
 
-      type ChunkHandler = (
-        uri: URL,
-        params: { chunkIndex?: string; notePath?: string | string[] }
-      ) => Promise<unknown>;
+      type ChunkHandler = (uri: URL, params: { chunkIndex?: string; notePath?: string | string[] }) => Promise<unknown>;
       let chunkHandler: ChunkHandler | undefined;
       const fakeServer = {
         registerResource: (...registration: unknown[]) => {

@@ -183,10 +183,7 @@ describe("loadPeriodicConfig (v1.10)", () => {
   it("reads .obsidian/daily-notes.json", async () => {
     await fs.mkdir(path.join(root, ".obsidian"), { recursive: true });
     const configPath = path.join(root, ".obsidian", "daily-notes.json");
-    await fs.writeFile(
-      configPath,
-      JSON.stringify({ format: "YYYY-MM-DD", folder: "Daily Notes/" })
-    );
+    await fs.writeFile(configPath, JSON.stringify({ format: "YYYY-MM-DD", folder: "Daily Notes/" }));
     const config = await loadPeriodicConfig(root);
     expect(config.daily).toEqual({ format: "YYYY-MM-DD", folder: "Daily Notes/" });
 

@@ -5,7 +5,7 @@ import * as path from "node:path";
 import { foldName } from "./name-fold.js";
 import { type ParsedNote, parseNote } from "./parser.js";
 import { loadPeriodicConfig, type PeriodicConfig } from "./periodic.js";
-import { restrictedVaultPathReason, type RestrictedVaultPathReason } from "./vault-path-policy.js";
+import { type RestrictedVaultPathReason, restrictedVaultPathReason } from "./vault-path-policy.js";
 import { compileGlobTokens, matchWildcardTokens } from "./wildcard-match.js";
 import { windowsRelativePathProblem } from "./windows-path.js";
 

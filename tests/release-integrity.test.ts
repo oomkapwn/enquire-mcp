@@ -8657,7 +8657,7 @@ describe("release identity and exact required-job gate", () => {
       oracleSource.slice(matrixBodyOffset)
     ].join("");
     expect(releaseMutationInventoryProblems(extraProjectMutation)).toContain(
-      "release mutation hybrid inventory expected 538 first / 22 all, found 539 first / 22 all (legacy 497/19; declarative 42/3; cases 44)"
+      "release mutation hybrid inventory expected 538 first / 22 all, found 539 first / 22 all (legacy 496/19; declarative 43/3; cases 45)"
     );
     const outsideMutation = `${oracleSource}\nvoid replaceAllExactly("inventory", "inventory", "mutant");\n`;
     expect(releaseMutationInventoryProblems(outsideMutation)).toContain(
@@ -8671,7 +8671,7 @@ describe("release identity and exact required-job gate", () => {
       oracleSource.slice(firstProjectCallOffset + "replaceExactly(".length)
     ].join("");
     expect(releaseMutationInventoryProblems(projectModeDrift)).toContain(
-      "release mutation hybrid inventory expected 538 first / 22 all, found 537 first / 23 all (legacy 495/20; declarative 42/3; cases 44)"
+      "release mutation hybrid inventory expected 538 first / 22 all, found 537 first / 23 all (legacy 494/20; declarative 43/3; cases 45)"
     );
     const hybridDeclarativeMutation = oracleSource;
     const declarativeBatchStartToken = "    const releaseIntegrityText = mcpbInputs.integrity;";
@@ -9311,7 +9311,7 @@ describe("release identity and exact required-job gate", () => {
         .join("legacyMigratedExactly(")
     ].join("");
     expect(releaseMutationInventoryProblems(legacyFreeMatrix)).toContain(
-      "release mutation final closed graph expected 560 unique descriptors / 536 cases and roots / 541 expectations / 24 dependency-only, found 45 descriptors / 44 cases / 44 roots / 44 expectations / 1 dependency-only"
+      "release mutation final closed graph expected 560 unique descriptors / 536 cases and roots / 541 expectations / 24 dependency-only, found 46 descriptors / 45 cases / 45 roots / 45 expectations / 1 dependency-only"
     );
     const loopGeneratedDeclarative = [
       oracleSource.slice(0, matrixBodyOffset),
@@ -9454,7 +9454,7 @@ describe("release identity and exact required-job gate", () => {
       expect.stringMatching(/must be one explicit straight-line case/)
     );
     expect(iterableLiteralProblems).toContain(
-      "release mutation hybrid inventory expected 538 first / 22 all, found 539 first / 22 all (legacy 497/19; declarative 42/3; cases 44)"
+      "release mutation hybrid inventory expected 538 first / 22 all, found 539 first / 22 all (legacy 496/19; declarative 43/3; cases 45)"
     );
     const nestedStraightLineMutation = [
       oracleSource.slice(0, matrixBodyOffset),
@@ -9466,7 +9466,7 @@ describe("release identity and exact required-job gate", () => {
       expect.stringMatching(/must be one explicit straight-line case/)
     );
     expect(nestedStraightLineProblems).toContain(
-      "release mutation hybrid inventory expected 538 first / 22 all, found 540 first / 22 all (legacy 498/19; declarative 42/3; cases 44)"
+      "release mutation hybrid inventory expected 538 first / 22 all, found 540 first / 22 all (legacy 497/19; declarative 43/3; cases 45)"
     );
     const earlyReturnMutation = [
       oracleSource.slice(0, matrixBodyOffset),
@@ -11745,12 +11745,12 @@ describe("release identity and exact required-job gate", () => {
 
     const releaseIntegrityText = mcpbInputs.integrity;
     const releaseMutationPlan = new ReleaseMutationPlan({
-      total: 45,
-      first: 42,
+      total: 46,
+      first: 43,
       all: 3,
-      cases: 44,
-      expectations: 44,
-      roots: 44,
+      cases: 45,
+      expectations: 45,
+      roots: 45,
       dependencyOnly: 1
     });
     const releaseIntegritySource = releaseMutationPlan.registerSource("script.release-integrity", releaseIntegrityText);
@@ -13200,6 +13200,38 @@ describe("release identity and exact required-job gate", () => {
         }
       ]
     });
+    const releaseMutationM116 = releaseMutationPlan.registerMutation("release.m116", {
+      mode: "first",
+      source: releaseWorkflowFixtureSource,
+      needle: `PROVENANCE_SHA: \${{ github.sha }}`,
+      replacement: `PROVENANCE_SHA: \${{ github.workflow_sha }}`,
+      expectedOccurrences: 1,
+      witness: {
+        kind: "token",
+        anchor: `PROVENANCE_SHA: \${{ github.sha }}`,
+        before: 1,
+        after: 0
+      }
+    });
+    releaseMutationPlan.registerCase({
+      id: "release.case.m116",
+      root: releaseMutationM116,
+      checks: [
+        {
+          invoke: {
+            kind: "npm.workflow",
+            baseline: releaseWorkflowFixtureSource,
+            mutant: releaseMutationM116
+          },
+          expectation: {
+            id: "release.expectation.m116.primary",
+            kind: "problem",
+            problem:
+              "npm provenance must bind the tag-push context before the sole publish and verify two exact attestations without credentials"
+          }
+        }
+      ]
+    });
     const releaseMutationProblems = releaseMutationPlan.seal();
     expect(releaseMutationProblems).toEqual([]);
     releaseMutationPlan.executeThrough(releaseMutationM037, {
@@ -13740,16 +13772,11 @@ describe("release identity and exact required-job gate", () => {
     }
     releaseMutationPlan.executeRemaining();
     expect(releaseMutationPlan.phase).toBe("executed");
-    expect(releaseMutationPlan.caseExecutions).toBe(44);
-    expect(releaseMutationPlan.expectationExecutions).toBe(44);
+    expect(releaseMutationPlan.caseExecutions).toBe(45);
+    expect(releaseMutationPlan.expectationExecutions).toBe(45);
 
     // Mutation oracle: workflow ordering, token isolation, exact verifier pin, and read-only convergence.
     for (const weakenedProvenanceWorkflow of [
-      replaceExactly(
-        mcpbInputs.release,
-        `PROVENANCE_SHA: \${{ github.sha }}`,
-        `PROVENANCE_SHA: \${{ github.workflow_sha }}`
-      ),
       replaceExactly(
         mcpbInputs.release,
         `      - name: ${NPM_PROVENANCE_STEP_NAME}`,

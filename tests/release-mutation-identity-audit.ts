@@ -5532,9 +5532,7 @@ function validateHybridPartition(
         : expectedMutationHandle(frozen.source.id);
     const exactFrozenTopology =
       frozen.id === "release.m108"
-        ? frozen.role === "dependency" &&
-          frozen.ownerRoot === "release.m107" &&
-          frozen.replacementDependency === null
+        ? frozen.role === "dependency" && frozen.ownerRoot === "release.m107" && frozen.replacementDependency === null
         : frozen.role === "root" && frozen.ownerRoot === frozen.id && frozen.replacementDependency === null;
     const exactWitnessDerivation =
       (frozen.witness.derivation === "needle" && frozen.witness.anchor === frozen.expressions.needle.resolved) ||

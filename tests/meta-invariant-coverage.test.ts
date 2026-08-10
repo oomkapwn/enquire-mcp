@@ -1168,19 +1168,19 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
     const legacyM108CallNode = [
       "replaceExactly(",
       "            registryRun,",
-      '            \'require_job_reserve 2200 "MCP Registry publish and convergence"\',',
-      '            \'for replay in {1..2}; do\\n  require_job_reserve 2200 "MCP Registry publish and convergence"\'',
+      "            'require_job_reserve 2200 \"MCP Registry publish and convergence\"',",
+      "            'for replay in {1..2}; do\\n  require_job_reserve 2200 \"MCP Registry publish and convergence\"'",
       "          )"
     ].join("\n");
     const legacyM107CallNode = [
       "replaceExactly(",
       "          replaceExactly(",
       "            registryRun,",
-      '            \'require_job_reserve 2200 "MCP Registry publish and convergence"\',',
-      '            \'for replay in {1..2}; do\\n  require_job_reserve 2200 "MCP Registry publish and convergence"\'',
+      "            'require_job_reserve 2200 \"MCP Registry publish and convergence\"',",
+      "            'for replay in {1..2}; do\\n  require_job_reserve 2200 \"MCP Registry publish and convergence\"'",
       "          ),",
-      '          \'echo "MCP Registry exact publication is confirmed for $MCP_NAME@$VERSION"\',',
-      '          \'echo "MCP Registry exact publication is confirmed for $MCP_NAME@$VERSION"\\ndone\'',
+      "          'echo \"MCP Registry exact publication is confirmed for $MCP_NAME@$VERSION\"',",
+      "          'echo \"MCP Registry exact publication is confirmed for $MCP_NAME@$VERSION\"\\ndone'",
       "        )"
     ].join("\n");
     const legacyM109CallNode = [

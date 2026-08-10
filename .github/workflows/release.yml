@@ -200,8 +200,15 @@ jobs:
               ci_wait "CI workflow-run lookup failed (attempt $attempt/120) — waiting 30s..."
               continue
             fi
-            CI_RUNS=$(printf '%s' "$CI_RUN_PAGES" | node scripts/check-release-integrity.mjs \
-              flatten-field workflow_runs)
+            if ! CI_RUNS=$(printf '%s' "$CI_RUN_PAGES" | node scripts/check-release-integrity.mjs \
+              flatten-field workflow_runs); then
+              if [ "$attempt" -eq 120 ]; then
+                echo "::error::Exact ci.yml workflow-run pages remained unstable after 60 minutes"
+                exit 1
+              fi
+              ci_wait "CI workflow-run strict decode failed (attempt $attempt/120) — restarting at page 1 in 30s..."
+              continue
+            fi
             CI_RUN_COUNT=$(printf '%s' "$CI_RUNS" | jq 'length')
             if [ "$CI_RUN_COUNT" -gt 1 ]; then
               echo "::error::More than one exact ci.yml main-push run exists for $SHA"
@@ -227,7 +234,14 @@ jobs:
               ci_wait "CI workflow-run attempt job lookup failed (attempt $attempt/120) — waiting 30s..."
               continue
             fi
-            JOBS=$(printf '%s' "$JOB_PAGES" | node scripts/check-release-integrity.mjs flatten-field jobs)
+            if ! JOBS=$(printf '%s' "$JOB_PAGES" | node scripts/check-release-integrity.mjs flatten-field jobs); then
+              if [ "$attempt" -eq 120 ]; then
+                echo "::error::Exact CI workflow-run job pages remained unstable after 60 minutes"
+                exit 1
+              fi
+              ci_wait "CI job strict decode failed (attempt $attempt/120) — restarting at page 1 in 30s..."
+              continue
+            fi
             JSON=$(jq -n --argjson workflow_run "$WORKFLOW_RUN" --argjson jobs "$JOBS" \
               '{workflow_run: $workflow_run, jobs: $jobs}')
             RESULT=$(printf '%s' "$JSON" | node scripts/check-release-integrity.mjs checks "$SHA")
@@ -818,8 +832,16 @@ jobs:
               sleep 5
               continue
             fi
-            RELEASES=$(printf '%s' "$RELEASE_PAGES" | node scripts/check-release-integrity.mjs \
-              flatten-pages release)
+            if ! RELEASES=$(printf '%s' "$RELEASE_PAGES" | node scripts/check-release-integrity.mjs \
+              flatten-pages release); then
+              if [ "$release_preflight_attempt" -eq 12 ]; then
+                echo "::error::GitHub release preflight pages remained unstable after 12 bounded checks"
+                exit 1
+              fi
+              echo "::warning::GitHub release preflight strict decode failed (attempt $release_preflight_attempt/12); restarting at page 1 in 5s"
+              sleep 5
+              continue
+            fi
             RELEASE_COUNT=$(printf '%s' "$RELEASES" | jq --arg tag "$TAG" \
               '[.[] | select(.tag_name == $tag)] | length')
             if [ "$RELEASE_COUNT" -gt 1 ]; then
@@ -1828,6 +1850,7 @@ jobs:
           # authoritative reads must prove one exact safe release state. This
           # also handles a lost response or delayed list visibility without a
           # second create in the same workflow run.
+          RECOVERY_PREVIOUS_INVENTORY=""
           for (( create_recovery_attempt=1; create_recovery_attempt<=12; create_recovery_attempt++ )); do
             if ! RECOVERY_PAGES=$(gh_read api --paginate --slurp \
               "repos/${{ github.repository }}/releases?per_page=100"); then
@@ -1835,11 +1858,20 @@ jobs:
                 echo "::error::Draft create readback remained unreadable after 12 bounded checks; create exit=$CREATE_EXIT"
                 exit 1
               fi
+              RECOVERY_PREVIOUS_INVENTORY=""
               sleep 5
               continue
             fi
-            RECOVERY_RELEASES=$(printf '%s' "$RECOVERY_PAGES" | node scripts/check-release-integrity.mjs \
-              flatten-pages release)
+            if ! RECOVERY_RELEASES=$(printf '%s' "$RECOVERY_PAGES" | node scripts/check-release-integrity.mjs \
+              flatten-pages release); then
+              if [ "$create_recovery_attempt" -eq 12 ]; then
+                echo "::error::Draft create readback pages remained unstable after 12 bounded checks; create exit=$CREATE_EXIT"
+                exit 1
+              fi
+              RECOVERY_PREVIOUS_INVENTORY=""
+              sleep 5
+              continue
+            fi
             RECOVERY_COUNT=$(printf '%s' "$RECOVERY_RELEASES" | jq --arg tag "$TAG" \
               '[.[] | select(.tag_name == $tag)] | length')
             if [ "$RECOVERY_COUNT" -gt 1 ]; then
@@ -1847,6 +1879,17 @@ jobs:
               exit 1
             fi
             if [ "$RECOVERY_COUNT" -eq 1 ]; then
+              RECOVERY_INVENTORY=$(printf '%s' "$RECOVERY_RELEASES" | jq -c \
+                '[.[] | [.id, .tag_name, .draft, .prerelease]]')
+              if [ "$RECOVERY_INVENTORY" != "$RECOVERY_PREVIOUS_INVENTORY" ]; then
+                RECOVERY_PREVIOUS_INVENTORY="$RECOVERY_INVENTORY"
+                if [ "$create_recovery_attempt" -eq 12 ]; then
+                  echo "::error::Draft create readback did not reach a stable inventory after 12 bounded checks; create exit=$CREATE_EXIT"
+                  exit 1
+                fi
+                sleep 5
+                continue
+              fi
               RECOVERY_RELEASE=$(printf '%s' "$RECOVERY_RELEASES" | jq --arg tag "$TAG" \
                 '.[] | select(.tag_name == $tag)')
               if ! RECOVERY_ID=$(printf '%s' "$RECOVERY_RELEASE" | jq -er \
@@ -1861,6 +1904,7 @@ jobs:
                   echo "::error::Draft create readback remained malformed after 12 bounded checks"
                   exit 1
                 fi
+                RECOVERY_PREVIOUS_INVENTORY=""
                 sleep 5
                 continue
               fi
@@ -1877,6 +1921,7 @@ jobs:
                   echo "::error::Draft create asset readback remained unreadable after 12 bounded checks"
                   exit 1
                 fi
+                RECOVERY_PREVIOUS_INVENTORY=""
                 sleep 5
                 continue
               fi
@@ -1891,6 +1936,8 @@ jobs:
               assert_remote_tag_identity
               echo "Confirmed exact release $TAG after one draft-create attempt (exit=$CREATE_EXIT)"
               exit 0
+            else
+              RECOVERY_PREVIOUS_INVENTORY=""
             fi
             if [ "$create_recovery_attempt" -eq 12 ]; then
               echo "::error::Draft create did not become visible after 12 bounded checks; create exit=$CREATE_EXIT"
@@ -1957,7 +2004,7 @@ jobs:
             echo "::error::GitHub Release transaction script could not be read from the workflow commit"
             exit 1
           fi
-          RELEASE_TRANSACTION_SHA256="3f9f96ddf9ddd7c273c97a9ad4a03898d1b0ae1590940770c0185ed432d10469"
+          RELEASE_TRANSACTION_SHA256="e82f8c645256d30fda712c646a24f092a12e47c4b010f009e3d91fb8965cf527"
           if ! RELEASE_TRANSACTION_ACTUAL_SHA256=$(
             builtin printf '%s' "$RELEASE_TRANSACTION_SNAPSHOT" | /usr/bin/sha256sum
           ); then

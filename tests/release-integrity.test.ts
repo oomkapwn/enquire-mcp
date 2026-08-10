@@ -1,6 +1,17 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  linkSync,
+  lstatSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  symlinkSync,
+  writeFileSync
+} from "node:fs";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { load } from "js-yaml";
 import ts from "typescript";
@@ -10,7 +21,9 @@ import {
   assertChannelVersionAdvance,
   assertMcpbAssetVersion,
   assertReleaseTagMatchesVersion,
+  auditReleaseBodyFile,
   candidateRunIds,
+  createReleaseBodyFile,
   evaluateConvergentCount,
   evaluateMcpbCandidateRun,
   evaluateMcpbReleaseState,
@@ -19,6 +32,7 @@ import {
   evaluateNpmProvenanceContext,
   evaluateNpmPublication,
   evaluateReleaseChecks,
+  extractReleaseBody,
   flattenPaginatedArrays,
   flattenPaginatedField,
   REQUIRED_RELEASE_CHECKS
@@ -5096,8 +5110,12 @@ function githubReleaseTransactionProblems(workflow: string): string[] {
   } catch {
     return ["GitHub Release transaction workflow must parse"];
   }
-  const preflight = runBody(namedStep(steps, "Preflight existing GitHub release and every Basic asset before npm"));
-  const prepare = runBody(namedStep(steps, "Prepare draft GitHub Release"));
+  const releaseBodyStep = namedStep(steps, "Materialize bounded GitHub Release body");
+  const releaseBodyRun = runBody(releaseBodyStep);
+  const preflightStep = namedStep(steps, "Preflight existing GitHub release and every Basic asset before npm");
+  const preflight = runBody(preflightStep);
+  const prepareStep = namedStep(steps, "Prepare draft GitHub Release");
+  const prepare = runBody(prepareStep);
   const uploadStep = namedStep(steps, "Upload Basic MCPB asset, checksum, and provenance");
   const uploadWrapper = runBody(uploadStep);
   const upload = releaseTransaction;
@@ -5303,21 +5321,108 @@ function githubReleaseTransactionProblems(workflow: string): string[] {
   ) {
     problems.push("GitHub latest-release absence must be one strict HTTP identity, never stderr text");
   }
+  const releaseBodyStepIndex = steps.findIndex((step) => step.name === "Materialize bounded GitHub Release body");
+  const deterministicRecordsIndex = steps.findIndex(
+    (step) => step.name === "Prepare deterministic Basic release records"
+  );
+  const preflightStepIndex = steps.findIndex(
+    (step) => step.name === "Preflight existing GitHub release and every Basic asset before npm"
+  );
+  const npmPublicationIndex = steps.findIndex(
+    (step) => step.name === "Publish with provenance or verify an exact prior publication"
+  );
+  const releaseBodyEnvPins = {
+    MCPB_RELEASE_BODY_PATH: `\${{ steps.release_body.outputs.path }}`,
+    MCPB_RELEASE_BODY_SHA256: `\${{ steps.release_body.outputs.sha256 }}`,
+    MCPB_RELEASE_BODY_BYTES: `\${{ steps.release_body.outputs.bytes }}`,
+    MCPB_RELEASE_BODY_CHARS: `\${{ steps.release_body.outputs.chars }}`
+  } as const;
+  const releaseBodyEnvKeys = Object.keys(releaseBodyEnvPins);
+  const releaseBodyConsumerSteps = [preflightStep, prepareStep, uploadStep];
+  const releaseBodyEnvCarriers = steps.filter((step) => {
+    const env = yamlRecord(step.env);
+    return env !== null && releaseBodyEnvKeys.some((key) => Object.hasOwn(env, key));
+  });
+  const releaseBodyConsumerEnvIsExact =
+    releaseBodyEnvCarriers.length === 3 &&
+    releaseBodyConsumerSteps.every((step) => {
+      const env = yamlRecord(step?.env);
+      return (
+        env !== null &&
+        releaseBodyEnvKeys.every((key) => env[key] === releaseBodyEnvPins[key as keyof typeof releaseBodyEnvPins])
+      );
+    });
+  const frozenAwkAnchor = '# Frozen release.m389 identity anchor only: awk -v heading="## [$VERSION] — "';
+  const receiptKeys = '(keys | sort) == ["bytes", "chars", "path", "sha256"]';
+  const receiptByteBound = '(.bytes | type == "number" and floor == . and . > 0 and . <= 125000)';
+  const receiptCharacterBound = '(.chars | type == "number" and floor == . and . > 0 and . <= 125000)';
+  const bodyProducerIsExact =
+    steps.filter((step) => step.name === "Materialize bounded GitHub Release body").length === 1 &&
+    releaseBodyStep?.id === "release_body" &&
+    releaseBodyStep?.shell === protectedShell &&
+    yamlRecord(releaseBodyStep?.env) === null &&
+    deterministicRecordsIndex >= 0 &&
+    releaseBodyStepIndex > deterministicRecordsIndex &&
+    preflightStepIndex > releaseBodyStepIndex &&
+    npmPublicationIndex > preflightStepIndex &&
+    releaseBodyRun.startsWith("set -euo pipefail\nbuiltin umask 077\n") &&
+    mutationMatchCount(releaseBodyRun, "release-body-create") === 1 &&
+    releaseBodyRun.includes('release-body-create "$VERSION" "$RELEASE_BODY_PATH" < CHANGELOG.md') &&
+    releaseBodyRun.includes('RELEASE_BODY_DIR=$(/usr/bin/mktemp -d "$RUNNER_TEMP/enquire-release-body.XXXXXX")') &&
+    releaseBodyRun.includes('RELEASE_BODY_PATH="$RELEASE_BODY_DIR/release-notes.md"') &&
+    releaseBodyRun.includes("/usr/bin/jq --compact-output --slurp --exit-status") &&
+    releaseBodyRun.includes("if length == 1 then .[0] else empty end |") &&
+    mutationMatchCount(releaseBodyRun, receiptKeys) === 1 &&
+    mutationMatchCount(releaseBodyRun, receiptByteBound) === 1 &&
+    mutationMatchCount(releaseBodyRun, receiptCharacterBound) === 1 &&
+    releaseBodyRun.includes('[ "$RECEIPT_PATH" != "$RELEASE_BODY_PATH" ]') &&
+    mutationMatchCount(releaseBodyRun, "printf 'path=%s\\n'") === 1 &&
+    mutationMatchCount(releaseBodyRun, "printf 'sha256=%s\\n'") === 1 &&
+    mutationMatchCount(releaseBodyRun, "printf 'bytes=%s\\n'") === 1 &&
+    mutationMatchCount(releaseBodyRun, "printf 'chars=%s\\n'") === 1 &&
+    mutationMatchCount(releaseBodyRun, '>> "$GITHUB_OUTPUT"') === 1 &&
+    !releaseBodyRun.includes("GITHUB_ENV") &&
+    !releaseBodyRun.includes("body=");
+  const releaseBodyAuditInvocation = 'release-body-audit "$NOTES"';
+  const releaseBodyAuditBeforeCreate =
+    '"$MCPB_RELEASE_BODY_SHA256" "$MCPB_RELEASE_BODY_BYTES" "$MCPB_RELEASE_BODY_CHARS" >/dev/null\n' +
+    "CREATE_EXIT=0\n" +
+    "set +e\n" +
+    `"$TIMEOUT_BIN" --kill-after=10s 300s "$GH_BIN" "\${CREATE_ARGS[@]}"`;
   if (
-    mutationMatchCount(workflow, 'NOTES=$(awk -v heading="## [$VERSION] — "') !== 3 ||
-    mutationMatchCount(workflow, 'EXPECTED_RELEASE_NAME="$TAG" EXPECTED_RELEASE_BODY="$NOTES"') !== 3
+    !bodyProducerIsExact ||
+    !releaseBodyConsumerEnvIsExact ||
+    mutationMatchCount(workflow, frozenAwkAnchor) !== 3 ||
+    mutationMatchCount(workflow, 'awk -v heading="## [$VERSION] — "') !== 3 ||
+    mutationMatchCount(workflow, "NOTES=$(awk") !== 0 ||
+    mutationMatchCount(workflow, 'NOTES="$MCPB_RELEASE_BODY_PATH"') !== 3 ||
+    mutationMatchCount(workflow, 'EXPECTED_RELEASE_NAME="$TAG" EXPECTED_RELEASE_BODY="$NOTES"') !== 3 ||
+    mutationMatchCount(workflow, 'EXPECTED_RELEASE_BODY_SHA256="$MCPB_RELEASE_BODY_SHA256"') !== 3 ||
+    mutationMatchCount(workflow, 'EXPECTED_RELEASE_BODY_BYTES="$MCPB_RELEASE_BODY_BYTES"') !== 3 ||
+    mutationMatchCount(workflow, 'EXPECTED_RELEASE_BODY_CHARS="$MCPB_RELEASE_BODY_CHARS"') !== 3 ||
+    workflow.includes("EXPECTED_RELEASE_BODY_FILE") ||
+    workflow.includes("See [CHANGELOG.md]") ||
+    workflow.includes("NOTES_BODY") ||
+    (workflow.match(/^[ \t]*NOTES=\$\(/gmu) ?? []).length !== 0 ||
+    mutationMatchCount(workflow, "release-body-create") !== 1 ||
+    mutationMatchCount(workflow, "release-body-audit") !== 1 ||
+    mutationMatchCount(prepare, releaseBodyAuditInvocation) !== 1 ||
+    !prepare.includes(releaseBodyAuditBeforeCreate) ||
+    (workflow.match(/--notes(?:[ =]|$)/gmu) ?? []).length !== 0 ||
+    mutationMatchCount(workflow, '--notes-file "$NOTES"') !== 1
   ) {
     problems.push("every release snapshot must bind the exact canonical title and CHANGELOG body");
   }
   const createReserve = 'require_job_reserve 3600 "GitHub draft creation"';
-  const createArgs = `CREATE_ARGS=(release create "$TAG" --repo "\${{ github.repository }}" \\\n  --title "$TAG" --notes "$NOTES" --draft --verify-tag)`;
+  const createArgs = `CREATE_ARGS=(release create "$TAG" --repo "\${{ github.repository }}" \\\n  --title "$TAG" --notes-file "$NOTES" --draft --verify-tag)`;
   const createChannelBlock =
     `if [ "\${{ steps.dist_tag.outputs.tag }}" != "latest" ]; then\n` + "  CREATE_ARGS+=(--prerelease)\n" + "fi";
   const createCommand = `"$TIMEOUT_BIN" --kill-after=10s 300s "$GH_BIN" "\${CREATE_ARGS[@]}"`;
   const createRecovery = "for (( create_recovery_attempt=1; create_recovery_attempt<=12;";
   const createReserveIndex = prepare.indexOf(createReserve);
   const createTagIndex = prepare.indexOf("assert_remote_tag_identity", createReserveIndex);
-  const createCommandIndex = prepare.indexOf(createCommand, createTagIndex);
+  const createAuditIndex = prepare.indexOf(releaseBodyAuditInvocation, createTagIndex);
+  const createCommandIndex = prepare.indexOf(createCommand, createAuditIndex);
   const createRecoveryIndex = prepare.indexOf(createRecovery, createCommandIndex);
   const createActionIndex = prepare.indexOf('RECOVERY_ACTION" != "reuse_published"', createRecoveryIndex);
   const createActionErrorIndex = prepare.indexOf(
@@ -5334,11 +5439,10 @@ function githubReleaseTransactionProblems(workflow: string): string[] {
     mutationMatchCount(prepare, "CREATE_ARGS+=(") !== 1 ||
     mutationMatchCount(prepare, createCommand) !== 1 ||
     mutationMatchCount(prepare, 'release create "$TAG"') !== 1 ||
-    !prepare.includes('awk -v heading="## [$VERSION] — "') ||
-    !prepare.includes("index($0, heading) == 1") ||
-    prepare.includes('$0 ~ "^## \\[" ver') ||
-    !prepare.includes("/blob/main/CHANGELOG.md) for full release notes") ||
-    prepare.includes(`CHANGELOG.md#\${VERSION//./}`) ||
+    mutationMatchCount(prepare, releaseBodyAuditInvocation) !== 1 ||
+    !prepare.includes('NOTES="$MCPB_RELEASE_BODY_PATH"') ||
+    prepare.includes("NOTES=$(awk") ||
+    prepare.includes("See [CHANGELOG.md]") ||
     !prepare.includes(NPM_RESERVE_DEADLINE_GUARD) ||
     !prepare.includes("CREATE_EXIT=$?") ||
     !prepare.includes("authoritative reads must prove one exact safe release state") ||
@@ -5349,7 +5453,8 @@ function githubReleaseTransactionProblems(workflow: string): string[] {
     !prepare.includes('RECOVERY_ACTION" != "reuse_published"') ||
     createReserveIndex < 0 ||
     createTagIndex <= createReserveIndex ||
-    createCommandIndex <= createTagIndex ||
+    createAuditIndex <= createTagIndex ||
+    createCommandIndex <= createAuditIndex ||
     createRecoveryIndex <= createCommandIndex ||
     createActionIndex <= createRecoveryIndex ||
     createActionErrorIndex <= createActionIndex ||
@@ -7003,6 +7108,7 @@ function mcpbContractProblems(inputs: {
     "Re-verify exact CI-gated Basic MCPB release asset",
     "Resolve npm dist-tag from version",
     "Prepare deterministic Basic release records",
+    "Materialize bounded GitHub Release body",
     "Preflight existing GitHub release and every Basic asset before npm",
     "Publish with provenance or verify an exact prior publication",
     NPM_PROVENANCE_STEP_NAME,
@@ -7498,7 +7604,20 @@ function mcpbContractProblems(inputs: {
     !inputs.integrity.includes("release.name !== expected.name") ||
     !inputs.integrity.includes("release.body !== expected.body") ||
     !inputs.integrity.includes("name: process.env.EXPECTED_RELEASE_NAME") ||
-    !inputs.integrity.includes("body: process.env.EXPECTED_RELEASE_BODY") ||
+    mutationMatchCount(inputs.integrity, "body: process.env.EXPECTED_RELEASE_BODY") !== 1 ||
+    !inputs.integrity.includes("export function extractReleaseBody") ||
+    !inputs.integrity.includes("export function createReleaseBodyFile") ||
+    !inputs.integrity.includes("export function auditReleaseBodyFile") ||
+    mutationMatchCount(inputs.integrity, 'mode === "release-body-create"') !== 1 ||
+    mutationMatchCount(inputs.integrity, 'mode === "release-body-audit"') !== 1 ||
+    !inputs.integrity.includes("if (process.argv.length !== 5)") ||
+    !inputs.integrity.includes("if (process.argv.length !== 7)") ||
+    mutationMatchCount(inputs.integrity, "sha256: process.env.EXPECTED_RELEASE_BODY_SHA256") !== 1 ||
+    mutationMatchCount(inputs.integrity, "bytes: process.env.EXPECTED_RELEASE_BODY_BYTES") !== 1 ||
+    mutationMatchCount(inputs.integrity, "chars: process.env.EXPECTED_RELEASE_BODY_CHARS") !== 1 ||
+    !inputs.integrity.includes("const releaseBody = readAuditedReleaseBodyFile(") ||
+    mutationMatchCount(inputs.integrity, "body: releaseBody") !== 1 ||
+    inputs.integrity.includes("EXPECTED_RELEASE_BODY_FILE") ||
     !inputs.integrity.includes("isExactSha256DigestOrNull") ||
     !inputs.integrity.includes("paginated asset element has an invalid identity") ||
     !inputs.integrity.includes("export function candidateRunIds") ||
@@ -7519,7 +7638,11 @@ function mcpbContractProblems(inputs: {
     (inputs.release.match(/node scripts\/check-release-integrity\.mjs release-state/g) ?? []).length !== 3 ||
     (inputs.release.match(/release-state "\$TAG" "\$EXPECTED_PRERELEASE"/g) ?? []).length !== 3 ||
     (inputs.release.match(/EXPECTED_RELEASE_NAME="\$TAG" EXPECTED_RELEASE_BODY="\$NOTES"/g) ?? []).length !== 3 ||
-    (inputs.release.match(/NOTES=\$\(awk -v heading="## \[\$VERSION\] — "/g) ?? []).length !== 3 ||
+    mutationMatchCount(
+      inputs.release,
+      '# Frozen release.m389 identity anchor only: awk -v heading="## [$VERSION] — "'
+    ) !== 3 ||
+    (inputs.release.match(/^[ \t]*NOTES=\$\(awk/gmu) ?? []).length !== 0 ||
     inputs.release.includes('release-state "$TAG" "$SOURCE_SHA"') ||
     !inputs.release.includes("build_artifact_id:") ||
     !inputs.release.includes("build_artifact_digest:") ||
@@ -9534,6 +9657,307 @@ done`;
     ).toBe("b-b");
     expect(literalReplacementOffsets).toEqual([0, 2]);
     expect(replaceAllExactly("a-a", "a", "$`|$&|$'", 2)).toBe("|a|-a-a-|a|");
+
+    const releaseBodyVersion = "4.0.0-rc.3";
+    const releaseBodyHeading = `## [${releaseBodyVersion}] — 2026-08-11`;
+    const exactReleaseBody = "\n> Exact release body\n\n- first\n- second";
+    expect(
+      extractReleaseBody(
+        `${releaseBodyHeading}\n${exactReleaseBody}\n\n## [4.0.0-rc.2] — 2026-08-10\n\nOlder body`,
+        releaseBodyVersion
+      )
+    ).toBe(exactReleaseBody);
+    expect(extractReleaseBody(`${releaseBodyHeading}\n${exactReleaseBody}`, releaseBodyVersion)).toBe(exactReleaseBody);
+    for (const terminalLf of ["", "\n", "\n\n\n"]) {
+      expect(extractReleaseBody(`${releaseBodyHeading}\nBody${terminalLf}`, releaseBodyVersion)).toBe("Body");
+    }
+
+    const asciiLimitBody = "a".repeat(125_000);
+    expect(extractReleaseBody(`${releaseBodyHeading}\n${asciiLimitBody}`, releaseBodyVersion)).toBe(asciiLimitBody);
+    const multibyteBody = "Русский язык";
+    const extractedMultibyteBody = extractReleaseBody(`${releaseBodyHeading}\n${multibyteBody}`, releaseBodyVersion);
+    expect(Array.from(extractedMultibyteBody)).toHaveLength(12);
+    expect(Buffer.byteLength(extractedMultibyteBody, "utf8")).toBe(23);
+    const multibyteLimitBody = "é".repeat(62_500);
+    expect(extractReleaseBody(`${releaseBodyHeading}\n${multibyteLimitBody}`, releaseBodyVersion)).toBe(
+      multibyteLimitBody
+    );
+    expect(Array.from(multibyteLimitBody)).toHaveLength(62_500);
+    expect(Buffer.byteLength(multibyteLimitBody, "utf8")).toBe(125_000);
+
+    expect(() => extractReleaseBody("## [4.0.0-rc.2] — 2026-08-10\nBody", releaseBodyVersion)).toThrow(
+      /missing.*heading|heading.*missing/iu
+    );
+    expect(() =>
+      extractReleaseBody(`${releaseBodyHeading}\nFirst\n${releaseBodyHeading}\nSecond`, releaseBodyVersion)
+    ).toThrow(/duplicat.*heading|heading.*duplicat/iu);
+    for (const malformedHeading of [
+      `## [${releaseBodyVersion}] - 2026-08-11\nBody`,
+      `## [${releaseBodyVersion}] — 2026-8-11\nBody`,
+      `## [${releaseBodyVersion}] — 2026-08-11 trailing\nBody`
+    ]) {
+      expect(() => extractReleaseBody(malformedHeading, releaseBodyVersion)).toThrow(/exact.*heading|heading.*exact/iu);
+    }
+    for (const emptyBody of [`${releaseBodyHeading}`, `${releaseBodyHeading}\n\n \t\n`]) {
+      expect(() => extractReleaseBody(emptyBody, releaseBodyVersion)).toThrow(/empty|whitespace/iu);
+    }
+    expect(() => extractReleaseBody(`${releaseBodyHeading}\n${"a".repeat(125_001)}`, releaseBodyVersion)).toThrow(
+      /125000|limit/iu
+    );
+    expect(() => extractReleaseBody(`${releaseBodyHeading}\n${"é".repeat(62_500)}a`, releaseBodyVersion)).toThrow(
+      /125000|byte.*limit|limit.*byte/iu
+    );
+    expect(() => extractReleaseBody(`${releaseBodyHeading}\nBody\u0000tail`, releaseBodyVersion)).toThrow(
+      /U\+0000|NUL/iu
+    );
+    expect(() => extractReleaseBody(`${releaseBodyHeading}\r\nBody`, releaseBodyVersion)).toThrow(/canonical LF/iu);
+
+    const releaseBodyScratch = createOwnedScratch();
+    try {
+      const releaseBodyScratchRoot = realpathSync(releaseBodyScratch.path);
+      const releaseBodyPath = join(releaseBodyScratchRoot, "release-notes.md");
+      const releaseBodyChangelog = `${releaseBodyHeading}\n${exactReleaseBody}\n\n`;
+      const releaseBodyReceipt = createReleaseBodyFile(releaseBodyChangelog, releaseBodyVersion, releaseBodyPath);
+      expect(releaseBodyReceipt).toEqual({
+        path: releaseBodyPath,
+        sha256: createHash("sha256").update(exactReleaseBody, "utf8").digest("hex"),
+        bytes: Buffer.byteLength(exactReleaseBody, "utf8"),
+        chars: Array.from(exactReleaseBody).length
+      });
+      const releaseBodyStat = lstatSync(releaseBodyPath);
+      expect(releaseBodyStat.isFile()).toBe(true);
+      expect(releaseBodyStat.isSymbolicLink()).toBe(false);
+      expect(releaseBodyStat.mode & 0o777).toBe(0o600);
+      expect(readFileSync(releaseBodyPath, "utf8")).toBe(exactReleaseBody);
+      expect(() => createReleaseBodyFile(releaseBodyChangelog, releaseBodyVersion, releaseBodyPath)).toThrow(
+        /already exists|exclusive|refus|EEXIST/iu
+      );
+      expect(
+        auditReleaseBodyFile(
+          releaseBodyReceipt.path,
+          releaseBodyReceipt.sha256,
+          String(releaseBodyReceipt.bytes),
+          String(releaseBodyReceipt.chars)
+        )
+      ).toEqual(releaseBodyReceipt);
+
+      const releaseBodyCliPath = join(releaseBodyScratchRoot, "release-notes-cli.md");
+      const releaseBodyCreateCli = runReleaseIntegrityCli(
+        ["release-body-create", releaseBodyVersion, releaseBodyCliPath],
+        releaseBodyChangelog
+      );
+      expect(releaseBodyCreateCli.status).toBe(0);
+      const releaseBodyCliReceipt = JSON.parse(releaseBodyCreateCli.stdout) as typeof releaseBodyReceipt;
+      expect(releaseBodyCliReceipt).toEqual({ ...releaseBodyReceipt, path: releaseBodyCliPath });
+      expect(releaseBodyCreateCli.stdout).not.toContain(exactReleaseBody);
+      const releaseBodyAuditCli = runReleaseIntegrityCli([
+        "release-body-audit",
+        releaseBodyCliReceipt.path,
+        releaseBodyCliReceipt.sha256,
+        String(releaseBodyCliReceipt.bytes),
+        String(releaseBodyCliReceipt.chars)
+      ]);
+      expect(releaseBodyAuditCli.status).toBe(0);
+      expect(JSON.parse(releaseBodyAuditCli.stdout)).toEqual(releaseBodyCliReceipt);
+      expect(releaseBodyAuditCli.stdout).not.toContain(exactReleaseBody);
+      expect(runReleaseIntegrityCli(["release-body-create", releaseBodyVersion]).status).not.toBe(0);
+      expect(
+        runReleaseIntegrityCli([
+          "release-body-create",
+          releaseBodyVersion,
+          join(releaseBodyScratchRoot, "must-not-exist.md"),
+          "extra"
+        ]).status
+      ).not.toBe(0);
+      expect(
+        runReleaseIntegrityCli([
+          "release-body-audit",
+          releaseBodyCliReceipt.path,
+          releaseBodyCliReceipt.sha256,
+          String(releaseBodyCliReceipt.bytes)
+        ]).status
+      ).not.toBe(0);
+      expect(
+        runReleaseIntegrityCli([
+          "release-body-audit",
+          releaseBodyCliReceipt.path,
+          releaseBodyCliReceipt.sha256,
+          String(releaseBodyCliReceipt.bytes),
+          String(releaseBodyCliReceipt.chars),
+          "extra"
+        ]).status
+      ).not.toBe(0);
+
+      expect(() =>
+        auditReleaseBodyFile(
+          releaseBodyReceipt.path,
+          "0".repeat(64),
+          releaseBodyReceipt.bytes,
+          releaseBodyReceipt.chars
+        )
+      ).toThrow(/digest|SHA-256|receipt/iu);
+      expect(() =>
+        auditReleaseBodyFile(
+          releaseBodyReceipt.path,
+          releaseBodyReceipt.sha256,
+          releaseBodyReceipt.bytes + 1,
+          releaseBodyReceipt.chars
+        )
+      ).toThrow(/byte|receipt/iu);
+      expect(() =>
+        auditReleaseBodyFile(
+          releaseBodyReceipt.path,
+          releaseBodyReceipt.sha256,
+          releaseBodyReceipt.bytes,
+          releaseBodyReceipt.chars + 1
+        )
+      ).toThrow(/character|receipt/iu);
+      expect(() =>
+        auditReleaseBodyFile(
+          "release-notes.md",
+          releaseBodyReceipt.sha256,
+          releaseBodyReceipt.bytes,
+          releaseBodyReceipt.chars
+        )
+      ).toThrow(/absolute path|canonical.*path/iu);
+      expect(() =>
+        auditReleaseBodyFile(
+          join(releaseBodyScratchRoot, "missing.md"),
+          releaseBodyReceipt.sha256,
+          releaseBodyReceipt.bytes,
+          releaseBodyReceipt.chars
+        )
+      ).toThrow(/missing|open|regular|ENOENT|no such file/iu);
+
+      const symlinkPath = join(releaseBodyScratchRoot, "release-notes-link.md");
+      symlinkSync(releaseBodyPath, symlinkPath, "file");
+      expect(() =>
+        auditReleaseBodyFile(symlinkPath, releaseBodyReceipt.sha256, releaseBodyReceipt.bytes, releaseBodyReceipt.chars)
+      ).toThrow(/symlink|symbolic|NOFOLLOW/iu);
+
+      const tamperedPath = join(releaseBodyScratchRoot, "release-notes-tampered.md");
+      const tamperedReceipt = createReleaseBodyFile(releaseBodyChangelog, releaseBodyVersion, tamperedPath);
+      writeFileSync(tamperedPath, `${exactReleaseBody}!`, { encoding: "utf8", mode: 0o600 });
+      expect(() =>
+        auditReleaseBodyFile(tamperedReceipt.path, tamperedReceipt.sha256, tamperedReceipt.bytes, tamperedReceipt.chars)
+      ).toThrow(/digest|byte|character|receipt/iu);
+
+      const hardlinkPath = join(releaseBodyScratchRoot, "release-notes-hardlink.md");
+      linkSync(releaseBodyPath, hardlinkPath);
+      expect(() =>
+        auditReleaseBodyFile(
+          hardlinkPath,
+          releaseBodyReceipt.sha256,
+          releaseBodyReceipt.bytes,
+          releaseBodyReceipt.chars
+        )
+      ).toThrow(/link|regular|owned/iu);
+
+      const wrongModePath = join(releaseBodyScratchRoot, "release-notes-mode.md");
+      const wrongModeReceipt = createReleaseBodyFile(releaseBodyChangelog, releaseBodyVersion, wrongModePath);
+      chmodSync(wrongModePath, 0o644);
+      expect(() =>
+        auditReleaseBodyFile(
+          wrongModeReceipt.path,
+          wrongModeReceipt.sha256,
+          wrongModeReceipt.bytes,
+          wrongModeReceipt.chars
+        )
+      ).toThrow(/0600|mode/iu);
+    } finally {
+      removeOwnedScratch(releaseBodyScratch);
+    }
+
+    const releaseBodyWorkflow = releaseWorkflowFixture(
+      readFileSync(new URL("../.github/workflows/release.yml", import.meta.url), "utf8"),
+      readFileSync(new URL("../.github/scripts/release-mcpb-github-transaction.sh", import.meta.url), "utf8")
+    );
+    const canonicalReleaseBodyProblem = "every release snapshot must bind the exact canonical title and CHANGELOG body";
+    const spliceFirstReleaseBodyLiteral = (source: string, needle: string, replacement: string) => {
+      const start = source.indexOf(needle);
+      expect(start, `release-body control anchor must exist: ${needle}`).toBeGreaterThanOrEqual(0);
+      return source.slice(0, start) + replacement + source.slice(start + needle.length);
+    };
+    expect(githubReleaseTransactionProblems(releaseBodyWorkflow)).toEqual([]);
+    const releaseBodyProducerStart = releaseBodyWorkflow.indexOf(
+      "      - name: Materialize bounded GitHub Release body"
+    );
+    const releaseBodyPreflightStart = releaseBodyWorkflow.indexOf(
+      "      - name: Preflight existing GitHub release and every Basic asset before npm",
+      releaseBodyProducerStart
+    );
+    expect(releaseBodyProducerStart).toBeGreaterThanOrEqual(0);
+    expect(releaseBodyPreflightStart).toBeGreaterThan(releaseBodyProducerStart);
+    const releaseBodyProducerBlock = releaseBodyWorkflow.slice(releaseBodyProducerStart, releaseBodyPreflightStart);
+    const duplicatedReleaseBodyProducer =
+      releaseBodyWorkflow.slice(0, releaseBodyPreflightStart) +
+      releaseBodyProducerBlock +
+      releaseBodyWorkflow.slice(releaseBodyPreflightStart);
+    const releaseBodyWorkflowWithoutProducer =
+      releaseBodyWorkflow.slice(0, releaseBodyProducerStart) + releaseBodyWorkflow.slice(releaseBodyPreflightStart);
+    const lateReleaseBodyProducerStart = releaseBodyWorkflowWithoutProducer.indexOf(
+      "      - name: Prepare draft GitHub Release"
+    );
+    const npmPublicationStart = releaseBodyWorkflowWithoutProducer.indexOf(
+      "      - name: Publish with provenance or verify an exact prior publication"
+    );
+    expect(npmPublicationStart).toBeGreaterThan(releaseBodyProducerStart);
+    expect(lateReleaseBodyProducerStart).toBeGreaterThan(npmPublicationStart);
+    const lateReleaseBodyProducer =
+      releaseBodyWorkflowWithoutProducer.slice(0, lateReleaseBodyProducerStart) +
+      releaseBodyProducerBlock +
+      releaseBodyWorkflowWithoutProducer.slice(lateReleaseBodyProducerStart);
+    const releaseBodyWorkflowMutants = [
+      spliceFirstReleaseBodyLiteral(
+        releaseBodyWorkflow,
+        "- name: Materialize bounded GitHub Release body",
+        "- name: Materialize unverified GitHub Release body"
+      ),
+      spliceFirstReleaseBodyLiteral(
+        releaseBodyWorkflow,
+        '(keys | sort) == ["bytes", "chars", "path", "sha256"]',
+        '(keys | sort) == ["bytes", "path", "sha256"]'
+      ),
+      spliceFirstReleaseBodyLiteral(
+        releaseBodyWorkflow,
+        '(.bytes | type == "number" and floor == . and . > 0 and . <= 125000)',
+        '(.bytes | type == "number" and floor == . and . > 0 and . <= 125001)'
+      ),
+      spliceFirstReleaseBodyLiteral(
+        releaseBodyWorkflow,
+        `MCPB_RELEASE_BODY_SHA256: \${{ steps.release_body.outputs.sha256 }}`,
+        `MCPB_RELEASE_BODY_SHA25X: \${{ steps.release_body.outputs.sha256 }}`
+      ),
+      spliceFirstReleaseBodyLiteral(releaseBodyWorkflow, 'release-body-audit "$NOTES"', 'release-body-check "$NOTES"'),
+      spliceFirstReleaseBodyLiteral(releaseBodyWorkflow, '--notes-file "$NOTES"', '--notes "$NOTES"'),
+      spliceFirstReleaseBodyLiteral(
+        releaseBodyWorkflow,
+        '# Frozen release.m389 identity anchor only: awk -v heading="## [$VERSION] — "',
+        "# stale release.m389 identity anchor removed"
+      ),
+      spliceFirstReleaseBodyLiteral(
+        releaseBodyWorkflow,
+        'NOTES="$MCPB_RELEASE_BODY_PATH"',
+        'NOTES=$(awk -v heading="## [$VERSION] — " "$CHANGELOG")'
+      ),
+      spliceFirstReleaseBodyLiteral(
+        releaseBodyWorkflow,
+        'NOTES="$MCPB_RELEASE_BODY_PATH"',
+        `NOTES="\${MCPB_RELEASE_BODY_PATH:-See [CHANGELOG.md]}"`
+      ),
+      spliceFirstReleaseBodyLiteral(
+        releaseBodyWorkflow,
+        '          } >> "$GITHUB_OUTPUT"\n      - name: Preflight existing GitHub release',
+        '          } >> "$GITHUB_OUTPUT"\n' +
+          '          printf \'body=%s\\n\' "$RELEASE_BODY_RESULT" >> "$GITHUB_ENV"\n' +
+          "      - name: Preflight existing GitHub release"
+      ),
+      duplicatedReleaseBodyProducer,
+      lateReleaseBodyProducer
+    ];
+    for (const releaseBodyWorkflowMutant of releaseBodyWorkflowMutants) {
+      expect(githubReleaseTransactionProblems(releaseBodyWorkflowMutant)).toContain(canonicalReleaseBodyProblem);
+    }
 
     const oracleSource = readFileSync(new URL("./release-integrity.test.ts", import.meta.url), "utf8");
     expect(rawMutationCallProblems(oracleSource)).toEqual([]);
@@ -15505,40 +15929,69 @@ done`;
     ]) {
       expect(() => evaluateConvergentCount(observed, expected, attempt, maxAttempts, label)).toThrow(/invalid/);
     }
-    const releaseCliEnv = {
-      EXPECTED_RELEASE_NAME: releaseExpected.name,
-      EXPECTED_RELEASE_BODY: releaseExpected.body
-    };
-    const releaseCli = runReleaseIntegrityCli(
-      ["release-state", releaseExpected.tag, "true", "a", "b"],
-      JSON.stringify({ release: draftRelease, assets: [assetA] }),
-      releaseCliEnv
-    );
-    expect(releaseCli.status).toBe(0);
-    expect(JSON.parse(releaseCli.stdout)).toEqual({ action: "resume_draft", missing: ["b"] });
-    const publishedReleaseCli = runReleaseIntegrityCli(
-      ["release-state", releaseExpected.tag, "false", "a", "b"],
-      JSON.stringify({
-        release: { ...draftRelease, prerelease: false, draft: false, immutable: true },
-        assets: [assetA, assetB]
-      }),
-      releaseCliEnv
-    );
-    expect(publishedReleaseCli.status).toBe(0);
-    expect(JSON.parse(publishedReleaseCli.stdout)).toEqual({ action: "reuse_published", missing: [] });
-    expect(
-      runReleaseIntegrityCli(
-        ["release-state", releaseExpected.tag, "TRUE", "a", "b"],
+    const releaseCliScratch = createOwnedScratch();
+    try {
+      const releaseCliBodyPath = join(realpathSync(releaseCliScratch.path), "release-state-body.md");
+      const releaseCliVersion = releaseExpected.tag.slice(1);
+      const releaseCliBodyReceipt = createReleaseBodyFile(
+        `## [${releaseCliVersion}] — 2026-08-10\n${releaseExpected.body}\n`,
+        releaseCliVersion,
+        releaseCliBodyPath
+      );
+      const releaseCliEnv = {
+        EXPECTED_RELEASE_NAME: releaseExpected.name,
+        EXPECTED_RELEASE_BODY: releaseCliBodyReceipt.path,
+        EXPECTED_RELEASE_BODY_SHA256: releaseCliBodyReceipt.sha256,
+        EXPECTED_RELEASE_BODY_BYTES: String(releaseCliBodyReceipt.bytes),
+        EXPECTED_RELEASE_BODY_CHARS: String(releaseCliBodyReceipt.chars)
+      };
+      const releaseCli = runReleaseIntegrityCli(
+        ["release-state", releaseExpected.tag, "true", "a", "b"],
         JSON.stringify({ release: draftRelease, assets: [assetA] }),
         releaseCliEnv
-      ).status
-    ).not.toBe(0);
-    expect(
-      runReleaseIntegrityCli(
-        ["release-state", releaseExpected.tag, "true", "a", "b"],
-        JSON.stringify({ release: draftRelease, assets: [assetA] })
-      ).status
-    ).not.toBe(0);
+      );
+      expect(releaseCli.status).toBe(0);
+      expect(JSON.parse(releaseCli.stdout)).toEqual({ action: "resume_draft", missing: ["b"] });
+      const publishedReleaseCli = runReleaseIntegrityCli(
+        ["release-state", releaseExpected.tag, "false", "a", "b"],
+        JSON.stringify({
+          release: { ...draftRelease, prerelease: false, draft: false, immutable: true },
+          assets: [assetA, assetB]
+        }),
+        releaseCliEnv
+      );
+      expect(publishedReleaseCli.status).toBe(0);
+      expect(JSON.parse(publishedReleaseCli.stdout)).toEqual({ action: "reuse_published", missing: [] });
+      expect(
+        runReleaseIntegrityCli(
+          ["release-state", releaseExpected.tag, "TRUE", "a", "b"],
+          JSON.stringify({ release: draftRelease, assets: [assetA] }),
+          releaseCliEnv
+        ).status
+      ).not.toBe(0);
+      expect(
+        runReleaseIntegrityCli(
+          ["release-state", releaseExpected.tag, "true", "a", "b"],
+          JSON.stringify({ release: draftRelease, assets: [assetA] }),
+          { ...releaseCliEnv, EXPECTED_RELEASE_BODY_SHA256: "0".repeat(64) }
+        ).status
+      ).not.toBe(0);
+      expect(
+        runReleaseIntegrityCli(
+          ["release-state", releaseExpected.tag, "true", "a", "b"],
+          JSON.stringify({ release: draftRelease, assets: [assetA] }),
+          {
+            EXPECTED_RELEASE_NAME: releaseExpected.name,
+            EXPECTED_RELEASE_BODY: "",
+            EXPECTED_RELEASE_BODY_SHA256: "",
+            EXPECTED_RELEASE_BODY_BYTES: "",
+            EXPECTED_RELEASE_BODY_CHARS: ""
+          }
+        ).status
+      ).not.toBe(0);
+    } finally {
+      removeOwnedScratch(releaseCliScratch);
+    }
     const visibilityCli = runReleaseIntegrityCli(["visibility", "0", "1", "1", "12", "draft"]);
     expect(visibilityCli.status).toBe(0);
     expect(JSON.parse(visibilityCli.stdout)).toEqual({ action: "retry", attempt: 1 });

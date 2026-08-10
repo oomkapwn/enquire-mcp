@@ -31,7 +31,7 @@ import {
 } from "./release-mutation-identity-audit.js";
 
 const repoRoot = path.resolve(__dirname, "..");
-const RELEASE_MUTATION_IDENTITY_FIXTURE_SHA256 = "164acf789ef7b592a186ba47c10b4bd043391a879ed893698ecc127770439f23";
+const RELEASE_MUTATION_IDENTITY_FIXTURE_SHA256 = "cb751e1fa96eb0a29eb59b4ed535d0535c4b228b099c4a148c629b9785893531";
 const releaseMutationIdentityFixturePath = path.join(repoRoot, "tests/fixtures/release-mutation-identity.v2.json");
 const releaseIntegritySourcePath = path.join(repoRoot, "tests/release-integrity.test.ts");
 

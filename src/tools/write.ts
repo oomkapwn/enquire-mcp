@@ -59,7 +59,7 @@ function throwCancelledAfterRollback(operation: string, signal: AbortSignal | un
  * @returns `{ path, mtime, bytes }` — resolved vault-relative path, ISO
  *   mtime, and UTF-8 byte size of the written file.
  * @throws {Error} If the vault is read-only, the destination exists and
- *   `overwrite` is not true, or the path is excluded by privacy filters.
+ *   `overwrite` is not true, or the path is excluded by the vault visibility policy.
  * @throws {VaultPathError} If the path traverses outside the vault root.
  * @example
  * ```ts
@@ -245,6 +245,10 @@ export async function renameNote(
   // catches them with the same canonical check.
   const toAbsCheck = vault.resolveInside(toRelNorm);
   const toRelCheck = vault.toRel(toAbsCheck);
+  const lexicalRenameReason = vault.exclusionReason(toRelCheck);
+  if (lexicalRenameReason) {
+    throw new Error(`Refusing to rename — destination is excluded by ${lexicalRenameReason}: ${toRelCheck}`);
+  }
   const canonicalToRel = await vault.canonicalRenameDestinationRelPublic(toAbsCheck);
   const renameReason = vault.exclusionReason(canonicalToRel);
   if (renameReason) {
@@ -1417,7 +1421,7 @@ export async function resolveTarget(
         // from a user's own --read-paths / --exclude-glob config, so they
         // deserve a clear "excluded" message rather than silent fallthrough
         // to the legacy alias resolver (which won't help anyway).
-        if (err instanceof Error && /excluded by --(read-paths|exclude-glob)/.test(err.message)) {
+        if (err instanceof Error && err.message.includes("excluded by ")) {
           throw err;
         }
         // Fall through to basename match on ENOENT-class errors only.

@@ -42,6 +42,21 @@ function srcBlob(): string {
 // + a `symbol` that MUST exist in src/ as the code guard enforcing it.
 const GUARANTEES: Array<{ label: string; marker: string; symbol: string }> = [
   { label: "path/symlink escape rejected", marker: "resolve outside are rejected", symbol: "resolveSafePath" },
+  {
+    label: "hidden/reserved vault paths excluded centrally",
+    marker: "Hidden and reserved path segments are never part",
+    symbol: "restrictedVaultPathReason"
+  },
+  {
+    label: "persisted search evidence receives live physical admission",
+    marker: "Persisted search evidence is re-admitted live",
+    symbol: "filterLiveVaultHits"
+  },
+  {
+    label: "mutations repeat final physical admission",
+    marker: "repeat physical admission before their content-bearing write or move step",
+    symbol: "assertMutationPathPublic"
+  },
   { label: "OCR offline — CDN path blocked", marker: "blocks that path entirely", symbol: "assertOcrLangsInstalled" },
   { label: "OCR worker read-only cache", marker: "cacheMethod", symbol: "cacheMethod" },
   { label: "OCR canvas-dimension clamp (OOM)", marker: "MAX_OCR_CANVAS_DIM", symbol: "MAX_OCR_CANVAS_DIM" },
@@ -85,6 +100,65 @@ describe("enforcement-guarantee → code-guard invariant (rc.3, overclaim #15/#1
     const src = srcBlob();
     const offenders = GUARANTEES.map((g) => checkGuarantee(g, security, src)).filter(Boolean) as string[];
     expect(offenders, offenders.join("\n")).toEqual([]);
+    const registry = readFileSync(path.join(repoRoot, "src/tool-registry.ts"), "utf8");
+    const search = readFileSync(path.join(repoRoot, "src/tools/search.ts"), "utf8");
+    const vault = readFileSync(path.join(repoRoot, "src/vault.ts"), "utf8");
+    expect(registry).toContain("const matches = await searchLiveFts(vault, idx, {");
+    expect(registry).toContain("const payload = await readLiveFtsChunk(vault, idx, decoded, chunkIndex);");
+    expect(search).toContain("const hits = await filterLiveVaultHits(");
+    expect(search).toContain("const ftsHits = await filterLiveVaultHits(");
+    expect(search).toContain("fused = await filterLiveVaultHits(");
+    const ftsCore = search.indexOf("export async function searchLiveFts(");
+    const ftsQuery = search.indexOf("const rawMatches = idx.search(", ftsCore);
+    const ftsAdmission = search.indexOf("return filterLiveVaultHits(", ftsQuery);
+    expect(ftsCore).toBeGreaterThanOrEqual(0);
+    expect(ftsQuery).toBeGreaterThan(ftsCore);
+    expect(ftsAdmission).toBeGreaterThan(ftsQuery);
+    const chunkCore = search.indexOf("export async function readLiveFtsChunk(");
+    const chunkAdmission = search.indexOf("const stat = await vault.stat(relPath);", chunkCore);
+    const chunkRead = search.indexOf("const chunk = idx.getChunk(relPath, chunkIndex);", chunkAdmission);
+    expect(chunkCore).toBeGreaterThanOrEqual(0);
+    expect(chunkAdmission).toBeGreaterThan(chunkCore);
+    expect(chunkRead).toBeGreaterThan(chunkAdmission);
+    expect(vault).toContain('assertMutationPathPublic(abs, "write", "destination")');
+    expect(vault).toContain('assertMutationPathPublic(fromAbs, "rename", "source")');
+    expect(vault).toContain('assertMutationPathPublic(toAbs, "rename", "destination")');
+    expect(vault).toContain('assertMutationPathPublic(realAfterOpen, "append", "physical target")');
+    const createOpen = vault.indexOf('fh = await this.openSafe(abs, "wx");');
+    const createAdmission = vault.indexOf(
+      'await this.assertMutationPathPublic(abs, "write", "destination");',
+      createOpen
+    );
+    const createWrite = vault.indexOf('await fh.writeFile(content, "utf8");', createOpen);
+    expect(createOpen).toBeGreaterThanOrEqual(0);
+    expect(createAdmission).toBeGreaterThan(createOpen);
+    expect(createWrite).toBeGreaterThan(createAdmission);
+    const temporaryOpen = vault.indexOf('fh = await this.openSafe(tmp, "wx", tmpMode);');
+    const temporaryAdmission = vault.indexOf(
+      'await this.assertMutationPathPublic(tmp, "write", "temporary destination");',
+      temporaryOpen
+    );
+    const temporaryWrite = vault.indexOf('await fh.writeFile(content, "utf8");', temporaryOpen);
+    const overwriteDestinationAdmission = vault.indexOf(
+      'await this.assertMutationPathPublic(abs, "write", "destination");',
+      temporaryWrite
+    );
+    const overwriteMove = vault.indexOf("await this.renameSafe(tmp, abs);", overwriteDestinationAdmission);
+    expect(temporaryOpen).toBeGreaterThanOrEqual(0);
+    expect(temporaryAdmission).toBeGreaterThan(temporaryOpen);
+    expect(temporaryWrite).toBeGreaterThan(temporaryAdmission);
+    expect(overwriteDestinationAdmission).toBeGreaterThan(temporaryWrite);
+    expect(overwriteMove).toBeGreaterThan(overwriteDestinationAdmission);
+    const appendAdmission = vault.indexOf(
+      'await this.assertMutationPathPublic(realAfterOpen, "append", "physical target");'
+    );
+    const appendWrite = vault.indexOf('await handle.writeFile(addition, "utf8");', appendAdmission);
+    expect(appendAdmission).toBeGreaterThanOrEqual(0);
+    expect(appendWrite).toBeGreaterThan(appendAdmission);
+    const renameAdmission = vault.indexOf('await this.assertMutationPathPublic(toAbs, "rename", "destination");');
+    const renameMutation = vault.indexOf("if (opts.overwrite) {", renameAdmission);
+    expect(renameAdmission).toBeGreaterThanOrEqual(0);
+    expect(renameMutation).toBeGreaterThan(renameAdmission);
   });
 
   // NEGATIVE control: a guarantee whose guard symbol is absent from src MUST be

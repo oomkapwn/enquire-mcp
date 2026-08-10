@@ -50,7 +50,9 @@ const DEFAULTS: Record<PeriodicKind, PeriodicSpec> = {
  *  reads. Without this, the `.obsidian/` directory was implicitly exempted
  *  from the user's privacy filter — a strict allowlist user got their
  *  config read regardless. Now the resolver falls back to hard-coded
- *  defaults when the user's filter would have blocked the read. */
+ *  defaults when the user's filter would have blocked the read. The two
+ *  trusted paths must also resolve to their exact regular-file identities;
+ *  symlinked parents or leaves are ignored. */
 export async function loadPeriodicConfig(
   vaultRoot: string,
   isExcluded?: (relPath: string) => boolean
@@ -62,7 +64,7 @@ export async function loadPeriodicConfig(
   const dailyJsonPath = path.join(vaultRoot, dailyJsonRel);
   if (!isExcluded?.(dailyJsonRel)) {
     try {
-      const raw = await fs.readFile(dailyJsonPath, "utf8");
+      const raw = await readExactPeriodicConfig(vaultRoot, dailyJsonRel, dailyJsonPath);
       const json = JSON.parse(raw) as { format?: unknown; folder?: unknown };
       if (typeof json.format === "string" || typeof json.folder === "string") {
         out.daily = {
@@ -82,7 +84,7 @@ export async function loadPeriodicConfig(
     return out;
   }
   try {
-    const raw = await fs.readFile(periodicJsonPath, "utf8");
+    const raw = await readExactPeriodicConfig(vaultRoot, periodicJsonRel, periodicJsonPath);
     const json = JSON.parse(raw) as Record<string, unknown>;
     for (const kind of ["daily", "weekly", "monthly", "quarterly", "yearly"] as const) {
       const block = json[kind];
@@ -102,6 +104,20 @@ export async function loadPeriodicConfig(
   }
 
   return out;
+}
+
+async function readExactPeriodicConfig(vaultRoot: string, relPath: string, configuredPath: string): Promise<string> {
+  const canonicalRoot = await fs.realpath(vaultRoot);
+  const expectedPath = path.join(canonicalRoot, ...relPath.split("/"));
+  const realPath = await fs.realpath(configuredPath);
+  if (realPath !== expectedPath) {
+    throw new Error(`Periodic config physical identity differs from its trusted path: ${relPath}`);
+  }
+  const stat = await fs.lstat(realPath);
+  if (!stat.isFile() || stat.isSymbolicLink()) {
+    throw new Error(`Periodic config is not a regular file: ${relPath}`);
+  }
+  return fs.readFile(realPath, "utf8");
 }
 
 function normaliseFolder(folder: string): string {

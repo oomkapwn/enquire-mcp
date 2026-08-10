@@ -160,6 +160,7 @@ describe("VaultWatcher (v1.2 — opt-in --watch)", () => {
   it("handle() skips an excluded path before any index work (rc.20 M7 defense-in-depth)", async () => {
     await fs.mkdir(path.join(root, "Private"), { recursive: true });
     await fs.writeFile(path.join(root, "Private", "secret.md"), "secret");
+    await fs.writeFile(path.join(root, ".hidden.md"), "hidden");
     const v = new Vault(root, { excludeGlobs: ["Private/**"] });
     await v.ensureExists();
     const w = new VaultWatcher({ vault: v, silent: true });
@@ -176,7 +177,30 @@ describe("VaultWatcher (v1.2 — opt-in --watch)", () => {
     // → /private/tmp on macOS), else handle()'s `path.relative` starts with ".."
     // and returns at the FIRST guard, masking the M7 exclude re-check.
     await handle(path.join(v.root, "Private", "secret.md"), "change");
+    await handle(path.join(v.root, ".hidden.md"), "change");
     expect(invalidated).toEqual([]); // exclude re-check returned before invalidateOne
+
+    // NEGATIVE control for lexical-vs-physical identity: an intermediate
+    // hidden alias resolves to a visible canonical directory. Canonical-only
+    // admission would therefore miss the hidden spelling and upsert it.
+    const visibleDir = path.join(v.root, "Visible-target");
+    const hiddenAlias = path.join(v.root, ".HiddenAlias");
+    await fs.mkdir(visibleDir, { recursive: true });
+    await fs.writeFile(path.join(visibleDir, "note.md"), "visible target");
+    const aliasCreated = await fs
+      .symlink(visibleDir, hiddenAlias)
+      .then(() => true)
+      .catch(() => false);
+    if (process.env.CI) expect(aliasCreated, "CI must exercise watcher hidden-alias admission").toBe(true);
+    if (aliasCreated) {
+      const aliasPath = path.join(hiddenAlias, "note.md");
+      const internals = w as unknown as {
+        activationPlan(absPath: string): Promise<{ purge: ReadonlyArray<string>; upsert: string | null }>;
+        inspectAliasPath(absPath: string): Promise<{ state: string }>;
+      };
+      await expect(internals.activationPlan(aliasPath)).resolves.toEqual({ purge: [aliasPath], upsert: null });
+      await expect(internals.inspectAliasPath(aliasPath)).resolves.toEqual({ state: "purge" });
+    }
   });
 
   // v3.10.0-rc.24 (audit L) — but an UNLINK must NOT be skipped for an excluded
@@ -201,7 +225,9 @@ describe("VaultWatcher (v1.2 — opt-in --watch)", () => {
 
     const abs = path.join(v.root, "Private", "secret.md");
     await handle(abs, "unlink");
-    expect(invalidated).toEqual([abs]); // unlink proceeded PAST the exclude gate (cleanup runs)
+    const hiddenAbs = path.join(v.root, ".hidden.md");
+    await handle(hiddenAbs, "unlink");
+    expect(invalidated).toEqual([abs, hiddenAbs]); // unlink proceeded PAST the exclude gate (cleanup runs)
   });
 
   // POSITIVE control — a NON-excluded path DOES reach invalidateOne, proving the

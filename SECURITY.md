@@ -96,8 +96,22 @@ When `--persistent-cache` is enabled, full note bodies are written to a JSON fil
 - Cache file is rejected if its `root` field doesn't match the current vault realpath (cross-vault protection).
 - Cache file is rejected if its declared `version` doesn't match the current schema version.
 - Deleted notes: on load, entries whose source file no longer exists are dropped from memory AND the cache is marked dirty so the next save rewrites the file without those entries.
+- Hidden/reserved paths: legacy or crafted entries outside the public vault surface are dropped on load, omitted again on save, and removed from the next persisted snapshot.
 - Manual purge: `enquire-mcp clear-cache --vault <path>` deletes the cache file.
 - **Caveat:** anyone with read access to your user account can read the cache file. If your threat model includes other local users on the same machine, do not use `--persistent-cache`.
+
+## Built-in hidden/reserved path boundary
+
+Hidden and reserved path segments are never part of enquire-mcp's public vault surface, even when neither `--read-paths` nor `--exclude-glob` is configured. The central `restrictedVaultPathReason()` policy blocks any dot-prefixed segment plus `.obsidian`, `.git`, `.trash`, `node_modules`, `.DS_Store`, and `Thumbs.db` at every depth. Reserved names are compared case-insensitively and after folding Windows-equivalent trailing dots/spaces; mixed path separators are normalized. Ordinary dotted names such as `Project.v2/note.v2.md` remain visible.
+
+- **One policy, all funnels.** `Vault.isExcluded()` composes the built-in boundary with user filters. Walkers, explicit folder lists, direct text/binary/stat reads, create/append/rename, persistent cache, watcher admission, persistent-index result filters, and resources therefore share one verdict instead of maintaining separate skip lists.
+- **Lexical and physical identities are checked.** Direct paths and writes are checked before filesystem resolution and again after canonical `realpath`, blocking both a hidden alias to a visible target and a visible alias to a hidden target. A hidden missing path is refused before an existence lookup. Create, append and rename paths repeat physical admission before their content-bearing write or move step.
+- **Persisted search evidence is re-admitted live.** Bounded final FTS5, embedding and hybrid candidates must still name present, publicly admitted regular files before stored snippets or previews are returned. A chunk URI applies the same rule before returning indexed bytes; failures use the same not-found framing as a missing chunk.
+- **Aggregate index counters are physical health metadata.** Existing `total_chunks` / `total_files` fields describe the persisted database and can include stale filtered rows until the index is rebuilt. They expose no path or content, but deployments that treat even aggregate stale-row counts as sensitive should rebuild after changing visibility policy.
+- **Upgrade cleanup is explicit.** Runtime admission blocks stale hidden/reserved rows from tool output, but older FTS5, EmbedDb, HNSW, and parse-cache bytes are not retroactively erased merely by upgrading. Run the documented `clear-index`, `clear-embeddings`, and `clear-cache` flows, then rebuild under the new policy when at-rest removal is required.
+- **Watcher deletion still purges.** Hidden/reserved add and change events cannot enter FTS5, EmbedDb, or HNSW. An exact unlink that reaches the handler is allowed through the early admission gate so stale derived rows can be deleted.
+- **Narrow internal exception.** The Periodic Notes resolver may read exactly the two regular configuration files documented below. Their physical identities must equal those exact paths, so symlinked parents/leaves fail soft to defaults. The reads still obey the user's explicit `--read-paths` / `--exclude-glob` policy; no other `.obsidian` path is admitted publicly.
+- **Same-account filesystem writers are trusted.** These checks reject client-chosen paths and stable aliases; they are not an `openat`-style transaction against another local process swapping or moving path components between syscalls. A process that can already mutate the user's vault is inside the filesystem trust boundary.
 
 ## `--read-paths`: strict-allowlist posture
 
@@ -105,7 +119,7 @@ When `--persistent-cache` is enabled, full note bodies are written to a JSON fil
 
 Threat model: an attacker-controlled MCP client tries to read a path the user hasn't whitelisted. Mitigations:
 
-- **`Vault.isExcluded()` enforces both flags.** A path must match the allowlist AND not match any exclude pattern. The same predicate gates `listMarkdown()`, `listFilesByExtension()`, `resolveSafePath()` (so `readNote` / `readBinaryFile` / write paths all respect it).
+- **`Vault.isExcluded()` enforces both flags after the built-in hidden/reserved boundary.** A path must be intrinsically public, match the allowlist, AND not match any exclude pattern. The same predicate gates `listMarkdown()`, `listFilesByExtension()`, `resolveSafePath()` (so `readNote` / `readBinaryFile` / write paths all respect it).
 - **Watcher-aware (defense-in-depth).** When `--watch` is enabled, file events for paths outside the allowlist are dropped at the chokidar `ignored` predicate — the watcher never even sees writes to private folders. Since v3.10.0-rc.20 the watcher's per-file `handle()` ALSO re-checks `isExcluded()` before any index/embed work, so a filtered note can't be indexed even if an event reaches the handler by another path.
 - **Error-message distinguishes the two filters.** When a tool tries to read a path that's blocked, the error says either `"--read-paths allowlist (path doesn't match any allow-glob)"` or `"--exclude-glob denylist"` — so users can tell which flag rejected the path.
 - **No silent degradation.** If `--read-paths` is set and zero paths match, `listMarkdown()` returns `[]` and tools return empty results rather than falling back to "everything is visible."
@@ -149,8 +163,8 @@ Mitigations already in place:
 
 - **Symlinks not followed** — `chokidar` is configured with `followSymlinks: false`, matching the vault walker. A symlink inside the vault that resolves outside the vault is invisible to the watcher.
 - **`--exclude-glob` honoured at runtime** — the watcher's `ignored` predicate calls `vault.isExcluded(rel)` per file. Edits to excluded paths fire **no** cache invalidation and **no** FTS5 reindex, so a private subfolder stays private even when the watcher is on.
-- **Skip-dirs match the walker** — `.git`, `.obsidian`, `.trash`, `node_modules`, `.DS_Store` are ignored so editor metadata and SCM noise don't trigger reindex.
-- **Non-`.md` files ignored** — `.txt`, `.png`, `.canvas`, etc. don't fire events.
+- **Hidden/reserved paths match the walker** — the watcher calls the same central segment classifier as direct/list/cache/search paths, so arbitrary dot paths and nested case variants cannot trigger reindex.
+- **Content types are explicit** — `.md` is watched by default; `.pdf` is additionally watched only when PDF indexing is enabled. Other files such as `.txt`, `.png`, and `.canvas` do not enter the indexing pipeline.
 - **Editor-debouncing** — chokidar's `awaitWriteFinish` (`stabilityThreshold: 250ms`, `pollInterval: 50ms`) collapses bursts of save events from editors like Obsidian into a single reindex per logical write. This isn't a security mitigation, but it prevents resource-exhaustion via rapid saves.
 - **Bounded startup activation** — native events observed while EmbedDb/OCR/HNSW attach are coalesced by exact path and applied from final disk state only after late attachment. Admission is capped at 50,000 identities, planning/replay at four concurrent tasks, and non-quiescing activation at 16 generations. A post-ready FTS rediff plus exact path/mtime EmbedDb audit covers the ordinary `ignoreInitial` gap; byte replacement that deliberately preserves both path and mtime is outside that proof.
 - **Process-restart interlock** — when a watched EmbedDb exists, startup creates an exclusive private guard directory before chokidar starts and removes it only after activation completes. A crash, overflow, non-quiescence or release failure makes every later server/embedding reader refuse that index until strict `clear-embeddings` recovery (or a manual ownership audit when the guard shape is unsafe). The guard contains only a schema version and random token, never note text or vault/note paths. It protects restart admission, not already-admitted concurrent writers or hostile same-account tampering.
@@ -179,7 +193,7 @@ Posture:
 
 - **Reads only.** Both files are opened with `fs.readFile` and parsed via `JSON.parse`; the resolver never writes back. A malformed file logs to stderr and falls through to the v0.11 hard-coded defaults — never throws.
 - **Inside the vault root.** Both paths live under the vault root the user already exposed. No new filesystem surface is introduced.
-- **No `.obsidian/` listing.** The walker's `SKIP_DIRS` set (which includes `.obsidian`) still hides everything else under that folder; only those two specific files are read by-name.
+- **No `.obsidian/` listing.** The central hidden/reserved segment policy hides everything else under that folder; only those two specific files are read by-name through the private config path.
 - **Cached for the process lifetime.** The first call populates `Vault.periodicConfig` and subsequent calls return that snapshot — restart the server after editing the plugin config.
 - **No string interpolation.** The `format` string from the plugin config feeds a fixed Moment.js token table (`YYYY`, `MMM`, `Do`, …) and bracket-escaped literals; there's no `eval` or template path that could turn user-provided format text into code execution.
 - **`--read-paths` allowlist now consistent.** v1.11.1 surfaces "excluded by --read-paths / --exclude-glob" errors from the periodic-alias path lookup the same way as the path-based lookup. Pre-1.11.1, exclusion errors were silently caught and the resolver fell through to the legacy basename matcher — which could surface a different (visible) note with a colliding basename. v1.11.1 re-throws exclusion errors, so the agent gets a clear refusal instead.

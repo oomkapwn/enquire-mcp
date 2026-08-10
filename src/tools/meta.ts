@@ -152,6 +152,22 @@ export async function validateNoteProposal(vault: Vault, args: ValidateProposalA
         kind: "path-excluded",
         message: `Destination is excluded by ${exclusion}: ${normalizedPath}`
       });
+    } else {
+      try {
+        const canonicalPath = await vault.canonicalRelForPrivacyCheckPublic(absPath);
+        const physicalExclusion = vault.exclusionReason(canonicalPath);
+        if (physicalExclusion !== null) {
+          errors.push({
+            kind: "path-excluded",
+            message: `Destination is excluded by ${physicalExclusion}: ${canonicalPath}`
+          });
+        }
+      } catch (err) {
+        errors.push({
+          kind: "path-excluded",
+          message: err instanceof Error ? err.message : String(err)
+        });
+      }
     }
   }
 

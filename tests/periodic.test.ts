@@ -182,12 +182,31 @@ describe("loadPeriodicConfig (v1.10)", () => {
 
   it("reads .obsidian/daily-notes.json", async () => {
     await fs.mkdir(path.join(root, ".obsidian"), { recursive: true });
-    await fs.writeFile(
-      path.join(root, ".obsidian", "daily-notes.json"),
-      JSON.stringify({ format: "YYYY-MM-DD", folder: "Daily Notes/" })
-    );
+    const configPath = path.join(root, ".obsidian", "daily-notes.json");
+    await fs.writeFile(configPath, JSON.stringify({ format: "YYYY-MM-DD", folder: "Daily Notes/" }));
     const config = await loadPeriodicConfig(root);
     expect(config.daily).toEqual({ format: "YYYY-MM-DD", folder: "Daily Notes/" });
+
+    const hiddenTarget = path.join(root, ".hidden-daily-config.json");
+    await fs.rename(configPath, hiddenTarget);
+    const symlinkCreated = await fs
+      .symlink(hiddenTarget, configPath)
+      .then(() => true)
+      .catch(() => false);
+    if (process.env.CI) expect(symlinkCreated, "CI must exercise exact periodic config identity").toBe(true);
+    if (symlinkCreated) {
+      expect(await loadPeriodicConfig(root)).toEqual({});
+      await fs.unlink(configPath);
+      await fs.rm(path.join(root, ".obsidian"), { recursive: true, force: true });
+      const hiddenParent = path.join(root, ".hidden-obsidian");
+      await fs.mkdir(hiddenParent);
+      await fs.writeFile(
+        path.join(hiddenParent, "daily-notes.json"),
+        JSON.stringify({ format: "YYYY-MM-DD", folder: "Hidden Notes/" })
+      );
+      await fs.symlink(hiddenParent, path.join(root, ".obsidian"));
+      expect(await loadPeriodicConfig(root)).toEqual({});
+    }
   });
 
   it("reads Periodic Notes plugin config (data.json)", async () => {

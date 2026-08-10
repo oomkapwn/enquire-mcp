@@ -1,5 +1,5 @@
 import * as path from "node:path";
-import type { FtsIndex } from "../fts5.js";
+import type { FtsIndex, FtsSearchHit } from "../fts5.js";
 import { foldName, foldTag, lookupFoldedKey, nfcLower } from "../name-fold.js";
 import { computeStaleness, recencyScore } from "../staleness.js";
 import type { FileEntry, Vault } from "../vault.js";
@@ -1272,7 +1272,8 @@ export async function embeddingsSearch(
     // v3.10.0-rc.22 (audit M8) — terminal privacy filter via the shared,
     // unit-tested helper (was an inline `.filter` the security test only
     // reimplemented, never exercised).
-    const hits = filterExcludedEmbedHits(rawHits, (p) => vault.isExcluded(p)).slice(0, limit);
+    const stringAdmittedHits = filterExcludedEmbedHits(rawHits, (p) => vault.isExcluded(p));
+    const hits = await filterLiveVaultHits(vault, stringAdmittedHits, (hit) => hit.rel_path, limit);
     const matches: EmbedHit[] = hits.map((h) => ({
       path: h.rel_path,
       title: stripMd(path.basename(h.rel_path)),
@@ -1547,6 +1548,152 @@ export function filterExcludedEmbedHits<T extends { rel_path: string }>(
   return hits.filter((h) => !isExcluded(h.rel_path));
 }
 
+/**
+ * Re-admit persisted search rows against the live vault before their stored
+ * snippets or previews can leave the process. A row may have been public when
+ * it was indexed but now resolve through an in-vault symlink to a hidden or
+ * reserved path. String-only filtering cannot detect that identity change.
+ *
+ * Admission is bounded to 16 concurrent stats, preserves ranking order, caches
+ * duplicate-path verdicts, and stops once `limit` admitted rows are collected.
+ * Missing, unreadable, excluded, physically hidden, or non-regular-file paths
+ * fail closed.
+ *
+ * @param vault - Vault whose current lexical and physical policy is authoritative.
+ * @param hits - Ranked persisted-index rows to validate.
+ * @param pathOf - Extracts a bare vault-relative path from one row.
+ * @param limit - Maximum admitted rows to return.
+ * @returns Admitted rows in their original ranking order.
+ * @example
+ * ```ts
+ * const publicHits = await filterLiveVaultHits(vault, rows, (row) => row.rel_path, 10);
+ * ```
+ */
+export async function filterLiveVaultHits<T>(
+  vault: Vault,
+  hits: readonly T[],
+  pathOf: (hit: T) => string,
+  limit = hits.length
+): Promise<T[]> {
+  if (limit <= 0 || hits.length === 0) return [];
+  const verdicts = new Map<string, Promise<boolean>>();
+  const admitted: T[] = [];
+  const batchSize = 16;
+
+  const admit = (relPath: string): Promise<boolean> => {
+    const cached = verdicts.get(relPath);
+    if (cached) return cached;
+    const verdict = (async () => {
+      if (vault.isExcluded(relPath)) return false;
+      try {
+        const stat = await vault.stat(relPath);
+        return stat.isFile;
+      } catch {
+        return false;
+      }
+    })();
+    verdicts.set(relPath, verdict);
+    return verdict;
+  };
+
+  for (let offset = 0; offset < hits.length && admitted.length < limit; offset += batchSize) {
+    const batch = hits.slice(offset, offset + batchSize);
+    const batchVerdicts = await Promise.all(batch.map((hit) => admit(pathOf(hit))));
+    for (let i = 0; i < batch.length && admitted.length < limit; i += 1) {
+      const hit = batch[i];
+      if (hit !== undefined && batchVerdicts[i] === true) admitted.push(hit);
+    }
+  }
+  return admitted;
+}
+
+/**
+ * Query the persistent FTS index, then re-admit every over-fetched candidate
+ * against the current lexical and physical vault policy before returning it.
+ *
+ * @param vault - Vault whose current visibility policy is authoritative.
+ * @param idx - Open persistent FTS index.
+ * @param args - Query, optional filters, parsed lower mtime bound and result cap.
+ * @returns Live public regular-file hits in their original BM25 order.
+ * @example
+ * ```ts
+ * const hits = await searchLiveFts(vault, ftsIndex, { query: "retrieval", limit: 10 });
+ * ```
+ */
+export async function searchLiveFts(
+  vault: Vault,
+  idx: FtsIndex,
+  args: { query: string; folder?: string; tag?: string; sinceMtimeMs?: number; limit?: number }
+): Promise<FtsSearchHit[]> {
+  const userLimit = args.limit ?? 25;
+  // v2.0.0-beta.2 P0 — the persistent DB may retain rows that became
+  // private after indexing. Over-fetch, then apply both lexical and live
+  // physical admission before a stored snippet leaves the process.
+  const rawMatches = idx.search(args.query, {
+    limit: userLimit * 2,
+    folder: args.folder,
+    tag: args.tag,
+    sinceMtimeMs: args.sinceMtimeMs
+  });
+  return filterLiveVaultHits(
+    vault,
+    rawMatches.filter((match) => !vault.isExcluded(match.rel_path)),
+    (match) => match.rel_path,
+    userLimit
+  );
+}
+
+/**
+ * Read one stored FTS chunk only while its current source is still a public
+ * regular file. Every refusal uses the resource's non-oracular not-found form.
+ *
+ * @param vault - Vault whose live lexical and physical policy is authoritative.
+ * @param idx - Open persistent FTS index containing the chunk.
+ * @param relPath - Decoded vault-relative source path.
+ * @param chunkIndex - Zero-based chunk position within the source.
+ * @returns The stored chunk payload with source path and line receipt.
+ * @throws {Error} If the path is invalid, excluded, stale, non-regular or absent from the index.
+ * @example
+ * ```ts
+ * const chunk = await readLiveFtsChunk(vault, ftsIndex, "Notes/Retrieval.md", 0);
+ * ```
+ */
+export async function readLiveFtsChunk(
+  vault: Vault,
+  idx: FtsIndex,
+  relPath: string,
+  chunkIndex: number
+): Promise<{ rel_path: string; chunk_index: number; line_start: number; line_end: number; content: string }> {
+  const notFound = (): Error => new Error(`Chunk not found: ${relPath}#${chunkIndex}`);
+  // v3.7.20 R-9 — reject traversal/absolute input before consulting FTS5,
+  // while retaining the resource's non-oracular not-found response.
+  try {
+    vault.resolveInside(relPath);
+  } catch {
+    throw notFound();
+  }
+  // v2.0.0-beta.2 P0 — stale index rows never bypass current user filters.
+  if (vault.isExcluded(relPath)) throw notFound();
+  // mcpvault transfer audit — string admission is insufficient after an
+  // in-vault symlink swap or file-to-directory replacement. Re-admit the
+  // current physical source before returning stored bytes.
+  try {
+    const stat = await vault.stat(relPath);
+    if (!stat.isFile) throw notFound();
+  } catch {
+    throw notFound();
+  }
+  const chunk = idx.getChunk(relPath, chunkIndex);
+  if (!chunk) throw notFound();
+  return {
+    rel_path: relPath,
+    chunk_index: chunkIndex,
+    line_start: chunk.line_start,
+    line_end: chunk.line_end,
+    content: chunk.content
+  };
+}
+
 /** v3.10 (rc.10) — a scalar a frontmatter filter can match against. */
 export type FrontmatterFilterScalar = string | number | boolean;
 /** v3.10 (rc.10) — one filter value: a scalar, or an array of scalars (OR-semantics). */
@@ -1781,7 +1928,12 @@ export async function searchHybrid(
       // index was built without exclusion flags (or with different flags).
       // Pre-fix, BM25 search returned excluded chunks via the hybrid pipeline.
       const rawFtsHits = ctx.ftsIndex.search(args.query, { limit: fanOutK, folder: args.folder });
-      const ftsHits = rawFtsHits.filter((h) => !vault.isExcluded(h.rel_path));
+      const ftsHits = await filterLiveVaultHits(
+        vault,
+        rawFtsHits.filter((h) => !vault.isExcluded(h.rel_path)),
+        (hit) => hit.rel_path,
+        fanOutK
+      );
       // v2.2.0: granularity branch.
       //   "note"  → collapse multi-chunk hits per note (best-rank wins),
       //             RRF fuses on path key.
@@ -1998,6 +2150,16 @@ export async function searchHybrid(
   // path can't inject an excluded id into `fused` (the per-arm filters already
   // prevent it), so an integration test of this layer would be vacuous.
   fused = pruneExcludedHits(fused, (p) => vault.isExcluded(p), granularity);
+  fused = await filterLiveVaultHits(
+    vault,
+    fused,
+    (hit) => {
+      if (granularity !== "block") return hit.id;
+      const hashIdx = hit.id.lastIndexOf("#");
+      return hashIdx > 0 ? hit.id.slice(0, hashIdx) : hit.id;
+    },
+    fused.length
+  );
 
   // S-5 — snapshot the pure-RRF order/score BEFORE any re-rank stage runs.
   if (exRrf) {
@@ -2327,6 +2489,12 @@ export async function searchHybrid(
       if (hashIdx > 0) pathForFilter = f.id.slice(0, hashIdx);
     }
     if (vault.isExcluded(pathForFilter)) continue;
+    try {
+      const live = await vault.stat(pathForFilter);
+      if (!live.isFile) continue;
+    } catch {
+      continue;
+    }
     // v3.10 (rc.10) — opt-in frontmatter filter. Runs ONLY when the caller
     // passed `filter_frontmatter` (else skipped — byte-identical default).
     // PDFs/canvas have no YAML frontmatter, so a frontmatter filter excludes

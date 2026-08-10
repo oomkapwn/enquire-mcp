@@ -5,10 +5,15 @@ import * as path from "node:path";
 import { foldName } from "./name-fold.js";
 import { type ParsedNote, parseNote } from "./parser.js";
 import { loadPeriodicConfig, type PeriodicConfig } from "./periodic.js";
+import { type RestrictedVaultPathReason, restrictedVaultPathReason } from "./vault-path-policy.js";
 import { compileGlobTokens, matchWildcardTokens } from "./wildcard-match.js";
 import { windowsRelativePathProblem } from "./windows-path.js";
 
-const SKIP_DIRS = new Set([".git", ".obsidian", ".trash", "node_modules", ".DS_Store"]);
+/** Stable reason returned when a path is outside the public vault surface. */
+export type VaultExclusionReason =
+  | RestrictedVaultPathReason
+  | "--read-paths allowlist (path doesn't match any allow-glob)"
+  | "--exclude-glob denylist";
 
 function vaultRelative(root: string, abs: string): string {
   const rel = path.relative(root, abs);
@@ -120,7 +125,8 @@ export interface VaultOptions {
 /**
  * Vault — the central read-and-cache layer over the user's Obsidian
  * directory. Handles path safety (no escapes via `..` or symlinks),
- * privacy filtering (`--read-paths` allowlist + `--exclude-glob` denylist),
+ * intrinsic hidden/reserved path policy plus user privacy filtering
+ * (`--read-paths` allowlist + `--exclude-glob` denylist),
  * parsed-note caching (in-memory LRU + optional persistent JSON file),
  * and write gating (opt-in via `--enable-write`).
  *
@@ -193,12 +199,16 @@ export class Vault {
     this.readPathMatchers = this.readPaths.map(compileGlob);
   }
 
-  /** v2.0.0-beta.2: helper that returns the reason a path was excluded, or
-   *  null if not excluded. Lets call sites surface the right CLI flag in
-   *  user-facing error messages without duplicating the regex predicates. */
-  exclusionReason(
-    relPath: string
-  ): "--read-paths allowlist (path doesn't match any allow-glob)" | "--exclude-glob denylist" | null {
+  /** Return why a path is outside the public vault surface, or `null` when admitted. */
+  exclusionReason(relPath: string): VaultExclusionReason | null {
+    const norm = relPath.replace(/\\/g, "/");
+    const restricted = restrictedVaultPathReason(norm);
+    if (restricted) return restricted;
+    return this.userExclusionReason(norm);
+  }
+
+  /** User-configured filters only. Trusted internal `.obsidian` config reads use this path. */
+  private userExclusionReason(relPath: string): Exclude<VaultExclusionReason, "hidden or reserved vault path"> | null {
     if (this.excludeMatchers.length === 0 && this.readPathMatchers.length === 0) return null;
     const norm = relPath.replace(/\\/g, "/");
     if (this.readPathMatchers.length > 0 && !this.readPathMatchers.some((re) => re.test(norm))) {
@@ -211,19 +221,9 @@ export class Vault {
     return null;
   }
 
-  /** True if a vault-relative path is filtered out by either --read-paths
-   *  (strict allowlist) or --exclude-glob (denylist). When --read-paths is set
-   *  but the path doesn't match any allow-glob, the file is treated as
-   *  excluded — no list/read/write/watch event surfaces it.
-   *  When BOTH are set: must match an allow-glob AND not match an exclude. */
+  /** True when a path is hidden/reserved or rejected by a configured privacy filter. */
   isExcluded(relPath: string): boolean {
-    if (this.excludeMatchers.length === 0 && this.readPathMatchers.length === 0) return false;
-    const norm = relPath.replace(/\\/g, "/");
-    if (this.readPathMatchers.length > 0 && !this.readPathMatchers.some((re) => re.test(norm))) {
-      return true; // not in allowlist → excluded
-    }
-    if (this.excludeMatchers.length === 0) return false;
-    return this.excludeMatchers.some((re) => re.test(norm));
+    return this.exclusionReason(relPath) !== null;
   }
 
   /**
@@ -337,7 +337,7 @@ export class Vault {
         }
         try {
           const s = await this.statSafe(abs);
-          if (s.mtimeMs !== entry.mtimeMs) return { kind: "drop" } as const;
+          if (!s.isFile() || s.mtimeMs !== entry.mtimeMs) return { kind: "drop" } as const;
           // Belt-and-braces: realpath check in case the path includes a symlink
           // chain that resolves outside the vault.
           const real = await this.realpathSafe(abs);
@@ -400,7 +400,7 @@ export class Vault {
     // via the cacheDirty flag above.
     if (droppedByPrivacy > 0) {
       process.stderr.write(
-        `enquire: persistent cache — dropped ${droppedByPrivacy} entries now excluded by --exclude-glob / --read-paths. ` +
+        `enquire: persistent cache — dropped ${droppedByPrivacy} entries now excluded by vault visibility policy. ` +
           `Cache will be rewritten without them on the next save.\n`
       );
     }
@@ -449,8 +449,24 @@ export class Vault {
     if (!this.persistentCacheEnabled || !this.cacheFile || !this.cacheDirty) return;
     const entries: DiskCacheEntry[] = [];
     for (const [abs, cached] of this.cache) {
+      const relPath = vaultRelative(this.root, abs);
+      if (this.isExcluded(relPath)) {
+        this.cache.delete(abs);
+        continue;
+      }
+      try {
+        const liveAbs = await this.resolveSafePath(abs);
+        const liveStat = await this.statSafe(liveAbs);
+        if (!liveStat.isFile() || liveStat.mtimeMs !== cached.mtimeMs) {
+          this.cache.delete(abs);
+          continue;
+        }
+      } catch {
+        this.cache.delete(abs);
+        continue;
+      }
       entries.push({
-        relPath: vaultRelative(this.root, abs),
+        relPath,
         mtimeMs: cached.mtimeMs,
         content: cached.content,
         parsed: cached.parsed
@@ -540,10 +556,9 @@ export class Vault {
 
   /**
    * List every markdown file under the vault root (or a subfolder).
-   * Skips `.git` / `.obsidian` / `.trash` / `node_modules` directories,
-   * follows the standard hidden-file rule (no dotfiles), refuses to
-   * traverse symlinks. Applies the privacy filter (`--exclude-glob` /
-   * `--read-paths`) before returning.
+   * Skips every hidden or reserved segment recognized by the central vault
+   * path policy and refuses to traverse symlinks. Applies the privacy filter
+   * (`--exclude-glob` / `--read-paths`) before returning.
    *
    * @param folder - Optional vault-relative subfolder. When set, scan
    *   only under that folder. Returns `[]` if the folder doesn't exist,
@@ -554,6 +569,7 @@ export class Vault {
     if (!this.ready) await this.ensureExists();
     let start = folder ? this.resolveInside(folder) : this.root;
     if (folder) {
+      if (this.isExcluded(vaultRelative(this.root, start))) return [];
       const lstat = await fs.lstat(start).catch(() => null);
       if (!lstat) return [];
       if (lstat.isSymbolicLink()) return [];
@@ -571,10 +587,7 @@ export class Vault {
     // any --read-paths allowlist pattern are omitted from the listing entirely.
     // resolveSafePath also rejects them on direct read/write, so the LLM has
     // no way to reach excluded content.
-    if (this.excludeMatchers.length > 0 || this.readPathMatchers.length > 0) {
-      return out.filter((e) => !this.isExcluded(e.relPath.replace(/\\/g, "/")));
-    }
-    return out;
+    return out.filter((e) => !this.isExcluded(e.relPath.replace(/\\/g, "/")));
   }
 
   /** Walk the vault and return files ending with the given extension (e.g.
@@ -584,6 +597,7 @@ export class Vault {
     if (!this.ready) await this.ensureExists();
     let start = folder ? this.resolveInside(folder) : this.root;
     if (folder) {
+      if (this.isExcluded(vaultRelative(this.root, start))) return [];
       const lstat = await fs.lstat(start).catch(() => null);
       if (!lstat || lstat.isSymbolicLink()) return [];
       const real = await fs.realpath(start).catch(() => null);
@@ -595,10 +609,7 @@ export class Vault {
     }
     const out: FileEntry[] = [];
     await walkAnyExt(start, this.root, out, ext.toLowerCase());
-    if (this.excludeMatchers.length > 0 || this.readPathMatchers.length > 0) {
-      return out.filter((e) => !this.isExcluded(e.relPath.replace(/\\/g, "/")));
-    }
-    return out;
+    return out.filter((e) => !this.isExcluded(e.relPath.replace(/\\/g, "/")));
   }
 
   /** Read a non-markdown file (e.g. `.canvas` JSON). Same path-safety + size
@@ -803,9 +814,9 @@ export class Vault {
 
   /**
    * Create or overwrite a markdown note. Requires `enableWrite: true` at
-   * construction. Honors privacy filters — refuses to write to a path
-   * excluded by `--read-paths` / `--exclude-glob`. Refuses to write
-   * through symlinks. Auto-creates parent directories.
+   * construction. Honors the intrinsic vault visibility policy and configured
+   * privacy filters. Refuses to write through symlinks. Auto-creates parent
+   * directories.
    *
    * v3.7.13 M2 — `overwrite=false` uses the `wx` open flag for atomic
    * exclusive create (closes stat-then-write TOCTOU race).
@@ -854,6 +865,11 @@ export class Vault {
     }
     const targetRel = trimmed.toLowerCase().endsWith(".md") ? trimmed : `${trimmed}.md`;
     const abs = this.resolveInside(targetRel);
+    const lexicalRel = vaultRelative(this.root, abs);
+    const lexicalExclusion = this.exclusionReason(lexicalRel);
+    if (lexicalExclusion) {
+      throw new Error(`Refusing to write — destination is excluded by ${lexicalExclusion}: ${lexicalRel}`);
+    }
     await this.assertParentInsideVault(abs);
     // Preserve the explicit leaf-symlink refusal before canonical privacy
     // validation follows the target. Unexpected lstat failures fail closed;
@@ -878,12 +894,9 @@ export class Vault {
     // before running the exclusion check. Linux ext4/btrfs (case-sensitive)
     // is unaffected; the realpath operation is a no-op there.
     const targetRelNorm = await this.canonicalRelForPrivacyCheck(abs);
-    if (this.isExcluded(targetRelNorm)) {
-      const reason =
-        this.readPathMatchers.length > 0 && !this.readPathMatchers.some((re) => re.test(targetRelNorm))
-          ? "--read-paths allowlist (path doesn't match any allow-glob)"
-          : "--exclude-glob denylist";
-      throw new Error(`Refusing to write — destination is excluded by ${reason}: ${targetRelNorm}`);
+    const targetExclusion = this.exclusionReason(targetRelNorm);
+    if (targetExclusion) {
+      throw new Error(`Refusing to write — destination is excluded by ${targetExclusion}: ${targetRelNorm}`);
     }
     await this.mkdirSafe(path.dirname(abs), { recursive: true });
     await this.assertParentInsideVault(abs);
@@ -897,10 +910,11 @@ export class Vault {
     // and a follow-up `fs.writeFile`, another process could create the file
     // and then `overwrite=false` would silently overwrite it. With `wx`,
     // the kernel atomically refuses to open the file if it exists. The
-    // legacy stat-based check stays as a no-op (writeFile-with-`wx` throws
-    // EEXIST on existing destination, which we translate to the same
+    // legacy stat-based check stays as a no-op (the exclusive `wx` open throws
+    // EEXIST on an existing destination, which we translate to the same
     // user-facing "Note already exists" error for back-compat).
     const targetLstat = await this.assertMutationLeafNotSymlink(abs, "write");
+    await this.assertMutationPathPublic(abs, "write", "destination");
     if (opts.overwrite) {
       // v3.11.0-rc.12 (rc.11-audit L-7) — atomic overwrite: write a sibling tmp then
       // rename(2) over the target, so a crash/SIGKILL mid-write can never truncate the
@@ -924,9 +938,13 @@ export class Vault {
       let fh: import("node:fs/promises").FileHandle | undefined;
       try {
         fh = await this.openSafe(tmp, "wx", tmpMode); // O_EXCL — never follows a pre-planted symlink
+        await this.assertMutationPathPublic(tmp, "write", "temporary destination");
         await fh.writeFile(content, "utf8");
         await fh.close();
         fh = undefined;
+        await this.assertMutationLeafNotSymlink(abs, "write");
+        await this.assertMutationPathPublic(tmp, "write", "temporary source");
+        await this.assertMutationPathPublic(abs, "write", "destination");
         await this.renameSafe(tmp, abs);
       } catch (err) {
         if (fh) await fh.close().catch(() => {});
@@ -934,13 +952,18 @@ export class Vault {
         throw err;
       }
     } else {
+      let fh: import("node:fs/promises").FileHandle | undefined;
       try {
-        await this.writeFileSafe(abs, content, { encoding: "utf8", flag: "wx" });
+        fh = await this.openSafe(abs, "wx");
+        await this.assertMutationPathPublic(abs, "write", "destination");
+        await fh.writeFile(content, "utf8");
       } catch (err) {
         if (err instanceof Error && "code" in err && (err as NodeJS.ErrnoException).code === "EEXIST") {
           throw new Error(`Note already exists: ${targetRel} (pass overwrite=true to replace)`);
         }
         throw err;
+      } finally {
+        await fh?.close().catch(() => {});
       }
     }
     this.cache.delete(abs);
@@ -977,6 +1000,19 @@ export class Vault {
       }
       current = path.dirname(current);
     }
+  }
+
+  private async assertMutationPathPublic(
+    abs: string,
+    operation: "write" | "rename" | "append",
+    role: string
+  ): Promise<string> {
+    const rel = await this.canonicalRelForPrivacyCheck(abs);
+    const reason = this.exclusionReason(rel);
+    if (reason) {
+      throw new Error(`Refusing to ${operation} — ${role} is excluded by ${reason}: ${rel}`);
+    }
+    return rel;
   }
 
   /**
@@ -1111,24 +1147,31 @@ export class Vault {
     const fromAbs = await this.resolveSafePath(fromRel);
     const toRelNorm = toRel.toLowerCase().endsWith(".md") ? toRel : `${toRel}.md`;
     const toAbs = this.resolveInside(toRelNorm);
+    const lexicalToRel = vaultRelative(this.root, toAbs);
+    const lexicalDestinationExclusion = this.exclusionReason(lexicalToRel);
+    if (lexicalDestinationExclusion) {
+      throw new Error(
+        `Refusing to rename — destination is excluded by ${lexicalDestinationExclusion}: ${lexicalToRel}`
+      );
+    }
     await this.assertParentInsideVault(toAbs);
     // v2.0.0-beta.2 P1 fix: distinguish allowlist-vs-denylist same as
     // writeNote does, so users with --read-paths see the actual reason.
     // v3.7.16 P1-6 — case-insensitive bypass closure (same as writeNote).
     const toRelForFilter = await this.canonicalRenameDestinationRelPublic(toAbs);
-    if (this.isExcluded(toRelForFilter)) {
-      const reason =
-        this.readPathMatchers.length > 0 && !this.readPathMatchers.some((re) => re.test(toRelForFilter))
-          ? "--read-paths allowlist (path doesn't match any allow-glob)"
-          : "--exclude-glob denylist";
-      throw new Error(`Refusing to rename — destination is excluded by ${reason}: ${toRelNorm}`);
+    const destinationExclusion = this.exclusionReason(toRelForFilter);
+    if (destinationExclusion) {
+      throw new Error(`Refusing to rename — destination is excluded by ${destinationExclusion}: ${toRelNorm}`);
     }
     await this.mkdirSafe(path.dirname(toAbs), { recursive: true });
     await this.assertParentInsideVault(toAbs);
+    const sameInodeCaseRename = !opts.overwrite && (await this.isSameInodeCaseRename(fromAbs, toAbs));
     // Recheck beside the mutation after awaits in validation/mkdir. This
     // narrows the stable-pre-state validation window; the non-following/atomic
     // rename/link operations remain authoritative if the leaf changes later.
     await this.assertMutationLeafNotSymlink(toAbs, "rename");
+    await this.assertMutationPathPublic(fromAbs, "rename", "source");
+    await this.assertMutationPathPublic(toAbs, "rename", "destination");
     // v3.7.14 F2 — atomic exclusive-destination rename (parity with v3.7.13 M2).
     // Pre-3.7.14 we did `stat(toAbs)`-then-`rename(fromAbs, toAbs)`. POSIX
     // rename(2) silently REPLACES the destination if it exists, so between
@@ -1144,7 +1187,7 @@ export class Vault {
     // we keep plain rename() since the user opted into replacement.
     if (opts.overwrite) {
       await this.renameSafe(fromAbs, toAbs);
-    } else if (await this.isSameInodeCaseRename(fromAbs, toAbs)) {
+    } else if (sameInodeCaseRename) {
       // v3.10.0-rc.61 (WRITE-3) — a case-only rename (Foo.md → foo.md) on a case-INSENSITIVE
       // FS (macOS APFS/HFS+, Windows NTFS) targets the SAME physical inode, so the linkSafe
       // path below would throw EEXIST → a misleading "Destination already exists". Use plain
@@ -1251,12 +1294,9 @@ export class Vault {
       }
       await this.assertParentInsideVault(abs);
       const relForFilter = await this.canonicalRelForPrivacyCheck(abs);
-      if (this.isExcluded(relForFilter)) {
-        const reason =
-          this.readPathMatchers.length > 0 && !this.readPathMatchers.some((re) => re.test(relForFilter))
-            ? "--read-paths allowlist (path doesn't match any allow-glob)"
-            : "--exclude-glob denylist";
-        throw new Error(`Refusing to append — target is excluded by ${reason}: ${relForFilter}`);
+      const targetExclusion = this.exclusionReason(relForFilter);
+      if (targetExclusion) {
+        throw new Error(`Refusing to append — target is excluded by ${targetExclusion}: ${relForFilter}`);
       }
 
       const handle = await this.openSafe(abs, appendFlags);
@@ -1280,6 +1320,7 @@ export class Vault {
         if (relAfterOpen.startsWith("..") || path.isAbsolute(relAfterOpen)) {
           throw new Error(`Resolved path escapes vault root: ${relOrAbs}`);
         }
+        await this.assertMutationPathPublic(realAfterOpen, "append", "physical target");
         const validationHandle = await this.openSafe(realAfterOpen, appendFlags);
         try {
           const pathIdentity = await validationHandle.stat();
@@ -1326,13 +1367,13 @@ export class Vault {
    * metadata).
    *
    * @param relOrAbs - Vault-relative or absolute path.
-   * @returns Modification time and byte size.
+   * @returns Modification time, byte size, and whether the target is a regular file.
    */
-  async stat(relOrAbs: string): Promise<{ mtimeMs: number; size: number }> {
+  async stat(relOrAbs: string): Promise<{ mtimeMs: number; size: number; isFile: boolean }> {
     const abs = await this.resolveSafePath(relOrAbs);
     try {
       const s = await this.statSafe(abs);
-      return { mtimeMs: s.mtimeMs, size: s.size };
+      return { mtimeMs: s.mtimeMs, size: s.size, isFile: s.isFile() };
     } catch (err) {
       throw this.sanitizeFsError(err); // rc.45 — M3: raw fs ENOENT embedded the abs path
     }
@@ -1393,10 +1434,11 @@ export class Vault {
   async getPeriodicConfig(): Promise<PeriodicConfig> {
     if (this.periodicConfig) return this.periodicConfig;
     if (!this.ready) await this.ensureExists();
-    // v2.0.0-beta.2 P1 sec DiD: pass `isExcluded` so a user with --read-paths
-    // / --exclude-glob covering `.obsidian/**` doesn't get their plugin
-    // config read against their wishes. Falls back to hard-coded defaults.
-    this.periodicConfig = await loadPeriodicConfig(this.root, (rel) => this.isExcluded(rel));
+    // The built-in policy deliberately keeps `.obsidian` outside the public
+    // surface. These two trusted config reads are the narrow exception, but
+    // they still obey explicit --read-paths / --exclude-glob preferences and
+    // fall back to hard-coded defaults when the user filters them.
+    this.periodicConfig = await loadPeriodicConfig(this.root, (rel) => this.userExclusionReason(rel) !== null);
     return this.periodicConfig;
   }
 
@@ -1407,6 +1449,11 @@ export class Vault {
     // component validation; absolute paths through the configured root alias
     // remain accepted after `this.root` is canonicalized.
     const abs = this.resolveInside(relOrAbs);
+    const lexicalNorm = vaultRelative(this.root, abs);
+    const lexicalExclusion = this.exclusionReason(lexicalNorm);
+    if (lexicalExclusion) {
+      throw new Error(`Path is excluded by ${lexicalExclusion}: ${lexicalNorm}`);
+    }
     try {
       const real = await this.realpathSafe(abs);
       const rel = path.relative(this.root, real);
@@ -1425,16 +1472,20 @@ export class Vault {
       // explicit exclude-glob match in the error message so the user can
       // tell which flag is rejecting the path.
       const norm = rel.replace(/\\/g, "/");
-      if (this.isExcluded(norm)) {
-        const reason =
-          this.readPathMatchers.length > 0 && !this.readPathMatchers.some((re) => re.test(norm))
-            ? "--read-paths allowlist (path doesn't match any allow-glob)"
-            : "--exclude-glob denylist";
-        throw new Error(`Path is excluded by ${reason}: ${norm}`);
+      const physicalExclusion = this.exclusionReason(norm);
+      if (physicalExclusion) {
+        throw new Error(`Path is excluded by ${physicalExclusion}: ${norm}`);
       }
       return real;
     } catch (err) {
-      if (isErrnoException(err) && err.code === "ENOENT") return abs;
+      if (isErrnoException(err) && err.code === "ENOENT") {
+        const canonicalRel = await this.canonicalRelForPrivacyCheck(abs);
+        const physicalExclusion = this.exclusionReason(canonicalRel);
+        if (physicalExclusion) {
+          throw new Error(`Path is excluded by ${physicalExclusion}: ${canonicalRel}`);
+        }
+        return abs;
+      }
       throw err;
     }
   }
@@ -1503,10 +1554,10 @@ async function walk(dir: string, root: string, out: FileEntry[], depth = 0): Pro
     return;
   }
   for (const e of entries) {
-    if (SKIP_DIRS.has(e.name)) continue;
-    if (e.name.startsWith(".")) continue;
-    if (e.isSymbolicLink()) continue;
     const full = path.join(dir, e.name);
+    const relPath = vaultRelative(root, full);
+    if (restrictedVaultPathReason(relPath)) continue;
+    if (e.isSymbolicLink()) continue;
     if (e.isDirectory()) {
       const real = await fs.realpath(full).catch(() => null);
       if (!real) continue;
@@ -1518,7 +1569,7 @@ async function walk(dir: string, root: string, out: FileEntry[], depth = 0): Pro
       if (!stat) continue;
       out.push({
         absPath: full,
-        relPath: vaultRelative(root, full),
+        relPath,
         basename: e.name,
         mtimeMs: stat.mtimeMs
       });
@@ -1537,10 +1588,10 @@ async function walkAnyExt(dir: string, root: string, out: FileEntry[], ext: stri
     return;
   }
   for (const e of entries) {
-    if (SKIP_DIRS.has(e.name)) continue;
-    if (e.name.startsWith(".")) continue;
-    if (e.isSymbolicLink()) continue;
     const full = path.join(dir, e.name);
+    const relPath = vaultRelative(root, full);
+    if (restrictedVaultPathReason(relPath)) continue;
+    if (e.isSymbolicLink()) continue;
     if (e.isDirectory()) {
       const real = await fs.realpath(full).catch(() => null);
       if (!real) continue;
@@ -1552,7 +1603,7 @@ async function walkAnyExt(dir: string, root: string, out: FileEntry[], ext: stri
       if (!stat) continue;
       out.push({
         absPath: full,
-        relPath: vaultRelative(root, full),
+        relPath,
         basename: e.name,
         mtimeMs: stat.mtimeMs
       });

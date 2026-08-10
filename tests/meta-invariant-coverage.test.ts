@@ -1770,16 +1770,16 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       [
         "      replaceExactly(",
         "        mcpbInputs.release,",
-        "        `PROVENANCE_SHA: \\${{ github.sha }}`,",
-        "        `PROVENANCE_SHA: \\${{ github.workflow_sha }}`",
+        `        \`PROVENANCE_SHA: \\\${{ github.sha }}\`,`,
+        `        \`PROVENANCE_SHA: \\\${{ github.workflow_sha }}\``,
         "      ),"
       ].join("\n"),
       [
         "      (",
         "        replaceExactly(",
         "          mcpbInputs.release,",
-        "          `PROVENANCE_SHA: \\${{ github.sha }}`,",
-        "          `PROVENANCE_SHA: \\${{ github.workflow_sha }}`",
+        `          \`PROVENANCE_SHA: \\\${{ github.sha }}\`,`,
+        `          \`PROVENANCE_SHA: \\\${{ github.workflow_sha }}\``,
         "        ),",
         "        mcpbInputs.release",
         "      ),"

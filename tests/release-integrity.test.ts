@@ -5332,10 +5332,10 @@ function githubReleaseTransactionProblems(workflow: string): string[] {
     (step) => step.name === "Publish with provenance or verify an exact prior publication"
   );
   const releaseBodyEnvPins = {
-    MCPB_RELEASE_BODY_PATH: '${{ steps.release_body.outputs.path }}',
-    MCPB_RELEASE_BODY_SHA256: '${{ steps.release_body.outputs.sha256 }}',
-    MCPB_RELEASE_BODY_BYTES: '${{ steps.release_body.outputs.bytes }}',
-    MCPB_RELEASE_BODY_CHARS: '${{ steps.release_body.outputs.chars }}'
+    MCPB_RELEASE_BODY_PATH: `\${{ steps.release_body.outputs.path }}`,
+    MCPB_RELEASE_BODY_SHA256: `\${{ steps.release_body.outputs.sha256 }}`,
+    MCPB_RELEASE_BODY_BYTES: `\${{ steps.release_body.outputs.bytes }}`,
+    MCPB_RELEASE_BODY_CHARS: `\${{ steps.release_body.outputs.chars }}`
   } as const;
   const releaseBodyEnvKeys = Object.keys(releaseBodyEnvPins);
   const releaseBodyConsumerSteps = [preflightStep, prepareStep, uploadStep];
@@ -5388,13 +5388,13 @@ function githubReleaseTransactionProblems(workflow: string): string[] {
     '"$MCPB_RELEASE_BODY_SHA256" "$MCPB_RELEASE_BODY_BYTES" "$MCPB_RELEASE_BODY_CHARS" >/dev/null\n' +
     "CREATE_EXIT=0\n" +
     "set +e\n" +
-    '"$TIMEOUT_BIN" --kill-after=10s 300s "$GH_BIN" "${CREATE_ARGS[@]}"';
+    `"$TIMEOUT_BIN" --kill-after=10s 300s "$GH_BIN" "\${CREATE_ARGS[@]}"`;
   if (
     !bodyProducerIsExact ||
     !releaseBodyConsumerEnvIsExact ||
     mutationMatchCount(workflow, frozenAwkAnchor) !== 3 ||
     mutationMatchCount(workflow, 'awk -v heading="## [$VERSION] — "') !== 3 ||
-    mutationMatchCount(workflow, 'NOTES=$(awk') !== 0 ||
+    mutationMatchCount(workflow, "NOTES=$(awk") !== 0 ||
     mutationMatchCount(workflow, 'NOTES="$MCPB_RELEASE_BODY_PATH"') !== 3 ||
     mutationMatchCount(workflow, 'EXPECTED_RELEASE_NAME="$TAG" EXPECTED_RELEASE_BODY="$NOTES"') !== 3 ||
     mutationMatchCount(workflow, 'EXPECTED_RELEASE_BODY_SHA256="$MCPB_RELEASE_BODY_SHA256"') !== 3 ||
@@ -9667,9 +9667,7 @@ done`;
         releaseBodyVersion
       )
     ).toBe(exactReleaseBody);
-    expect(extractReleaseBody(`${releaseBodyHeading}\n${exactReleaseBody}`, releaseBodyVersion)).toBe(
-      exactReleaseBody
-    );
+    expect(extractReleaseBody(`${releaseBodyHeading}\n${exactReleaseBody}`, releaseBodyVersion)).toBe(exactReleaseBody);
     for (const terminalLf of ["", "\n", "\n\n\n"]) {
       expect(extractReleaseBody(`${releaseBodyHeading}\nBody${terminalLf}`, releaseBodyVersion)).toBe("Body");
     }
@@ -9677,10 +9675,7 @@ done`;
     const asciiLimitBody = "a".repeat(125_000);
     expect(extractReleaseBody(`${releaseBodyHeading}\n${asciiLimitBody}`, releaseBodyVersion)).toBe(asciiLimitBody);
     const multibyteBody = "Русский язык";
-    const extractedMultibyteBody = extractReleaseBody(
-      `${releaseBodyHeading}\n${multibyteBody}`,
-      releaseBodyVersion
-    );
+    const extractedMultibyteBody = extractReleaseBody(`${releaseBodyHeading}\n${multibyteBody}`, releaseBodyVersion);
     expect(Array.from(extractedMultibyteBody)).toHaveLength(12);
     expect(Buffer.byteLength(extractedMultibyteBody, "utf8")).toBe(23);
     const multibyteLimitBody = "é".repeat(62_500);
@@ -9694,10 +9689,7 @@ done`;
       /missing.*heading|heading.*missing/iu
     );
     expect(() =>
-      extractReleaseBody(
-        `${releaseBodyHeading}\nFirst\n${releaseBodyHeading}\nSecond`,
-        releaseBodyVersion
-      )
+      extractReleaseBody(`${releaseBodyHeading}\nFirst\n${releaseBodyHeading}\nSecond`, releaseBodyVersion)
     ).toThrow(/duplicat.*heading|heading.*duplicat/iu);
     for (const malformedHeading of [
       `## [${releaseBodyVersion}] - 2026-08-11\nBody`,
@@ -9709,12 +9701,12 @@ done`;
     for (const emptyBody of [`${releaseBodyHeading}`, `${releaseBodyHeading}\n\n \t\n`]) {
       expect(() => extractReleaseBody(emptyBody, releaseBodyVersion)).toThrow(/empty|whitespace/iu);
     }
-    expect(() =>
-      extractReleaseBody(`${releaseBodyHeading}\n${"a".repeat(125_001)}`, releaseBodyVersion)
-    ).toThrow(/125000|limit/iu);
-    expect(() =>
-      extractReleaseBody(`${releaseBodyHeading}\n${"é".repeat(62_500)}a`, releaseBodyVersion)
-    ).toThrow(/125000|byte.*limit|limit.*byte/iu);
+    expect(() => extractReleaseBody(`${releaseBodyHeading}\n${"a".repeat(125_001)}`, releaseBodyVersion)).toThrow(
+      /125000|limit/iu
+    );
+    expect(() => extractReleaseBody(`${releaseBodyHeading}\n${"é".repeat(62_500)}a`, releaseBodyVersion)).toThrow(
+      /125000|byte.*limit|limit.*byte/iu
+    );
     expect(() => extractReleaseBody(`${releaseBodyHeading}\nBody\u0000tail`, releaseBodyVersion)).toThrow(
       /U\+0000|NUL/iu
     );
@@ -9840,24 +9832,14 @@ done`;
       const symlinkPath = join(releaseBodyScratchRoot, "release-notes-link.md");
       symlinkSync(releaseBodyPath, symlinkPath, "file");
       expect(() =>
-        auditReleaseBodyFile(
-          symlinkPath,
-          releaseBodyReceipt.sha256,
-          releaseBodyReceipt.bytes,
-          releaseBodyReceipt.chars
-        )
+        auditReleaseBodyFile(symlinkPath, releaseBodyReceipt.sha256, releaseBodyReceipt.bytes, releaseBodyReceipt.chars)
       ).toThrow(/symlink|symbolic|NOFOLLOW/iu);
 
       const tamperedPath = join(releaseBodyScratchRoot, "release-notes-tampered.md");
       const tamperedReceipt = createReleaseBodyFile(releaseBodyChangelog, releaseBodyVersion, tamperedPath);
       writeFileSync(tamperedPath, `${exactReleaseBody}!`, { encoding: "utf8", mode: 0o600 });
       expect(() =>
-        auditReleaseBodyFile(
-          tamperedReceipt.path,
-          tamperedReceipt.sha256,
-          tamperedReceipt.bytes,
-          tamperedReceipt.chars
-        )
+        auditReleaseBodyFile(tamperedReceipt.path, tamperedReceipt.sha256, tamperedReceipt.bytes, tamperedReceipt.chars)
       ).toThrow(/digest|byte|character|receipt/iu);
 
       const hardlinkPath = join(releaseBodyScratchRoot, "release-notes-hardlink.md");
@@ -9943,14 +9925,10 @@ done`;
       ),
       spliceFirstReleaseBodyLiteral(
         releaseBodyWorkflow,
-        "MCPB_RELEASE_BODY_SHA256: ${{ steps.release_body.outputs.sha256 }}",
-        "MCPB_RELEASE_BODY_SHA25X: ${{ steps.release_body.outputs.sha256 }}"
+        `MCPB_RELEASE_BODY_SHA256: \${{ steps.release_body.outputs.sha256 }}`,
+        `MCPB_RELEASE_BODY_SHA25X: \${{ steps.release_body.outputs.sha256 }}`
       ),
-      spliceFirstReleaseBodyLiteral(
-        releaseBodyWorkflow,
-        'release-body-audit "$NOTES"',
-        'release-body-check "$NOTES"'
-      ),
+      spliceFirstReleaseBodyLiteral(releaseBodyWorkflow, 'release-body-audit "$NOTES"', 'release-body-check "$NOTES"'),
       spliceFirstReleaseBodyLiteral(releaseBodyWorkflow, '--notes-file "$NOTES"', '--notes "$NOTES"'),
       spliceFirstReleaseBodyLiteral(
         releaseBodyWorkflow,
@@ -9960,12 +9938,12 @@ done`;
       spliceFirstReleaseBodyLiteral(
         releaseBodyWorkflow,
         'NOTES="$MCPB_RELEASE_BODY_PATH"',
-        'NOTES=$(awk -v heading="## [$VERSION] — " \"$CHANGELOG\")'
+        'NOTES=$(awk -v heading="## [$VERSION] — " "$CHANGELOG")'
       ),
       spliceFirstReleaseBodyLiteral(
         releaseBodyWorkflow,
         'NOTES="$MCPB_RELEASE_BODY_PATH"',
-        'NOTES="${MCPB_RELEASE_BODY_PATH:-See [CHANGELOG.md]}"'
+        `NOTES="\${MCPB_RELEASE_BODY_PATH:-See [CHANGELOG.md]}"`
       ),
       spliceFirstReleaseBodyLiteral(
         releaseBodyWorkflow,

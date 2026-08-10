@@ -283,9 +283,11 @@ if [ -e "$IDENTITY_DIR" ]; then
   exit 1
 fi
 mkdir "$IDENTITY_DIR"
-# A newly created draft can be briefly absent from list-releases.
-# Retry only the zero-result state; duplicates still fail immediately.
+# A newly created draft can be briefly absent from list-releases. A transport
+# or strict-decoder failure is a non-authorizing observation: restart the whole
+# offset-paginated census at page 1 without deduplication or another write.
 RELEASE_COUNT=0
+RELEASE_PREVIOUS_INVENTORY=""
 for (( release_attempt=1; release_attempt<=12; release_attempt++ )); do
   if ! RELEASE_PAGES=$(gh_read api --paginate --slurp \
     "repos/$MCPB_RELEASE_REPOSITORY/releases?per_page=100"); then
@@ -293,17 +295,42 @@ for (( release_attempt=1; release_attempt<=12; release_attempt++ )); do
       echo "::error::Release $TAG remained unreadable after 12 bounded checks"
       exit 1
     fi
+    RELEASE_PREVIOUS_INVENTORY=""
     echo "::warning::Release list read failed (attempt $release_attempt/12); retrying in 5s"
     sleep 5
     continue
   fi
-  RELEASES=$(printf '%s' "$RELEASE_PAGES" | node scripts/check-release-integrity.mjs \
-    flatten-pages release)
+  if ! RELEASES=$(printf '%s' "$RELEASE_PAGES" | node scripts/check-release-integrity.mjs \
+    flatten-pages release); then
+    if [ "$release_attempt" -eq 12 ]; then
+      echo "::error::Release $TAG pages remained unstable after 12 bounded checks"
+      exit 1
+    fi
+    RELEASE_PREVIOUS_INVENTORY=""
+    echo "::warning::Release list strict decode failed (attempt $release_attempt/12); restarting at page 1 in 5s"
+    sleep 5
+    continue
+  fi
   RELEASE_COUNT=$(printf '%s' "$RELEASES" | jq --arg tag "$TAG" \
     '[.[] | select(.tag_name == $tag)] | length')
   if [ "$RELEASE_COUNT" -gt 1 ]; then
     echo "::error::Asset phase found duplicate draft/published releases for $TAG"
     exit 1
+  fi
+  if [ "$RELEASE_COUNT" -eq 1 ]; then
+    RELEASE_INVENTORY=$(printf '%s' "$RELEASES" | jq -c \
+      '[.[] | [.id, .tag_name, .draft, .prerelease]]')
+    if [ "$RELEASE_INVENTORY" != "$RELEASE_PREVIOUS_INVENTORY" ]; then
+      RELEASE_PREVIOUS_INVENTORY="$RELEASE_INVENTORY"
+      if [ "$release_attempt" -eq 12 ]; then
+        echo "::error::Release $TAG did not reach a stable inventory after 12 bounded checks"
+        exit 1
+      fi
+      sleep 5
+      continue
+    fi
+  else
+    RELEASE_PREVIOUS_INVENTORY=""
   fi
   if [ "$RELEASE_COUNT" -eq 1 ]; then break; fi
   if [ "$release_attempt" -eq 12 ]; then
@@ -840,6 +867,7 @@ for (( publish_attempt=1; publish_attempt<=12; publish_attempt++ )); do
   fi
   sleep 5
 done
+PUBLISHED_PREVIOUS_INVENTORY=""
 for (( published_list_attempt=1; published_list_attempt<=12; published_list_attempt++ )); do
   if ! RELEASE_PAGES=$(gh_read api --paginate --slurp \
     "repos/$MCPB_RELEASE_REPOSITORY/releases?per_page=100"); then
@@ -847,11 +875,20 @@ for (( published_list_attempt=1; published_list_attempt<=12; published_list_atte
       echo "::error::Published release list remained unreadable after 12 bounded checks"
       exit 1
     fi
+    PUBLISHED_PREVIOUS_INVENTORY=""
     sleep 5
     continue
   fi
-  RELEASES=$(printf '%s' "$RELEASE_PAGES" | node scripts/check-release-integrity.mjs \
-    flatten-pages release)
+  if ! RELEASES=$(printf '%s' "$RELEASE_PAGES" | node scripts/check-release-integrity.mjs \
+    flatten-pages release); then
+    if [ "$published_list_attempt" -eq 12 ]; then
+      echo "::error::Published release pages remained unstable after 12 bounded checks"
+      exit 1
+    fi
+    PUBLISHED_PREVIOUS_INVENTORY=""
+    sleep 5
+    continue
+  fi
   RELEASE_COUNT=$(printf '%s' "$RELEASES" | jq --arg tag "$TAG" \
     '[.[] | select(.tag_name == $tag)] | length')
   if [ "$RELEASE_COUNT" -gt 1 ]; then
@@ -859,6 +896,17 @@ for (( published_list_attempt=1; published_list_attempt<=12; published_list_atte
     exit 1
   fi
   if [ "$RELEASE_COUNT" -eq 1 ]; then
+    PUBLISHED_INVENTORY=$(printf '%s' "$RELEASES" | jq -c \
+      '[.[] | [.id, .tag_name, .draft, .prerelease]]')
+    if [ "$PUBLISHED_INVENTORY" != "$PUBLISHED_PREVIOUS_INVENTORY" ]; then
+      PUBLISHED_PREVIOUS_INVENTORY="$PUBLISHED_INVENTORY"
+      if [ "$published_list_attempt" -eq 12 ]; then
+        echo "::error::Published release list did not reach a stable inventory after 12 bounded checks"
+        exit 1
+      fi
+      sleep 5
+      continue
+    fi
     RELEASE_JSON=$(printf '%s' "$RELEASES" | jq --arg tag "$TAG" \
       '.[] | select(.tag_name == $tag)')
     LISTED_ID=$(printf '%s' "$RELEASE_JSON" | jq -er \
@@ -872,6 +920,8 @@ for (( published_list_attempt=1; published_list_attempt<=12; published_list_atte
       exit 1
     fi
     if [ "$LISTED_DRAFT" = "false" ]; then break; fi
+  else
+    PUBLISHED_PREVIOUS_INVENTORY=""
   fi
   if [ "$published_list_attempt" -eq 12 ]; then
     echo "::error::Published release list did not converge to one exact non-draft release"
@@ -879,6 +929,7 @@ for (( published_list_attempt=1; published_list_attempt<=12; published_list_atte
   fi
   sleep 5
 done
+POST_ASSET_PREVIOUS_INVENTORY=""
 for (( post_publish_asset_attempt=1; post_publish_asset_attempt<=12; post_publish_asset_attempt++ )); do
   if ! POST_ASSET_PAGES=$(gh_read api --paginate --slurp \
     "repos/$MCPB_RELEASE_REPOSITORY/releases/$RELEASE_ID/assets?per_page=100"); then
@@ -886,12 +937,33 @@ for (( post_publish_asset_attempt=1; post_publish_asset_attempt<=12; post_publis
       echo "::error::Published asset collection remained unreadable after 12 bounded checks"
       exit 1
     fi
+    POST_ASSET_PREVIOUS_INVENTORY=""
     sleep 5
     continue
   fi
-  POST_ASSETS=$(printf '%s' "$POST_ASSET_PAGES" | node scripts/check-release-integrity.mjs \
-    flatten-pages asset)
+  if ! POST_ASSETS=$(printf '%s' "$POST_ASSET_PAGES" | node scripts/check-release-integrity.mjs \
+    flatten-pages asset); then
+    if [ "$post_publish_asset_attempt" -eq 12 ]; then
+      echo "::error::Published asset pages remained unstable after 12 bounded checks"
+      exit 1
+    fi
+    POST_ASSET_PREVIOUS_INVENTORY=""
+    sleep 5
+    continue
+  fi
   POST_ASSET_COUNT=$(printf '%s' "$POST_ASSETS" | jq 'length')
+  POST_ASSET_INVENTORY=$(printf '%s' "$POST_ASSETS" | jq -c \
+    '[.[] | [.id, .name, .state, .content_type, .size, .digest]]')
+  if [ "$POST_ASSET_COUNT" -ge 6 ] && [ "$POST_ASSET_INVENTORY" != "$POST_ASSET_PREVIOUS_INVENTORY" ]; then
+    POST_ASSET_PREVIOUS_INVENTORY="$POST_ASSET_INVENTORY"
+    if [ "$post_publish_asset_attempt" -eq 12 ]; then
+      echo "::error::Published asset collection did not reach a stable inventory after 12 bounded checks"
+      exit 1
+    fi
+    sleep 5
+    continue
+  fi
+  POST_ASSET_PREVIOUS_INVENTORY="$POST_ASSET_INVENTORY"
   if [ "$POST_ASSET_COUNT" -lt 6 ]; then
     PENDING_RELEASE=$(printf '%s' "$EXACT_RELEASE" | jq -c '.draft = true')
     PENDING_STATE=$(jq -n --argjson release "$PENDING_RELEASE" --argjson assets "$POST_ASSETS" \

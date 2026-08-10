@@ -4326,6 +4326,534 @@ function remoteGateScriptProblems(packageConsumer: string, protocolConformance: 
   return problems;
 }
 
+const WRITE_AWARE_PAGINATION_PROBLEM =
+  "retrying paginated GitHub reads must keep strict decoding inside one bounded non-authorizing attempt";
+const PAGINATION_LOOP_FORBIDDEN_TOKENS = [
+  " unique_by",
+  " add // []",
+  " release create ",
+  " release upload ",
+  " --method POST",
+  " --method PATCH",
+  " --method PUT",
+  " --method DELETE",
+  " --request POST",
+  " --request PATCH",
+  " --request PUT",
+  " --request DELETE"
+] as const;
+const SHELL_BREAK_TOKEN = /(?:^|[\s;&|(){}<>])break(?=$|[\s;&|(){}<>])/u;
+const SHELL_EXIT_ZERO_TOKEN = /(?:^|[\s;&|(){}<>])exit 0(?=$|[\s;&|(){}<>])/u;
+
+interface RetryBoundPaginationSpec {
+  loop: string;
+  readPrefix?: string;
+  read: string;
+  readFailure: string;
+  readWait: string;
+  reset?: string;
+  decode: string;
+  decodeWait: string;
+  terminal: string;
+  failure: string;
+  consume: string;
+}
+
+function compactShellSource(source: string): string {
+  return source
+    .split(/\\\r?\n\s*/u)
+    .join(" ")
+    .split(/\s+/u)
+    .join(" ");
+}
+
+function retryBoundPaginationPairProblems(source: string, spec: RetryBoundPaginationSpec): string[] {
+  const compact = compactShellSource(source);
+  const loopIndex = compact.indexOf(spec.loop);
+  const readPrefix = spec.readPrefix ?? spec.loop;
+  const readPrefixIndex = compact.indexOf(readPrefix, loopIndex);
+  const readIndex = compact.indexOf(spec.read, loopIndex);
+  const firstReadContinueIndex = compact.indexOf("continue", readIndex);
+  const readTerminalIndex = compact.indexOf(spec.terminal, readIndex);
+  const readFailureIndex = compact.indexOf(spec.readFailure, readTerminalIndex);
+  const readExitIndex = compact.indexOf(" exit 1 ", readFailureIndex);
+  const readTerminalCloseIndex = compact.indexOf(" fi ", readExitIndex);
+  const readResetIndex =
+    spec.reset === undefined ? readTerminalCloseIndex : compact.indexOf(spec.reset, readTerminalCloseIndex);
+  const readWaitIndex = compact.indexOf(spec.readWait, readResetIndex);
+  const readContinueIndex = compact.indexOf("continue", readWaitIndex);
+  const readCloseIndex = compact.indexOf(" fi ", readContinueIndex);
+  const decodeIndex = compact.indexOf(spec.decode, readCloseIndex);
+  const firstDecodeContinueIndex = compact.indexOf("continue", decodeIndex);
+  const terminalIndex = compact.indexOf(spec.terminal, decodeIndex);
+  const failureIndex = compact.indexOf(spec.failure, terminalIndex);
+  const exitIndex = compact.indexOf(" exit 1 ", failureIndex);
+  const terminalCloseIndex = compact.indexOf(" fi ", exitIndex);
+  const resetIndex = spec.reset === undefined ? terminalCloseIndex : compact.indexOf(spec.reset, terminalCloseIndex);
+  const waitIndex = compact.indexOf(spec.decodeWait, resetIndex);
+  const continueIndex = compact.indexOf("continue", waitIndex);
+  const decoderCloseIndex = compact.indexOf(" fi ", continueIndex);
+  const consumeIndex = compact.indexOf(spec.consume, decodeIndex);
+  const loopExitIndex = compact.indexOf(" done", loopIndex);
+  const loopSlice = compact.slice(loopIndex, loopExitIndex);
+  if (
+    loopIndex < 0 ||
+    readPrefixIndex < loopIndex ||
+    readIndex <= readPrefixIndex ||
+    readTerminalIndex <= readIndex ||
+    readFailureIndex <= readTerminalIndex ||
+    readExitIndex <= readFailureIndex ||
+    readTerminalCloseIndex <= readExitIndex ||
+    readResetIndex < readTerminalCloseIndex ||
+    readWaitIndex <= readResetIndex ||
+    readContinueIndex <= readWaitIndex ||
+    firstReadContinueIndex !== readContinueIndex ||
+    readCloseIndex <= readContinueIndex ||
+    decodeIndex <= readCloseIndex ||
+    terminalIndex <= decodeIndex ||
+    failureIndex <= terminalIndex ||
+    exitIndex <= failureIndex ||
+    terminalCloseIndex <= exitIndex ||
+    resetIndex < terminalCloseIndex ||
+    waitIndex <= resetIndex ||
+    continueIndex <= waitIndex ||
+    firstDecodeContinueIndex !== continueIndex ||
+    decoderCloseIndex <= continueIndex ||
+    consumeIndex <= decoderCloseIndex ||
+    loopExitIndex <= consumeIndex ||
+    SHELL_BREAK_TOKEN.test(compact.slice(readPrefixIndex + readPrefix.length, readIndex)) ||
+    compact.slice(readPrefixIndex + readPrefix.length, readIndex).includes("continue") ||
+    SHELL_EXIT_ZERO_TOKEN.test(compact.slice(readPrefixIndex + readPrefix.length, readIndex)) ||
+    compact.slice(readIndex + spec.read.length, readTerminalIndex).includes(" fi ") ||
+    SHELL_BREAK_TOKEN.test(compact.slice(readIndex, readCloseIndex)) ||
+    SHELL_EXIT_ZERO_TOKEN.test(compact.slice(readIndex, readCloseIndex)) ||
+    compact.slice(readTerminalCloseIndex + 4, readContinueIndex).includes(" fi ") ||
+    compact.slice(readCloseIndex + 4, decodeIndex).trim().length !== 0 ||
+    compact.slice(decodeIndex + spec.decode.length, terminalIndex).includes(" fi ") ||
+    compact.slice(terminalCloseIndex + 4, continueIndex).includes(" fi ") ||
+    SHELL_BREAK_TOKEN.test(compact.slice(decodeIndex, decoderCloseIndex)) ||
+    SHELL_EXIT_ZERO_TOKEN.test(compact.slice(decodeIndex, decoderCloseIndex)) ||
+    compact.slice(decoderCloseIndex + 4, consumeIndex).trim().length !== 0 ||
+    PAGINATION_LOOP_FORBIDDEN_TOKENS.some((forbidden) => loopSlice.includes(forbidden))
+  ) {
+    return [WRITE_AWARE_PAGINATION_PROBLEM];
+  }
+  return [];
+}
+
+interface PaginationFixedPointSpec {
+  init: string;
+  loop: string;
+  observation: string;
+  projection: string;
+  compare: string;
+  assignment: string;
+  terminal: string;
+  failure: string;
+  wait: string;
+  consume: string;
+  reset: string;
+  exactLoopResets: number;
+}
+
+function paginationFixedPointProblems(source: string, spec: PaginationFixedPointSpec): string[] {
+  const compact = compactShellSource(source);
+  const initIndex = compact.indexOf(spec.init);
+  const loopIndex = compact.indexOf(spec.loop, initIndex);
+  const observationIndex = compact.indexOf(spec.observation, loopIndex);
+  const projectionIndex = compact.indexOf(spec.projection, observationIndex);
+  const earlyConsumeIndex = compact.indexOf(spec.consume, loopIndex);
+  const compareIndex = compact.indexOf(spec.compare, projectionIndex);
+  const assignmentIndex = compact.indexOf(spec.assignment, compareIndex);
+  const terminalIndex = compact.indexOf(spec.terminal, assignmentIndex);
+  const failureIndex = compact.indexOf(spec.failure, terminalIndex);
+  const exitIndex = compact.indexOf(" exit 1 ", failureIndex);
+  const terminalCloseIndex = compact.indexOf(" fi ", exitIndex);
+  const waitIndex = compact.indexOf(spec.wait, terminalCloseIndex);
+  const continueIndex = compact.indexOf("continue", waitIndex);
+  const firstBranchContinueIndex = compact.indexOf("continue", compareIndex);
+  const branchCloseIndex = compact.indexOf(" fi ", continueIndex);
+  const consumeIndex = compact.indexOf(spec.consume, branchCloseIndex);
+  const loopExitIndex = compact.indexOf(" done", loopIndex);
+  const loopSlice = compact.slice(loopIndex, loopExitIndex);
+  const resetCount = loopSlice.split(spec.reset).length - 1;
+  if (
+    initIndex < 0 ||
+    loopIndex <= initIndex ||
+    observationIndex <= loopIndex ||
+    projectionIndex <= observationIndex ||
+    compareIndex <= projectionIndex ||
+    assignmentIndex <= compareIndex ||
+    terminalIndex <= assignmentIndex ||
+    failureIndex <= terminalIndex ||
+    exitIndex <= failureIndex ||
+    terminalCloseIndex <= exitIndex ||
+    waitIndex <= terminalCloseIndex ||
+    continueIndex <= waitIndex ||
+    firstBranchContinueIndex !== continueIndex ||
+    branchCloseIndex <= continueIndex ||
+    consumeIndex <= branchCloseIndex ||
+    loopExitIndex <= consumeIndex ||
+    resetCount !== spec.exactLoopResets ||
+    compact.slice(observationIndex + spec.observation.length, projectionIndex).includes("continue") ||
+    SHELL_BREAK_TOKEN.test(compact.slice(observationIndex + spec.observation.length, projectionIndex)) ||
+    SHELL_EXIT_ZERO_TOKEN.test(compact.slice(observationIndex + spec.observation.length, projectionIndex)) ||
+    (earlyConsumeIndex >= 0 && earlyConsumeIndex < branchCloseIndex) ||
+    compact.slice(projectionIndex + spec.projection.length, compareIndex).trim().length !== 0 ||
+    compact.slice(compareIndex + spec.compare.length, terminalIndex).includes(" fi ") ||
+    compact.slice(terminalCloseIndex + 4, continueIndex).includes(" fi ") ||
+    SHELL_BREAK_TOKEN.test(compact.slice(loopIndex, branchCloseIndex)) ||
+    SHELL_EXIT_ZERO_TOKEN.test(compact.slice(loopIndex, branchCloseIndex)) ||
+    compact.slice(branchCloseIndex + 4, consumeIndex).includes("continue") ||
+    SHELL_BREAK_TOKEN.test(compact.slice(branchCloseIndex + 4, consumeIndex)) ||
+    SHELL_EXIT_ZERO_TOKEN.test(compact.slice(branchCloseIndex + 4, consumeIndex)) ||
+    PAGINATION_LOOP_FORBIDDEN_TOKENS.some((forbidden) => loopSlice.includes(forbidden))
+  ) {
+    return [WRITE_AWARE_PAGINATION_PROBLEM];
+  }
+  return [];
+}
+
+interface CompoundPaginationPairSpec {
+  read: string;
+  decode: string;
+  terminal: string;
+  failure: string;
+  reset: string;
+  wait: string;
+  consume: string;
+}
+
+function compoundPaginationPairProblems(source: string, spec: CompoundPaginationPairSpec): string[] {
+  const compact = compactShellSource(source);
+  const readIndex = compact.indexOf(spec.read);
+  const decodeIndex = compact.indexOf(spec.decode, readIndex);
+  const terminalIndex = compact.indexOf(spec.terminal, decodeIndex);
+  const failureIndex = compact.indexOf(spec.failure, terminalIndex);
+  const exitIndex = compact.indexOf(" exit 1 ", failureIndex);
+  const terminalCloseIndex = compact.indexOf(" fi ", exitIndex);
+  const resetIndex = compact.indexOf(spec.reset, terminalCloseIndex);
+  const waitIndex = compact.indexOf(spec.wait, resetIndex);
+  const continueIndex = compact.indexOf("continue", waitIndex);
+  const firstContinueIndex = compact.indexOf("continue", decodeIndex);
+  const branchCloseIndex = compact.indexOf(" fi ", continueIndex);
+  const consumeIndex = compact.indexOf(spec.consume, branchCloseIndex);
+  if (
+    readIndex < 0 ||
+    decodeIndex <= readIndex ||
+    compact.slice(readIndex + spec.read.length, decodeIndex).trim() !== "||" ||
+    terminalIndex <= decodeIndex ||
+    compact.slice(decodeIndex + spec.decode.length, terminalIndex).includes(" fi ") ||
+    failureIndex <= terminalIndex ||
+    exitIndex <= failureIndex ||
+    terminalCloseIndex <= exitIndex ||
+    resetIndex <= terminalCloseIndex ||
+    waitIndex <= resetIndex ||
+    continueIndex <= waitIndex ||
+    firstContinueIndex !== continueIndex ||
+    branchCloseIndex <= continueIndex ||
+    consumeIndex <= branchCloseIndex ||
+    SHELL_BREAK_TOKEN.test(compact.slice(decodeIndex, branchCloseIndex)) ||
+    SHELL_EXIT_ZERO_TOKEN.test(compact.slice(decodeIndex, branchCloseIndex)) ||
+    compact.slice(branchCloseIndex + 4, consumeIndex).trim().length !== 0
+  ) {
+    return [WRITE_AWARE_PAGINATION_PROBLEM];
+  }
+  return [];
+}
+
+interface ReleaseTagAmbiguitySpec {
+  loop: string;
+  count: string;
+  guard: string;
+  failure: string;
+  projection: string;
+}
+
+function releaseTagAmbiguityProblems(source: string, spec: ReleaseTagAmbiguitySpec): string[] {
+  const compact = compactShellSource(source);
+  const loopIndex = compact.indexOf(spec.loop);
+  const countIndex = compact.indexOf(spec.count, loopIndex);
+  const guardIndex = compact.indexOf(spec.guard, countIndex);
+  const failureIndex = compact.indexOf(spec.failure, guardIndex);
+  const exitIndex = compact.indexOf(" exit 1 ", failureIndex);
+  const firstExitIndex = compact.indexOf(" exit ", guardIndex);
+  const guardCloseIndex = compact.indexOf(" fi ", exitIndex);
+  const projectionIndex = compact.indexOf(spec.projection, guardCloseIndex);
+  if (
+    loopIndex < 0 ||
+    countIndex <= loopIndex ||
+    guardIndex <= countIndex ||
+    compact.slice(countIndex + spec.count.length, guardIndex).trim().length !== 0 ||
+    failureIndex <= guardIndex ||
+    compact.slice(guardIndex + spec.guard.length, failureIndex).includes(" fi ") ||
+    exitIndex <= failureIndex ||
+    firstExitIndex !== exitIndex ||
+    compact.slice(failureIndex + spec.failure.length, exitIndex).includes(" fi ") ||
+    guardCloseIndex <= exitIndex ||
+    projectionIndex <= guardCloseIndex ||
+    SHELL_EXIT_ZERO_TOKEN.test(compact.slice(guardIndex, guardCloseIndex)) ||
+    compact.slice(guardIndex, guardCloseIndex).includes("continue") ||
+    SHELL_BREAK_TOKEN.test(compact.slice(guardIndex, guardCloseIndex)) ||
+    compact.slice(guardCloseIndex + 4, projectionIndex).includes("continue") ||
+    SHELL_BREAK_TOKEN.test(compact.slice(guardCloseIndex + 4, projectionIndex)) ||
+    SHELL_EXIT_ZERO_TOKEN.test(compact.slice(guardCloseIndex + 4, projectionIndex))
+  ) {
+    return [WRITE_AWARE_PAGINATION_PROBLEM];
+  }
+  return [];
+}
+
+function releasePaginationRetryProblems(
+  gate: string,
+  preflight: string,
+  prepare: string,
+  transaction: string
+): string[] {
+  const specs: Array<[string, RetryBoundPaginationSpec]> = [
+    [
+      gate,
+      {
+        loop: "for (( attempt=1; attempt<=120; attempt++ )); do",
+        read: "if ! CI_RUN_PAGES=$(gh_read api --paginate --slurp",
+        readFailure: "Exact ci.yml workflow run remained unreadable after 60 minutes",
+        readWait: 'ci_wait "CI workflow-run lookup failed',
+        decode:
+          "if ! CI_RUNS=$(printf '%s' \"$CI_RUN_PAGES\" | node scripts/check-release-integrity.mjs flatten-field workflow_runs); then",
+        decodeWait: 'ci_wait "CI workflow-run strict decode failed',
+        terminal: 'if [ "$attempt" -eq 120 ]; then',
+        failure: "Exact ci.yml workflow-run pages remained unstable after 60 minutes",
+        consume: "CI_RUN_COUNT=$(printf"
+      }
+    ],
+    [
+      gate,
+      {
+        loop: "for (( attempt=1; attempt<=120; attempt++ )); do",
+        readPrefix:
+          "WORKFLOW_RUN_ID=$(printf '%s' \"$WORKFLOW_RUN\" | jq -er '.id | select(type == \"number\" and . > 0 and floor == . and . <= 9007199254740991)')",
+        read: "if ! JOB_PAGES=$(gh_read api --paginate --slurp",
+        readFailure: "Exact CI workflow-run attempt jobs remained unreadable after 60 minutes",
+        readWait: 'ci_wait "CI workflow-run attempt job lookup failed',
+        decode:
+          "if ! JOBS=$(printf '%s' \"$JOB_PAGES\" | node scripts/check-release-integrity.mjs flatten-field jobs); then",
+        decodeWait: 'ci_wait "CI job strict decode failed',
+        terminal: 'if [ "$attempt" -eq 120 ]; then',
+        failure: "Exact CI workflow-run job pages remained unstable after 60 minutes",
+        consume: "JSON=$(jq"
+      }
+    ],
+    [
+      preflight,
+      {
+        loop: "for (( release_preflight_attempt=1; release_preflight_attempt<=12; release_preflight_attempt++ )); do",
+        read: "if ! RELEASE_PAGES=$(gh_read api --paginate --slurp",
+        readFailure: "GitHub release preflight remained unreadable after 12 bounded checks",
+        readWait: "sleep 5",
+        decode:
+          "if ! RELEASES=$(printf '%s' \"$RELEASE_PAGES\" | node scripts/check-release-integrity.mjs flatten-pages release); then",
+        decodeWait: "sleep 5",
+        terminal: 'if [ "$release_preflight_attempt" -eq 12 ]; then',
+        failure: "GitHub release preflight pages remained unstable after 12 bounded checks",
+        consume: "RELEASE_COUNT=$(printf"
+      }
+    ],
+    [
+      prepare,
+      {
+        loop: "for (( create_recovery_attempt=1; create_recovery_attempt<=12; create_recovery_attempt++ )); do",
+        read: "if ! RECOVERY_PAGES=$(gh_read api --paginate --slurp",
+        readFailure: "Draft create readback remained unreadable after 12 bounded checks",
+        readWait: "sleep 5",
+        reset: 'RECOVERY_PREVIOUS_INVENTORY=""',
+        decode:
+          "if ! RECOVERY_RELEASES=$(printf '%s' \"$RECOVERY_PAGES\" | node scripts/check-release-integrity.mjs flatten-pages release); then",
+        decodeWait: "sleep 5",
+        terminal: 'if [ "$create_recovery_attempt" -eq 12 ]; then',
+        failure: "Draft create readback pages remained unstable after 12 bounded checks",
+        consume: "RECOVERY_COUNT=$(printf"
+      }
+    ],
+    [
+      transaction,
+      {
+        loop: "for (( release_attempt=1; release_attempt<=12; release_attempt++ )); do",
+        read: "if ! RELEASE_PAGES=$(gh_read api --paginate --slurp",
+        readFailure: "remained unreadable after 12 bounded checks",
+        readWait: "sleep 5",
+        reset: 'RELEASE_PREVIOUS_INVENTORY=""',
+        decode:
+          "if ! RELEASES=$(printf '%s' \"$RELEASE_PAGES\" | node scripts/check-release-integrity.mjs flatten-pages release); then",
+        decodeWait: "sleep 5",
+        terminal: 'if [ "$release_attempt" -eq 12 ]; then',
+        failure: "pages remained unstable after 12 bounded checks",
+        consume: "RELEASE_COUNT=$(printf"
+      }
+    ],
+    [
+      transaction,
+      {
+        loop: "for (( published_list_attempt=1; published_list_attempt<=12; published_list_attempt++ )); do",
+        read: "if ! RELEASE_PAGES=$(gh_read api --paginate --slurp",
+        readFailure: "Published release list remained unreadable after 12 bounded checks",
+        readWait: "sleep 5",
+        reset: 'PUBLISHED_PREVIOUS_INVENTORY=""',
+        decode:
+          "if ! RELEASES=$(printf '%s' \"$RELEASE_PAGES\" | node scripts/check-release-integrity.mjs flatten-pages release); then",
+        decodeWait: "sleep 5",
+        terminal: 'if [ "$published_list_attempt" -eq 12 ]; then',
+        failure: "Published release pages remained unstable after 12 bounded checks",
+        consume: "RELEASE_COUNT=$(printf"
+      }
+    ],
+    [
+      transaction,
+      {
+        loop: "for (( post_publish_asset_attempt=1; post_publish_asset_attempt<=12; post_publish_asset_attempt++ )); do",
+        read: "if ! POST_ASSET_PAGES=$(gh_read api --paginate --slurp",
+        readFailure: "Published asset collection remained unreadable after 12 bounded checks",
+        readWait: "sleep 5",
+        reset: 'POST_ASSET_PREVIOUS_INVENTORY=""',
+        decode:
+          "if ! POST_ASSETS=$(printf '%s' \"$POST_ASSET_PAGES\" | node scripts/check-release-integrity.mjs flatten-pages asset); then",
+        decodeWait: "sleep 5",
+        terminal: 'if [ "$post_publish_asset_attempt" -eq 12 ]; then',
+        failure: "Published asset pages remained unstable after 12 bounded checks",
+        consume: "POST_ASSET_COUNT=$(printf"
+      }
+    ]
+  ];
+  const fixedPointSpecs: Array<[string, PaginationFixedPointSpec]> = [
+    [
+      prepare,
+      {
+        init: 'RECOVERY_PREVIOUS_INVENTORY=""',
+        loop: "for (( create_recovery_attempt=1; create_recovery_attempt<=12; create_recovery_attempt++ )); do",
+        observation:
+          "RECOVERY_COUNT=$(printf '%s' \"$RECOVERY_RELEASES\" | jq --arg tag \"$TAG\" '[.[] | select(.tag_name == $tag)] | length')",
+        projection:
+          "RECOVERY_INVENTORY=$(printf '%s' \"$RECOVERY_RELEASES\" | jq -c '[.[] | [.id, .tag_name, .draft, .prerelease]]')",
+        compare: 'if [ "$RECOVERY_INVENTORY" != "$RECOVERY_PREVIOUS_INVENTORY" ]; then',
+        assignment: 'RECOVERY_PREVIOUS_INVENTORY="$RECOVERY_INVENTORY"',
+        terminal: 'if [ "$create_recovery_attempt" -eq 12 ]; then',
+        failure: "Draft create readback did not reach a stable inventory after 12 bounded checks",
+        wait: "sleep 5",
+        consume: "RECOVERY_RELEASE=$(printf",
+        reset: 'RECOVERY_PREVIOUS_INVENTORY=""',
+        exactLoopResets: 5
+      }
+    ],
+    [
+      transaction,
+      {
+        init: 'RELEASE_PREVIOUS_INVENTORY=""',
+        loop: "for (( release_attempt=1; release_attempt<=12; release_attempt++ )); do",
+        observation:
+          "RELEASE_COUNT=$(printf '%s' \"$RELEASES\" | jq --arg tag \"$TAG\" '[.[] | select(.tag_name == $tag)] | length')",
+        projection:
+          "RELEASE_INVENTORY=$(printf '%s' \"$RELEASES\" | jq -c '[.[] | [.id, .tag_name, .draft, .prerelease]]')",
+        compare: 'if [ "$RELEASE_INVENTORY" != "$RELEASE_PREVIOUS_INVENTORY" ]; then',
+        assignment: 'RELEASE_PREVIOUS_INVENTORY="$RELEASE_INVENTORY"',
+        terminal: 'if [ "$release_attempt" -eq 12 ]; then',
+        failure: "did not reach a stable inventory after 12 bounded checks",
+        wait: "sleep 5",
+        consume: 'if [ "$RELEASE_COUNT" -eq 1 ]; then break; fi',
+        reset: 'RELEASE_PREVIOUS_INVENTORY=""',
+        exactLoopResets: 3
+      }
+    ],
+    [
+      transaction,
+      {
+        init: 'PUBLISHED_PREVIOUS_INVENTORY=""',
+        loop: "for (( published_list_attempt=1; published_list_attempt<=12; published_list_attempt++ )); do",
+        observation:
+          "RELEASE_COUNT=$(printf '%s' \"$RELEASES\" | jq --arg tag \"$TAG\" '[.[] | select(.tag_name == $tag)] | length')",
+        projection:
+          "PUBLISHED_INVENTORY=$(printf '%s' \"$RELEASES\" | jq -c '[.[] | [.id, .tag_name, .draft, .prerelease]]')",
+        compare: 'if [ "$PUBLISHED_INVENTORY" != "$PUBLISHED_PREVIOUS_INVENTORY" ]; then',
+        assignment: 'PUBLISHED_PREVIOUS_INVENTORY="$PUBLISHED_INVENTORY"',
+        terminal: 'if [ "$published_list_attempt" -eq 12 ]; then',
+        failure: "Published release list did not reach a stable inventory after 12 bounded checks",
+        wait: "sleep 5",
+        consume: "RELEASE_JSON=$(printf",
+        reset: 'PUBLISHED_PREVIOUS_INVENTORY=""',
+        exactLoopResets: 3
+      }
+    ],
+    [
+      transaction,
+      {
+        init: 'POST_ASSET_PREVIOUS_INVENTORY=""',
+        loop: "for (( post_publish_asset_attempt=1; post_publish_asset_attempt<=12; post_publish_asset_attempt++ )); do",
+        observation: "POST_ASSET_COUNT=$(printf '%s' \"$POST_ASSETS\" | jq 'length')",
+        projection:
+          "POST_ASSET_INVENTORY=$(printf '%s' \"$POST_ASSETS\" | jq -c '[.[] | [.id, .name, .state, .content_type, .size, .digest]]')",
+        compare:
+          'if [ "$POST_ASSET_COUNT" -ge 6 ] && [ "$POST_ASSET_INVENTORY" != "$POST_ASSET_PREVIOUS_INVENTORY" ]; then',
+        assignment: 'POST_ASSET_PREVIOUS_INVENTORY="$POST_ASSET_INVENTORY"',
+        terminal: 'if [ "$post_publish_asset_attempt" -eq 12 ]; then',
+        failure: "Published asset collection did not reach a stable inventory after 12 bounded checks",
+        wait: "sleep 5",
+        consume: 'if [ "$POST_ASSET_COUNT" -lt 6 ]; then',
+        reset: 'POST_ASSET_PREVIOUS_INVENTORY=""',
+        exactLoopResets: 2
+      }
+    ]
+  ];
+  const recoveryAssetPairProblems = compoundPaginationPairProblems(prepare, {
+    read: `if ! RECOVERY_ASSET_PAGES=$(gh_read api --paginate --slurp "repos/\${{ github.repository }}/releases/$RECOVERY_ID/assets?per_page=100")`,
+    decode:
+      "! RECOVERY_ASSETS=$(printf '%s' \"$RECOVERY_ASSET_PAGES\" | node scripts/check-release-integrity.mjs flatten-pages asset); then",
+    terminal: 'if [ "$create_recovery_attempt" -eq 12 ]; then',
+    failure: "Draft create asset readback remained unreadable after 12 bounded checks",
+    reset: 'RECOVERY_PREVIOUS_INVENTORY=""',
+    wait: "sleep 5",
+    consume: "RECOVERY_STATE=$(jq"
+  });
+  const ambiguitySpecs: Array<[string, ReleaseTagAmbiguitySpec]> = [
+    [
+      prepare,
+      {
+        loop: "for (( create_recovery_attempt=1; create_recovery_attempt<=12; create_recovery_attempt++ )); do",
+        count:
+          "RECOVERY_COUNT=$(printf '%s' \"$RECOVERY_RELEASES\" | jq --arg tag \"$TAG\" '[.[] | select(.tag_name == $tag)] | length')",
+        guard: 'if [ "$RECOVERY_COUNT" -gt 1 ]; then',
+        failure: "Draft create readback found duplicate releases for $TAG",
+        projection: "RECOVERY_INVENTORY=$(printf"
+      }
+    ],
+    [
+      transaction,
+      {
+        loop: "for (( release_attempt=1; release_attempt<=12; release_attempt++ )); do",
+        count:
+          "RELEASE_COUNT=$(printf '%s' \"$RELEASES\" | jq --arg tag \"$TAG\" '[.[] | select(.tag_name == $tag)] | length')",
+        guard: 'if [ "$RELEASE_COUNT" -gt 1 ]; then',
+        failure: "Asset phase found duplicate draft/published releases for $TAG",
+        projection: "RELEASE_INVENTORY=$(printf"
+      }
+    ],
+    [
+      transaction,
+      {
+        loop: "for (( published_list_attempt=1; published_list_attempt<=12; published_list_attempt++ )); do",
+        count:
+          "RELEASE_COUNT=$(printf '%s' \"$RELEASES\" | jq --arg tag \"$TAG\" '[.[] | select(.tag_name == $tag)] | length')",
+        guard: 'if [ "$RELEASE_COUNT" -gt 1 ]; then',
+        failure: "Published release list contains duplicate releases for $TAG",
+        projection: "PUBLISHED_INVENTORY=$(printf"
+      }
+    ]
+  ];
+  return [
+    ...specs.flatMap(([source, spec]) => retryBoundPaginationPairProblems(source, spec)),
+    ...fixedPointSpecs.flatMap(([source, spec]) => paginationFixedPointProblems(source, spec)),
+    ...recoveryAssetPairProblems,
+    ...ambiguitySpecs.flatMap(([source, spec]) => releaseTagAmbiguityProblems(source, spec))
+  ];
+}
+
 function releasePollProblems(workflow: string): string[] {
   let document: YamlRecord | null = null;
   try {
@@ -4497,6 +5025,7 @@ function releasePollProblems(workflow: string): string[] {
     return ["every paginated release read must use one strict collection decoder"];
   }
   const preflight = runBody(namedStep(steps, "Preflight existing GitHub release and every Basic asset before npm"));
+  const prepare = runBody(namedStep(steps, "Prepare draft GitHub Release"));
   const initIndex = preflight.indexOf("RELEASE_ABSENCE_OBSERVATIONS=0");
   const loopIndex = preflight.indexOf("release_preflight_attempt<=12", initIndex);
   const refreshIndex = preflight.indexOf("if ! RELEASE_PAGES=$(gh_read api --paginate --slurp", loopIndex);
@@ -4551,6 +5080,8 @@ function releasePollProblems(workflow: string): string[] {
   ) {
     return ["release absence must require six successful strict zero observations before npm"];
   }
+  const retryProblems = releasePaginationRetryProblems(body, preflight, prepare, releaseTransaction);
+  if (retryProblems.length > 0) return retryProblems;
   return [];
 }
 
@@ -8357,6 +8888,590 @@ describe("release identity and exact required-job gate", () => {
     expect(() => flattenPaginatedField([{ total_count: 0, workflow_runs: [] }], "unknown")).toThrow(
       /unknown paginated/
     );
+
+    const retryPairSpec: RetryBoundPaginationSpec = {
+      loop: "for (( page_attempt=1; page_attempt<=2; page_attempt++ )); do",
+      read: "if ! PAGES=$(gh_read api --paginate --slurp",
+      readFailure: "strict read remained unstable",
+      readWait: "sleep 1",
+      decode:
+        "if ! ITEMS=$(printf '%s' \"$PAGES\" | node scripts/check-release-integrity.mjs flatten-pages release); then",
+      decodeWait: "sleep 1",
+      terminal: 'if [ "$page_attempt" -eq 2 ]; then',
+      failure: "strict pages remained unstable",
+      consume: "COUNT=$(printf"
+    };
+    const retryPairPositive = `for (( page_attempt=1; page_attempt<=2; page_attempt++ )); do
+  if ! PAGES=$(gh_read api --paginate --slurp "releases?per_page=100"); then
+    if [ "$page_attempt" -eq 2 ]; then
+      echo "strict read remained unstable"
+      exit 1
+    fi
+    sleep 1
+    continue
+  fi
+  if ! ITEMS=$(printf '%s' "$PAGES" | node scripts/check-release-integrity.mjs flatten-pages release); then
+    if [ "$page_attempt" -eq 2 ]; then
+      echo "strict pages remained unstable"
+      exit 1
+    fi
+    sleep 1
+    continue
+  fi
+  COUNT=$(printf '%s' "$ITEMS" | jq 'length')
+done`;
+    const retryPairUnguardedDecoder = `for (( page_attempt=1; page_attempt<=2; page_attempt++ )); do
+  if ! PAGES=$(gh_read api --paginate --slurp "releases?per_page=100"); then
+    if [ "$page_attempt" -eq 2 ]; then
+      echo "strict read remained unstable"
+      exit 1
+    fi
+    sleep 1
+    continue
+  fi
+  ITEMS=$(printf '%s' "$PAGES" | node scripts/check-release-integrity.mjs flatten-pages release)
+  if [ "$page_attempt" -eq 2 ]; then
+    echo "strict pages remained unstable"
+    exit 1
+  fi
+  sleep 1
+  continue
+  COUNT=$(printf '%s' "$ITEMS" | jq 'length')
+done`;
+    const retryPairWithoutContinue = `for (( page_attempt=1; page_attempt<=2; page_attempt++ )); do
+  if ! PAGES=$(gh_read api --paginate --slurp "releases?per_page=100"); then
+    if [ "$page_attempt" -eq 2 ]; then
+      echo "strict read remained unstable"
+      exit 1
+    fi
+    sleep 1
+    continue
+  fi
+  if ! ITEMS=$(printf '%s' "$PAGES" | node scripts/check-release-integrity.mjs flatten-pages release); then
+    if [ "$page_attempt" -eq 2 ]; then
+      echo "strict pages remained unstable"
+      exit 1
+    fi
+    sleep 1
+  fi
+  COUNT=$(printf '%s' "$ITEMS" | jq 'length')
+done`;
+    const retryPairTransportWithoutContinue = `for (( page_attempt=1; page_attempt<=2; page_attempt++ )); do
+  if ! PAGES=$(gh_read api --paginate --slurp "releases?per_page=100"); then
+    if [ "$page_attempt" -eq 2 ]; then
+      echo "strict read remained unstable"
+      exit 1
+    fi
+    sleep 1
+  fi
+  if ! ITEMS=$(printf '%s' "$PAGES" | node scripts/check-release-integrity.mjs flatten-pages release); then
+    if [ "$page_attempt" -eq 2 ]; then
+      echo "strict pages remained unstable"
+      exit 1
+    fi
+    sleep 1
+    continue
+  fi
+  COUNT=$(printf '%s' "$ITEMS" | jq 'length')
+done`;
+    const retryPairDecodedRewrite = `for (( page_attempt=1; page_attempt<=2; page_attempt++ )); do
+  if ! PAGES=$(gh_read api --paginate --slurp "releases?per_page=100"); then
+    if [ "$page_attempt" -eq 2 ]; then
+      echo "strict read remained unstable"
+      exit 1
+    fi
+    sleep 1
+    continue
+  fi
+  if ! ITEMS=$(printf '%s' "$PAGES" | node scripts/check-release-integrity.mjs flatten-pages release); then
+    if [ "$page_attempt" -eq 2 ]; then
+      echo "strict pages remained unstable"
+      exit 1
+    fi
+    sleep 1
+    continue
+  fi
+  ITEMS=$(printf '%s' "$ITEMS" | jq 'unique_by(.id)')
+  COUNT=$(printf '%s' "$ITEMS" | jq 'length')
+done`;
+    const retryPairWithoutExit = `for (( page_attempt=1; page_attempt<=2; page_attempt++ )); do
+  if ! PAGES=$(gh_read api --paginate --slurp "releases?per_page=100"); then
+    if [ "$page_attempt" -eq 2 ]; then
+      echo "strict read remained unstable"
+      exit 1
+    fi
+    sleep 1
+    continue
+  fi
+  if ! ITEMS=$(printf '%s' "$PAGES" | node scripts/check-release-integrity.mjs flatten-pages release); then
+    if [ "$page_attempt" -eq 2 ]; then
+      echo "strict pages remained unstable"
+      true
+    fi
+    sleep 1
+    continue
+  fi
+  COUNT=$(printf '%s' "$ITEMS" | jq 'length')
+done`;
+    const retryPairPrematureClose = `for (( page_attempt=1; page_attempt<=2; page_attempt++ )); do
+  if ! PAGES=$(gh_read api --paginate --slurp "releases?per_page=100"); then
+    if [ "$page_attempt" -eq 2 ]; then
+      echo "strict read remained unstable"
+      exit 1
+    fi
+    sleep 1
+    continue
+  fi
+  if ! ITEMS=$(printf '%s' "$PAGES" | node scripts/check-release-integrity.mjs flatten-pages release); then
+  fi
+  if [ "$page_attempt" -eq 2 ]; then
+    echo "strict pages remained unstable"
+    exit 1
+  fi
+  sleep 1
+  continue
+  COUNT=$(printf '%s' "$ITEMS" | jq 'length')
+done`;
+    const retryPairEarlyTransportContinue = `for (( page_attempt=1; page_attempt<=2; page_attempt++ )); do
+  if ! PAGES=$(gh_read api --paginate --slurp "releases?per_page=100"); then
+    continue
+    if [ "$page_attempt" -eq 2 ]; then
+      echo "strict read remained unstable"
+      exit 1
+    fi
+    sleep 1
+    continue
+  fi
+  if ! ITEMS=$(printf '%s' "$PAGES" | node scripts/check-release-integrity.mjs flatten-pages release); then
+    if [ "$page_attempt" -eq 2 ]; then
+      echo "strict pages remained unstable"
+      exit 1
+    fi
+    sleep 1
+    continue
+  fi
+  COUNT=$(printf '%s' "$ITEMS" | jq 'length')
+done`;
+    const retryPairEarlyDecodeContinue = `for (( page_attempt=1; page_attempt<=2; page_attempt++ )); do
+  if ! PAGES=$(gh_read api --paginate --slurp "releases?per_page=100"); then
+    if [ "$page_attempt" -eq 2 ]; then
+      echo "strict read remained unstable"
+      exit 1
+    fi
+    sleep 1
+    continue
+  fi
+  if ! ITEMS=$(printf '%s' "$PAGES" | node scripts/check-release-integrity.mjs flatten-pages release); then
+    continue
+    if [ "$page_attempt" -eq 2 ]; then
+      echo "strict pages remained unstable"
+      exit 1
+    fi
+    sleep 1
+    continue
+  fi
+  COUNT=$(printf '%s' "$ITEMS" | jq 'length')
+done`;
+    const retryPairBeforeReadExitSuccess = `for (( page_attempt=1; page_attempt<=2; page_attempt++ )); do
+  exit 0
+  if ! PAGES=$(gh_read api --paginate --slurp "releases?per_page=100"); then
+    if [ "$page_attempt" -eq 2 ]; then
+      echo "strict read remained unstable"
+      exit 1
+    fi
+    sleep 1
+    continue
+  fi
+  if ! ITEMS=$(printf '%s' "$PAGES" | node scripts/check-release-integrity.mjs flatten-pages release); then
+    if [ "$page_attempt" -eq 2 ]; then
+      echo "strict pages remained unstable"
+      exit 1
+    fi
+    sleep 1
+    continue
+  fi
+  COUNT=$(printf '%s' "$ITEMS" | jq 'length')
+done`;
+    const retryPairBeforeReadContinue = `for (( page_attempt=1; page_attempt<=2; page_attempt++ )); do
+  continue
+  if ! PAGES=$(gh_read api --paginate --slurp "releases?per_page=100"); then
+    if [ "$page_attempt" -eq 2 ]; then
+      echo "strict read remained unstable"
+      exit 1
+    fi
+    sleep 1
+    continue
+  fi
+  if ! ITEMS=$(printf '%s' "$PAGES" | node scripts/check-release-integrity.mjs flatten-pages release); then
+    if [ "$page_attempt" -eq 2 ]; then
+      echo "strict pages remained unstable"
+      exit 1
+    fi
+    sleep 1
+    continue
+  fi
+  COUNT=$(printf '%s' "$ITEMS" | jq 'length')
+done`;
+    const retryPairTransportExitSuccess = `for (( page_attempt=1; page_attempt<=2; page_attempt++ )); do
+  if ! PAGES=$(gh_read api --paginate --slurp "releases?per_page=100"); then
+    exit 0
+    if [ "$page_attempt" -eq 2 ]; then
+      echo "strict read remained unstable"
+      exit 1
+    fi
+    sleep 1
+    continue
+  fi
+  if ! ITEMS=$(printf '%s' "$PAGES" | node scripts/check-release-integrity.mjs flatten-pages release); then
+    if [ "$page_attempt" -eq 2 ]; then
+      echo "strict pages remained unstable"
+      exit 1
+    fi
+    sleep 1
+    continue
+  fi
+  COUNT=$(printf '%s' "$ITEMS" | jq 'length')
+done`;
+    const retryPairDecodeExitSuccess = `for (( page_attempt=1; page_attempt<=2; page_attempt++ )); do
+  if ! PAGES=$(gh_read api --paginate --slurp "releases?per_page=100"); then
+    if [ "$page_attempt" -eq 2 ]; then
+      echo "strict read remained unstable"
+      exit 1
+    fi
+    sleep 1
+    continue
+  fi
+  if ! ITEMS=$(printf '%s' "$PAGES" | node scripts/check-release-integrity.mjs flatten-pages release); then
+    exit 0
+    if [ "$page_attempt" -eq 2 ]; then
+      echo "strict pages remained unstable"
+      exit 1
+    fi
+    sleep 1
+    continue
+  fi
+  COUNT=$(printf '%s' "$ITEMS" | jq 'length')
+done`;
+    expect(retryBoundPaginationPairProblems(retryPairPositive, retryPairSpec)).toEqual([]);
+    for (const invalidPair of [
+      retryPairUnguardedDecoder,
+      retryPairWithoutContinue,
+      retryPairTransportWithoutContinue,
+      retryPairDecodedRewrite,
+      retryPairWithoutExit,
+      retryPairPrematureClose,
+      retryPairEarlyTransportContinue,
+      retryPairEarlyDecodeContinue,
+      retryPairBeforeReadExitSuccess,
+      retryPairBeforeReadContinue,
+      retryPairTransportExitSuccess,
+      retryPairDecodeExitSuccess
+    ]) {
+      expect(retryBoundPaginationPairProblems(invalidPair, retryPairSpec)).toContain(WRITE_AWARE_PAGINATION_PROBLEM);
+    }
+
+    const compoundPairSpec: CompoundPaginationPairSpec = {
+      read: "if ! ASSET_PAGES=$(read_pages)",
+      decode: '! ASSETS=$(strict_decode "$ASSET_PAGES"); then',
+      terminal: 'if [ "$page_attempt" -eq 2 ]; then',
+      failure: "asset pages remained unstable",
+      reset: 'PREVIOUS_INVENTORY=""',
+      wait: "sleep 1",
+      consume: "STATE=$(consume"
+    };
+    const compoundPairPositive = `if ! ASSET_PAGES=$(read_pages) || ! ASSETS=$(strict_decode "$ASSET_PAGES"); then
+  if [ "$page_attempt" -eq 2 ]; then
+    echo "asset pages remained unstable"
+    exit 1
+  fi
+  PREVIOUS_INVENTORY=""
+  sleep 1
+  continue
+fi
+STATE=$(consume "$ASSETS")`;
+    const compoundPairConjunctive = `if ! ASSET_PAGES=$(read_pages) && ! ASSETS=$(strict_decode "$ASSET_PAGES"); then
+  if [ "$page_attempt" -eq 2 ]; then
+    echo "asset pages remained unstable"
+    exit 1
+  fi
+  PREVIOUS_INVENTORY=""
+  sleep 1
+  continue
+fi
+STATE=$(consume "$ASSETS")`;
+    const compoundPairPrematureClose = `if ! ASSET_PAGES=$(read_pages) || ! ASSETS=$(strict_decode "$ASSET_PAGES"); then
+fi
+if [ "$page_attempt" -eq 2 ]; then
+  echo "asset pages remained unstable"
+  exit 1
+fi
+PREVIOUS_INVENTORY=""
+sleep 1
+continue
+fi
+STATE=$(consume "$ASSETS")`;
+    expect(compoundPaginationPairProblems(compoundPairPositive, compoundPairSpec)).toEqual([]);
+    for (const invalidCompoundPair of [compoundPairConjunctive, compoundPairPrematureClose]) {
+      expect(compoundPaginationPairProblems(invalidCompoundPair, compoundPairSpec)).toContain(
+        WRITE_AWARE_PAGINATION_PROBLEM
+      );
+    }
+
+    const ambiguitySpec: ReleaseTagAmbiguitySpec = {
+      loop: "for (( page_attempt=1; page_attempt<=2; page_attempt++ )); do",
+      count: "COUNT=$(count_exact_tag)",
+      guard: 'if [ "$COUNT" -gt 1 ]; then',
+      failure: "duplicate releases for tag",
+      projection: "INVENTORY=$(project"
+    };
+    const ambiguityPositive = `for (( page_attempt=1; page_attempt<=2; page_attempt++ )); do
+  COUNT=$(count_exact_tag)
+  if [ "$COUNT" -gt 1 ]; then
+    echo "duplicate releases for tag"
+    exit 1
+  fi
+  INVENTORY=$(project "$RELEASES")
+done`;
+    const ambiguityFailOpen = `for (( page_attempt=1; page_attempt<=2; page_attempt++ )); do
+  COUNT=$(count_exact_tag)
+  if [ "$COUNT" -gt 1 ]; then
+    echo "duplicate releases for tag"
+    exit 0
+  fi
+  INVENTORY=$(project "$RELEASES")
+done`;
+    const ambiguityPrematureClose = `for (( page_attempt=1; page_attempt<=2; page_attempt++ )); do
+  COUNT=$(count_exact_tag)
+  if [ "$COUNT" -gt 1 ]; then
+  fi
+  echo "duplicate releases for tag"
+  exit 1
+  fi
+  INVENTORY=$(project "$RELEASES")
+done`;
+    const ambiguityPostGuardContinue = `for (( page_attempt=1; page_attempt<=2; page_attempt++ )); do
+  COUNT=$(count_exact_tag)
+  if [ "$COUNT" -gt 1 ]; then
+    echo "duplicate releases for tag"
+    exit 1
+  fi
+  continue
+  INVENTORY=$(project "$RELEASES")
+done`;
+    expect(releaseTagAmbiguityProblems(ambiguityPositive, ambiguitySpec)).toEqual([]);
+    for (const invalidAmbiguity of [ambiguityFailOpen, ambiguityPrematureClose, ambiguityPostGuardContinue]) {
+      expect(releaseTagAmbiguityProblems(invalidAmbiguity, ambiguitySpec)).toContain(WRITE_AWARE_PAGINATION_PROBLEM);
+    }
+
+    const fixedPointSpec: PaginationFixedPointSpec = {
+      init: 'PREVIOUS_INVENTORY=""',
+      loop: "for (( page_attempt=1; page_attempt<=2; page_attempt++ )); do",
+      observation: "COUNT=$(printf '%s' \"$ITEMS\" | jq 'length')",
+      projection: "INVENTORY=$(printf '%s' \"$ITEMS\" | jq -c '[.[] | [.id]]')",
+      compare: 'if [ "$INVENTORY" != "$PREVIOUS_INVENTORY" ]; then',
+      assignment: 'PREVIOUS_INVENTORY="$INVENTORY"',
+      terminal: 'if [ "$page_attempt" -eq 2 ]; then',
+      failure: "inventory did not stabilize",
+      wait: "sleep 1",
+      consume: 'if [ "$COUNT" -eq 1 ]; then break; fi',
+      reset: 'PREVIOUS_INVENTORY=""',
+      exactLoopResets: 3
+    };
+    const fixedPointPositive = `PREVIOUS_INVENTORY=""
+for (( page_attempt=1; page_attempt<=2; page_attempt++ )); do
+  if ! PAGES=$(gh_read api --paginate --slurp "releases?per_page=100"); then
+    PREVIOUS_INVENTORY=""
+    continue
+  fi
+  if ! ITEMS=$(strict_decode "$PAGES"); then
+    PREVIOUS_INVENTORY=""
+    continue
+  fi
+  COUNT=$(printf '%s' "$ITEMS" | jq 'length')
+  if [ "$COUNT" -eq 1 ]; then
+    INVENTORY=$(printf '%s' "$ITEMS" | jq -c '[.[] | [.id]]')
+    if [ "$INVENTORY" != "$PREVIOUS_INVENTORY" ]; then
+      PREVIOUS_INVENTORY="$INVENTORY"
+      if [ "$page_attempt" -eq 2 ]; then
+        echo "inventory did not stabilize"
+        exit 1
+      fi
+      sleep 1
+      continue
+    fi
+  else
+    PREVIOUS_INVENTORY=""
+  fi
+  if [ "$COUNT" -eq 1 ]; then break; fi
+done`;
+    const fixedPointSingleObservation = `PREVIOUS_INVENTORY=""
+for (( page_attempt=1; page_attempt<=2; page_attempt++ )); do
+  PREVIOUS_INVENTORY=""
+  PREVIOUS_INVENTORY=""
+  PREVIOUS_INVENTORY=""
+  COUNT=$(printf '%s' "$ITEMS" | jq 'length')
+  INVENTORY=$(printf '%s' "$ITEMS" | jq -c '[.[] | [.id]]')
+  if [ "$COUNT" -eq 1 ]; then break; fi
+done`;
+    const fixedPointPrematureBreak = `PREVIOUS_INVENTORY=""
+for (( page_attempt=1; page_attempt<=2; page_attempt++ )); do
+  PREVIOUS_INVENTORY=""
+  PREVIOUS_INVENTORY=""
+  PREVIOUS_INVENTORY=""
+  COUNT=$(printf '%s' "$ITEMS" | jq 'length')
+  INVENTORY=$(printf '%s' "$ITEMS" | jq -c '[.[] | [.id]]')
+  if [ "$INVENTORY" != "$PREVIOUS_INVENTORY" ]; then
+    PREVIOUS_INVENTORY="$INVENTORY"
+    if [ "$page_attempt" -eq 2 ]; then
+      echo "inventory did not stabilize"
+      exit 1
+    fi
+    sleep 1
+    continue
+    break
+  fi
+  if [ "$COUNT" -eq 1 ]; then break; fi
+done`;
+    const fixedPointWriteReplay =
+      'PREVIOUS_INVENTORY="" for (( page_attempt=1; page_attempt<=2; page_attempt++ )); do ' +
+      'PREVIOUS_INVENTORY="" PREVIOUS_INVENTORY="" PREVIOUS_INVENTORY="" ' +
+      "COUNT=$(printf '%s' \"$ITEMS\" | jq 'length') " +
+      "INVENTORY=$(printf '%s' \"$ITEMS\" | jq -c '[.[] | [.id]]') " +
+      'if [ "$INVENTORY" != "$PREVIOUS_INVENTORY" ]; then PREVIOUS_INVENTORY="$INVENTORY" ' +
+      'if [ "$page_attempt" -eq 2 ]; then echo "inventory did not stabilize" exit 1 fi ' +
+      'sleep 1 continue fi release create "$TAG" if [ "$COUNT" -eq 1 ]; then break; fi done';
+    const fixedPointSemicolonBreak =
+      'PREVIOUS_INVENTORY="" for (( page_attempt=1; page_attempt<=2; page_attempt++ )); do ' +
+      'PREVIOUS_INVENTORY="" PREVIOUS_INVENTORY="" PREVIOUS_INVENTORY="" ' +
+      "COUNT=$(printf '%s' \"$ITEMS\" | jq 'length') " +
+      "INVENTORY=$(printf '%s' \"$ITEMS\" | jq -c '[.[] | [.id]]') " +
+      'if [ "$INVENTORY" != "$PREVIOUS_INVENTORY" ]; then PREVIOUS_INVENTORY="$INVENTORY" ' +
+      'if [ "$page_attempt" -eq 2 ]; then echo "inventory did not stabilize" exit 1 fi ' +
+      'sleep 1 continue; break; fi if [ "$COUNT" -eq 1 ]; then break; fi done';
+    const fixedPointEarlyConsume =
+      'PREVIOUS_INVENTORY="" for (( page_attempt=1; page_attempt<=2; page_attempt++ )); do ' +
+      'PREVIOUS_INVENTORY="" PREVIOUS_INVENTORY="" PREVIOUS_INVENTORY="" ' +
+      "COUNT=$(printf '%s' \"$ITEMS\" | jq 'length') " +
+      "INVENTORY=$(printf '%s' \"$ITEMS\" | jq -c '[.[] | [.id]]') " +
+      'if [ "$COUNT" -eq 1 ]; then break; fi ' +
+      'if [ "$INVENTORY" != "$PREVIOUS_INVENTORY" ]; then PREVIOUS_INVENTORY="$INVENTORY" ' +
+      'if [ "$page_attempt" -eq 2 ]; then echo "inventory did not stabilize" exit 1 fi ' +
+      'sleep 1 continue fi if [ "$COUNT" -eq 1 ]; then break; fi done';
+    const fixedPointExitSuccess =
+      'PREVIOUS_INVENTORY="" for (( page_attempt=1; page_attempt<=2; page_attempt++ )); do ' +
+      'PREVIOUS_INVENTORY="" PREVIOUS_INVENTORY="" PREVIOUS_INVENTORY="" exit 0; ' +
+      "COUNT=$(printf '%s' \"$ITEMS\" | jq 'length') " +
+      "INVENTORY=$(printf '%s' \"$ITEMS\" | jq -c '[.[] | [.id]]') " +
+      'if [ "$INVENTORY" != "$PREVIOUS_INVENTORY" ]; then PREVIOUS_INVENTORY="$INVENTORY" ' +
+      'if [ "$page_attempt" -eq 2 ]; then echo "inventory did not stabilize" exit 1 fi ' +
+      'sleep 1 continue fi if [ "$COUNT" -eq 1 ]; then break; fi done';
+    const fixedPointObservationContinue =
+      'PREVIOUS_INVENTORY="" for (( page_attempt=1; page_attempt<=2; page_attempt++ )); do ' +
+      'PREVIOUS_INVENTORY="" PREVIOUS_INVENTORY="" PREVIOUS_INVENTORY="" ' +
+      "COUNT=$(printf '%s' \"$ITEMS\" | jq 'length') continue " +
+      "INVENTORY=$(printf '%s' \"$ITEMS\" | jq -c '[.[] | [.id]]') " +
+      'if [ "$INVENTORY" != "$PREVIOUS_INVENTORY" ]; then PREVIOUS_INVENTORY="$INVENTORY" ' +
+      'if [ "$page_attempt" -eq 2 ]; then echo "inventory did not stabilize" exit 1 fi ' +
+      'sleep 1 continue fi if [ "$COUNT" -eq 1 ]; then break; fi done';
+    const fixedPointPostCompareContinue =
+      'PREVIOUS_INVENTORY="" for (( page_attempt=1; page_attempt<=2; page_attempt++ )); do ' +
+      'PREVIOUS_INVENTORY="" PREVIOUS_INVENTORY="" PREVIOUS_INVENTORY="" ' +
+      "COUNT=$(printf '%s' \"$ITEMS\" | jq 'length') " +
+      "INVENTORY=$(printf '%s' \"$ITEMS\" | jq -c '[.[] | [.id]]') " +
+      'if [ "$INVENTORY" != "$PREVIOUS_INVENTORY" ]; then PREVIOUS_INVENTORY="$INVENTORY" ' +
+      'if [ "$page_attempt" -eq 2 ]; then echo "inventory did not stabilize" exit 1 fi ' +
+      'sleep 1 continue fi continue if [ "$COUNT" -eq 1 ]; then break; fi done';
+    expect(paginationFixedPointProblems(fixedPointPositive, fixedPointSpec)).toEqual([]);
+    for (const invalidFixedPoint of [
+      fixedPointSingleObservation,
+      fixedPointPrematureBreak,
+      fixedPointWriteReplay,
+      fixedPointSemicolonBreak,
+      fixedPointEarlyConsume,
+      fixedPointExitSuccess,
+      fixedPointObservationContinue,
+      fixedPointPostCompareContinue
+    ]) {
+      expect(paginationFixedPointProblems(invalidFixedPoint, fixedPointSpec)).toContain(WRITE_AWARE_PAGINATION_PROBLEM);
+    }
+
+    const oldRelease = { id: 3, tag_name: "old", draft: false, prerelease: false };
+    const candidateRelease = { id: 4, tag_name: "v4.0.0-rc.3", draft: true, prerelease: true };
+    const stableReleasePages = [[candidateRelease], [oldRelease]];
+    const shiftedThenStableReleasePages = [
+      stableReleasePages,
+      [[oldRelease], [{ ...oldRelease }]],
+      stableReleasePages,
+      stableReleasePages
+    ];
+    let acceptedReleaseInventory: Record<string, unknown>[] | null = null;
+    let previousReleaseProjection: string | undefined;
+    let paginationObservationAttempts = 0;
+    for (const observation of shiftedThenStableReleasePages) {
+      paginationObservationAttempts += 1;
+      try {
+        const inventory = flattenPaginatedArrays(observation, "release");
+        const projection = JSON.stringify(
+          inventory.map((item) => [item.id, item.tag_name, item.draft, item.prerelease])
+        );
+        if (projection !== previousReleaseProjection) {
+          previousReleaseProjection = projection;
+          continue;
+        }
+        acceptedReleaseInventory = inventory;
+        break;
+      } catch {
+        previousReleaseProjection = undefined;
+      }
+    }
+    expect(paginationObservationAttempts).toBe(4);
+    expect(acceptedReleaseInventory).toEqual([candidateRelease, oldRelease]);
+    expect(() => flattenPaginatedArrays(shiftedThenStableReleasePages[1], "release")).toThrow(/duplicate id/);
+
+    const conflictingRelease = { ...candidateRelease, id: candidateRelease.id + 1 };
+    const conflictingInventory = flattenPaginatedArrays([[candidateRelease, conflictingRelease]], "release");
+    const conflictingTagMatches = conflictingInventory.filter((item) => item.tag_name === candidateRelease.tag_name);
+    let stableTagAmbiguityFailure: string | null = null;
+    if (conflictingTagMatches.length > 1) stableTagAmbiguityFailure = "duplicate releases for exact tag";
+    expect(stableTagAmbiguityFailure).toMatch(/duplicate releases/);
+
+    let persistentAttempts = 0;
+    let repeatedCreateCalls = 0;
+    let terminalPaginationFailure: string | null = null;
+    for (const observation of Array.from({ length: 12 }, () => shiftedThenStableReleasePages[1])) {
+      persistentAttempts += 1;
+      try {
+        flattenPaginatedArrays(observation, "release");
+      } catch {
+        if (persistentAttempts === 12) {
+          terminalPaginationFailure = "paginated release inventory remained unstable after 12 attempts";
+        }
+        continue;
+      }
+      repeatedCreateCalls += 1;
+    }
+    expect(persistentAttempts).toBe(12);
+    expect(terminalPaginationFailure).toMatch(/remained unstable after 12 attempts/);
+    expect(repeatedCreateCalls).toBe(0);
+
+    const zeroReleasePages: unknown[][] = [[]];
+    let successfulZeroObservations = 0;
+    for (const observation of [
+      zeroReleasePages,
+      shiftedThenStableReleasePages[1],
+      zeroReleasePages,
+      zeroReleasePages,
+      zeroReleasePages,
+      zeroReleasePages,
+      zeroReleasePages
+    ]) {
+      try {
+        if (flattenPaginatedArrays(observation, "release").length === 0) successfulZeroObservations += 1;
+      } catch {
+        // A failed epoch consumes budget but cannot count as authoritative absence.
+      }
+    }
+    expect(successfulZeroObservations).toBe(6);
   });
 
   // This mutation oracle intentionally exercises thousands of structural checks.

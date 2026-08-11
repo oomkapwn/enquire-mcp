@@ -1036,6 +1036,8 @@ for (const docFile of DOCS_FILES_TO_SCAN) {
 {
   const wfDir = ".github/workflows";
   const helperCommand = "node scripts/npm-ci-with-retry.mjs";
+  const executableNpmCiPattern =
+    /(?:^|[\s;&|(){}"'`])(?:"(?:[^"\r\n]*[/\\])?npm(?:\.cmd|\.exe)?"|'(?:[^'\r\n]*[/\\])?npm(?:\.cmd|\.exe)?'|(?:[^\s;&|()"'<>]*[/\\])?npm(?:\.cmd|\.exe)?)(?:\s+[^\s;&|()]+)*\s+ci(?=$|[\s;&|(){}<>"'`])/iu;
   const installStepName = "Install deps (npm ci with retry)";
   const auditCommand = "timeout --kill-after=10s 300s npm run check:audit";
   const auditStepName = "Audit source and published-consumer dependency graphs";
@@ -1314,7 +1316,7 @@ for (const docFile of DOCS_FILES_TO_SCAN) {
           `The helper token is allowed only as the exact ${helperCommand} command in one reviewed install step.`
         );
       }
-      if (/\bnpm(?:\.cmd|\.exe)?(?:\s+[^\s;&|]+)*\s+ci\b/i.test(command.text)) {
+      if (executableNpmCiPattern.test(command.text)) {
         record(
           "NPM-CI-LEGACY-COMMAND",
           rel,

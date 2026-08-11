@@ -2396,7 +2396,22 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
           "    runs-on: windows-2025\n" +
           "    timeout-minutes: 10\n" +
           "    steps:\n" +
-          "      - { name: Executable install, run: NPM.EXE ci }\n"
+          "      - { name: Executable install, run: NPM.EXE ci }\n" +
+          "  bypass-quoted:\n" +
+          "    runs-on: ubuntu-latest\n" +
+          "    timeout-minutes: 10\n" +
+          "    steps:\n" +
+          "      - { name: Quoted path install, run: '\"/usr/bin/npm\" ci' }\n" +
+          "  bypass-shell-wrapper:\n" +
+          "    runs-on: ubuntu-latest\n" +
+          "    timeout-minutes: 10\n" +
+          "    steps:\n" +
+          "      - { name: Shell wrapped install, run: 'sh -c \"npm ci\"' }\n" +
+          "  bypass-redirection:\n" +
+          "    runs-on: ubuntu-latest\n" +
+          "    timeout-minutes: 10\n" +
+          "    steps:\n" +
+          "      - { name: Redirected install, run: 'npm ci>install.log' }\n"
       );
       const pagesFixture = path.join(fixtureRoot, ".github", "workflows", "publish-docs.yml");
       const pagesWorkflow = await fs.readFile(pagesFixture, "utf8");
@@ -2483,6 +2498,15 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
       expect(output, "OIA must resolve a YAML alias to its executable npm.cmd install").toContain("> npm.cmd ci");
       expect(output, "OIA must reject case-insensitive npm.exe installs in .yaml flow steps").toContain(
         "> NPM.EXE ci"
+      );
+      expect(output, "OIA must reject quoted absolute npm executables in .yaml flow steps").toContain(
+        '> "/usr/bin/npm" ci'
+      );
+      expect(output, "OIA must reject shell-wrapped npm installs in .yaml flow steps").toContain(
+        '> sh -c "npm ci"'
+      );
+      expect(output, "OIA must reject npm installs with attached redirections in .yaml flow steps").toContain(
+        "> npm ci>install.log"
       );
       expect(output, "OIA must reject a wrapped helper command").toContain(
         "[NPM-CI-HELPER-NONCANONICAL] .github/workflows/npm-ci-bypass.yaml:"

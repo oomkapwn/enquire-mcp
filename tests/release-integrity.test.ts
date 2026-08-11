@@ -3667,6 +3667,8 @@ if (releaseTransactionExpectationIdentityBootstrapProblems.length !== 0) {
 const NPM_CI_HELPER_COMMAND = "node scripts/npm-ci-with-retry.mjs";
 const NPM_CI_INSTALL_STEP_NAME = "Install deps (npm ci with retry)";
 const NPM_CI_AUDIT_COMMAND = "timeout --kill-after=10s 300s npm run check:audit";
+const NPM_CI_EXECUTABLE_COMMAND =
+  /(?:^|[\s;&|(){}"'`])(?:"(?:[^"\r\n]*[/\\])?npm(?:\.cmd|\.exe)?"|'(?:[^'\r\n]*[/\\])?npm(?:\.cmd|\.exe)?'|(?:[^\s;&|()"'<>]*[/\\])?npm(?:\.cmd|\.exe)?)(?:\s+[^\s;&|()]+)*\s+ci(?=$|[\s;&|(){}<>"'`])/iu;
 const NPM_CI_WORKFLOW_JOB_TIMEOUTS = [
   ["ci.yml", "lint", 5],
   ["ci.yml", "test", 10],
@@ -3879,10 +3881,7 @@ function npmCiWorkflowProblems(workflows: ReadonlyMap<string, string>): string[]
         problems.push(`${NPM_CI_WORKFLOW_PROBLEM}: noncanonical helper in ${filename}#${jobId}`);
       }
       if (
-        steps.some(
-          (step) =>
-            typeof step.run === "string" && /\bnpm(?:\.cmd|\.exe)?(?:\s+[^\s;&|]+)*\s+ci\b/iu.test(step.run)
-        )
+        steps.some((step) => typeof step.run === "string" && NPM_CI_EXECUTABLE_COMMAND.test(step.run))
       ) {
         problems.push(`${NPM_CI_WORKFLOW_PROBLEM}: legacy executable npm ci in ${filename}#${jobId}`);
       }
@@ -4643,12 +4642,36 @@ async function assertNpmCiWorkflowContract(): Promise<void> {
       "    timeout-minutes: 10\n" +
       "    steps:\n" +
       "      - { name: Executable install, run: NPM.EXE ci }\n"
+      + "  bypass-quoted:\n"
+      + "    runs-on: ubuntu-latest\n"
+      + "    timeout-minutes: 10\n"
+      + "    steps:\n"
+      + "      - { name: Quoted install, run: '\"npm\" ci' }\n"
+      + "  bypass-shell-wrapper:\n"
+      + "    runs-on: ubuntu-latest\n"
+      + "    timeout-minutes: 10\n"
+      + "    steps:\n"
+      + "      - { name: Shell wrapped install, run: 'bash -c \"npm ci\"' }\n"
+      + "  bypass-redirection:\n"
+      + "    runs-on: ubuntu-latest\n"
+      + "    timeout-minutes: 10\n"
+      + "    steps:\n"
+      + "      - { name: Redirected install, run: 'npm ci>install.log' }\n"
   );
   expect(npmCiWorkflowProblems(yamlAliasBypass)).toContain(
     `${NPM_CI_WORKFLOW_PROBLEM}: legacy executable npm ci in npm-ci-bypass.yaml#bypass`
   );
   expect(npmCiWorkflowProblems(yamlAliasBypass)).toContain(
     `${NPM_CI_WORKFLOW_PROBLEM}: legacy executable npm ci in npm-ci-bypass.yaml#bypass-exe`
+  );
+  expect(npmCiWorkflowProblems(yamlAliasBypass)).toContain(
+    `${NPM_CI_WORKFLOW_PROBLEM}: legacy executable npm ci in npm-ci-bypass.yaml#bypass-quoted`
+  );
+  expect(npmCiWorkflowProblems(yamlAliasBypass)).toContain(
+    `${NPM_CI_WORKFLOW_PROBLEM}: legacy executable npm ci in npm-ci-bypass.yaml#bypass-shell-wrapper`
+  );
+  expect(npmCiWorkflowProblems(yamlAliasBypass)).toContain(
+    `${NPM_CI_WORKFLOW_PROBLEM}: legacy executable npm ci in npm-ci-bypass.yaml#bypass-redirection`
   );
   expect(
     npmCiWorkflowProblems(

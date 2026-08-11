@@ -875,7 +875,7 @@ function checkInvariantHasNegativeCoverage(filename: string, content: string): s
 
 describe("META-invariant: exact structural census + NEGATIVE control coverage", () => {
   // PR #443 raised hybrid candidate-audit invocations from 24 to 53; the m109-m110
-  // migration adds 12 bounded candidates for 65 total, and m111, paired m112-m113, m114-m116,
+  // migration adds 12 bounded candidates for 65 total, and m111, paired m112-m113, m114-m117,
   // plus the nested m108->m107 dependency pair reuse those exact candidate slots without
   // adding another full matrix scan. The last
   // measured 53-candidate run completed the synchronous work in 323.7s; remote CI must
@@ -1159,7 +1159,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       ])
     );
 
-    // NEGATIVE control: append the nine exact historical root call-node byte spans after
+    // NEGATIVE control: append the ten exact historical root call-node byte spans after
     // the frozen legacy tail. The m107 root retains its nested m108 dependency, so one
     // resurrection must fail both frozen XOR identities. Earlier insertion would shift
     // unrelated positional identities, while different inner indentation would not
@@ -1239,6 +1239,13 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       `        \`PROVENANCE_SHA: \\\${{ github.workflow_sha }}\``,
       "      )"
     ].join("\n");
+    const legacyM117CallNode = [
+      "replaceExactly(",
+      "        mcpbInputs.release,",
+      `        \`      - name: \${NPM_PROVENANCE_STEP_NAME}\`,`,
+      '        "      - name: Skipped npm provenance"',
+      "      )"
+    ].join("\n");
     expect(sha256Text(legacyM108CallNode)).toBe("067bacefc171385fbf496ba6d7e25ad9403569d2a8daeba29e483e8c486507b8");
     expect(sha256Text(legacyM107CallNode)).toBe("b67c164531f5a0702f1ceb3ec750cf4df6f655ac68d12fbb31bf04db35ca5325");
     expect(sha256Text(legacyM109CallNode)).toBe("24c05d112a2d846080b17c7413f555c37b2c50a54975f16a985d8b1018b2d711");
@@ -1249,6 +1256,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
     expect(sha256Text(legacyM114CallNode)).toBe("33eafb51e59c895771d9b0523834365e423477bdee438022ebba3866ac293581");
     expect(sha256Text(legacyM115CallNode)).toBe("32f57ce2ec034103af6ada47d96577ac16df4c63e90c2ea31994b106f4955576");
     expect(sha256Text(legacyM116CallNode)).toBe("54be2d32d9f71d6781fa5b76a93b19373e8387f0c99452104b3676ab8060c27c");
+    expect(sha256Text(legacyM117CallNode)).toBe("6255d6dc505099d10ea951efa0ff2bd01583bce7caeb565dd28ffa9d6415b9c1");
     const resurrectedRegistryRoots = replaceExactly(
       matrixSource,
       finalRequiredReleaseCheck,
@@ -1262,6 +1270,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
         `    void ${legacyM114CallNode};`,
         `    void ${legacyM115CallNode};`,
         `    void ${legacyM116CallNode};`,
+        `    void ${legacyM117CallNode};`,
         finalRequiredReleaseCheck
       ].join("\n")
     );
@@ -1297,6 +1306,9 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
         ),
         expect.stringMatching(
           /release mutation hybrid frozen ID release\.m116 must exist in exactly one legacy XOR declarative representation; found 1\/1/
+        ),
+        expect.stringMatching(
+          /release mutation hybrid frozen ID release\.m117 must exist in exactly one legacy XOR declarative representation; found 1\/1/
         )
       ])
     );
@@ -1341,9 +1353,12 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
     const m116BlockStart = matrixSource.indexOf(
       '    const releaseMutationM116 = releaseMutationPlan.registerMutation("release.m116", {'
     );
+    const m117BlockStart = matrixSource.indexOf(
+      '    const releaseMutationM117 = releaseMutationPlan.registerMutation("release.m117", {'
+    );
     const declarativeSealStart = matrixSource.indexOf(
       "    const releaseMutationProblems = releaseMutationPlan.seal();",
-      m116BlockStart
+      m117BlockStart
     );
     expect(m108BlockStart).toBeGreaterThan(0);
     expect(m107BlockStart).toBeGreaterThan(m108BlockStart);
@@ -1356,7 +1371,8 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
     expect(m114BlockStart).toBeGreaterThan(m113BlockStart);
     expect(m115BlockStart).toBeGreaterThan(m114BlockStart);
     expect(m116BlockStart).toBeGreaterThan(m115BlockStart);
-    expect(declarativeSealStart).toBeGreaterThan(m116BlockStart);
+    expect(m117BlockStart).toBeGreaterThan(m116BlockStart);
+    expect(declarativeSealStart).toBeGreaterThan(m117BlockStart);
     const swappedRegistryDependencyDeclarations = [
       matrixSource.slice(0, m108BlockStart),
       matrixSource.slice(m107BlockStart, m109BlockStart),
@@ -1485,7 +1501,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
         "            mutant: releaseMutationM115"
       ].join("\n")
     );
-    const npmWorkflowInvocationDrift = replaceExactly(
+    const npmWorkflowM116InvocationDrift = replaceExactly(
       npmWorkflowM115InvocationDrift,
       [
         '            kind: "npm.workflow",',
@@ -1496,6 +1512,19 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
         '            kind: "npm.workflow",',
         "            baseline: releaseIntegritySource,",
         "            mutant: releaseMutationM116"
+      ].join("\n")
+    );
+    const npmWorkflowInvocationDrift = replaceExactly(
+      npmWorkflowM116InvocationDrift,
+      [
+        '            kind: "npm.workflow",',
+        "            baseline: releaseWorkflowFixtureSource,",
+        "            mutant: releaseMutationM117"
+      ].join("\n"),
+      [
+        '            kind: "npm.workflow",',
+        "            baseline: releaseIntegritySource,",
+        "            mutant: releaseMutationM117"
       ].join("\n")
     );
     expect(preparedAudit.auditMatrix(npmWorkflowInvocationDrift)).toEqual(
@@ -1510,7 +1539,8 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
         expect.stringMatching(/release mutation hybrid case release\.case\.m113 invocation must retain its exact/),
         expect.stringMatching(/release mutation hybrid case release\.case\.m114 invocation must retain its exact/),
         expect.stringMatching(/release mutation hybrid case release\.case\.m115 invocation must retain its exact/),
-        expect.stringMatching(/release mutation hybrid case release\.case\.m116 invocation must retain its exact/)
+        expect.stringMatching(/release mutation hybrid case release\.case\.m116 invocation must retain its exact/),
+        expect.stringMatching(/release mutation hybrid case release\.case\.m117 invocation must retain its exact/)
       ])
     );
 
@@ -1800,16 +1830,16 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       [
         "      replaceExactly(",
         "        mcpbInputs.release,",
-        `        \`      - name: \${NPM_PROVENANCE_STEP_NAME}\`,`,
-        '        "      - name: Skipped npm provenance"',
+        `        \`PUBLISH_ATTEMPTED: \\\${{ steps.npm_publication.outputs.publish_attempted }}\`,`,
+        '        \'PUBLISH_ATTEMPTED: "false"\'',
         "      ),"
       ].join("\n"),
       [
         "      (",
         "        replaceExactly(",
         "          mcpbInputs.release,",
-        `          \`      - name: \${NPM_PROVENANCE_STEP_NAME}\`,`,
-        '          "      - name: Skipped npm provenance"',
+        `          \`PUBLISH_ATTEMPTED: \\\${{ steps.npm_publication.outputs.publish_attempted }}\`,`,
+        '          \'PUBLISH_ATTEMPTED: "false"\'',
         "        ),",
         "        mcpbInputs.release",
         "      ),"
@@ -1820,7 +1850,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
         expect.stringMatching(/release mutation hybrid current source must retain exact SHA-256/),
         expect.stringMatching(/release mutation hybrid current matrix slice must retain exact SHA-256/),
         expect.stringMatching(
-          /release mutation hybrid shared primary matcher 3df3ee2e.*exact closed iterable\/runtime topology for 32 frozen root/
+          /release mutation hybrid shared primary matcher 3df3ee2e.*exact closed iterable\/runtime topology for 31 frozen root/
         )
       ])
     );
@@ -1919,8 +1949,8 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
     const stagedRemainingBlock = [
       stagedRemainingCall,
       '    expect(releaseMutationPlan.phase).toBe("executed");',
-      "    expect(releaseMutationPlan.caseExecutions).toBe(45);",
-      "    expect(releaseMutationPlan.expectationExecutions).toBe(45);"
+      "    expect(releaseMutationPlan.caseExecutions).toBe(46);",
+      "    expect(releaseMutationPlan.expectationExecutions).toBe(46);"
     ].join("\n");
     const stagedLifecycleProblem =
       /release mutation hybrid lifecycle must be one clean seal followed by the exact m037 executeThrough\/executeRemaining pair with derived phase and execution censuses/;
@@ -1950,13 +1980,13 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
     );
     const wrongStagedFinalCaseCount = replaceExactly(
       matrixSource,
-      "    expect(releaseMutationPlan.caseExecutions).toBe(45);",
-      "    expect(releaseMutationPlan.caseExecutions).toBe(44);"
+      "    expect(releaseMutationPlan.caseExecutions).toBe(46);",
+      "    expect(releaseMutationPlan.caseExecutions).toBe(45);"
     );
     const wrongStagedFinalCensus = replaceExactly(
       wrongStagedFinalCaseCount,
-      "    expect(releaseMutationPlan.expectationExecutions).toBe(45);",
-      "    expect(releaseMutationPlan.expectationExecutions).toBe(44);"
+      "    expect(releaseMutationPlan.expectationExecutions).toBe(46);",
+      "    expect(releaseMutationPlan.expectationExecutions).toBe(45);"
     );
     expect(preparedAudit.auditMatrix(wrongStagedFinalCensus)).toEqual(
       expect.arrayContaining([expect.stringMatching(stagedLifecycleProblem)])
@@ -2085,7 +2115,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
     );
 
     // NEGATIVE controls: the suffix executes exactly between the shared m038-m106
-    // Registry loop and legacy m117, preserving the frozen global case order.
+    // Registry loop and legacy m118, preserving the frozen global case order.
     const stagedWithoutRemaining = replaceExactly(matrixSource, stagedRemainingBlock, "");
     const earlyStagedRemaining = replaceExactly(
       stagedWithoutRemaining,
@@ -2207,7 +2237,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
         "            mutant: releaseMutationM115"
       ].join("\n")
     );
-    const conflatedNpmOracles = replaceExactly(
+    const conflatedM116NpmOracle = replaceExactly(
       conflatedM115NpmOracle,
       [
         '            kind: "npm.workflow",',
@@ -2218,6 +2248,19 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
         '            kind: "npm.workflow",',
         "            baseline: releaseIntegritySource,",
         "            mutant: releaseMutationM116"
+      ].join("\n")
+    );
+    const conflatedNpmOracles = replaceExactly(
+      conflatedM116NpmOracle,
+      [
+        '            kind: "npm.workflow",',
+        "            baseline: releaseWorkflowFixtureSource,",
+        "            mutant: releaseMutationM117"
+      ].join("\n"),
+      [
+        '            kind: "npm.workflow",',
+        "            baseline: releaseIntegritySource,",
+        "            mutant: releaseMutationM117"
       ].join("\n")
     );
     expect(preparedAudit.auditMatrix(conflatedNpmOracles)).toEqual(
@@ -2257,6 +2300,12 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
         ),
         expect.stringMatching(
           /release mutation hybrid case release\.case\.m116 disagrees with its exact frozen identity/
+        ),
+        expect.stringMatching(
+          /release mutation hybrid case release\.case\.m117 invocation must retain its exact frozen oracle adapter/
+        ),
+        expect.stringMatching(
+          /release mutation hybrid case release\.case\.m117 disagrees with its exact frozen identity/
         )
       ])
     );

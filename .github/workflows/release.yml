@@ -271,16 +271,9 @@ jobs:
           cache: npm
           cache-dependency-path: package-lock.json
       - name: Install deps (npm ci with retry)
-        # v3.9.0-rc.20 — retry guards the recurring onnxruntime-node postinstall
-        # CDN ETIMEDOUT flake (hit rc.9 + failed the rc.19 release). Dependency-free
-        # bash loop — no new action to SHA-pin. OIA Check 10 forbids bare `npm ci`.
-        run: |
-          for n in 1 2 3; do
-            npm ci && break
-            if [ "$n" -eq 3 ]; then echo "::error::npm ci failed after 3 attempts"; exit 1; fi
-            echo "::warning::npm ci attempt $n failed (transient — e.g. onnxruntime postinstall CDN ETIMEDOUT); retrying in 15s"
-            sleep 15
-          done
+        # The release controller uses the same bounded install contract as CI;
+        # timed-out trees must be gone before retry can start.
+        run: node scripts/npm-ci-with-retry.mjs
       - run: npm run lint
       - run: npm run build
       - name: Test exact source without npm or contents-write tokens
@@ -296,7 +289,7 @@ jobs:
       # registry consumer resolves without root-only overrides. New and stale advisories
       # fail closed; any scope-specific exception needs a rationale + removal tracker.
       - name: Audit source and published-consumer dependency graphs
-        run: npm run check:audit
+        run: timeout --kill-after=10s 300s npm run check:audit
       - name: JSON-RPC smoke test against synthetic vault (scan + FTS5 paths)
         run: |
           VAULT="$(node scripts/synthetic-vault.mjs)"

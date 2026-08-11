@@ -2351,6 +2351,115 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
         `After v1.0.0, an unrelated report based on v1.0 gates v1.0.\n` +
           `stable v${staleMajorMinor}.x is the current release.\n${roadmap}`
       );
+      // Check 10 must exercise its real class detector, not merely retain
+      // descriptive code. Reintroduce one executable bare install and remove
+      // the audit subprocess deadline in the same isolated fixture: both must
+      // be reported alongside the unrelated currency mutations below.
+      const ciFixture = path.join(fixtureRoot, ".github", "workflows", "ci.yml");
+      const ciWorkflow = await fs.readFile(ciFixture, "utf8");
+      const ciWithLegacyInstall = replaceExactly(
+        ciWorkflow,
+        "        run: node scripts/npm-ci-with-retry.mjs",
+        "        run: npm ci",
+        13
+      );
+      await fs.writeFile(
+        ciFixture,
+        replaceExactly(
+          replaceExactly(
+            ciWithLegacyInstall,
+            "        run: timeout --kill-after=10s 300s npm run check:audit",
+            "        run: npm run check:audit"
+          ),
+          "  lint:\n    runs-on: ubuntu-latest\n    timeout-minutes: 5",
+          "  lint:\n    runs-on: ubuntu-latest\n    timeout-minutes: 5\n    continue-on-error: true"
+        )
+      );
+      const yamlBypassFixture = path.join(fixtureRoot, ".github", "workflows", "npm-ci-bypass.yaml");
+      await fs.writeFile(
+        yamlBypassFixture,
+        "name: npm-ci-bypass\n" +
+          "on: workflow_dispatch\n" +
+          "x-install: &install npm.cmd ci\n" +
+          "jobs:\n" +
+          "  bypass:\n" +
+          "    runs-on: ubuntu-latest\n" +
+          "    timeout-minutes: 10\n" +
+          "    steps:\n" +
+          "      - { name: Alias install, run: *install }\n" +
+          "      - { name: Wrapped helper, run: 'node scripts/npm-ci-with-retry.mjs || true' }\n" +
+          "      - name: Wrapped audit\n" +
+          "        run: |2- # explicit indentation and chomping are still executable\n" +
+          "          echo preparing\n" +
+          "          npm run check:audit\n" +
+          "  bypass-exe:\n" +
+          "    runs-on: windows-2025\n" +
+          "    timeout-minutes: 10\n" +
+          "    steps:\n" +
+          "      - { name: Executable install, run: NPM.EXE ci }\n"
+      );
+      const pagesFixture = path.join(fixtureRoot, ".github", "workflows", "publish-docs.yml");
+      const pagesWorkflow = await fs.readFile(pagesFixture, "utf8");
+      const pagesWithSetupDecoy = replaceExactly(
+        pagesWorkflow,
+        "      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7\n" +
+          "        with:\n" +
+          "          node-version: 22\n" +
+          "          cache: npm",
+        "      - name: Inert setup-node text decoy\n" +
+          "        run: |\n" +
+          "          cat <<'EOF'\n" +
+          "          - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020\n" +
+          "          EOF"
+      );
+      const pagesWithBoundaryDecoy = replaceExactly(
+        pagesWithSetupDecoy,
+        "  build:\n    runs-on: ubuntu-latest",
+        "  build:\n" +
+          "    name: |2\n" +
+          "      - name: Install deps (npm ci with retry)\n" +
+          "        run: node scripts/npm-ci-with-retry.mjs\n" +
+          "    runs-on: self-hosted"
+      );
+      await fs.writeFile(
+        pagesFixture,
+        replaceExactly(
+          pagesWithBoundaryDecoy,
+          "      - name: Install deps (npm ci with retry)\n" +
+            "        # One dependency-free cross-platform runner owns the exact attempt,\n" +
+            "        # process-tree deadline, kill grace and retry policy. OIA Check 10\n" +
+            "        # requires this exact invocation instead of accepting an inline loop.\n" +
+            "        run: node scripts/npm-ci-with-retry.mjs",
+          "      - { name: Install deps (npm ci with retry), run: node scripts/npm-ci-with-retry.mjs, continue-on-error: true }"
+        )
+      );
+      const releaseFixture = path.join(fixtureRoot, ".github", "workflows", "release.yml");
+      const releaseWorkflow = await fs.readFile(releaseFixture, "utf8");
+      const releaseWithSetupBypass = replaceExactly(
+        releaseWorkflow,
+        "      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7\n" +
+          "        with:",
+        "      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7\n" +
+          "        continue-on-error: true\n" +
+          "        with:"
+      );
+      await fs.writeFile(
+        releaseFixture,
+        replaceExactly(
+          releaseWithSetupBypass,
+          "      - name: Audit source and published-consumer dependency graphs\n" +
+            "        run: timeout --kill-after=10s 300s npm run check:audit",
+          "      - name: Audit source and published-consumer dependency graphs\n" +
+            "        continue-on-error: true\n" +
+            "        run: timeout --kill-after=10s 300s npm run check:audit"
+        )
+      );
+      const npmCiHelperFixture = path.join(fixtureRoot, "scripts", "npm-ci-with-retry.mjs");
+      const npmCiHelper = await fs.readFile(npmCiHelperFixture, "utf8");
+      await fs.writeFile(
+        npmCiHelperFixture,
+        replaceExactly(npmCiHelper, "  attempts: 3,", "  attempts: 4,")
+      );
       const oia = spawnSync(process.execPath, [path.join(fixtureRoot, "scripts/oia-walk.mjs"), "--skip-network"], {
         cwd: fixtureRoot,
         encoding: "utf8",
@@ -2366,6 +2475,47 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
       }
       expect(output, "adjacent weak history wording must not mask a stale current claim").toContain(
         "[STALE-DOC-CURRENCY-CLAIM] ROADMAP.md:2"
+      );
+      expect(output, "OIA must reject an executable legacy npm ci command").toContain("[NPM-CI-LEGACY-COMMAND]");
+      expect(output, "OIA must scan .yaml workflows and reject wrapped installs").toContain(
+        "[NPM-CI-LEGACY-COMMAND] .github/workflows/npm-ci-bypass.yaml:"
+      );
+      expect(output, "OIA must resolve a YAML alias to its executable npm.cmd install").toContain("> npm.cmd ci");
+      expect(output, "OIA must reject case-insensitive npm.exe installs in .yaml flow steps").toContain(
+        "> NPM.EXE ci"
+      );
+      expect(output, "OIA must reject a wrapped helper command").toContain(
+        "[NPM-CI-HELPER-NONCANONICAL] .github/workflows/npm-ci-bypass.yaml:"
+      );
+      expect(output, "OIA must reject a multiline unbounded audit").toContain(
+        "[NPM-AUDIT-UNBOUNDED-COMMAND] .github/workflows/npm-ci-bypass.yaml:"
+      );
+      expect(output, "OIA must reject a job-level continuation bypass").toContain(
+        "[NPM-CI-JOB-BOUNDARY] .github/workflows/ci.yml:"
+      );
+      expect(output, "OIA must not accept setup-node text embedded in a block scalar").toContain(
+        "[NPM-CI-SETUP-ORDER] .github/workflows/publish-docs.yml:"
+      );
+      expect(output, "OIA must reject fail-open setup-node metadata").toContain(
+        "[NPM-CI-SETUP-ORDER] .github/workflows/release.yml:"
+      );
+      expect(output, "OIA must validate the semantic helper step instead of a block-scalar decoy").toContain(
+        "[NPM-CI-STEP-BOUNDARY] .github/workflows/publish-docs.yml:"
+      );
+      expect(output, "OIA must pin the reviewed runner for every bounded install job").toContain(
+        "[NPM-CI-JOB-BOUNDARY] .github/workflows/publish-docs.yml:"
+      );
+      expect(output, "OIA must reject the missing canonical helper in its exact job inventory").toContain(
+        "[NPM-CI-HELPER-CARDINALITY]"
+      );
+      expect(output, "OIA must reject loss of the independently bounded audit phase").toContain(
+        "[NPM-AUDIT-DEADLINE]"
+      );
+      expect(output, "OIA must reject fail-open metadata on the release audit step").toContain(
+        "[NPM-AUDIT-DEADLINE] .github/workflows/release.yml:"
+      );
+      expect(output, "OIA must reject semantic drift in the helper retry policy").toContain(
+        "[NPM-CI-HELPER-POLICY]"
       );
     } finally {
       await fs.rm(tempRoot, { recursive: true, force: true });

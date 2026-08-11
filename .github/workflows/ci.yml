@@ -24,16 +24,10 @@ jobs:
           node-version: 22
           cache: npm
       - name: Install deps (npm ci with retry)
-        # v3.9.0-rc.20 — retry guards the recurring onnxruntime-node postinstall
-        # CDN ETIMEDOUT flake (hit rc.9 + failed the rc.19 release). Dependency-free
-        # bash loop — no new action to SHA-pin. OIA Check 10 forbids bare `npm ci`.
-        run: |
-          for n in 1 2 3; do
-            npm ci && break
-            if [ "$n" -eq 3 ]; then echo "::error::npm ci failed after 3 attempts"; exit 1; fi
-            echo "::warning::npm ci attempt $n failed (transient — e.g. onnxruntime postinstall CDN ETIMEDOUT); retrying in 15s"
-            sleep 15
-          done
+        # One dependency-free cross-platform runner owns the exact attempt,
+        # process-tree deadline, kill grace and retry policy. OIA Check 10
+        # requires this exact invocation instead of accepting an inline loop.
+        run: node scripts/npm-ci-with-retry.mjs
       - run: npm run lint
 
   test:
@@ -83,16 +77,10 @@ jobs:
             }
           '
       - name: Install deps (npm ci with retry)
-        # v3.9.0-rc.20 — retry guards the recurring onnxruntime-node postinstall
-        # CDN ETIMEDOUT flake (hit rc.9 + failed the rc.19 release). Dependency-free
-        # bash loop — no new action to SHA-pin. OIA Check 10 forbids bare `npm ci`.
-        run: |
-          for n in 1 2 3; do
-            npm ci && break
-            if [ "$n" -eq 3 ]; then echo "::error::npm ci failed after 3 attempts"; exit 1; fi
-            echo "::warning::npm ci attempt $n failed (transient — e.g. onnxruntime postinstall CDN ETIMEDOUT); retrying in 15s"
-            sleep 15
-          done
+        # One dependency-free cross-platform runner owns the exact attempt,
+        # process-tree deadline, kill grace and retry policy. OIA Check 10
+        # requires this exact invocation instead of accepting an inline loop.
+        run: node scripts/npm-ci-with-retry.mjs
       - run: npm run build
       - name: Probe native SQLite and FTS5 at declared floor
         if: matrix.floor
@@ -161,13 +149,9 @@ jobs:
             }
           '
       - name: Install deps (npm ci with retry)
-        run: |
-          for n in 1 2 3; do
-            npm ci && break
-            if [ "$n" -eq 3 ]; then echo "::error::npm ci failed after 3 attempts"; exit 1; fi
-            echo "::warning::npm ci attempt $n failed; retrying in 15s"
-            sleep 15
-          done
+        # The shared runner is portable across Linux, macOS and Windows and
+        # proves timed-out tree cleanup before any retry.
+        run: node scripts/npm-ci-with-retry.mjs
       - run: npm run build
       - name: Probe native SQLite and FTS5 on Windows
         run: |
@@ -206,16 +190,10 @@ jobs:
           cache: npm
           cache-dependency-path: package-lock.json
       - name: Install deps (npm ci with retry)
-        # v3.9.0-rc.20 — retry guards the recurring onnxruntime-node postinstall
-        # CDN ETIMEDOUT flake (hit rc.9 + failed the rc.19 release). Dependency-free
-        # bash loop — no new action to SHA-pin. OIA Check 10 forbids bare `npm ci`.
-        run: |
-          for n in 1 2 3; do
-            npm ci && break
-            if [ "$n" -eq 3 ]; then echo "::error::npm ci failed after 3 attempts"; exit 1; fi
-            echo "::warning::npm ci attempt $n failed (transient — e.g. onnxruntime postinstall CDN ETIMEDOUT); retrying in 15s"
-            sleep 15
-          done
+        # One dependency-free cross-platform runner owns the exact attempt,
+        # process-tree deadline, kill grace and retry policy. OIA Check 10
+        # requires this exact invocation instead of accepting an inline loop.
+        run: node scripts/npm-ci-with-retry.mjs
       - run: npm run build
       - run: npm test
 
@@ -234,16 +212,10 @@ jobs:
           node-version: 22
           cache: npm
       - name: Install deps (npm ci with retry)
-        # v3.9.0-rc.20 — retry guards the recurring onnxruntime-node postinstall
-        # CDN ETIMEDOUT flake (hit rc.9 + failed the rc.19 release). Dependency-free
-        # bash loop — no new action to SHA-pin. OIA Check 10 forbids bare `npm ci`.
-        run: |
-          for n in 1 2 3; do
-            npm ci && break
-            if [ "$n" -eq 3 ]; then echo "::error::npm ci failed after 3 attempts"; exit 1; fi
-            echo "::warning::npm ci attempt $n failed (transient — e.g. onnxruntime postinstall CDN ETIMEDOUT); retrying in 15s"
-            sleep 15
-          done
+        # One dependency-free cross-platform runner owns the exact attempt,
+        # process-tree deadline, kill grace and retry policy. OIA Check 10
+        # requires this exact invocation instead of accepting an inline loop.
+        run: node scripts/npm-ci-with-retry.mjs
       # v3.9.0-rc.26 (rc.25-audit LOW-2) — explicit build (matches the `test`
       # job). Previously dist/ existed only via the `npm ci` `prepare` hook; if
       # that hook ever changed (or `--ignore-scripts`), every distExists()-gated
@@ -276,7 +248,7 @@ jobs:
   # Now: PR CI verifies docs:api runs cleanly + emits no warnings.
   docs:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
@@ -284,16 +256,10 @@ jobs:
           node-version: 22
           cache: npm
       - name: Install deps (npm ci with retry)
-        # v3.9.0-rc.20 — retry guards the recurring onnxruntime-node postinstall
-        # CDN ETIMEDOUT flake (hit rc.9 + failed the rc.19 release). Dependency-free
-        # bash loop — no new action to SHA-pin. OIA Check 10 forbids bare `npm ci`.
-        run: |
-          for n in 1 2 3; do
-            npm ci && break
-            if [ "$n" -eq 3 ]; then echo "::error::npm ci failed after 3 attempts"; exit 1; fi
-            echo "::warning::npm ci attempt $n failed (transient — e.g. onnxruntime postinstall CDN ETIMEDOUT); retrying in 15s"
-            sleep 15
-          done
+        # One dependency-free cross-platform runner owns the exact attempt,
+        # process-tree deadline, kill grace and retry policy. OIA Check 10
+        # requires this exact invocation instead of accepting an inline loop.
+        run: node scripts/npm-ci-with-retry.mjs
       - run: npm run build
       # D-45 remote-only validation: SDK migrations may intentionally change
       # the exact tools/list JSON Schema dialect. Capture the runner-observed
@@ -360,7 +326,7 @@ jobs:
   # positives. Also added to the release.yml REQUIRED gate list (9 total).
   oia:
     runs-on: ubuntu-latest
-    timeout-minutes: 3
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
@@ -368,22 +334,16 @@ jobs:
           node-version: 22
           cache: npm
       - name: Install deps (npm ci with retry)
-        # v3.9.0-rc.20 — retry guards the recurring onnxruntime-node postinstall
-        # CDN ETIMEDOUT flake (hit rc.9 + failed the rc.19 release). Dependency-free
-        # bash loop — no new action to SHA-pin. OIA Check 10 forbids bare `npm ci`.
-        run: |
-          for n in 1 2 3; do
-            npm ci && break
-            if [ "$n" -eq 3 ]; then echo "::error::npm ci failed after 3 attempts"; exit 1; fi
-            echo "::warning::npm ci attempt $n failed (transient — e.g. onnxruntime postinstall CDN ETIMEDOUT); retrying in 15s"
-            sleep 15
-          done
+        # One dependency-free cross-platform runner owns the exact attempt,
+        # process-tree deadline, kill grace and retry policy. OIA Check 10
+        # requires this exact invocation instead of accepting an inline loop.
+        run: node scripts/npm-ci-with-retry.mjs
       # OIA doesn't need a build — it greps source + docs. Skip `npm run build`.
       - run: npm run check:oia
 
   smoke:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     # Keep the protected/release-required `smoke` context name stable while
     # making the Windows filesystem lane a real blocking prerequisite.
     needs: [test, test-windows]
@@ -407,16 +367,10 @@ jobs:
           node-version: "22.13.0"
           cache: npm
       - name: Install deps (npm ci with retry)
-        # v3.9.0-rc.20 — retry guards the recurring onnxruntime-node postinstall
-        # CDN ETIMEDOUT flake (hit rc.9 + failed the rc.19 release). Dependency-free
-        # bash loop — no new action to SHA-pin. OIA Check 10 forbids bare `npm ci`.
-        run: |
-          for n in 1 2 3; do
-            npm ci && break
-            if [ "$n" -eq 3 ]; then echo "::error::npm ci failed after 3 attempts"; exit 1; fi
-            echo "::warning::npm ci attempt $n failed (transient — e.g. onnxruntime postinstall CDN ETIMEDOUT); retrying in 15s"
-            sleep 15
-          done
+        # One dependency-free cross-platform runner owns the exact attempt,
+        # process-tree deadline, kill grace and retry policy. OIA Check 10
+        # requires this exact invocation instead of accepting an inline loop.
+        run: node scripts/npm-ci-with-retry.mjs
       - run: npm run build
       - name: Build synthetic vault
         id: vault
@@ -459,13 +413,9 @@ jobs:
           cache: npm
           cache-dependency-path: package-lock.json
       - name: Install deps (npm ci with retry)
-        run: |
-          for n in 1 2 3; do
-            npm ci && break
-            if [ "$n" -eq 3 ]; then echo "::error::npm ci failed after 3 attempts"; exit 1; fi
-            echo "::warning::npm ci attempt $n failed; retrying in 15s"
-            sleep 15
-          done
+        # The shared runner is portable across Linux, macOS and Windows and
+        # proves timed-out tree cleanup before any retry.
+        run: node scripts/npm-ci-with-retry.mjs
       - run: npm run build
       - name: Verify modern and legacy stdio/HTTP with official client v2
         run: node scripts/protocol-conformance.mjs
@@ -524,13 +474,9 @@ jobs:
           cache: npm
           cache-dependency-path: package-lock.json
       - name: Install deps (npm ci with retry)
-        run: |
-          for n in 1 2 3; do
-            npm ci && break
-            if [ "$n" -eq 3 ]; then echo "::error::npm ci failed after 3 attempts"; exit 1; fi
-            echo "::warning::npm ci attempt $n failed; retrying in 15s"
-            sleep 15
-          done
+        # The shared runner is portable across Linux, macOS and Windows and
+        # proves timed-out tree cleanup before any retry.
+        run: node scripts/npm-ci-with-retry.mjs
       - run: npm run build
       - name: Verify packed consumers with and without optional dependencies
         run: node scripts/package-consumer.mjs
@@ -577,13 +523,9 @@ jobs:
           cache: npm
           cache-dependency-path: package-lock.json
       - name: Install deps (npm ci with retry)
-        run: |
-          for n in 1 2 3; do
-            npm ci && break
-            if [ "$n" -eq 3 ]; then echo "::error::npm ci failed after 3 attempts"; exit 1; fi
-            echo "::warning::npm ci attempt $n failed; retrying in 15s"
-            sleep 15
-          done
+        # The shared runner is portable across Linux, macOS and Windows and
+        # proves timed-out tree cleanup before any retry.
+        run: node scripts/npm-ci-with-retry.mjs
       - run: npm run build
       - name: Build Basic read-only MCPB with pinned packer
         run: npm run mcpb:build
@@ -684,13 +626,9 @@ jobs:
           cache: npm
           cache-dependency-path: package-lock.json
       - name: Install deps (npm ci with retry)
-        run: |
-          for n in 1 2 3; do
-            npm ci && break
-            if [ "$n" -eq 3 ]; then echo "::error::npm ci failed after 3 attempts"; exit 1; fi
-            echo "::warning::npm ci attempt $n failed; retrying in 15s"
-            sleep 15
-          done
+        # The shared runner is portable across Linux, macOS and Windows and
+        # proves timed-out tree cleanup before any retry.
+        run: node scripts/npm-ci-with-retry.mjs
       - name: Download canonical Linux MCPB candidate
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -724,7 +662,7 @@ jobs:
     # transitive deps are usually safe, but elevating closes that gap.
     # Dev deps stay at high (test/build tooling, less surface, more noise).
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
@@ -733,21 +671,15 @@ jobs:
           node-version: 22
           cache: npm
       - name: Install deps (npm ci with retry)
-        # v3.9.0-rc.20 — retry guards the recurring onnxruntime-node postinstall
-        # CDN ETIMEDOUT flake (hit rc.9 + failed the rc.19 release). Dependency-free
-        # bash loop — no new action to SHA-pin. OIA Check 10 forbids bare `npm ci`.
-        run: |
-          for n in 1 2 3; do
-            npm ci && break
-            if [ "$n" -eq 3 ]; then echo "::error::npm ci failed after 3 attempts"; exit 1; fi
-            echo "::warning::npm ci attempt $n failed (transient — e.g. onnxruntime postinstall CDN ETIMEDOUT); retrying in 15s"
-            sleep 15
-          done
+        # One dependency-free cross-platform runner owns the exact attempt,
+        # process-tree deadline, kill grace and retry policy. OIA Check 10
+        # requires this exact invocation instead of accepting an inline loop.
+        run: node scripts/npm-ci-with-retry.mjs
       # v3.11.7-rc.8 — audit both this root lockfile and the dependency graph a registry
       # consumer resolves without our root-only overrides. Scope-specific exceptions must
       # carry a rationale + removal tracker; new or stale advisories fail closed.
       - name: Audit source and published-consumer dependency graphs
-        run: npm run check:audit
+        run: timeout --kill-after=10s 300s npm run check:audit
 
   version-consistency:
     runs-on: ubuntu-latest

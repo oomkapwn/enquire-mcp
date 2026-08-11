@@ -30,7 +30,7 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
@@ -38,16 +38,10 @@ jobs:
           node-version: 22
           cache: npm
       - name: Install deps (npm ci with retry)
-        # v3.9.0-rc.20 — retry guards the recurring onnxruntime-node postinstall
-        # CDN ETIMEDOUT flake (hit rc.9 + failed the rc.19 release). Dependency-free
-        # bash loop — no new action to SHA-pin. OIA Check 10 forbids bare `npm ci`.
-        run: |
-          for n in 1 2 3; do
-            npm ci && break
-            if [ "$n" -eq 3 ]; then echo "::error::npm ci failed after 3 attempts"; exit 1; fi
-            echo "::warning::npm ci attempt $n failed (transient — e.g. onnxruntime postinstall CDN ETIMEDOUT); retrying in 15s"
-            sleep 15
-          done
+        # One dependency-free cross-platform runner owns the exact attempt,
+        # process-tree deadline, kill grace and retry policy. OIA Check 10
+        # requires this exact invocation instead of accepting an inline loop.
+        run: node scripts/npm-ci-with-retry.mjs
       # v3.7.19 round-21 θ3 — lint + build before docs:api. Pre-3.7.19
       # publish-docs.yml ran ONLY `npm run docs:api` — if TypeDoc emitted
       # warnings or generation silently failed, the workflow still

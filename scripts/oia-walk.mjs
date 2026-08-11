@@ -30,7 +30,7 @@
 //   1.  STALE VERSION TOMBSTONES — `vX.Y.Z` / `X.Y.Z-rc.N` in src/*.ts
 //       file-header docstrings (first 30 lines) not tagged as history.
 //   2.  WORKFLOW EXISTENCE — CI workflow names in README/docs must exist
-//       as `.github/workflows/*.yml` or be annotated "via GitHub default-setup".
+//       as `.github/workflows/*.{yml,yaml}` or be annotated "via GitHub default-setup".
 //   3.  CLI SUBCOMMAND EXISTENCE — backticked `enquire-mcp <cmd>` in
 //       docs/*.md must match a `program.command("<cmd>")` in src/cli.ts.
 //   4b. STALE-CURRENCY-CLAIM in docs/*.md headers (extends 1 to docs/).
@@ -58,7 +58,7 @@
 //   8.  SCOPE-COMPLETENESS — delegates to scope-completeness-audit.mjs
 //       (numeric-claim + deferred-claim + cli-flag-coverage dimensions).
 //   9.  ACTION SHA-PIN — every third-party GitHub Action in
-//       .github/workflows/*.yml must be pinned to a 40-hex commit SHA, not a
+//       .github/workflows/*.{yml,yaml} must be pinned to a 40-hex commit SHA, not a
 //       floating tag (supply-chain). [added rc.14]
 //   9b. RUN-DOWNLOAD-UNPINNED / -UNVERIFIED — a `run:` `curl`/`wget` must not
 //       fetch from a moving `releases/latest` URL (same supply-chain class as 9,
@@ -66,9 +66,10 @@
 //       tag-pinned release ARCHIVE (`releases/download/<tag>/…\.tar.gz`) must ALSO
 //       be SHA256-verified (`sha256sum -c`) in the same file — content-pin, since
 //       a tag is mutable. [extended rc.26 / SYS-1 M-9 completion]
-//   10. NPM-CI RETRY — every `npm ci` in .github/workflows/*.yml must be
-//       retry-wrapped (bare `- run: npm ci` fails the job on a transient
-//       onnxruntime-postinstall CDN ETIMEDOUT). [added rc.20]
+//   10. NPM-CI DEADLINE — every dependency-installing workflow job must invoke
+//       the one bounded retry helper exactly once, after setup-node, with the
+//       reviewed whole-job budget. Legacy/bare `npm ci`, duplicate/bypass steps
+//       and missing inventory entries fail closed. [added rc.20; class-fixed rc.3]
 //   11. MCP-REGISTRY VERSION DRIFT — canonical registry version vs npm
 //       `@latest` (non-fatal advisory; remediation is maintainer-gated). [rc.32]
 //   12. STALE-DIST-TOOLS-IMPORT — scripts/*.mjs must not import the pre-split
@@ -92,6 +93,7 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { load } from "js-yaml";
 import { inspectEmbeddingsOfflineGuards } from "./lib/oia-offline-guard.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -181,10 +183,10 @@ walk("src", ".ts", (file) => {
 
 // ─── Check 2: Workflow existence ────────────────────────────────────────
 // Find every backticked "CodeQL", "Analyze", "smoke", etc. CI gate name
-// in README/docs and verify it exists either as a .github/workflows/*.yml
+// in README/docs and verify it exists either as a .github/workflows/*.{yml,yaml}
 // file OR is documented as "default-setup".
 const workflowDir = join(repoRoot, ".github", "workflows");
-const workflowFiles = existsSync(workflowDir) ? readdirSync(workflowDir).filter((f) => f.endsWith(".yml")) : [];
+const workflowFiles = existsSync(workflowDir) ? readdirSync(workflowDir).filter((f) => /\.ya?ml$/.test(f)) : [];
 const workflowJobs = new Set();
 for (const wf of workflowFiles) {
   const yml = readFileSync(join(workflowDir, wf), "utf8");
@@ -943,7 +945,7 @@ for (const docFile of DOCS_FILES_TO_SCAN) {
 {
   const wfDir = ".github/workflows";
   if (existsSync(join(repoRoot, wfDir))) {
-    for (const wf of readdirSync(join(repoRoot, wfDir)).filter((f) => f.endsWith(".yml"))) {
+    for (const wf of readdirSync(join(repoRoot, wfDir)).filter((f) => /\.ya?ml$/.test(f))) {
       const rel = join(wfDir, wf);
       const lines = readLines(rel);
       for (let i = 0; i < lines.length; i++) {
@@ -984,7 +986,7 @@ for (const docFile of DOCS_FILES_TO_SCAN) {
 {
   const wfDir = ".github/workflows";
   if (existsSync(join(repoRoot, wfDir))) {
-    for (const wf of readdirSync(join(repoRoot, wfDir)).filter((f) => f.endsWith(".yml"))) {
+    for (const wf of readdirSync(join(repoRoot, wfDir)).filter((f) => /\.ya?ml$/.test(f))) {
       const rel = join(wfDir, wf);
       const lines = readLines(rel);
       // A SHA256 verification anywhere in the file (`sha256sum -c` / `shasum -a
@@ -1022,32 +1024,557 @@ for (const docFile of DOCS_FILES_TO_SCAN) {
   }
 }
 
-// ─── Check 10: workflow `npm ci` steps must be retry-wrapped ──────────
-// v3.9.0-rc.20 — a bare `- run: npm ci` fails the whole job on a transient
-// network blip: the onnxruntime-node postinstall fetches its native binary
-// from a CDN that intermittently ETIMEDOUTs (hit rc.9, then FAILED the rc.19
-// release at the assert-CI gate). Every `npm ci` must run inside a retry loop
-// (`run: |` + `for n in 1 2 3; do npm ci && break; … sleep 15; done`). Flags
-// any line that is exactly a bare `- run: npm ci` (dependency-free guard — no
-// new action to SHA-pin, unlike a marketplace retry action).
+// ─── Check 10: workflow `npm ci` attempts and jobs are bounded ────────
+// The rc.20 three-attempt shell loop bounded retry COUNT only. PR #456 proved
+// that one hung first attempt could still consume the audit job's complete
+// five-minute breaker before the actual audit started. Parse the workflow with
+// the pinned project YAML parser and inventory the whole class instead of
+// grepping one bare spelling:
+// exactly 15 reviewed jobs invoke one fixed helper after setup-node; no workflow
+// retains an executable `npm ci`; every job keeps its composed timeout; and
+// both Linux audit steps have their own TERM-to-KILL deadline.
 {
   const wfDir = ".github/workflows";
-  if (existsSync(join(repoRoot, wfDir))) {
-    for (const wf of readdirSync(join(repoRoot, wfDir)).filter((f) => f.endsWith(".yml"))) {
-      const rel = join(wfDir, wf);
-      const lines = readLines(rel);
-      for (let i = 0; i < lines.length; i++) {
-        if (/^\s*-\s*run:\s*npm ci\s*$/.test(lines[i] ?? "")) {
+  const helperCommand = "node scripts/npm-ci-with-retry.mjs";
+  const installStepName = "Install deps (npm ci with retry)";
+  const auditCommand = "timeout --kill-after=10s 300s npm run check:audit";
+  const auditStepName = "Audit source and published-consumer dependency graphs";
+  const helperRel = "scripts/npm-ci-with-retry.mjs";
+  const matrixScriptShell = `\${{ matrix.script_shell }}`;
+  const matrixOs = `\${{ matrix.os }}`;
+  const matrixNodeVersion = `\${{ matrix.node-version }}`;
+  const alwaysCondition = `\${{ always() }}`;
+  const expectedJobs = new Map([
+    [
+      "ci.yml",
+      new Map([
+        ["lint", 5],
+        ["test", 10],
+        ["test-windows", 20],
+        ["test-macos", 15],
+        ["coverage", 10],
+        ["docs", 10],
+        ["oia", 10],
+        ["smoke", 10],
+        ["protocol-conformance-matrix", 20],
+        ["package-consumer-matrix", 30],
+        ["mcpb-basic-package", 40],
+        ["mcpb-basic-matrix", 30],
+        ["audit", 12]
+      ])
+    ],
+    ["publish-docs.yml", new Map([["build", 10]])],
+    ["release.yml", new Map([["publish", 240]])]
+  ]);
+  const expectedJobEnvironments = new Map([
+    ["ci.yml#test", { NPM_CONFIG_ENGINE_STRICT: "true" }],
+    [
+      "ci.yml#test-windows",
+      {
+        NPM_CONFIG_ENGINE_STRICT: "true",
+        NPM_CONFIG_SCRIPT_SHELL: "C:\\Program Files\\Git\\bin\\bash.exe"
+      }
+    ],
+    ["ci.yml#smoke", { NPM_CONFIG_ENGINE_STRICT: "true" }],
+    [
+      "ci.yml#protocol-conformance-matrix",
+      { NPM_CONFIG_ENGINE_STRICT: "true", NPM_CONFIG_SCRIPT_SHELL: matrixScriptShell }
+    ],
+    [
+      "ci.yml#package-consumer-matrix",
+      { NPM_CONFIG_ENGINE_STRICT: "true", NPM_CONFIG_SCRIPT_SHELL: matrixScriptShell }
+    ],
+    [
+      "ci.yml#mcpb-basic-package",
+      { NPM_CONFIG_ENGINE_STRICT: "true", NPM_CONFIG_SCRIPT_SHELL: "/bin/bash" }
+    ],
+    [
+      "ci.yml#mcpb-basic-matrix",
+      { NPM_CONFIG_ENGINE_STRICT: "true", NPM_CONFIG_SCRIPT_SHELL: matrixScriptShell }
+    ],
+    ["release.yml#publish", { BASH_ENV: "" }]
+  ]);
+  const expectedJobRunners = new Map([
+    ["ci.yml#lint", "ubuntu-latest"],
+    ["ci.yml#test", "ubuntu-latest"],
+    ["ci.yml#test-windows", "windows-2025"],
+    ["ci.yml#test-macos", "macos-latest"],
+    ["ci.yml#coverage", "ubuntu-latest"],
+    ["ci.yml#docs", "ubuntu-latest"],
+    ["ci.yml#oia", "ubuntu-latest"],
+    ["ci.yml#smoke", "ubuntu-latest"],
+    ["ci.yml#protocol-conformance-matrix", matrixOs],
+    ["ci.yml#package-consumer-matrix", matrixOs],
+    ["ci.yml#mcpb-basic-package", "ubuntu-latest"],
+    ["ci.yml#mcpb-basic-matrix", matrixOs],
+    ["ci.yml#audit", "ubuntu-latest"],
+    ["publish-docs.yml#build", "ubuntu-latest"],
+    ["release.yml#publish", "ubuntu-latest"]
+  ]);
+  const expectedSetupInputs = new Map([
+    ["ci.yml#lint", { "node-version": 22, cache: "npm" }],
+    [
+      "ci.yml#test",
+      { "node-version": matrixNodeVersion, cache: "npm", "cache-dependency-path": "package-lock.json" }
+    ],
+    [
+      "ci.yml#test-windows",
+      { "node-version": "22.13.0", cache: "npm", "cache-dependency-path": "package-lock.json" }
+    ],
+    [
+      "ci.yml#test-macos",
+      { "node-version": 22, cache: "npm", "cache-dependency-path": "package-lock.json" }
+    ],
+    ["ci.yml#coverage", { "node-version": 22, cache: "npm" }],
+    ["ci.yml#docs", { "node-version": 22, cache: "npm" }],
+    ["ci.yml#oia", { "node-version": 22, cache: "npm" }],
+    ["ci.yml#smoke", { "node-version": "22.13.0", cache: "npm" }],
+    [
+      "ci.yml#protocol-conformance-matrix",
+      { "node-version": "22.13.0", cache: "npm", "cache-dependency-path": "package-lock.json" }
+    ],
+    [
+      "ci.yml#package-consumer-matrix",
+      { "node-version": "22.13.0", cache: "npm", "cache-dependency-path": "package-lock.json" }
+    ],
+    [
+      "ci.yml#mcpb-basic-package",
+      { "node-version": "22.13.0", cache: "npm", "cache-dependency-path": "package-lock.json" }
+    ],
+    [
+      "ci.yml#mcpb-basic-matrix",
+      { "node-version": "22.13.0", cache: "npm", "cache-dependency-path": "package-lock.json" }
+    ],
+    ["ci.yml#audit", { "node-version": 22, cache: "npm" }],
+    ["publish-docs.yml#build", { "node-version": 22, cache: "npm" }],
+    [
+      "release.yml#publish",
+      {
+        "node-version": "22.13.0",
+        "registry-url": "https://registry.npmjs.org",
+        cache: "npm",
+        "cache-dependency-path": "package-lock.json"
+      }
+    ]
+  ]);
+  const bashDefaultJobs = new Set([
+    "ci.yml#test-windows",
+    "ci.yml#protocol-conformance-matrix",
+    "ci.yml#package-consumer-matrix",
+    "ci.yml#mcpb-basic-matrix"
+  ]);
+
+  const yamlRecord = (value) =>
+    value !== null && typeof value === "object" && !Array.isArray(value) ? value : null;
+  const exactRecord = (value, expected) => {
+    if (expected === undefined) return value === undefined;
+    const record = yamlRecord(value);
+    if (record === null) return false;
+    const actualKeys = Object.keys(record).sort();
+    const expectedKeys = Object.keys(expected).sort();
+    return (
+      JSON.stringify(actualKeys) === JSON.stringify(expectedKeys) &&
+      expectedKeys.every((key) => record[key] === expected[key])
+    );
+  };
+
+  const workflowJobBlocks = (lines) => {
+    const blocks = new Map();
+    let inJobs = false;
+    let current = null;
+    for (let index = 0; index < lines.length; index++) {
+      const line = lines[index] ?? "";
+      if (/^jobs:\s*(?:#.*)?$/.test(line)) {
+        inJobs = true;
+        current = null;
+        continue;
+      }
+      if (inJobs && /^\S/.test(line) && !/^#/.test(line)) {
+        inJobs = false;
+        current = null;
+      }
+      if (!inJobs) continue;
+      const job = /^  ([a-zA-Z0-9_-]+):\s*(?:#.*)?$/.exec(line)?.[1];
+      if (job !== undefined) {
+        current = { id: job, line: index + 1, lines: [] };
+        blocks.set(job, current);
+        continue;
+      }
+      if (current !== null) current.lines.push({ index, text: line });
+    }
+    return blocks;
+  };
+
+  const workflowModel = (lines, blocks) => {
+    let document;
+    try {
+      document = yamlRecord(load(lines.join("\n")));
+    } catch {
+      return { document: null, jobs: new Map(), commands: [], valid: false };
+    }
+    const jobsRecord = yamlRecord(document?.jobs);
+    if (document === null || jobsRecord === null) {
+      return { document, jobs: new Map(), commands: [], valid: false };
+    }
+    const jobs = new Map();
+    const commands = [];
+    for (const [jobId, value] of Object.entries(jobsRecord)) {
+      const job = yamlRecord(value);
+      if (job === null) continue;
+      jobs.set(jobId, job);
+      const steps = Array.isArray(job.steps) ? job.steps : [];
+      for (const stepValue of steps) {
+        const step = yamlRecord(stepValue);
+        if (step === null || typeof step.run !== "string") continue;
+        commands.push({ index: (blocks.get(jobId)?.line ?? 1) - 1, jobId, text: step.run });
+      }
+    }
+    return { document, jobs, commands, valid: true };
+  };
+
+  const workflowNames = existsSync(join(repoRoot, wfDir))
+    ? readdirSync(join(repoRoot, wfDir))
+        .filter((name) => /\.ya?ml$/.test(name))
+        .sort()
+    : [];
+  if (!existsSync(join(repoRoot, helperRel))) {
+    record(
+      "NPM-CI-HELPER-POLICY",
+      helperRel,
+      1,
+      "bounded npm-ci helper is missing",
+      "The canonical workflow command must resolve to the reviewed fixed-policy helper."
+    );
+  } else {
+    const helperSource = readFileSync(join(repoRoot, helperRel), "utf8");
+    const policyMatch =
+      /export const NPM_CI_RETRY_POLICY = Object\.freeze\(\{\s*attempts:\s*([0-9_]+),\s*attemptTimeoutMs:\s*([0-9_]+),\s*killGraceMs:\s*([0-9_]+),\s*retryDelayMs:\s*([0-9_]+),?\s*\}\);/u.exec(helperSource);
+    const policy = (policyMatch?.slice(1) ?? []).map((value) => Number.parseInt(value.replaceAll("_", ""), 10));
+    const [attempts, attemptTimeoutMs, killGraceMs, retryDelayMs] = policy;
+    const phaseMs =
+      attempts === undefined ||
+      attemptTimeoutMs === undefined ||
+      killGraceMs === undefined ||
+      retryDelayMs === undefined
+        ? Number.NaN
+        : attempts * (attemptTimeoutMs + killGraceMs) + (attempts - 1) * retryDelayMs;
+    if (
+      attempts !== 3 ||
+      attemptTimeoutMs !== 60_000 ||
+      killGraceMs !== 10_000 ||
+      retryDelayMs !== 15_000 ||
+      phaseMs !== 240_000
+    ) {
+      record(
+        "NPM-CI-HELPER-POLICY",
+        helperRel,
+        1,
+        `attempts/timeout/grace/wait/phase=${attempts ?? "invalid"}/${attemptTimeoutMs ?? "invalid"}/${killGraceMs ?? "invalid"}/${retryDelayMs ?? "invalid"}/${Number.isFinite(phaseMs) ? phaseMs : "invalid"}`,
+        "Keep the non-configurable 3 × (60s attempt + 10s total termination grace) + 2 × 15s wait = 240s install policy."
+      );
+    }
+  }
+  let helperCount = 0;
+  let helperTokenCount = 0;
+  let auditTokenCount = 0;
+  for (const workflowName of workflowNames) {
+    const rel = join(wfDir, workflowName);
+    const lines = readLines(rel);
+    const blocks = workflowJobBlocks(lines);
+    const model = workflowModel(lines, blocks);
+    if (!model.valid) {
+      record(
+        "NPM-CI-WORKFLOW-YAML",
+        rel,
+        1,
+        "workflow is not one valid YAML jobs mapping",
+        "Check 10 parses every .yml/.yaml workflow so flow mappings, aliases and block scalars cannot bypass the command inventory."
+      );
+      continue;
+    }
+    if (expectedJobs.has(workflowName) && (model.document.env !== undefined || model.document.defaults !== undefined)) {
+      record(
+        "NPM-CI-WORKFLOW-BOUNDARY",
+        rel,
+        1,
+        "workflow-level env/defaults present",
+        "Keep workflow-level env/defaults absent; global NODE_OPTIONS, PATH or shell changes can bypass every reviewed helper step."
+      );
+    }
+
+    for (const command of model.commands) {
+      const helperTokens = [...command.text.matchAll(/scripts\/npm-ci-with-retry\.mjs\b/g)].length;
+      helperTokenCount += helperTokens;
+      if (helperTokens > 0 && (helperTokens !== 1 || command.text !== helperCommand)) {
+        record(
+          "NPM-CI-HELPER-NONCANONICAL",
+          rel,
+          command.index + 1,
+          command.text.slice(0, 160),
+          `The helper token is allowed only as the exact ${helperCommand} command in one reviewed install step.`
+        );
+      }
+      if (/\bnpm(?:\.cmd|\.exe)?(?:\s+[^\s;&|]+)*\s+ci\b/i.test(command.text)) {
+        record(
+          "NPM-CI-LEGACY-COMMAND",
+          rel,
+          command.index + 1,
+          command.text.slice(0, 160),
+          `Workflow dependency installs must use the bounded ${helperCommand} helper; inline or bare npm ci can hang past the intended retry boundary.`
+        );
+      }
+      const auditTokens = [...command.text.matchAll(/\bcheck:audit\b/g)].length;
+      auditTokenCount += auditTokens;
+      if (auditTokens > 0 && (auditTokens !== 1 || command.text !== auditCommand)) {
+        record(
+          "NPM-AUDIT-UNBOUNDED-COMMAND",
+          rel,
+          command.index + 1,
+          command.text.slice(0, 160),
+          `Workflow audit commands must use the exact ${auditCommand} deadline instead of inheriting only the outer job timeout.`
+        );
+      }
+    }
+
+    for (const [jobId, block] of blocks) {
+      const helperLines = block.lines.filter(({ text }) => text.trim() === `run: ${helperCommand}`);
+      helperCount += helperLines.length;
+      const expectedTimeout = expectedJobs.get(workflowName)?.get(jobId);
+      if (expectedTimeout === undefined) {
+        if (helperLines.length > 0) {
           record(
-            "NPM-CI-NOT-RETRY-WRAPPED",
+            "NPM-CI-UNEXPECTED-JOB",
             rel,
-            i + 1,
-            (lines[i] ?? "").trim(),
-            "Bare `npm ci` fails the job on a transient CDN blip (onnxruntime-node postinstall ETIMEDOUT — hit rc.9 + failed the rc.19 release). Wrap in a retry loop: `run: |` then `for n in 1 2 3; do npm ci && break; [ $n -eq 3 ] && exit 1; sleep 15; done`."
+            helperLines[0].index + 1,
+            `${jobId}: ${helperCommand}`,
+            "Add a new dependency-installing job to the reviewed Check 10 inventory with a composed timeout, or remove the unexpected install."
+          );
+        }
+        continue;
+      }
+
+      const identity = `${workflowName}#${jobId}`;
+      const parsedJob = model.jobs.get(jobId);
+      const defaults = yamlRecord(parsedJob?.defaults);
+      const defaultRun = yamlRecord(defaults?.run);
+      const expectsBashDefault = bashDefaultJobs.has(identity);
+      const defaultBoundaryIsExact = expectsBashDefault
+        ? defaults !== null &&
+          JSON.stringify(Object.keys(defaults).sort()) === JSON.stringify(["run"]) &&
+          defaultRun !== null &&
+          JSON.stringify(Object.keys(defaultRun).sort()) === JSON.stringify(["shell"]) &&
+          defaultRun.shell === "bash"
+        : parsedJob?.defaults === undefined;
+      const expectedContinueOnError = identity === "ci.yml#test-macos" ? true : undefined;
+      const expectedIf = identity === "ci.yml#smoke" ? alwaysCondition : undefined;
+      if (
+        parsedJob === undefined ||
+        parsedJob["runs-on"] !== expectedJobRunners.get(identity) ||
+        parsedJob["continue-on-error"] !== expectedContinueOnError ||
+        parsedJob.if !== expectedIf ||
+        !defaultBoundaryIsExact ||
+        !exactRecord(parsedJob.env, expectedJobEnvironments.get(identity)) ||
+        parsedJob.container !== undefined ||
+        parsedJob.services !== undefined
+      ) {
+        record(
+          "NPM-CI-JOB-BOUNDARY",
+          rel,
+          block.line,
+          `${identity}: job execution boundary drifted`,
+          "Pin advisory/if/default-shell/env exceptions exactly; added continuation, shell, NODE_OPTIONS, PATH, container or service state can bypass the reviewed install result."
+        );
+      }
+
+      if (helperLines.length !== 1) {
+        record(
+          "NPM-CI-HELPER-CARDINALITY",
+          rel,
+          block.line,
+          `${jobId}: expected one helper, found ${helperLines.length}`,
+          `Keep exactly one fail-capable ${helperCommand} step in every reviewed dependency-installing job.`
+        );
+        continue;
+      }
+      const helperLine = helperLines[0];
+      const timeoutLines = block.lines.filter(({ text }) => /^    timeout-minutes:\s*/.test(text));
+      const timeout =
+        timeoutLines.length === 1
+          ? Number.parseInt(
+              /^    timeout-minutes:\s*([0-9]+)\s*(?:#.*)?$/.exec(timeoutLines[0].text)?.[1] ?? "",
+              10
+            )
+          : Number.NaN;
+      if (timeout !== expectedTimeout) {
+        record(
+          "NPM-CI-JOB-BUDGET",
+          rel,
+          timeoutLines[0]?.index + 1 ?? block.line,
+          `${jobId}: timeout-minutes=${Number.isFinite(timeout) ? timeout : "invalid"}`,
+          `The reviewed composed timeout for ${workflowName}#${jobId} is exactly ${expectedTimeout} minutes.`
+        );
+      }
+      const parsedSteps = Array.isArray(parsedJob?.steps)
+        ? parsedJob.steps.map(yamlRecord).filter((step) => step !== null)
+        : [];
+      const semanticHelperIndex = parsedSteps.findIndex((step) => step.run === helperCommand);
+      const semanticHelper = semanticHelperIndex < 0 ? undefined : parsedSteps[semanticHelperIndex];
+      const setupIndexes = parsedSteps
+        .map((step, index) =>
+          typeof step.uses === "string" && /^actions\/setup-node@[0-9a-f]{40}$/.test(step.uses) ? index : -1
+        )
+        .filter((index) => index >= 0);
+      const setupStep = setupIndexes.length === 1 ? parsedSteps[setupIndexes[0] ?? -1] : undefined;
+      if (
+        setupIndexes.length !== 1 ||
+        JSON.stringify(Object.keys(setupStep ?? {}).sort()) !== JSON.stringify(["uses", "with"]) ||
+        !exactRecord(setupStep?.with, expectedSetupInputs.get(identity)) ||
+        semanticHelperIndex < 0 ||
+        (setupIndexes[0] ?? Number.MAX_SAFE_INTEGER) >= semanticHelperIndex
+      ) {
+        record(
+          "NPM-CI-SETUP-ORDER",
+          rel,
+          helperLine.index + 1,
+          `${jobId}: helper line ${helperLine.index + 1}`,
+          "The bounded helper requires exactly one SHA-pinned setup-node step earlier in the same job."
+        );
+      }
+
+      let stepStart = helperLine.index;
+      while (stepStart >= 0 && !/^      -\s+/.test(lines[stepStart] ?? "")) stepStart--;
+      let stepEnd = helperLine.index + 1;
+      while (
+        stepEnd < lines.length &&
+        !/^      -\s+/.test(lines[stepEnd] ?? "") &&
+        !/^  \S/.test(lines[stepEnd] ?? "")
+      ) {
+        stepEnd++;
+      }
+      const stepLines = lines.slice(Math.max(0, stepStart), stepEnd);
+      const stepName = /^      - name:\s*(.+?)\s*$/.exec(stepLines[0] ?? "")?.[1];
+      const stepKeys = stepLines
+        .map((text, offset) =>
+          offset === 0
+            ? /^      - ([a-zA-Z0-9_-]+):/.exec(text)?.[1]
+            : /^        ([a-zA-Z0-9_-]+):/.exec(text)?.[1]
+        )
+        .filter((key) => key !== undefined)
+        .sort();
+      const semanticHelperIsExact =
+        semanticHelper?.name === installStepName &&
+        JSON.stringify(Object.keys(semanticHelper).sort()) === JSON.stringify(["name", "run"]);
+      if (
+        !semanticHelperIsExact ||
+        stepName !== installStepName ||
+        JSON.stringify(stepKeys) !== JSON.stringify(["name", "run"])
+      ) {
+        record(
+          "NPM-CI-STEP-BOUNDARY",
+          rel,
+          helperLine.index + 1,
+          `${jobId}: ${stepName ?? "unnamed"} keys=${stepKeys.join(",")}`,
+          `Keep the exact ${installStepName} step with only name/run keys; conditionals, continue-on-error, shell and env overrides can bypass the bounded install contract.`
+        );
+      }
+    }
+
+    const expectedForWorkflow = expectedJobs.get(workflowName);
+    if (expectedForWorkflow !== undefined) {
+      for (const jobId of expectedForWorkflow.keys()) {
+        if (!blocks.has(jobId)) {
+          record(
+            "NPM-CI-INVENTORY-MISSING-JOB",
+            rel,
+            1,
+            `${workflowName}#${jobId}`,
+            "The reviewed dependency-install inventory is exact; deleting or renaming a job must not silently delete its bounded install gate."
           );
         }
       }
     }
+  }
+
+  for (const workflowName of expectedJobs.keys()) {
+    if (!workflowNames.includes(workflowName)) {
+      record(
+        "NPM-CI-INVENTORY-MISSING-WORKFLOW",
+        join(wfDir, workflowName),
+        1,
+        workflowName,
+        "The reviewed dependency-install inventory requires this workflow file."
+      );
+    }
+  }
+  if (helperCount !== 15) {
+    record(
+      "NPM-CI-INVENTORY-CARDINALITY",
+      wfDir,
+      1,
+      `bounded helper invocations=${helperCount}`,
+      "Exactly 15 reviewed workflow jobs must invoke the bounded npm-ci helper."
+    );
+  }
+  if (helperTokenCount !== 15) {
+    record(
+      "NPM-CI-INVENTORY-CARDINALITY",
+      wfDir,
+      1,
+      `all bounded-helper command tokens=${helperTokenCount}`,
+      "Exactly 15 workflow run commands may mention the bounded helper, and each must be one canonical reviewed step."
+    );
+  }
+
+  let boundedAuditCount = 0;
+  for (const [workflowName, jobId] of [
+    ["ci.yml", "audit"],
+    ["release.yml", "publish"]
+  ]) {
+    const rel = join(wfDir, workflowName);
+    const lines = existsSync(join(repoRoot, rel)) ? readLines(rel) : [];
+    const blocks = workflowJobBlocks(lines);
+    const jobBlock = blocks.get(jobId);
+    const model = workflowModel(lines, blocks);
+    const job = model.jobs.get(jobId);
+    const steps = Array.isArray(job?.steps) ? job.steps.map(yamlRecord).filter((step) => step !== null) : [];
+    const helperIndex = steps.findIndex((step) => step.run === helperCommand);
+    const auditSteps = steps.filter((step) => step.run === auditCommand);
+    boundedAuditCount += auditSteps.length;
+    const auditStep = auditSteps[0];
+    const auditIndex = auditStep === undefined ? -1 : steps.indexOf(auditStep);
+    if (
+      job?.["runs-on"] !== "ubuntu-latest" ||
+      auditSteps.length !== 1 ||
+      auditIndex <= helperIndex ||
+      auditStep?.name !== auditStepName ||
+      JSON.stringify(Object.keys(auditStep ?? {}).sort()) !== JSON.stringify(["name", "run"])
+    ) {
+      record(
+        "NPM-AUDIT-DEADLINE",
+        rel,
+        jobBlock?.line ?? 1,
+        `${jobId}: bounded audit commands=${auditSteps.length}`,
+        `Both CI audit and release publish must run exactly ${auditCommand} after their bounded install; a raw check:audit can consume the remaining job budget.`
+      );
+    }
+  }
+  if (boundedAuditCount !== 2) {
+    record(
+      "NPM-AUDIT-DEADLINE-CARDINALITY",
+      wfDir,
+      1,
+      `bounded audit commands=${boundedAuditCount}`,
+      "Exactly two workflow jobs may run check:audit, and both must use the reviewed 300s TERM-to-KILL deadline."
+    );
+  }
+  if (auditTokenCount !== 2) {
+    record(
+      "NPM-AUDIT-DEADLINE-CARDINALITY",
+      wfDir,
+      1,
+      `all check:audit command tokens=${auditTokenCount}`,
+      "Exactly two workflow steps may contain the check:audit command token, and both must be canonical bounded audits."
+    );
   }
 }
 

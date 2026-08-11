@@ -1089,14 +1089,8 @@ for (const docFile of DOCS_FILES_TO_SCAN) {
       "ci.yml#package-consumer-matrix",
       { NPM_CONFIG_ENGINE_STRICT: "true", NPM_CONFIG_SCRIPT_SHELL: matrixScriptShell }
     ],
-    [
-      "ci.yml#mcpb-basic-package",
-      { NPM_CONFIG_ENGINE_STRICT: "true", NPM_CONFIG_SCRIPT_SHELL: "/bin/bash" }
-    ],
-    [
-      "ci.yml#mcpb-basic-matrix",
-      { NPM_CONFIG_ENGINE_STRICT: "true", NPM_CONFIG_SCRIPT_SHELL: matrixScriptShell }
-    ],
+    ["ci.yml#mcpb-basic-package", { NPM_CONFIG_ENGINE_STRICT: "true", NPM_CONFIG_SCRIPT_SHELL: "/bin/bash" }],
+    ["ci.yml#mcpb-basic-matrix", { NPM_CONFIG_ENGINE_STRICT: "true", NPM_CONFIG_SCRIPT_SHELL: matrixScriptShell }],
     ["release.yml#publish", { BASH_ENV: "" }]
   ]);
   const expectedJobRunners = new Map([
@@ -1118,18 +1112,9 @@ for (const docFile of DOCS_FILES_TO_SCAN) {
   ]);
   const expectedSetupInputs = new Map([
     ["ci.yml#lint", { "node-version": 22, cache: "npm" }],
-    [
-      "ci.yml#test",
-      { "node-version": matrixNodeVersion, cache: "npm", "cache-dependency-path": "package-lock.json" }
-    ],
-    [
-      "ci.yml#test-windows",
-      { "node-version": "22.13.0", cache: "npm", "cache-dependency-path": "package-lock.json" }
-    ],
-    [
-      "ci.yml#test-macos",
-      { "node-version": 22, cache: "npm", "cache-dependency-path": "package-lock.json" }
-    ],
+    ["ci.yml#test", { "node-version": matrixNodeVersion, cache: "npm", "cache-dependency-path": "package-lock.json" }],
+    ["ci.yml#test-windows", { "node-version": "22.13.0", cache: "npm", "cache-dependency-path": "package-lock.json" }],
+    ["ci.yml#test-macos", { "node-version": 22, cache: "npm", "cache-dependency-path": "package-lock.json" }],
     ["ci.yml#coverage", { "node-version": 22, cache: "npm" }],
     ["ci.yml#docs", { "node-version": 22, cache: "npm" }],
     ["ci.yml#oia", { "node-version": 22, cache: "npm" }],
@@ -1208,8 +1193,7 @@ for (const docFile of DOCS_FILES_TO_SCAN) {
     "ci.yml#mcpb-basic-matrix"
   ]);
 
-  const yamlRecord = (value) =>
-    value !== null && typeof value === "object" && !Array.isArray(value) ? value : null;
+  const yamlRecord = (value) => (value !== null && typeof value === "object" && !Array.isArray(value) ? value : null);
   const exactRecord = (value, expected) => {
     if (expected === undefined) return value === undefined;
     const record = yamlRecord(value);
@@ -1253,7 +1237,7 @@ for (const docFile of DOCS_FILES_TO_SCAN) {
         current = null;
       }
       if (!inJobs) continue;
-      const job = /^  ([a-zA-Z0-9_-]+):\s*(?:#.*)?$/.exec(line)?.[1];
+      const job = /^ {2}([a-zA-Z0-9_-]+):\s*(?:#.*)?$/.exec(line)?.[1];
       if (job !== undefined) {
         current = { id: job, line: index + 1, lines: [] };
         blocks.set(job, current);
@@ -1307,7 +1291,9 @@ for (const docFile of DOCS_FILES_TO_SCAN) {
   } else {
     const helperSource = readFileSync(join(repoRoot, helperRel), "utf8");
     const policyMatch =
-      /export const NPM_CI_RETRY_POLICY = Object\.freeze\(\{\s*attempts:\s*([0-9_]+),\s*attemptTimeoutMs:\s*([0-9_]+),\s*killGraceMs:\s*([0-9_]+),\s*retryDelayMs:\s*([0-9_]+),?\s*\}\);/u.exec(helperSource);
+      /export const NPM_CI_RETRY_POLICY = Object\.freeze\(\{\s*attempts:\s*([0-9_]+),\s*attemptTimeoutMs:\s*([0-9_]+),\s*killGraceMs:\s*([0-9_]+),\s*retryDelayMs:\s*([0-9_]+),?\s*\}\);/u.exec(
+        helperSource
+      );
     const policy = (policyMatch?.slice(1) ?? []).map((value) => Number.parseInt(value.replaceAll("_", ""), 10));
     const [attempts, attemptTimeoutMs, killGraceMs, retryDelayMs] = policy;
     const phaseMs =
@@ -1336,8 +1322,9 @@ for (const docFile of DOCS_FILES_TO_SCAN) {
   }
   if (
     !existsSync(join(repoRoot, entrypointRel)) ||
-    createHash("sha256").update(readFileSync(join(repoRoot, entrypointRel), "utf8"), "utf8").digest("hex") !==
-      entrypointSha256
+    createHash("sha256")
+      .update(readFileSync(join(repoRoot, entrypointRel), "utf8"), "utf8")
+      .digest("hex") !== entrypointSha256
   ) {
     record(
       "NPM-CI-ENTRYPOINT-IDENTITY",
@@ -1390,7 +1377,10 @@ for (const docFile of DOCS_FILES_TO_SCAN) {
           "NPM-COMMAND-INVENTORY",
           rel,
           blocks.get(jobId)?.line ?? 1,
-          npmCommands.map(({ run }) => run).join(" || ").slice(0, 240),
+          npmCommands
+            .map(({ run }) => run)
+            .join(" || ")
+            .slice(0, 240),
           "Every literal npm-bearing workflow command is an exact reviewed entry; add no raw install, alias, wrapper, alternate helper path or unreviewed npm command."
         );
       }
@@ -1482,13 +1472,10 @@ for (const docFile of DOCS_FILES_TO_SCAN) {
         continue;
       }
       const helperLine = helperLines[0];
-      const timeoutLines = block.lines.filter(({ text }) => /^    timeout-minutes:\s*/.test(text));
+      const timeoutLines = block.lines.filter(({ text }) => /^ {4}timeout-minutes:\s*/.test(text));
       const timeout =
         timeoutLines.length === 1
-          ? Number.parseInt(
-              /^    timeout-minutes:\s*([0-9]+)\s*(?:#.*)?$/.exec(timeoutLines[0].text)?.[1] ?? "",
-              10
-            )
+          ? Number.parseInt(/^ {4}timeout-minutes:\s*([0-9]+)\s*(?:#.*)?$/.exec(timeoutLines[0].text)?.[1] ?? "", 10)
           : Number.NaN;
       if (timeout !== expectedTimeout) {
         record(
@@ -1538,22 +1525,20 @@ for (const docFile of DOCS_FILES_TO_SCAN) {
       }
 
       let stepStart = helperLine.index;
-      while (stepStart >= 0 && !/^      -\s+/.test(lines[stepStart] ?? "")) stepStart--;
+      while (stepStart >= 0 && !/^ {6}-\s+/.test(lines[stepStart] ?? "")) stepStart--;
       let stepEnd = helperLine.index + 1;
       while (
         stepEnd < lines.length &&
-        !/^      -\s+/.test(lines[stepEnd] ?? "") &&
-        !/^  \S/.test(lines[stepEnd] ?? "")
+        !/^ {6}-\s+/.test(lines[stepEnd] ?? "") &&
+        !/^ {2}\S/.test(lines[stepEnd] ?? "")
       ) {
         stepEnd++;
       }
       const stepLines = lines.slice(Math.max(0, stepStart), stepEnd);
-      const stepName = /^      - name:\s*(.+?)\s*$/.exec(stepLines[0] ?? "")?.[1];
+      const stepName = /^ {6}- name:\s*(.+?)\s*$/.exec(stepLines[0] ?? "")?.[1];
       const stepKeys = stepLines
         .map((text, offset) =>
-          offset === 0
-            ? /^      - ([a-zA-Z0-9_-]+):/.exec(text)?.[1]
-            : /^        ([a-zA-Z0-9_-]+):/.exec(text)?.[1]
+          offset === 0 ? /^ {6}- ([a-zA-Z0-9_-]+):/.exec(text)?.[1] : /^ {8}([a-zA-Z0-9_-]+):/.exec(text)?.[1]
         )
         .filter((key) => key !== undefined)
         .sort();

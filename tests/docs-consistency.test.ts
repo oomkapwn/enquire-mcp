@@ -2487,17 +2487,14 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
           "      - name: Poison audit shell\n" +
             "        run: |\n" +
             "          printf '%s\\n' 'exit 0' > \"$RUNNER_TEMP/audit-bypass.sh\"\n" +
-            "          printf '%s\\n' \"BASH_ENV=$RUNNER_TEMP/audit-bypass.sh\" >> \"$GITHUB_ENV\"\n" +
+            '          printf \'%s\\n\' "BASH_ENV=$RUNNER_TEMP/audit-bypass.sh" >> "$GITHUB_ENV"\n' +
             "      - name: Audit source and published-consumer dependency graphs\n" +
             "        run: /usr/bin/timeout --kill-after=10s 300s npm run check:audit"
         )
       );
       const npmCiHelperFixture = path.join(fixtureRoot, "scripts", "npm-ci-with-retry.mjs");
       const npmCiHelper = await fs.readFile(npmCiHelperFixture, "utf8");
-      await fs.writeFile(
-        npmCiHelperFixture,
-        replaceExactly(npmCiHelper, "  attempts: 3,", "  attempts: 4,")
-      );
+      await fs.writeFile(npmCiHelperFixture, replaceExactly(npmCiHelper, "  attempts: 3,", "  attempts: 4,"));
       const entrypointFixture = path.join(fixtureRoot, "scripts", "lib", "entrypoint.mjs");
       const entrypointSource = await fs.readFile(entrypointFixture, "utf8");
       await fs.writeFile(
@@ -2529,21 +2526,15 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
         "[NPM-COMMAND-INVENTORY] .github/workflows/npm-ci-bypass.yaml:"
       );
       expect(output, "OIA must resolve a YAML alias to its executable npm.cmd install").toContain("> npm.cmd ci");
-      expect(output, "OIA must reject case-insensitive npm.exe installs in .yaml flow steps").toContain(
-        "> NPM.EXE ci"
-      );
+      expect(output, "OIA must reject case-insensitive npm.exe installs in .yaml flow steps").toContain("> NPM.EXE ci");
       expect(output, "OIA must reject quoted absolute npm executables in .yaml flow steps").toContain(
         '> "/usr/bin/npm" ci'
       );
-      expect(output, "OIA must reject shell-wrapped npm installs in .yaml flow steps").toContain(
-        '> sh -c "npm ci"'
-      );
+      expect(output, "OIA must reject shell-wrapped npm installs in .yaml flow steps").toContain('> sh -c "npm ci"');
       expect(output, "OIA must reject npm installs with attached redirections in .yaml flow steps").toContain(
         "> npm ci>install.log"
       );
-      expect(output, "OIA must reject npm installs with pre-subcommand redirections").toContain(
-        "> npm>install.log ci"
-      );
+      expect(output, "OIA must reject npm installs with pre-subcommand redirections").toContain("> npm>install.log ci");
       expect(output, "OIA must reject quoted npm ci subcommands").toContain('> npm "ci"');
       expect(output, "OIA must reject escaped-line-continuation npm installs").toContain("> npm \\");
       expect(output, "OIA must reject official npm clean-install aliases").toContain("> npm.ps1 clean-install");
@@ -2574,15 +2565,11 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
       expect(output, "OIA must reject the missing canonical helper in its exact job inventory").toContain(
         "[NPM-CI-HELPER-CARDINALITY]"
       );
-      expect(output, "OIA must reject loss of the independently bounded audit phase").toContain(
-        "[NPM-AUDIT-DEADLINE]"
-      );
+      expect(output, "OIA must reject loss of the independently bounded audit phase").toContain("[NPM-AUDIT-DEADLINE]");
       expect(output, "OIA must reject semantic drift between install and the release audit").toContain(
         "[NPM-AUDIT-DEADLINE] .github/workflows/release.yml:"
       );
-      expect(output, "OIA must reject semantic drift in the helper retry policy").toContain(
-        "[NPM-CI-HELPER-POLICY]"
-      );
+      expect(output, "OIA must reject semantic drift in the helper retry policy").toContain("[NPM-CI-HELPER-POLICY]");
       expect(output, "OIA must reject a disabled shared entrypoint guard").toContain(
         "[NPM-CI-ENTRYPOINT-IDENTITY] scripts/lib/entrypoint.mjs:"
       );

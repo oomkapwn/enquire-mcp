@@ -3712,10 +3712,7 @@ const NPM_CI_JOB_ENVIRONMENTS = new Map<string, Readonly<Record<string, string>>
     "ci.yml#package-consumer-matrix",
     { NPM_CONFIG_ENGINE_STRICT: "true", NPM_CONFIG_SCRIPT_SHELL: NPM_CI_MATRIX_SCRIPT_SHELL }
   ],
-  [
-    "ci.yml#mcpb-basic-package",
-    { NPM_CONFIG_ENGINE_STRICT: "true", NPM_CONFIG_SCRIPT_SHELL: "/bin/bash" }
-  ],
+  ["ci.yml#mcpb-basic-package", { NPM_CONFIG_ENGINE_STRICT: "true", NPM_CONFIG_SCRIPT_SHELL: "/bin/bash" }],
   [
     "ci.yml#mcpb-basic-matrix",
     { NPM_CONFIG_ENGINE_STRICT: "true", NPM_CONFIG_SCRIPT_SHELL: NPM_CI_MATRIX_SCRIPT_SHELL }
@@ -3745,14 +3742,8 @@ const NPM_CI_SETUP_INPUTS = new Map<string, Readonly<Record<string, unknown>>>([
     "ci.yml#test",
     { "node-version": NPM_CI_MATRIX_NODE_VERSION, cache: "npm", "cache-dependency-path": "package-lock.json" }
   ],
-  [
-    "ci.yml#test-windows",
-    { "node-version": "22.13.0", cache: "npm", "cache-dependency-path": "package-lock.json" }
-  ],
-  [
-    "ci.yml#test-macos",
-    { "node-version": 22, cache: "npm", "cache-dependency-path": "package-lock.json" }
-  ],
+  ["ci.yml#test-windows", { "node-version": "22.13.0", cache: "npm", "cache-dependency-path": "package-lock.json" }],
+  ["ci.yml#test-macos", { "node-version": 22, cache: "npm", "cache-dependency-path": "package-lock.json" }],
   ["ci.yml#coverage", { "node-version": 22, cache: "npm" }],
   ["ci.yml#docs", { "node-version": 22, cache: "npm" }],
   ["ci.yml#oia", { "node-version": 22, cache: "npm" }],
@@ -3862,14 +3853,13 @@ function npmCiWorkflowValueDigest(value: unknown): string {
 
 function npmCiHelperNumericPolicyProblems(source: string): string[] {
   const match =
-    /export const NPM_CI_RETRY_POLICY = Object\.freeze\(\{\s*attempts:\s*([0-9_]+),\s*attemptTimeoutMs:\s*([0-9_]+),\s*killGraceMs:\s*([0-9_]+),\s*retryDelayMs:\s*([0-9_]+),?\s*\}\);/u.exec(source);
+    /export const NPM_CI_RETRY_POLICY = Object\.freeze\(\{\s*attempts:\s*([0-9_]+),\s*attemptTimeoutMs:\s*([0-9_]+),\s*killGraceMs:\s*([0-9_]+),\s*retryDelayMs:\s*([0-9_]+),?\s*\}\);/u.exec(
+      source
+    );
   const policy = (match?.slice(1) ?? []).map((value) => Number.parseInt(value.replaceAll("_", ""), 10));
   const [attempts, attemptTimeoutMs, killGraceMs, retryDelayMs] = policy;
   const phaseMs =
-    attempts === undefined ||
-    attemptTimeoutMs === undefined ||
-    killGraceMs === undefined ||
-    retryDelayMs === undefined
+    attempts === undefined || attemptTimeoutMs === undefined || killGraceMs === undefined || retryDelayMs === undefined
       ? Number.NaN
       : attempts * (attemptTimeoutMs + killGraceMs) + (attempts - 1) * retryDelayMs;
   return attempts === 3 &&
@@ -3933,9 +3923,7 @@ function npmCiWorkflowProblems(workflows: ReadonlyMap<string, string>): string[]
       helperTokenCount += helperTokenSteps.reduce(
         (count, step) =>
           count +
-          (typeof step.run === "string"
-            ? [...step.run.matchAll(/scripts\/npm-ci-with-retry\.mjs\b/gu)].length
-            : 0),
+          (typeof step.run === "string" ? [...step.run.matchAll(/scripts\/npm-ci-with-retry\.mjs\b/gu)].length : 0),
         0
       );
       if (
@@ -3945,9 +3933,7 @@ function npmCiWorkflowProblems(workflows: ReadonlyMap<string, string>): string[]
       ) {
         problems.push(`${NPM_CI_WORKFLOW_PROBLEM}: noncanonical helper in ${filename}#${jobId}`);
       }
-      if (
-        steps.some((step) => typeof step.run === "string" && /npm/iu.test(step.run))
-      ) {
+      if (steps.some((step) => typeof step.run === "string" && /npm/iu.test(step.run))) {
         const npmCommands = steps
           .filter((step) => typeof step.run === "string" && /npm/iu.test(step.run))
           .map((step) => ({ name: typeof step.name === "string" ? step.name : null, run: step.run }));
@@ -3957,13 +3943,10 @@ function npmCiWorkflowProblems(workflows: ReadonlyMap<string, string>): string[]
           problems.push(`${NPM_CI_WORKFLOW_PROBLEM}: literal npm command inventory drifted in ${identity}`);
         }
       }
-      const auditTokenSteps = steps.filter(
-        (step) => typeof step.run === "string" && /\bcheck:audit\b/u.test(step.run)
-      );
+      const auditTokenSteps = steps.filter((step) => typeof step.run === "string" && /\bcheck:audit\b/u.test(step.run));
       auditTokenCount += auditTokenSteps.reduce(
         (count, step) =>
-          count +
-          (typeof step.run === "string" ? [...step.run.matchAll(/\bcheck:audit\b/gu)].length : 0),
+          count + (typeof step.run === "string" ? [...step.run.matchAll(/\bcheck:audit\b/gu)].length : 0),
         0
       );
       if (
@@ -4123,27 +4106,19 @@ async function assertNpmCiWorkflowContract(): Promise<void> {
   const mutateHelperWiring = (needle: string, replacement: string): string =>
     mutateSourceOnce(helperSource, needle, replacement);
   for (const [needle, replacement] of [
-    [
-      "processSpec: options.runtime?.processSpec ?? npmCiProcessSpec,",
-      "processSpec: options.runtime?.processSpec,"
-    ],
+    ["processSpec: options.runtime?.processSpec ?? npmCiProcessSpec,", "processSpec: options.runtime?.processSpec,"],
     ["const spec = runtime.processSpec();", "const spec = npmCiProcessSpec();"],
-    [
-      "const attemptRunner = options.attemptRunner ?? runNpmCiAttempt;",
-      "const attemptRunner = options.attemptRunner;"
-    ],
+    ["const attemptRunner = options.attemptRunner ?? runNpmCiAttempt;", "const attemptRunner = options.attemptRunner;"],
     ["await runNpmCiWithRetry({ signal: controller.signal });", "await runNpmCiAttempt();"],
     ["if (isEntrypoint(import.meta.url)) await main();", "if (false) await main();"]
   ] as const) {
-    expect(npmCiHelperPolicyProblems(mutateHelperWiring(needle, replacement), entrypointSource)).toEqual(
-      [NPM_CI_HELPER_POLICY_PROBLEM]
-    );
+    expect(npmCiHelperPolicyProblems(mutateHelperWiring(needle, replacement), entrypointSource)).toEqual([
+      NPM_CI_HELPER_POLICY_PROBLEM
+    ]);
   }
   const passiveMainDecoy =
-    mutateHelperWiring(
-      "await runNpmCiWithRetry({ signal: controller.signal });",
-      "await runNpmCiAttempt();"
-    ) + "\n// await runNpmCiWithRetry({ signal: controller.signal });\n";
+    mutateHelperWiring("await runNpmCiWithRetry({ signal: controller.signal });", "await runNpmCiAttempt();") +
+    "\n// await runNpmCiWithRetry({ signal: controller.signal });\n";
   expect(npmCiHelperPolicyProblems(passiveMainDecoy, entrypointSource)).toEqual([NPM_CI_HELPER_POLICY_PROBLEM]);
   const disabledEntrypoint = mutateSourceOnce(
     entrypointSource,
@@ -4175,8 +4150,7 @@ async function assertNpmCiWorkflowContract(): Promise<void> {
   expect(Object.isFrozen(NPM_CI_RETRY_POLICY)).toBe(true);
   expect(helperSource).toContain('if (process.argv.length !== 2) throw new Error("usage:');
   expect(
-    NPM_CI_RETRY_POLICY.attempts *
-      (NPM_CI_RETRY_POLICY.attemptTimeoutMs + NPM_CI_RETRY_POLICY.killGraceMs) +
+    NPM_CI_RETRY_POLICY.attempts * (NPM_CI_RETRY_POLICY.attemptTimeoutMs + NPM_CI_RETRY_POLICY.killGraceMs) +
       (NPM_CI_RETRY_POLICY.attempts - 1) * NPM_CI_RETRY_POLICY.retryDelayMs
   ).toBe(240_000);
 
@@ -4721,7 +4695,9 @@ async function assertNpmCiWorkflowContract(): Promise<void> {
         mutableNpmCiInstallStep(mutableNpmCiJob(document, "lint")).run = "true";
       })
     )
-  ).toEqual(expect.arrayContaining([expect.stringContaining("invalid ci.yml#lint"), expect.stringContaining("14 helpers")]));
+  ).toEqual(
+    expect.arrayContaining([expect.stringContaining("invalid ci.yml#lint"), expect.stringContaining("14 helpers")])
+  );
   expect(
     npmCiWorkflowProblems(
       mutateNpmCiWorkflow(workflowSources, "ci.yml", (document) => {
@@ -4761,48 +4737,48 @@ async function assertNpmCiWorkflowContract(): Promise<void> {
       "    runs-on: windows-2025\n" +
       "    timeout-minutes: 10\n" +
       "    steps:\n" +
-      "      - { name: Executable install, run: NPM.EXE ci }\n"
-      + "  bypass-quoted:\n"
-      + "    runs-on: ubuntu-latest\n"
-      + "    timeout-minutes: 10\n"
-      + "    steps:\n"
-      + "      - { name: Quoted install, run: '\"npm\" ci' }\n"
-      + "  bypass-shell-wrapper:\n"
-      + "    runs-on: ubuntu-latest\n"
-      + "    timeout-minutes: 10\n"
-      + "    steps:\n"
-      + "      - { name: Shell wrapped install, run: 'bash -c \"npm ci\"' }\n"
-      + "  bypass-redirection:\n"
-      + "    runs-on: ubuntu-latest\n"
-      + "    timeout-minutes: 10\n"
-      + "    steps:\n"
-      + "      - { name: Redirected install, run: 'npm ci>install.log' }\n"
-      + "  bypass-middle-redirection:\n"
-      + "    runs-on: ubuntu-latest\n"
-      + "    timeout-minutes: 10\n"
-      + "    steps:\n"
-      + "      - { name: Mid-command redirection, run: 'npm>install.log ci' }\n"
-      + "  bypass-quoted-subcommand:\n"
-      + "    runs-on: ubuntu-latest\n"
-      + "    timeout-minutes: 10\n"
-      + "    steps:\n"
-      + "      - { name: Quoted subcommand, run: 'npm \"ci\"' }\n"
-      + "  bypass-bash-continuation:\n"
-      + "    runs-on: ubuntu-latest\n"
-      + "    timeout-minutes: 10\n"
-      + "    steps:\n"
-      + "      - name: Continued Bash install\n"
-      + "        run: |\n"
-      + "          npm \\\n"
-      + "            ci\n"
-      + "  bypass-powershell-continuation:\n"
-      + "    runs-on: windows-2025\n"
-      + "    timeout-minutes: 10\n"
-      + "    steps:\n"
-      + "      - name: Continued PowerShell install\n"
-      + "        run: |\n"
-      + "          npm `\n"
-      + "            ci\n"
+      "      - { name: Executable install, run: NPM.EXE ci }\n" +
+      "  bypass-quoted:\n" +
+      "    runs-on: ubuntu-latest\n" +
+      "    timeout-minutes: 10\n" +
+      "    steps:\n" +
+      "      - { name: Quoted install, run: '\"npm\" ci' }\n" +
+      "  bypass-shell-wrapper:\n" +
+      "    runs-on: ubuntu-latest\n" +
+      "    timeout-minutes: 10\n" +
+      "    steps:\n" +
+      "      - { name: Shell wrapped install, run: 'bash -c \"npm ci\"' }\n" +
+      "  bypass-redirection:\n" +
+      "    runs-on: ubuntu-latest\n" +
+      "    timeout-minutes: 10\n" +
+      "    steps:\n" +
+      "      - { name: Redirected install, run: 'npm ci>install.log' }\n" +
+      "  bypass-middle-redirection:\n" +
+      "    runs-on: ubuntu-latest\n" +
+      "    timeout-minutes: 10\n" +
+      "    steps:\n" +
+      "      - { name: Mid-command redirection, run: 'npm>install.log ci' }\n" +
+      "  bypass-quoted-subcommand:\n" +
+      "    runs-on: ubuntu-latest\n" +
+      "    timeout-minutes: 10\n" +
+      "    steps:\n" +
+      "      - { name: Quoted subcommand, run: 'npm \"ci\"' }\n" +
+      "  bypass-bash-continuation:\n" +
+      "    runs-on: ubuntu-latest\n" +
+      "    timeout-minutes: 10\n" +
+      "    steps:\n" +
+      "      - name: Continued Bash install\n" +
+      "        run: |\n" +
+      "          npm \\\n" +
+      "            ci\n" +
+      "  bypass-powershell-continuation:\n" +
+      "    runs-on: windows-2025\n" +
+      "    timeout-minutes: 10\n" +
+      "    steps:\n" +
+      "      - name: Continued PowerShell install\n" +
+      "        run: |\n" +
+      "          npm `\n" +
+      "            ci\n"
   );
   expect(npmCiWorkflowProblems(yamlAliasBypass)).toContain(
     `${NPM_CI_WORKFLOW_PROBLEM}: literal npm command inventory drifted in npm-ci-bypass.yaml#bypass`
@@ -4874,8 +4850,7 @@ async function assertNpmCiWorkflowContract(): Promise<void> {
   expect(
     npmCiWorkflowProblems(
       mutateNpmCiWorkflow(workflowSources, "ci.yml", (document) => {
-        mutableNpmCiInstallStep(mutableNpmCiJob(document, "lint")).run =
-          "node scripts/npm-ci-with-retry.mjs || true";
+        mutableNpmCiInstallStep(mutableNpmCiJob(document, "lint")).run = "node scripts/npm-ci-with-retry.mjs || true";
       })
     )
   ).toEqual(
@@ -4896,7 +4871,9 @@ async function assertNpmCiWorkflowContract(): Promise<void> {
         steps.splice(installIndex + 1, 0, JSON.parse(JSON.stringify(steps[installIndex])));
       })
     )
-  ).toEqual(expect.arrayContaining([expect.stringContaining("invalid ci.yml#lint"), expect.stringContaining("16 helpers")]));
+  ).toEqual(
+    expect.arrayContaining([expect.stringContaining("invalid ci.yml#lint"), expect.stringContaining("16 helpers")])
+  );
   expect(
     npmCiWorkflowProblems(
       mutateNpmCiWorkflow(workflowSources, "ci.yml", (document) => {
@@ -4912,7 +4889,8 @@ async function assertNpmCiWorkflowContract(): Promise<void> {
         if (!Array.isArray(steps)) throw new Error("lint mutation requires steps");
         const setupIndex = steps.findIndex(
           (step) =>
-            typeof yamlRecord(step)?.uses === "string" && String(yamlRecord(step)?.uses).startsWith("actions/setup-node@")
+            typeof yamlRecord(step)?.uses === "string" &&
+            String(yamlRecord(step)?.uses).startsWith("actions/setup-node@")
         );
         const installIndex = steps.findIndex((step) => yamlRecord(step)?.run === NPM_CI_HELPER_COMMAND);
         if (setupIndex < 0 || installIndex < 0) throw new Error("lint mutation requires setup and install");

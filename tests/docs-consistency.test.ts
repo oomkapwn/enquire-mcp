@@ -2411,7 +2411,35 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
           "    runs-on: ubuntu-latest\n" +
           "    timeout-minutes: 10\n" +
           "    steps:\n" +
-          "      - { name: Redirected install, run: 'npm ci>install.log' }\n"
+          "      - { name: Redirected install, run: 'npm ci>install.log' }\n" +
+          "  bypass-middle-redirection:\n" +
+          "    runs-on: ubuntu-latest\n" +
+          "    timeout-minutes: 10\n" +
+          "    steps:\n" +
+          "      - { name: Mid-command redirection, run: 'npm>install.log ci' }\n" +
+          "  bypass-quoted-subcommand:\n" +
+          "    runs-on: ubuntu-latest\n" +
+          "    timeout-minutes: 10\n" +
+          "    steps:\n" +
+          "      - { name: Quoted subcommand, run: 'npm \"ci\"' }\n" +
+          "  bypass-continuation:\n" +
+          "    runs-on: ubuntu-latest\n" +
+          "    timeout-minutes: 10\n" +
+          "    steps:\n" +
+          "      - name: Continued install\n" +
+          "        run: |\n" +
+          "          npm \\\n" +
+          "            ci\n" +
+          "  bypass-alias:\n" +
+          "    runs-on: windows-2025\n" +
+          "    timeout-minutes: 10\n" +
+          "    steps:\n" +
+          "      - { name: Alias install, run: 'npm.ps1 clean-install' }\n" +
+          "  bypass-helper-path:\n" +
+          "    runs-on: windows-2025\n" +
+          "    timeout-minutes: 10\n" +
+          "    steps:\n" +
+          "      - { name: Alternate helper path, run: 'node scripts//NPM-CI-WITH-RETRY.mjs' }\n"
       );
       const pagesFixture = path.join(fixtureRoot, ".github", "workflows", "publish-docs.yml");
       const pagesWorkflow = await fs.readFile(pagesFixture, "utf8");
@@ -2491,9 +2519,9 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
       expect(output, "adjacent weak history wording must not mask a stale current claim").toContain(
         "[STALE-DOC-CURRENCY-CLAIM] ROADMAP.md:2"
       );
-      expect(output, "OIA must reject an executable legacy npm ci command").toContain("[NPM-CI-LEGACY-COMMAND]");
+      expect(output, "OIA must reject an unreviewed literal npm command").toContain("[NPM-COMMAND-INVENTORY]");
       expect(output, "OIA must scan .yaml workflows and reject wrapped installs").toContain(
-        "[NPM-CI-LEGACY-COMMAND] .github/workflows/npm-ci-bypass.yaml:"
+        "[NPM-COMMAND-INVENTORY] .github/workflows/npm-ci-bypass.yaml:"
       );
       expect(output, "OIA must resolve a YAML alias to its executable npm.cmd install").toContain("> npm.cmd ci");
       expect(output, "OIA must reject case-insensitive npm.exe installs in .yaml flow steps").toContain(
@@ -2508,6 +2536,15 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
       expect(output, "OIA must reject npm installs with attached redirections in .yaml flow steps").toContain(
         "> npm ci>install.log"
       );
+      expect(output, "OIA must reject npm installs with pre-subcommand redirections").toContain(
+        "> npm>install.log ci"
+      );
+      expect(output, "OIA must reject quoted npm ci subcommands").toContain('> npm "ci"');
+      expect(output, "OIA must reject escaped-line-continuation npm installs").toContain("> npm \\");
+      expect(output, "OIA must reject official npm clean-install aliases").toContain("> npm.ps1 clean-install");
+      expect(output, "OIA must reject alternate helper casing and path spelling").toContain(
+        "> node scripts//NPM-CI-WITH-RETRY.mjs"
+      );
       expect(output, "OIA must reject a wrapped helper command").toContain(
         "[NPM-CI-HELPER-NONCANONICAL] .github/workflows/npm-ci-bypass.yaml:"
       );
@@ -2516,6 +2553,9 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
       );
       expect(output, "OIA must reject a job-level continuation bypass").toContain(
         "[NPM-CI-JOB-BOUNDARY] .github/workflows/ci.yml:"
+      );
+      expect(output, "OIA must reject semantic drift before the bounded helper").toContain(
+        "[NPM-CI-PREINSTALL-BOUNDARY] .github/workflows/release.yml:"
       );
       expect(output, "OIA must not accept setup-node text embedded in a block scalar").toContain(
         "[NPM-CI-SETUP-ORDER] .github/workflows/publish-docs.yml:"

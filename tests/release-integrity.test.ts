@@ -3689,7 +3689,7 @@ const NPM_CI_WORKFLOW_JOB_TIMEOUTS = [
 const NPM_CI_WORKFLOW_PROBLEM =
   "workflow npm-ci installs must retain the exact bounded helper inventory and composed job budgets";
 const NPM_CI_HELPER_POLICY_PROBLEM =
-  "npm-ci helper must retain the fixed 3/60s/10s/15s policy and configured 240-second retry budget";
+  "npm-ci helper must retain POSIX 3x60s, Windows 1x180s, 10s cleanup and the configured 240-second maximum";
 const NPM_CI_MATRIX_SCRIPT_SHELL = `\${{ matrix.script_shell }}`;
 const NPM_CI_MATRIX_OS = `\${{ matrix.os }}`;
 const NPM_CI_MATRIX_NODE_VERSION = `\${{ matrix.node-version }}`;
@@ -3853,20 +3853,30 @@ function npmCiWorkflowValueDigest(value: unknown): string {
 
 function npmCiHelperNumericPolicyProblems(source: string): string[] {
   const match =
-    /export const NPM_CI_RETRY_POLICY = Object\.freeze\(\{\s*attempts:\s*([0-9_]+),\s*attemptTimeoutMs:\s*([0-9_]+),\s*killGraceMs:\s*([0-9_]+),\s*retryDelayMs:\s*([0-9_]+),?\s*\}\);/u.exec(
+    /export const NPM_CI_RETRY_POLICY = Object\.freeze\(\{\s*attempts:\s*([0-9_]+),\s*attemptTimeoutMs:\s*([0-9_]+),\s*windowsAttempts:\s*([0-9_]+),\s*windowsAttemptTimeoutMs:\s*([0-9_]+),\s*killGraceMs:\s*([0-9_]+),\s*retryDelayMs:\s*([0-9_]+),?\s*\}\);/u.exec(
       source
     );
   const policy = (match?.slice(1) ?? []).map((value) => Number.parseInt(value.split("_").join(""), 10));
-  const [attempts, attemptTimeoutMs, killGraceMs, retryDelayMs] = policy;
-  const phaseMs =
-    attempts === undefined || attemptTimeoutMs === undefined || killGraceMs === undefined || retryDelayMs === undefined
+  const [attempts, attemptTimeoutMs, windowsAttempts, windowsAttemptTimeoutMs, killGraceMs, retryDelayMs] = policy;
+  const configuredMaximumMs =
+    attempts === undefined ||
+    attemptTimeoutMs === undefined ||
+    windowsAttempts === undefined ||
+    windowsAttemptTimeoutMs === undefined ||
+    killGraceMs === undefined ||
+    retryDelayMs === undefined
       ? Number.NaN
-      : attempts * (attemptTimeoutMs + killGraceMs) + (attempts - 1) * retryDelayMs;
+      : Math.max(
+          attempts * (attemptTimeoutMs + killGraceMs) + (attempts - 1) * retryDelayMs,
+          windowsAttempts * (windowsAttemptTimeoutMs + killGraceMs) + (windowsAttempts - 1) * retryDelayMs
+        );
   return attempts === 3 &&
     attemptTimeoutMs === 60_000 &&
+    windowsAttempts === 1 &&
+    windowsAttemptTimeoutMs === 180_000 &&
     killGraceMs === 10_000 &&
     retryDelayMs === 15_000 &&
-    phaseMs === 240_000
+    configuredMaximumMs === 240_000
     ? []
     : [NPM_CI_HELPER_POLICY_PROBLEM];
 }
@@ -4137,39 +4147,62 @@ async function assertNpmCiWorkflowContract(): Promise<void> {
     "return false;"
   );
   expect(npmCiHelperPolicyProblems(helperSource, disabledEntrypoint)).toEqual([NPM_CI_HELPER_POLICY_PROBLEM]);
-  const syntheticPolicy = (attempts: number, attemptTimeoutMs: number, killGraceMs: number, retryDelayMs: number) =>
+  const syntheticPolicy = (
+    attempts: number,
+    attemptTimeoutMs: number,
+    windowsAttempts: number,
+    windowsAttemptTimeoutMs: number,
+    killGraceMs: number,
+    retryDelayMs: number
+  ) =>
     `export const NPM_CI_RETRY_POLICY = Object.freeze({\n` +
     `  attempts: ${attempts},\n` +
     `  attemptTimeoutMs: ${attemptTimeoutMs},\n` +
+    `  windowsAttempts: ${windowsAttempts},\n` +
+    `  windowsAttemptTimeoutMs: ${windowsAttemptTimeoutMs},\n` +
     `  killGraceMs: ${killGraceMs},\n` +
     `  retryDelayMs: ${retryDelayMs}\n` +
     `});\n`;
   for (const invalidPolicy of [
-    syntheticPolicy(4, 60_000, 10_000, 15_000),
-    syntheticPolicy(3, 0, 10_000, 15_000),
-    syntheticPolicy(3, 60_000, 0, 15_000),
-    syntheticPolicy(3, 60_000, 10_000, 0)
+    syntheticPolicy(4, 60_000, 1, 180_000, 10_000, 15_000),
+    syntheticPolicy(3, 0, 1, 180_000, 10_000, 15_000),
+    syntheticPolicy(3, 60_000, 2, 180_000, 10_000, 15_000),
+    syntheticPolicy(3, 60_000, 1, 60_000, 10_000, 15_000),
+    syntheticPolicy(3, 60_000, 1, 180_000, 0, 15_000),
+    syntheticPolicy(3, 60_000, 1, 180_000, 10_000, 0)
   ]) {
     expect(npmCiHelperNumericPolicyProblems(invalidPolicy)).toEqual([NPM_CI_HELPER_POLICY_PROBLEM]);
   }
   expect(NPM_CI_RETRY_POLICY).toEqual({
     attempts: 3,
     attemptTimeoutMs: 60_000,
+    windowsAttempts: 1,
+    windowsAttemptTimeoutMs: 180_000,
     killGraceMs: 10_000,
     retryDelayMs: 15_000
   });
   expect(Object.isFrozen(NPM_CI_RETRY_POLICY)).toBe(true);
   expect(helperSource).toContain('if (process.argv.length !== 2) throw new Error("usage:');
   expect(
-    NPM_CI_RETRY_POLICY.attempts * (NPM_CI_RETRY_POLICY.attemptTimeoutMs + NPM_CI_RETRY_POLICY.killGraceMs) +
-      (NPM_CI_RETRY_POLICY.attempts - 1) * NPM_CI_RETRY_POLICY.retryDelayMs
+    Math.max(
+      NPM_CI_RETRY_POLICY.attempts * (NPM_CI_RETRY_POLICY.attemptTimeoutMs + NPM_CI_RETRY_POLICY.killGraceMs) +
+        (NPM_CI_RETRY_POLICY.attempts - 1) * NPM_CI_RETRY_POLICY.retryDelayMs,
+      NPM_CI_RETRY_POLICY.windowsAttempts *
+        (NPM_CI_RETRY_POLICY.windowsAttemptTimeoutMs + NPM_CI_RETRY_POLICY.killGraceMs) +
+        (NPM_CI_RETRY_POLICY.windowsAttempts - 1) * NPM_CI_RETRY_POLICY.retryDelayMs
+    )
   ).toBe(240_000);
+  expect(
+    NPM_CI_RETRY_POLICY.windowsAttempts *
+      (NPM_CI_RETRY_POLICY.windowsAttemptTimeoutMs + NPM_CI_RETRY_POLICY.killGraceMs)
+  ).toBe(190_000);
 
   const retryLog = { log: () => {}, warn: () => {} };
   let successfulAttemptCalls = 0;
   const successfulWaits: number[] = [];
   await expect(
     runNpmCiWithRetry({
+      platform: "linux",
       attemptRunner: async () => {
         successfulAttemptCalls++;
         return { ok: successfulAttemptCalls === 3, timedOut: false, code: 1, signal: null, error: null };
@@ -4187,6 +4220,7 @@ async function assertNpmCiWorkflowContract(): Promise<void> {
   const shortCircuitWaits: number[] = [];
   await expect(
     runNpmCiWithRetry({
+      platform: "linux",
       attemptRunner: async () => {
         shortCircuitAttemptCalls++;
         return { ok: shortCircuitAttemptCalls === 2, timedOut: false, code: 1, signal: null, error: null };
@@ -4204,6 +4238,7 @@ async function assertNpmCiWorkflowContract(): Promise<void> {
   const exhaustedWaits: number[] = [];
   await expect(
     runNpmCiWithRetry({
+      platform: "linux",
       attemptRunner: async () => {
         exhaustedAttemptCalls++;
         return { ok: false, timedOut: true, code: null, signal: "SIGKILL", error: null };
@@ -4310,6 +4345,7 @@ async function assertNpmCiWorkflowContract(): Promise<void> {
 
   const beforeDeadlineClock = createNpmCiClock(Number.POSITIVE_INFINITY);
   const beforeDeadlineChild = createNpmCiChild(20_000);
+  const beforeDeadlineTimerDurations: number[] = [];
   const beforeDeadlineExitZero = runNpmCiAttempt({
     platform: "linux",
     runtime: {
@@ -4321,7 +4357,10 @@ async function assertNpmCiWorkflowContract(): Promise<void> {
         });
         return beforeDeadlineChild.child;
       },
-      setTimeout: beforeDeadlineClock.setTimeout,
+      setTimeout: (callback: () => void, ms: number) => {
+        beforeDeadlineTimerDurations.push(ms);
+        return beforeDeadlineClock.setTimeout(callback, ms);
+      },
       clearTimeout: beforeDeadlineClock.clearTimeout,
       nowNs: beforeDeadlineClock.nowNs,
       kill: (_pid: number, signal: number | NodeJS.Signals) => {
@@ -4332,6 +4371,7 @@ async function assertNpmCiWorkflowContract(): Promise<void> {
     }
   });
   await expect(beforeDeadlineExitZero).resolves.toMatchObject({ ok: true, timedOut: false, code: 0, signal: null });
+  expect(beforeDeadlineTimerDurations).toEqual([60_000]);
 
   const lateClock = createNpmCiClock(Number.POSITIVE_INFINITY);
   const lateChild = createNpmCiChild(20_001);
@@ -4403,6 +4443,7 @@ async function assertNpmCiWorkflowContract(): Promise<void> {
   const survivingWaits: number[] = [];
   await expect(
     runNpmCiWithRetry({
+      platform: "linux",
       attemptRunner: async () => {
         survivingAttemptCalls++;
         if (survivingAttemptCalls === 2) {
@@ -4454,6 +4495,7 @@ async function assertNpmCiWorkflowContract(): Promise<void> {
   const persistentWaits: number[] = [];
   await expect(
     runNpmCiWithRetry({
+      platform: "linux",
       attemptRunner: async () => {
         persistentAttemptCalls++;
         return runNpmCiAttempt({
@@ -4487,11 +4529,13 @@ async function assertNpmCiWorkflowContract(): Promise<void> {
 
   const windowsClock = createNpmCiClock(1);
   const windowsChild = createNpmCiChild(20_005);
+  const windowsTimerDurations: number[] = [];
   const taskkillCalls: Array<{ command: string; args: string[]; options: Record<string, unknown> }> = [];
   let windowsTimeoutAttempts = 0;
   const windowsTimeoutWaits: number[] = [];
   await expect(
     runNpmCiWithRetry({
+      platform: "win32",
       attemptRunner: async () => {
         windowsTimeoutAttempts++;
         return runNpmCiAttempt({
@@ -4505,7 +4549,10 @@ async function assertNpmCiWorkflowContract(): Promise<void> {
               windowsChild.exit(null, "SIGKILL");
               return { status: 0, signal: null };
             },
-            setTimeout: windowsClock.setTimeout,
+            setTimeout: (callback: () => void, ms: number) => {
+              windowsTimerDurations.push(ms);
+              return windowsClock.setTimeout(callback, ms);
+            },
             clearTimeout: windowsClock.clearTimeout,
             nowNs: windowsClock.nowNs,
             kill: () => failNpmCiControl("a Windows attempt must not signal a POSIX group")
@@ -4520,6 +4567,7 @@ async function assertNpmCiWorkflowContract(): Promise<void> {
   ).rejects.toThrow(/Windows timeout is terminal because taskkill cannot prove all descendants/u);
   expect(windowsTimeoutAttempts).toBe(1);
   expect(windowsTimeoutWaits).toEqual([]);
+  expect(windowsTimerDurations).toEqual([180_000]);
   expect(taskkillCalls.map(({ command }) => command)).toEqual([
     "C:\\Windows\\System32\\taskkill.exe",
     "C:\\Windows\\System32\\taskkill.exe"
@@ -4531,22 +4579,49 @@ async function assertNpmCiWorkflowContract(): Promise<void> {
   expect(taskkillCalls[0]?.options).toMatchObject({ shell: false, timeout: 8_000, windowsHide: true });
   expect(taskkillCalls[1]?.options).toMatchObject({ shell: false, timeout: 10_000, windowsHide: true });
 
-  const windowsExitChildren = [createNpmCiChild(20_050), createNpmCiChild(20_051)];
+  let windowsSuccessAttempts = 0;
+  await expect(
+    runNpmCiWithRetry({
+      platform: "win32",
+      attemptRunner: async (attemptOptions: { platform?: NodeJS.Platform }) => {
+        expect(attemptOptions.platform).toBe("win32");
+        windowsSuccessAttempts++;
+        return { ok: true, timedOut: false, code: 0, signal: null, error: null };
+      },
+      wait: async () => failNpmCiControl("a successful Windows install must not wait for a retry"),
+      log: retryLog
+    })
+  ).resolves.toBe(1);
+  expect(windowsSuccessAttempts).toBe(1);
+
+  let defaultAttemptPlatform: NodeJS.Platform | undefined;
+  await expect(
+    runNpmCiWithRetry({
+      attemptRunner: async (attemptOptions: { platform?: NodeJS.Platform }) => {
+        defaultAttemptPlatform = attemptOptions.platform;
+        return { ok: true, timedOut: false, code: 0, signal: null, error: null };
+      },
+      wait: async () => failNpmCiControl("a successful default-platform install must not wait for a retry"),
+      log: retryLog
+    })
+  ).resolves.toBe(1);
+  expect(defaultAttemptPlatform).toBe(process.platform);
+
+  const windowsExitChild = createNpmCiChild(20_050);
   let windowsExitAttempts = 0;
   const windowsExitWaits: number[] = [];
   await expect(
     runNpmCiWithRetry({
+      platform: "win32",
       attemptRunner: async () => {
-        const attemptIndex = windowsExitAttempts++;
-        const attemptChild = windowsExitChildren[attemptIndex];
-        if (attemptChild === undefined) throw new Error("unexpected extra Windows npm-ci attempt");
+        windowsExitAttempts++;
         return runNpmCiAttempt({
           platform: "win32",
           runtime: {
             processSpec: fixedNpmCiSpec,
             spawn: () => {
-              queueMicrotask(() => attemptChild.exit(attemptIndex === 0 ? 1 : 0, null));
-              return attemptChild.child;
+              queueMicrotask(() => windowsExitChild.exit(1, null));
+              return windowsExitChild.child;
             },
             setTimeout: () => 1,
             clearTimeout: () => {},
@@ -4559,9 +4634,9 @@ async function assertNpmCiWorkflowContract(): Promise<void> {
       },
       log: retryLog
     })
-  ).resolves.toBe(2);
-  expect(windowsExitAttempts).toBe(2);
-  expect(windowsExitWaits).toEqual([15_000]);
+  ).rejects.toThrow(/failed after 1 attempt \(exit=1 signal=null\)/u);
+  expect(windowsExitAttempts).toBe(1);
+  expect(windowsExitWaits).toEqual([]);
 
   const failedTaskkillClock = createNpmCiClock(1);
   const failedTaskkillChild = createNpmCiChild(20_006);
@@ -4570,6 +4645,7 @@ async function assertNpmCiWorkflowContract(): Promise<void> {
   const failedTaskkillWaits: number[] = [];
   await expect(
     runNpmCiWithRetry({
+      platform: "win32",
       attemptRunner: async () => {
         failedTaskkillAttempts++;
         return runNpmCiAttempt({
@@ -4685,6 +4761,7 @@ async function assertNpmCiWorkflowContract(): Promise<void> {
   await expect(
     runNpmCiWithRetry({
       signal: lateCancelController.signal,
+      platform: "linux",
       attemptRunner: async () => {
         lateCancelAttemptCalls++;
         return runNpmCiAttempt({
@@ -4732,6 +4809,7 @@ async function assertNpmCiWorkflowContract(): Promise<void> {
   await expect(
     runNpmCiWithRetry({
       signal: latchController.signal,
+      platform: "linux",
       attemptRunner: async () => {
         latchAttemptCalls++;
         latchController.abort(latchReason);

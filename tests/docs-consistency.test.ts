@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -2494,7 +2495,24 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
       );
       const npmCiHelperFixture = path.join(fixtureRoot, "scripts", "npm-ci-with-retry.mjs");
       const npmCiHelper = await fs.readFile(npmCiHelperFixture, "utf8");
-      await fs.writeFile(npmCiHelperFixture, replaceExactly(npmCiHelper, "  attempts: 3,", "  attempts: 4,"));
+      const mutatedNpmCiHelper = replaceExactly(
+        npmCiHelper,
+        "  windowsAttemptTimeoutMs: 180_000,",
+        "  windowsAttemptTimeoutMs: 60_000,"
+      );
+      await fs.writeFile(npmCiHelperFixture, mutatedNpmCiHelper);
+      const oiaFixture = path.join(fixtureRoot, "scripts", "oia-walk.mjs");
+      const oiaSource = await fs.readFile(oiaFixture, "utf8");
+      const baselineHelperSha256 = createHash("sha256").update(npmCiHelper, "utf8").digest("hex");
+      const mutatedHelperSha256 = createHash("sha256").update(mutatedNpmCiHelper, "utf8").digest("hex");
+      await fs.writeFile(
+        oiaFixture,
+        replaceExactly(
+          oiaSource,
+          `const helperSha256 = "${baselineHelperSha256}";`,
+          `const helperSha256 = "${mutatedHelperSha256}";`
+        )
+      );
       const entrypointFixture = path.join(fixtureRoot, "scripts", "lib", "entrypoint.mjs");
       const entrypointSource = await fs.readFile(entrypointFixture, "utf8");
       await fs.writeFile(

@@ -1291,32 +1291,39 @@ for (const docFile of DOCS_FILES_TO_SCAN) {
   } else {
     const helperSource = readFileSync(join(repoRoot, helperRel), "utf8");
     const policyMatch =
-      /export const NPM_CI_RETRY_POLICY = Object\.freeze\(\{\s*attempts:\s*([0-9_]+),\s*attemptTimeoutMs:\s*([0-9_]+),\s*killGraceMs:\s*([0-9_]+),\s*retryDelayMs:\s*([0-9_]+),?\s*\}\);/u.exec(
+      /export const NPM_CI_RETRY_POLICY = Object\.freeze\(\{\s*attempts:\s*([0-9_]+),\s*attemptTimeoutMs:\s*([0-9_]+),\s*windowsAttempts:\s*([0-9_]+),\s*windowsAttemptTimeoutMs:\s*([0-9_]+),\s*killGraceMs:\s*([0-9_]+),\s*retryDelayMs:\s*([0-9_]+),?\s*\}\);/u.exec(
         helperSource
       );
     const policy = (policyMatch?.slice(1) ?? []).map((value) => Number.parseInt(value.replaceAll("_", ""), 10));
-    const [attempts, attemptTimeoutMs, killGraceMs, retryDelayMs] = policy;
-    const phaseMs =
+    const [attempts, attemptTimeoutMs, windowsAttempts, windowsAttemptTimeoutMs, killGraceMs, retryDelayMs] = policy;
+    const configuredMaximumMs =
       attempts === undefined ||
       attemptTimeoutMs === undefined ||
+      windowsAttempts === undefined ||
+      windowsAttemptTimeoutMs === undefined ||
       killGraceMs === undefined ||
       retryDelayMs === undefined
         ? Number.NaN
-        : attempts * (attemptTimeoutMs + killGraceMs) + (attempts - 1) * retryDelayMs;
+        : Math.max(
+            attempts * (attemptTimeoutMs + killGraceMs) + (attempts - 1) * retryDelayMs,
+            windowsAttempts * (windowsAttemptTimeoutMs + killGraceMs) + (windowsAttempts - 1) * retryDelayMs
+          );
     if (
       attempts !== 3 ||
       attemptTimeoutMs !== 60_000 ||
+      windowsAttempts !== 1 ||
+      windowsAttemptTimeoutMs !== 180_000 ||
       killGraceMs !== 10_000 ||
       retryDelayMs !== 15_000 ||
-      phaseMs !== 240_000 ||
+      configuredMaximumMs !== 240_000 ||
       createHash("sha256").update(helperSource, "utf8").digest("hex") !== helperSha256
     ) {
       record(
         "NPM-CI-HELPER-POLICY",
         helperRel,
         1,
-        `attempts/timeout/grace/wait/phase=${attempts ?? "invalid"}/${attemptTimeoutMs ?? "invalid"}/${killGraceMs ?? "invalid"}/${retryDelayMs ?? "invalid"}/${Number.isFinite(phaseMs) ? phaseMs : "invalid"}`,
-        "Keep the non-configurable 3 × (60s attempt + 10s total termination grace) + 2 × 15s wait = 240s install policy."
+        `posix-attempts/timeout/windows-attempts/timeout/grace/wait/maximum=${attempts ?? "invalid"}/${attemptTimeoutMs ?? "invalid"}/${windowsAttempts ?? "invalid"}/${windowsAttemptTimeoutMs ?? "invalid"}/${killGraceMs ?? "invalid"}/${retryDelayMs ?? "invalid"}/${Number.isFinite(configuredMaximumMs) ? configuredMaximumMs : "invalid"}`,
+        "Keep POSIX at 3 × 60s with two 15s waits, Windows at one 180s attempt, and both inside the shared 10s cleanup and 240s configured maximum."
       );
     }
   }

@@ -11,16 +11,20 @@ import { isEntrypoint } from "./lib/entrypoint.mjs";
  * `killGraceMs` is one inclusive termination envelope: graceful signalling,
  * forced termination, and the required platform-specific cleanup checks must fit.
  *
- * @type {Readonly<{attempts:number,attemptTimeoutMs:number,killGraceMs:number,retryDelayMs:number}>}
+ * @type {Readonly<{attempts:number,attemptTimeoutMs:number,windowsAttempts:number,windowsAttemptTimeoutMs:number,killGraceMs:number,retryDelayMs:number}>}
  * @example
  * NPM_CI_RETRY_POLICY.attempts === 3;
  * NPM_CI_RETRY_POLICY.attemptTimeoutMs === 60_000;
+ * NPM_CI_RETRY_POLICY.windowsAttempts === 1;
+ * NPM_CI_RETRY_POLICY.windowsAttemptTimeoutMs === 180_000;
  * NPM_CI_RETRY_POLICY.killGraceMs === 10_000;
  * NPM_CI_RETRY_POLICY.retryDelayMs === 15_000;
  */
 export const NPM_CI_RETRY_POLICY = Object.freeze({
   attempts: 3,
   attemptTimeoutMs: 60_000,
+  windowsAttempts: 1,
+  windowsAttemptTimeoutMs: 180_000,
   killGraceMs: 10_000,
   retryDelayMs: 15_000
 });
@@ -276,7 +280,9 @@ export async function runNpmCiAttempt(options = {}) {
   };
   if (options.signal?.aborted) throw options.signal.reason ?? new Error("npm ci retry cancelled");
 
-  const attemptDeadlineNs = deadlineAfter(runtime.nowNs, NPM_CI_RETRY_POLICY.attemptTimeoutMs);
+  const attemptTimeoutMs =
+    platform === "win32" ? NPM_CI_RETRY_POLICY.windowsAttemptTimeoutMs : NPM_CI_RETRY_POLICY.attemptTimeoutMs;
+  const attemptDeadlineNs = deadlineAfter(runtime.nowNs, attemptTimeoutMs);
   const spec = runtime.processSpec();
   let child;
   try {
@@ -334,9 +340,9 @@ export async function runNpmCiAttempt(options = {}) {
   if (first.kind === "exit" && first.result.observedNs < attemptDeadlineNs) {
     // POSIX retains a queryable process-group identity after its leader exits,
     // so prove the group is empty before retry. Windows taskkill cannot act on
-    // a tree through an already-dead parent PID; ordinary npm exit is therefore
-    // the narrow Windows retry boundary. Timeout below remains terminal even
-    // after bounded taskkill actuation and leader observation.
+    // a tree through an already-dead parent PID, so the wrapper never starts a
+    // second Windows attempt after either success or failure. Timeout below is
+    // likewise terminal after bounded taskkill actuation and leader observation.
     if (platform !== "win32" && posixGroupExists(child.pid, runtime.kill)) {
       const cleanupDeadlineNs = deadlineAfter(runtime.nowNs, NPM_CI_RETRY_POLICY.killGraceMs);
       await terminateAttemptTree(
@@ -413,28 +419,30 @@ function waitForRetry(ms, signal, clock = { setTimeout, clearTimeout }) {
 }
 
 /**
- * Run the fixed at-most-three-attempt npm-ci policy.
+ * Run the fixed platform-specific npm-ci attempt policy.
  *
- * @param {{signal?:AbortSignal,attemptRunner?:Function,wait?:Function,log?:Console}} [options] - Test seams.
+ * @param {{signal?:AbortSignal,platform?:NodeJS.Platform,attemptRunner?:Function,wait?:Function,log?:Console}} [options] - Test seams.
  * @returns {Promise<number>} One-based successful attempt number.
  * @example
  * await runNpmCiWithRetry();
  */
 export async function runNpmCiWithRetry(options = {}) {
+  const platform = options.platform ?? process.platform;
+  const attemptLimit = platform === "win32" ? NPM_CI_RETRY_POLICY.windowsAttempts : NPM_CI_RETRY_POLICY.attempts;
   const attemptRunner = options.attemptRunner ?? runNpmCiAttempt;
   const wait = options.wait ?? waitForRetry;
   const log = options.log ?? console;
   let lastResult;
 
-  for (let attempt = 1; attempt <= NPM_CI_RETRY_POLICY.attempts; attempt += 1) {
+  for (let attempt = 1; attempt <= attemptLimit; attempt += 1) {
     if (options.signal?.aborted) throw options.signal.reason ?? new Error("npm ci retry cancelled");
-    log.log(`npm ci attempt ${attempt}/${NPM_CI_RETRY_POLICY.attempts}`);
-    lastResult = await attemptRunner({ signal: options.signal });
+    log.log(`npm ci attempt ${attempt}/${attemptLimit}`);
+    lastResult = await attemptRunner({ signal: options.signal, platform });
     // Cancellation is a permanent latch. If child exit and AbortSignal settle
     // in the same turn, never let an exit-zero observation resume the workflow.
     if (options.signal?.aborted) throw options.signal.reason ?? new Error("npm ci retry cancelled");
     if (lastResult.ok) return attempt;
-    if (attempt === NPM_CI_RETRY_POLICY.attempts) break;
+    if (attempt === attemptLimit) break;
     const reason = lastResult.timedOut ? "timed out" : "failed";
     log.warn(`npm ci attempt ${attempt} ${reason}; retrying in ${NPM_CI_RETRY_POLICY.retryDelayMs / 1000}s`);
     await wait(NPM_CI_RETRY_POLICY.retryDelayMs, options.signal);
@@ -445,7 +453,8 @@ export async function runNpmCiWithRetry(options = {}) {
     : lastResult?.error instanceof Error
       ? lastResult.error.message
       : `exit=${String(lastResult?.code)} signal=${String(lastResult?.signal)}`;
-  throw new Error(`npm ci failed after ${NPM_CI_RETRY_POLICY.attempts} attempts (${detail})`);
+  const attemptLabel = attemptLimit === 1 ? "attempt" : "attempts";
+  throw new Error(`npm ci failed after ${attemptLimit} ${attemptLabel} (${detail})`);
 }
 
 async function main() {

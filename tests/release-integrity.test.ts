@@ -3856,7 +3856,7 @@ function npmCiHelperNumericPolicyProblems(source: string): string[] {
     /export const NPM_CI_RETRY_POLICY = Object\.freeze\(\{\s*attempts:\s*([0-9_]+),\s*attemptTimeoutMs:\s*([0-9_]+),\s*killGraceMs:\s*([0-9_]+),\s*retryDelayMs:\s*([0-9_]+),?\s*\}\);/u.exec(
       source
     );
-  const policy = (match?.slice(1) ?? []).map((value) => Number.parseInt(value.replaceAll("_", ""), 10));
+  const policy = (match?.slice(1) ?? []).map((value) => Number.parseInt(value.split("_").join(""), 10));
   const [attempts, attemptTimeoutMs, killGraceMs, retryDelayMs] = policy;
   const phaseMs =
     attempts === undefined || attemptTimeoutMs === undefined || killGraceMs === undefined || retryDelayMs === undefined
@@ -4707,7 +4707,7 @@ async function assertNpmCiWorkflowContract(): Promise<void> {
         mutableNpmCiInstallStep(mutableNpmCiJob(document, "lint")).run = "true";
       })
     ),
-    ["invalid ci.yml#lint", "14 helpers"]
+    ["invalid ci.yml#lint", "found 14"]
   );
   expectProblemFragments(
     npmCiWorkflowProblems(
@@ -4869,7 +4869,7 @@ async function assertNpmCiWorkflowContract(): Promise<void> {
         steps.splice(installIndex + 1, 0, JSON.parse(JSON.stringify(steps[installIndex])));
       })
     ),
-    ["invalid ci.yml#lint", "16 helpers"]
+    ["invalid ci.yml#lint", "found 16"]
   );
   expect(
     npmCiWorkflowProblems(
@@ -5119,7 +5119,7 @@ async function assertNpmCiWorkflowContract(): Promise<void> {
         jobs["unexpected-install"] = JSON.parse(JSON.stringify(mutableNpmCiJob(document, "lint")));
       })
     ),
-    ["unexpected ci.yml#unexpected-install", "16 helpers"]
+    ["unexpected ci.yml#unexpected-install", "found 16"]
   );
 }
 

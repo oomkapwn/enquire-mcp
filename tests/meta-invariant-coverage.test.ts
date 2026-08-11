@@ -1949,16 +1949,16 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       [
         "      replaceExactly(",
         "        mcpbInputs.release,",
-        '        \'          NPM_CLI_URL: "https://registry.npmjs.org/npm/-/npm-11.18.0.tgz"\',',
-        '        \'          NPM_CLI_URL: "https://registry.npmjs.org/npm/-/npm-latest.tgz"\'',
+        "        '          NPM_CLI_URL: \"https://registry.npmjs.org/npm/-/npm-11.18.0.tgz\"',",
+        "        '          NPM_CLI_URL: \"https://registry.npmjs.org/npm/-/npm-latest.tgz\"'",
         "      ),"
       ].join("\n"),
       [
         "      (",
         "        replaceExactly(",
         "          mcpbInputs.release,",
-        '          \'          NPM_CLI_URL: "https://registry.npmjs.org/npm/-/npm-11.18.0.tgz"\',',
-        '          \'          NPM_CLI_URL: "https://registry.npmjs.org/npm/-/npm-latest.tgz"\'',
+        "          '          NPM_CLI_URL: \"https://registry.npmjs.org/npm/-/npm-11.18.0.tgz\"',",
+        "          '          NPM_CLI_URL: \"https://registry.npmjs.org/npm/-/npm-latest.tgz\"'",
         "        ),",
         "        mcpbInputs.release",
         "      ),"

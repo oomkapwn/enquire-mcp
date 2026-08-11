@@ -1856,23 +1856,28 @@ if (!SKIP_NETWORK) {
 }
 
 // ─── Report ─────────────────────────────────────────────────────────────
+const reportExitCode = findings.length > 0 && !ALLOW_MODE ? 1 : 0;
+const reportLines = [];
+
 if (findings.length === 0) {
-  console.log("[oia-walk] ✓ No outside-in findings.");
-  process.exit(0);
+  reportLines.push("[oia-walk] ✓ No outside-in findings.");
+} else {
+  reportLines.push(`[oia-walk] ${findings.length} finding(s):`, "");
+  for (const f of findings) {
+    const relPath = f.file.startsWith(repoRoot) ? relative(repoRoot, f.file) : f.file;
+    reportLines.push(`  • [${f.kind}] ${relPath}:${f.line}`);
+    reportLines.push(`    > ${f.evidence}`);
+    reportLines.push(`    hint: ${f.hint}`, "");
+  }
+  reportLines.push(
+    ALLOW_MODE
+      ? "[oia-walk] --allow flag set; exiting 0 despite findings."
+      : "[oia-walk] Pass --allow to override (CHANGELOG must document why findings are acceptable)."
+  );
 }
 
-console.error(`[oia-walk] ${findings.length} finding(s):\n`);
-for (const f of findings) {
-  const relPath = f.file.startsWith(repoRoot) ? relative(repoRoot, f.file) : f.file;
-  console.error(`  • [${f.kind}] ${relPath}:${f.line}`);
-  console.error(`    > ${f.evidence}`);
-  console.error(`    hint: ${f.hint}`);
-  console.error("");
-}
-
-if (ALLOW_MODE) {
-  console.error("[oia-walk] --allow flag set; exiting 0 despite findings.");
-  process.exit(0);
-}
-console.error("[oia-walk] Pass --allow to override (CHANGELOG must document why findings are acceptable).");
-process.exit(1);
+reportLines.push(`[oia-walk] Report complete: ${findings.length} finding(s); exit=${reportExitCode}.`);
+const reportText = `${reportLines.join("\n")}\n`;
+const reportStream = findings.length === 0 ? process.stdout : process.stderr;
+reportStream.write(reportText);
+process.exitCode = reportExitCode;

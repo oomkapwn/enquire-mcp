@@ -165,7 +165,7 @@ const RAW_REPLACE_INVENTORY_FILES = [
 ] as const;
 const EXPECTED_REPOSITORY_MUTATION_HELPER_CALLS = new Map<string, number>([
   ["abs-path-leak-invariant.test.ts", 7],
-  ["docs-consistency.test.ts", 29],
+  ["docs-consistency.test.ts", 30],
   ["write-lifecycle-invariant.test.ts", 19]
 ]);
 const EXPECTED_REPOSITORY_MUTATION_HELPER_IMPORTS = new Map<string, readonly string[]>([

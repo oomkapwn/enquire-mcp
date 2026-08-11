@@ -16501,17 +16501,17 @@ done`;
     const releaseMutationM119 = releaseMutationPlan.registerMutation("release.m119", {
       mode: "first",
       source: releaseWorkflowFixtureSource,
-      // biome-ignore lint/suspicious/noTemplateCurlyInString: GitHub expressions must remain one literal StringLiteral.
       needle:
+        // biome-ignore lint/suspicious/noTemplateCurlyInString: GitHub expressions must remain one literal StringLiteral.
         "          RELEASE_JOB_DEADLINE_EPOCH: ${{ steps.deadline.outputs.epoch }}\n          EXPECTED_VERSION: ${{ steps.npm_publication.outputs.version }}\n          EXPECTED_SOURCE_SHA: ${{ steps.npm_publication.outputs.source_sha }}\n          EXPECTED_TAG: ${{ steps.npm_publication.outputs.tag }}\n          EXPECTED_INTEGRITY: ${{ steps.npm_publication.outputs.integrity }}",
-      // biome-ignore lint/suspicious/noTemplateCurlyInString: GitHub expressions must remain one literal StringLiteral.
       replacement:
+        // biome-ignore lint/suspicious/noTemplateCurlyInString: GitHub expressions must remain one literal StringLiteral.
         "          RELEASE_JOB_DEADLINE_EPOCH: 9999999999\n          EXPECTED_VERSION: ${{ steps.npm_publication.outputs.version }}\n          EXPECTED_SOURCE_SHA: ${{ steps.npm_publication.outputs.source_sha }}\n          EXPECTED_TAG: ${{ steps.npm_publication.outputs.tag }}\n          EXPECTED_INTEGRITY: ${{ steps.npm_publication.outputs.integrity }}",
       expectedOccurrences: 1,
       witness: {
         kind: "token",
-        // biome-ignore lint/suspicious/noTemplateCurlyInString: GitHub expressions must remain one literal StringLiteral.
         anchor:
+          // biome-ignore lint/suspicious/noTemplateCurlyInString: GitHub expressions must remain one literal StringLiteral.
           "          RELEASE_JOB_DEADLINE_EPOCH: ${{ steps.deadline.outputs.epoch }}\n          EXPECTED_VERSION: ${{ steps.npm_publication.outputs.version }}\n          EXPECTED_SOURCE_SHA: ${{ steps.npm_publication.outputs.source_sha }}\n          EXPECTED_TAG: ${{ steps.npm_publication.outputs.tag }}\n          EXPECTED_INTEGRITY: ${{ steps.npm_publication.outputs.integrity }}",
         before: 1,
         after: 0

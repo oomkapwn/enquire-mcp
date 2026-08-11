@@ -11817,7 +11817,7 @@ done`;
       oracleSource.slice(matrixBodyOffset)
     ].join("");
     expect(releaseMutationInventoryProblems(extraProjectMutation)).toContain(
-      "release mutation hybrid inventory expected 538 first / 22 all, found 539 first / 22 all (legacy 489/19; declarative 50/3; cases 52)"
+      "release mutation hybrid inventory expected 538 first / 22 all, found 539 first / 22 all (legacy 488/19; declarative 51/3; cases 53)"
     );
     const outsideMutation = `${oracleSource}\nvoid replaceAllExactly("inventory", "inventory", "mutant");\n`;
     expect(releaseMutationInventoryProblems(outsideMutation)).toContain(
@@ -11831,7 +11831,7 @@ done`;
       oracleSource.slice(firstProjectCallOffset + "replaceExactly(".length)
     ].join("");
     expect(releaseMutationInventoryProblems(projectModeDrift)).toContain(
-      "release mutation hybrid inventory expected 538 first / 22 all, found 537 first / 23 all (legacy 487/20; declarative 50/3; cases 52)"
+      "release mutation hybrid inventory expected 538 first / 22 all, found 537 first / 23 all (legacy 486/20; declarative 51/3; cases 53)"
     );
     const hybridDeclarativeMutation = oracleSource;
     const declarativeBatchStartToken = "    const releaseIntegrityText = mcpbInputs.integrity;";
@@ -12508,7 +12508,7 @@ done`;
         .join("legacyMigratedExactly(")
     ].join("");
     expect(releaseMutationInventoryProblems(legacyFreeMatrix)).toContain(
-      "release mutation final closed graph expected 560 unique descriptors / 536 cases and roots / 541 expectations / 24 dependency-only, found 53 descriptors / 52 cases / 52 roots / 52 expectations / 1 dependency-only"
+      "release mutation final closed graph expected 560 unique descriptors / 536 cases and roots / 541 expectations / 24 dependency-only, found 54 descriptors / 53 cases / 53 roots / 53 expectations / 1 dependency-only"
     );
     const loopGeneratedDeclarative = [
       oracleSource.slice(0, matrixBodyOffset),
@@ -12651,7 +12651,7 @@ done`;
       expect.stringMatching(/must be one explicit straight-line case/)
     );
     expect(iterableLiteralProblems).toContain(
-      "release mutation hybrid inventory expected 538 first / 22 all, found 539 first / 22 all (legacy 489/19; declarative 50/3; cases 52)"
+      "release mutation hybrid inventory expected 538 first / 22 all, found 539 first / 22 all (legacy 488/19; declarative 51/3; cases 53)"
     );
     const nestedStraightLineMutation = [
       oracleSource.slice(0, matrixBodyOffset),
@@ -12663,7 +12663,7 @@ done`;
       expect.stringMatching(/must be one explicit straight-line case/)
     );
     expect(nestedStraightLineProblems).toContain(
-      "release mutation hybrid inventory expected 538 first / 22 all, found 540 first / 22 all (legacy 490/19; declarative 50/3; cases 52)"
+      "release mutation hybrid inventory expected 538 first / 22 all, found 540 first / 22 all (legacy 489/19; declarative 51/3; cases 53)"
     );
     const earlyReturnMutation = [
       oracleSource.slice(0, matrixBodyOffset),
@@ -14942,12 +14942,12 @@ done`;
 
     const releaseIntegrityText = mcpbInputs.integrity;
     const releaseMutationPlan = new ReleaseMutationPlan({
-      total: 53,
-      first: 50,
+      total: 54,
+      first: 51,
       all: 3,
-      cases: 52,
-      expectations: 52,
-      roots: 52,
+      cases: 53,
+      expectations: 53,
+      roots: 53,
       dependencyOnly: 1
     });
     const releaseIntegritySource = releaseMutationPlan.registerSource("script.release-integrity", releaseIntegrityText);
@@ -16667,6 +16667,38 @@ done`;
         }
       ]
     });
+    const releaseMutationM124 = releaseMutationPlan.registerMutation("release.m124", {
+      mode: "first",
+      source: releaseWorkflowFixtureSource,
+      needle: '          NPM_CLI_SIZE: "2997746"',
+      replacement: '          NPM_CLI_SIZE: "0"',
+      expectedOccurrences: 1,
+      witness: {
+        kind: "token",
+        anchor: '          NPM_CLI_SIZE: "2997746"',
+        before: 1,
+        after: 0
+      }
+    });
+    releaseMutationPlan.registerCase({
+      id: "release.case.m124",
+      root: releaseMutationM124,
+      checks: [
+        {
+          invoke: {
+            kind: "npm.workflow",
+            baseline: releaseWorkflowFixtureSource,
+            mutant: releaseMutationM124
+          },
+          expectation: {
+            id: "release.expectation.m124.primary",
+            kind: "problem",
+            problem:
+              "npm provenance must bind the tag-push context before the sole publish and verify two exact attestations without credentials"
+          }
+        }
+      ]
+    });
     const releaseMutationProblems = releaseMutationPlan.seal();
     expect(releaseMutationProblems).toEqual([]);
     releaseMutationPlan.executeThrough(releaseMutationM037, {
@@ -17207,12 +17239,11 @@ done`;
     }
     releaseMutationPlan.executeRemaining();
     expect(releaseMutationPlan.phase).toBe("executed");
-    expect(releaseMutationPlan.caseExecutions).toBe(52);
-    expect(releaseMutationPlan.expectationExecutions).toBe(52);
+    expect(releaseMutationPlan.caseExecutions).toBe(53);
+    expect(releaseMutationPlan.expectationExecutions).toBe(53);
 
     // Mutation oracle: workflow ordering, token isolation, exact verifier pin, and read-only convergence.
     for (const weakenedProvenanceWorkflow of [
-      replaceExactly(mcpbInputs.release, '          NPM_CLI_SIZE: "2997746"', '          NPM_CLI_SIZE: "0"'),
       replaceExactly(
         mcpbInputs.release,
         '          NPM_GLOBALCONFIG="$VERIFY_ROOT/global.npmrc"',

@@ -546,8 +546,7 @@ function stableApiLabelProblems(apiMd: string, previewVersion: string): string[]
   return problems;
 }
 
-const OIA_REPORT_MARKER =
-  "// ─── Report ─────────────────────────────────────────────────────────────";
+const OIA_REPORT_MARKER = "// ─── Report ─────────────────────────────────────────────────────────────";
 
 /** Keep the OIA reporter on one buffered write and a graceful process exit. */
 function oiaReporterProblems(source: string): string[] {
@@ -602,7 +601,7 @@ function oiaFindingReportProblems(stderr: string, expectedExitCode: number): str
 
   const declaredCount = Number.parseInt(headers[0]?.[1] ?? "0", 10);
   if (declaredCount <= 0) problems.push(`finding-count header must be positive, found ${declaredCount}`);
-  const emittedCount = [...stderr.matchAll(/^  • \[/gmu)].length;
+  const emittedCount = [...stderr.matchAll(/^ {2}• \[/gmu)].length;
   if (emittedCount !== declaredCount) {
     problems.push(`declared ${declaredCount} OIA findings but emitted ${emittedCount}`);
   }

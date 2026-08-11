@@ -793,12 +793,6 @@ function releaseTriggerProblems(workflow: string): string[] {
   return [];
 }
 
-function hasRunLine(step: YamlRecord | undefined, command: string): boolean {
-  return runBody(step)
-    .split("\n")
-    .some((line) => line.trim() === command);
-}
-
 type MutationReplacer = (match: string, offset: number, source: string) => string;
 
 /** Count non-overlapping mutation targets using the same semantics as string replacement. */

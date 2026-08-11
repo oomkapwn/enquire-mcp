@@ -2064,16 +2064,16 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       [
         "      replaceExactly(",
         "        mcpbInputs.release,",
-        "        '/usr/bin/touch \"$NPM_USERCONFIG\" \"$NPM_GLOBALCONFIG\"',",
-        "        '/bin/true \"$NPM_USERCONFIG\" \"$NPM_GLOBALCONFIG\"'",
+        '        \'/usr/bin/touch "$NPM_USERCONFIG" "$NPM_GLOBALCONFIG"\',',
+        '        \'/bin/true "$NPM_USERCONFIG" "$NPM_GLOBALCONFIG"\'',
         "      ),"
       ].join("\n"),
       [
         "      (",
         "        replaceExactly(",
         "          mcpbInputs.release,",
-        "          '/usr/bin/touch \"$NPM_USERCONFIG\" \"$NPM_GLOBALCONFIG\"',",
-        "          '/bin/true \"$NPM_USERCONFIG\" \"$NPM_GLOBALCONFIG\"'",
+        '          \'/usr/bin/touch "$NPM_USERCONFIG" "$NPM_GLOBALCONFIG"\',',
+        '          \'/bin/true "$NPM_USERCONFIG" "$NPM_GLOBALCONFIG"\'',
         "        ),",
         "        mcpbInputs.release",
         "      ),"

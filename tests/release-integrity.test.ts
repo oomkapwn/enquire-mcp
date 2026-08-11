@@ -4100,7 +4100,10 @@ async function assertNpmCiWorkflowContract(): Promise<void> {
   };
   const expectProblemFragments = (problems: readonly string[], fragments: readonly string[]): void => {
     for (const fragment of fragments) {
-      expect(problems.some((problem) => problem.includes(fragment)), fragment).toBe(true);
+      expect(
+        problems.some((problem) => problem.includes(fragment)),
+        fragment
+      ).toBe(true);
     }
   };
   expect(npmCiHelperPolicyProblems(helperSource, entrypointSource)).toEqual([]);

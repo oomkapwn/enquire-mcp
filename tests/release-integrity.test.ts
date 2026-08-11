@@ -4095,6 +4095,14 @@ async function assertNpmCiWorkflowContract(): Promise<void> {
   );
   const helperSource = readFileSync(new URL("../scripts/npm-ci-with-retry.mjs", import.meta.url), "utf8");
   const entrypointSource = readFileSync(new URL("../scripts/lib/entrypoint.mjs", import.meta.url), "utf8");
+  const failNpmCiControl = (message: string): never => {
+    throw new Error(message);
+  };
+  const expectProblemFragments = (problems: readonly string[], fragments: readonly string[]): void => {
+    for (const fragment of fragments) {
+      expect(problems.some((problem) => problem.includes(fragment)), fragment).toBe(true);
+    }
+  };
   expect(npmCiHelperPolicyProblems(helperSource, entrypointSource)).toEqual([]);
   const mutateSourceOnce = (source: string, needle: string, replacement: string): string => {
     const index = source.indexOf(needle);
@@ -4231,18 +4239,21 @@ async function assertNpmCiWorkflowContract(): Promise<void> {
       setTimeout: () => 1,
       clearTimeout: () => {},
       kill: (_pid: number, signal: number | NodeJS.Signals) => {
-        if (signal !== 0) expect.fail("a successful attempt must not signal its process group");
+        if (signal !== 0) failNpmCiControl("a successful attempt must not signal its process group");
         throw Object.assign(new Error("group is gone"), { code: "ESRCH" });
       },
-      taskkill: () => expect.fail("a Linux attempt must not invoke taskkill")
+      taskkill: () => failNpmCiControl("a Linux attempt must not invoke taskkill")
     }
   });
   await expect(cleanAttempt).resolves.toMatchObject({ ok: true, timedOut: false, code: 0, signal: null });
   expect(spawnCalls).toHaveLength(1);
-  expect(spawnCalls[0]).toEqual({
-    command: process.execPath,
-    args: ["/fixed/npm-cli.js", "ci"],
-    options: expect.objectContaining({ detached: true, shell: false, stdio: "inherit", windowsHide: true })
+  expect(spawnCalls[0]?.command).toBe(process.execPath);
+  expect(spawnCalls[0]?.args).toEqual(["/fixed/npm-cli.js", "ci"]);
+  expect(spawnCalls[0]?.options).toMatchObject({
+    detached: true,
+    shell: false,
+    stdio: "inherit",
+    windowsHide: true
   });
 
   const noSuchNpmCiProcess = () => Object.assign(new Error("process group is gone"), { code: "ESRCH" });
@@ -4311,10 +4322,10 @@ async function assertNpmCiWorkflowContract(): Promise<void> {
       clearTimeout: beforeDeadlineClock.clearTimeout,
       nowNs: beforeDeadlineClock.nowNs,
       kill: (_pid: number, signal: number | NodeJS.Signals) => {
-        if (signal !== 0) expect.fail("an already-empty process group must not be signalled");
+        if (signal !== 0) failNpmCiControl("an already-empty process group must not be signalled");
         throw noSuchNpmCiProcess();
       },
-      taskkill: () => expect.fail("a Linux attempt must not invoke taskkill")
+      taskkill: () => failNpmCiControl("a Linux attempt must not invoke taskkill")
     }
   });
   await expect(beforeDeadlineExitZero).resolves.toMatchObject({ ok: true, timedOut: false, code: 0, signal: null });
@@ -4336,10 +4347,10 @@ async function assertNpmCiWorkflowContract(): Promise<void> {
       clearTimeout: lateClock.clearTimeout,
       nowNs: lateClock.nowNs,
       kill: (_pid: number, signal: number | NodeJS.Signals) => {
-        if (signal !== 0) expect.fail("an already-empty late process group must not be signalled");
+        if (signal !== 0) failNpmCiControl("an already-empty late process group must not be signalled");
         throw noSuchNpmCiProcess();
       },
-      taskkill: () => expect.fail("a Linux attempt must not invoke taskkill")
+      taskkill: () => failNpmCiControl("a Linux attempt must not invoke taskkill")
     }
   });
   await expect(lateExitZero).resolves.toMatchObject({ ok: false, timedOut: true, code: 0, signal: null });
@@ -4369,7 +4380,7 @@ async function assertNpmCiWorkflowContract(): Promise<void> {
         }
         return true;
       },
-      taskkill: () => expect.fail("a Linux attempt must not invoke taskkill")
+      taskkill: () => failNpmCiControl("a Linux attempt must not invoke taskkill")
     }
   });
   await expect(timedOutAttempt).resolves.toMatchObject({
@@ -4419,7 +4430,7 @@ async function assertNpmCiWorkflowContract(): Promise<void> {
               if (signal === "SIGKILL") survivingGroupAlive = false;
               return true;
             },
-            taskkill: () => expect.fail("a Linux attempt must not invoke taskkill")
+            taskkill: () => failNpmCiControl("a Linux attempt must not invoke taskkill")
           }
         });
       },
@@ -4457,7 +4468,7 @@ async function assertNpmCiWorkflowContract(): Promise<void> {
               if (signal === "SIGTERM") persistentChild.exit(null, "SIGTERM");
               return true;
             },
-            taskkill: () => expect.fail("a Linux attempt must not invoke taskkill")
+            taskkill: () => failNpmCiControl("a Linux attempt must not invoke taskkill")
           }
         });
       },
@@ -4488,7 +4499,7 @@ async function assertNpmCiWorkflowContract(): Promise<void> {
       setTimeout: windowsClock.setTimeout,
       clearTimeout: windowsClock.clearTimeout,
       nowNs: windowsClock.nowNs,
-      kill: () => expect.fail("a Windows attempt must not signal a POSIX group")
+      kill: () => failNpmCiControl("a Windows attempt must not signal a POSIX group")
     }
   });
   await expect(windowsTimeout).resolves.toMatchObject({ ok: false, timedOut: true, signal: "SIGKILL" });
@@ -4500,10 +4511,8 @@ async function assertNpmCiWorkflowContract(): Promise<void> {
     ["/PID", "20005", "/T"],
     ["/PID", "20005", "/T", "/F"]
   ]);
-  expect(taskkillCalls.map(({ options }) => options)).toEqual([
-    expect.objectContaining({ shell: false, timeout: 8_000, windowsHide: true }),
-    expect.objectContaining({ shell: false, timeout: 10_000, windowsHide: true })
-  ]);
+  expect(taskkillCalls[0]?.options).toMatchObject({ shell: false, timeout: 8_000, windowsHide: true });
+  expect(taskkillCalls[1]?.options).toMatchObject({ shell: false, timeout: 10_000, windowsHide: true });
 
   const failedTaskkillClock = createNpmCiClock(1);
   const failedTaskkillChild = createNpmCiChild(20_006);
@@ -4522,7 +4531,7 @@ async function assertNpmCiWorkflowContract(): Promise<void> {
             setTimeout: failedTaskkillClock.setTimeout,
             clearTimeout: failedTaskkillClock.clearTimeout,
             nowNs: failedTaskkillClock.nowNs,
-            kill: () => expect.fail("a Windows attempt must not signal a POSIX group"),
+            kill: () => failNpmCiControl("a Windows attempt must not signal a POSIX group"),
             taskkill: (_pid: number, force: boolean, timeoutMs: number) => {
               expect(timeoutMs).toBeGreaterThan(0);
               failedTaskkillModes.push(force);
@@ -4577,7 +4586,7 @@ async function assertNpmCiWorkflowContract(): Promise<void> {
         raceGroupAlive = false;
         return true;
       },
-      taskkill: () => expect.fail("a Linux attempt must not invoke taskkill")
+      taskkill: () => failNpmCiControl("a Linux attempt must not invoke taskkill")
     }
   });
   await expect(exitAbortRace).rejects.toBe(raceReason);
@@ -4609,7 +4618,7 @@ async function assertNpmCiWorkflowContract(): Promise<void> {
         termChild.exit(null, signal);
         return true;
       },
-      taskkill: () => expect.fail("a Linux attempt must not invoke taskkill")
+      taskkill: () => failNpmCiControl("a Linux attempt must not invoke taskkill")
     }
   });
   termController.abort(termReason);
@@ -4653,7 +4662,7 @@ async function assertNpmCiWorkflowContract(): Promise<void> {
               }
               return true;
             },
-            taskkill: () => expect.fail("a Linux attempt must not invoke taskkill")
+            taskkill: () => failNpmCiControl("a Linux attempt must not invoke taskkill")
           }
         });
       },
@@ -4689,38 +4698,29 @@ async function assertNpmCiWorkflowContract(): Promise<void> {
   expect(latchWaits).toEqual([]);
 
   expect(npmCiWorkflowProblems(workflowSources)).toEqual([]);
-  expect(
+  expectProblemFragments(
     npmCiWorkflowProblems(
       mutateNpmCiWorkflow(workflowSources, "ci.yml", (document) => {
         mutableNpmCiInstallStep(mutableNpmCiJob(document, "lint")).run = "true";
       })
-    )
-  ).toEqual(
-    expect.arrayContaining([expect.stringContaining("invalid ci.yml#lint"), expect.stringContaining("14 helpers")])
+    ),
+    ["invalid ci.yml#lint", "14 helpers"]
   );
-  expect(
+  expectProblemFragments(
     npmCiWorkflowProblems(
       mutateNpmCiWorkflow(workflowSources, "ci.yml", (document) => {
         mutableNpmCiInstallStep(mutableNpmCiJob(document, "lint")).run = "npm ci";
       })
-    )
-  ).toEqual(
-    expect.arrayContaining([
-      expect.stringContaining("literal npm command inventory drifted in ci.yml#lint"),
-      expect.stringContaining("invalid ci.yml#lint")
-    ])
+    ),
+    ["literal npm command inventory drifted in ci.yml#lint", "invalid ci.yml#lint"]
   );
-  expect(
+  expectProblemFragments(
     npmCiWorkflowProblems(
       mutateNpmCiWorkflow(workflowSources, "ci.yml", (document) => {
         mutableNpmCiInstallStep(mutableNpmCiJob(document, "lint")).run = "env CI=true npm ci";
       })
-    )
-  ).toEqual(
-    expect.arrayContaining([
-      expect.stringContaining("literal npm command inventory drifted in ci.yml#lint"),
-      expect.stringContaining("invalid ci.yml#lint")
-    ])
+    ),
+    ["literal npm command inventory drifted in ci.yml#lint", "invalid ci.yml#lint"]
   );
   const yamlAliasBypass = new Map(workflowSources).set(
     "npm-ci-bypass.yaml",
@@ -4847,20 +4847,15 @@ async function assertNpmCiWorkflowContract(): Promise<void> {
       command
     ).toContain(`${NPM_CI_WORKFLOW_PROBLEM}: literal npm command inventory drifted in ci.yml#lint`);
   }
-  expect(
+  expectProblemFragments(
     npmCiWorkflowProblems(
       mutateNpmCiWorkflow(workflowSources, "ci.yml", (document) => {
         mutableNpmCiInstallStep(mutableNpmCiJob(document, "lint")).run = "node scripts/npm-ci-with-retry.mjs || true";
       })
-    )
-  ).toEqual(
-    expect.arrayContaining([
-      expect.stringContaining("noncanonical helper in ci.yml#lint"),
-      expect.stringContaining("invalid ci.yml#lint"),
-      expect.stringContaining("expected 15 helpers, found 14")
-    ])
+    ),
+    ["noncanonical helper in ci.yml#lint", "invalid ci.yml#lint", "expected 15 helpers, found 14"]
   );
-  expect(
+  expectProblemFragments(
     npmCiWorkflowProblems(
       mutateNpmCiWorkflow(workflowSources, "ci.yml", (document) => {
         const lint = mutableNpmCiJob(document, "lint");
@@ -4870,9 +4865,8 @@ async function assertNpmCiWorkflowContract(): Promise<void> {
         if (installIndex < 0) throw new Error("lint mutation requires install");
         steps.splice(installIndex + 1, 0, JSON.parse(JSON.stringify(steps[installIndex])));
       })
-    )
-  ).toEqual(
-    expect.arrayContaining([expect.stringContaining("invalid ci.yml#lint"), expect.stringContaining("16 helpers")])
+    ),
+    ["invalid ci.yml#lint", "16 helpers"]
   );
   expect(
     npmCiWorkflowProblems(
@@ -5114,19 +5108,15 @@ async function assertNpmCiWorkflowContract(): Promise<void> {
       })
     )
   ).toContain(`${NPM_CI_WORKFLOW_PROBLEM}: invalid release.yml#publish`);
-  expect(
+  expectProblemFragments(
     npmCiWorkflowProblems(
       mutateNpmCiWorkflow(workflowSources, "ci.yml", (document) => {
         const jobs = yamlRecord(document.jobs);
         if (jobs === null) throw new Error("unexpected-job mutation requires jobs");
         jobs["unexpected-install"] = JSON.parse(JSON.stringify(mutableNpmCiJob(document, "lint")));
       })
-    )
-  ).toEqual(
-    expect.arrayContaining([
-      expect.stringContaining("unexpected ci.yml#unexpected-install"),
-      expect.stringContaining("16 helpers")
-    ])
+    ),
+    ["unexpected ci.yml#unexpected-install", "16 helpers"]
   );
 }
 

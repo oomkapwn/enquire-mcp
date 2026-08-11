@@ -289,7 +289,7 @@ jobs:
       # registry consumer resolves without root-only overrides. New and stale advisories
       # fail closed; any scope-specific exception needs a rationale + removal tracker.
       - name: Audit source and published-consumer dependency graphs
-        run: timeout --kill-after=10s 300s npm run check:audit
+        run: /usr/bin/timeout --kill-after=10s 300s npm run check:audit
       - name: JSON-RPC smoke test against synthetic vault (scan + FTS5 paths)
         run: |
           VAULT="$(node scripts/synthetic-vault.mjs)"

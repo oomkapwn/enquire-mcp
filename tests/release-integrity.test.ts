@@ -3666,7 +3666,8 @@ if (releaseTransactionExpectationIdentityBootstrapProblems.length !== 0) {
 
 const NPM_CI_HELPER_COMMAND = "node scripts/npm-ci-with-retry.mjs";
 const NPM_CI_INSTALL_STEP_NAME = "Install deps (npm ci with retry)";
-const NPM_CI_AUDIT_COMMAND = "timeout --kill-after=10s 300s npm run check:audit";
+const NPM_CI_AUDIT_COMMAND = "/usr/bin/timeout --kill-after=10s 300s npm run check:audit";
+const NPM_CI_HELPER_SOURCE_SHA256 = "40b725d11de43cd6b183ff3c52198735c7e27f85ea481f99812e37eb26612701";
 const NPM_CI_WORKFLOW_JOB_TIMEOUTS = [
   ["ci.yml", "lint", 5],
   ["ci.yml", "test", 10],
@@ -3813,10 +3814,10 @@ const NPM_CI_COMMAND_DIGESTS = new Map<string, string>([
   ["ci.yml#package-consumer-matrix", "4158b622c017e1e9463d27732c2ef0d4277807309f5e18a3867fb6500837585a"],
   ["ci.yml#mcpb-basic-package", "72f8f9db912e223c63e5245d948adc6c23299a60262bd7ba22d2c106654181f6"],
   ["ci.yml#mcpb-basic-matrix", "428a7037595e3943656994b9fd69aec7639287929316ef9ffbe017c37490ae82"],
-  ["ci.yml#audit", "4c5e769bf213d559fd645f67a63d27de8d280c6d037b3059447ec5180e7434d0"],
+  ["ci.yml#audit", "257a09114a4e895df831ace40f70115b66d7ae38a41eb166ff5dca10df1b245c"],
   ["dist-tag-cleanup.yml#cleanup", "80391e9a5a0ba770920e7798c6b4d8066035884c9b95b9cb5b4d9ff10768e5d5"],
   ["publish-docs.yml#build", "476bc2a8aea0d3def4c805b616058ba0c4aea7f9d940e73a5d9da4b5b977cfba"],
-  ["release.yml#publish", "c568d60a4c2ba539a14360b6a7d050ab8c52a7b3943f871181ae1a5186181638"]
+  ["release.yml#publish", "1336676a0ee7b70b0c1ba51a7d28b8d32dc553cd93eec2b28f83781280bd1905"]
 ]);
 const NPM_CI_PREAUDIT_DIGESTS = new Map<string, string>([
   ["ci.yml#audit", "877eb535025aaf14a917f52fd1a871e38a2c26836a6df19f5cc42a31f32eb6f6"],
@@ -3858,7 +3859,7 @@ function npmCiWorkflowValueDigest(value: unknown): string {
   return createHash("sha256").update(json, "utf8").digest("hex");
 }
 
-function npmCiHelperPolicyProblems(source: string): string[] {
+function npmCiHelperNumericPolicyProblems(source: string): string[] {
   const match =
     /export const NPM_CI_RETRY_POLICY = Object\.freeze\(\{\s*attempts:\s*([0-9_]+),\s*attemptTimeoutMs:\s*([0-9_]+),\s*killGraceMs:\s*([0-9_]+),\s*retryDelayMs:\s*([0-9_]+),?\s*\}\);/u.exec(source);
   const policy = (match?.slice(1) ?? []).map((value) => Number.parseInt(value.replaceAll("_", ""), 10));
@@ -3875,6 +3876,13 @@ function npmCiHelperPolicyProblems(source: string): string[] {
     killGraceMs === 10_000 &&
     retryDelayMs === 15_000 &&
     phaseMs === 240_000
+    ? []
+    : [NPM_CI_HELPER_POLICY_PROBLEM];
+}
+
+function npmCiHelperPolicyProblems(source: string): string[] {
+  return npmCiHelperNumericPolicyProblems(source).length === 0 &&
+    createHash("sha256").update(source, "utf8").digest("hex") === NPM_CI_HELPER_SOURCE_SHA256
     ? []
     : [NPM_CI_HELPER_POLICY_PROBLEM];
 }
@@ -4102,6 +4110,36 @@ async function assertNpmCiWorkflowContract(): Promise<void> {
   );
   const helperSource = readFileSync(new URL("../scripts/npm-ci-with-retry.mjs", import.meta.url), "utf8");
   expect(npmCiHelperPolicyProblems(helperSource)).toEqual([]);
+  const mutateHelperWiring = (needle: string, replacement: string): string => {
+    const index = helperSource.indexOf(needle);
+    if (index < 0 || helperSource.indexOf(needle, index + needle.length) >= 0) {
+      throw new Error(`helper wiring control requires one exact anchor: ${needle}`);
+    }
+    return helperSource.slice(0, index) + replacement + helperSource.slice(index + needle.length);
+  };
+  for (const [needle, replacement] of [
+    [
+      "processSpec: options.runtime?.processSpec ?? npmCiProcessSpec,",
+      "processSpec: options.runtime?.processSpec,"
+    ],
+    ["const spec = runtime.processSpec();", "const spec = npmCiProcessSpec();"],
+    [
+      "const attemptRunner = options.attemptRunner ?? runNpmCiAttempt;",
+      "const attemptRunner = options.attemptRunner;"
+    ],
+    ["await runNpmCiWithRetry({ signal: controller.signal });", "await runNpmCiAttempt();"],
+    ["if (isEntrypoint(import.meta.url)) await main();", "if (false) await main();"]
+  ] as const) {
+    expect(npmCiHelperPolicyProblems(mutateHelperWiring(needle, replacement))).toEqual([
+      NPM_CI_HELPER_POLICY_PROBLEM
+    ]);
+  }
+  const passiveMainDecoy =
+    mutateHelperWiring(
+      "await runNpmCiWithRetry({ signal: controller.signal });",
+      "await runNpmCiAttempt();"
+    ) + "\n// await runNpmCiWithRetry({ signal: controller.signal });\n";
+  expect(npmCiHelperPolicyProblems(passiveMainDecoy)).toEqual([NPM_CI_HELPER_POLICY_PROBLEM]);
   const syntheticPolicy = (attempts: number, attemptTimeoutMs: number, killGraceMs: number, retryDelayMs: number) =>
     `export const NPM_CI_RETRY_POLICY = Object.freeze({\n` +
     `  attempts: ${attempts},\n` +
@@ -4115,7 +4153,7 @@ async function assertNpmCiWorkflowContract(): Promise<void> {
     syntheticPolicy(3, 60_000, 0, 15_000),
     syntheticPolicy(3, 60_000, 10_000, 0)
   ]) {
-    expect(npmCiHelperPolicyProblems(invalidPolicy)).toEqual([NPM_CI_HELPER_POLICY_PROBLEM]);
+    expect(npmCiHelperNumericPolicyProblems(invalidPolicy)).toEqual([NPM_CI_HELPER_POLICY_PROBLEM]);
   }
   expect(NPM_CI_RETRY_POLICY).toEqual({
     attempts: 3,
@@ -4984,8 +5022,10 @@ async function assertNpmCiWorkflowContract(): Promise<void> {
         const auditIndex = steps.findIndex((step) => yamlRecord(step)?.run === NPM_CI_AUDIT_COMMAND);
         if (auditIndex < 0) throw new Error("preaudit mutation requires bounded audit");
         steps.splice(auditIndex, 0, {
-          name: "Shadow timeout",
-          run: 'printf "%s\\n" "$RUNNER_TEMP/shadow" >> "$GITHUB_PATH"'
+          name: "Poison audit shell",
+          run:
+            'printf "%s\\n" "exit 0" > "$RUNNER_TEMP/audit-bypass.sh"\n' +
+            'printf "%s\\n" "BASH_ENV=$RUNNER_TEMP/audit-bypass.sh" >> "$GITHUB_ENV"'
         });
       })
     )

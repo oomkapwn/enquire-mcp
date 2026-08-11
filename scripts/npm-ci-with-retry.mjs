@@ -6,7 +6,8 @@ import path from "node:path";
 import { isEntrypoint } from "./lib/entrypoint.mjs";
 
 /**
- * Fixed workflow policy. No environment or argv override may weaken it.
+ * Fixed workflow policy. The numeric policy exposes no helper-specific
+ * environment or argv override.
  * `killGraceMs` is one inclusive termination envelope: graceful signalling,
  * forced termination, and exit/tree-disappearance verification must all fit.
  *

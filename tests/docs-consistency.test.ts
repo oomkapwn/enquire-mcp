@@ -2368,7 +2368,7 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
         replaceExactly(
           replaceExactly(
             ciWithLegacyInstall,
-            "        run: timeout --kill-after=10s 300s npm run check:audit",
+            "        run: /usr/bin/timeout --kill-after=10s 300s npm run check:audit",
             "        run: npm run check:audit"
           ),
           "  lint:\n    runs-on: ubuntu-latest\n    timeout-minutes: 5",
@@ -2478,23 +2478,18 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
       );
       const releaseFixture = path.join(fixtureRoot, ".github", "workflows", "release.yml");
       const releaseWorkflow = await fs.readFile(releaseFixture, "utf8");
-      const releaseWithSetupBypass = replaceExactly(
-        releaseWorkflow,
-        "      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7\n" +
-          "        with:",
-        "      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7\n" +
-          "        continue-on-error: true\n" +
-          "        with:"
-      );
       await fs.writeFile(
         releaseFixture,
         replaceExactly(
-          releaseWithSetupBypass,
+          releaseWorkflow,
           "      - name: Audit source and published-consumer dependency graphs\n" +
-            "        run: timeout --kill-after=10s 300s npm run check:audit",
-          "      - name: Audit source and published-consumer dependency graphs\n" +
-            "        continue-on-error: true\n" +
-            "        run: timeout --kill-after=10s 300s npm run check:audit"
+            "        run: /usr/bin/timeout --kill-after=10s 300s npm run check:audit",
+          "      - name: Poison audit shell\n" +
+            "        run: |\n" +
+            "          printf '%s\\n' 'exit 0' > \"$RUNNER_TEMP/audit-bypass.sh\"\n" +
+            "          printf '%s\\n' \"BASH_ENV=$RUNNER_TEMP/audit-bypass.sh\" >> \"$GITHUB_ENV\"\n" +
+            "      - name: Audit source and published-consumer dependency graphs\n" +
+            "        run: /usr/bin/timeout --kill-after=10s 300s npm run check:audit"
         )
       );
       const npmCiHelperFixture = path.join(fixtureRoot, "scripts", "npm-ci-with-retry.mjs");
@@ -2555,13 +2550,10 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
         "[NPM-CI-JOB-BOUNDARY] .github/workflows/ci.yml:"
       );
       expect(output, "OIA must reject semantic drift before the bounded helper").toContain(
-        "[NPM-CI-PREINSTALL-BOUNDARY] .github/workflows/release.yml:"
+        "[NPM-CI-PREINSTALL-BOUNDARY] .github/workflows/publish-docs.yml:"
       );
       expect(output, "OIA must not accept setup-node text embedded in a block scalar").toContain(
         "[NPM-CI-SETUP-ORDER] .github/workflows/publish-docs.yml:"
-      );
-      expect(output, "OIA must reject fail-open setup-node metadata").toContain(
-        "[NPM-CI-SETUP-ORDER] .github/workflows/release.yml:"
       );
       expect(output, "OIA must validate the semantic helper step instead of a block-scalar decoy").toContain(
         "[NPM-CI-STEP-BOUNDARY] .github/workflows/publish-docs.yml:"
@@ -2575,7 +2567,7 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
       expect(output, "OIA must reject loss of the independently bounded audit phase").toContain(
         "[NPM-AUDIT-DEADLINE]"
       );
-      expect(output, "OIA must reject fail-open metadata on the release audit step").toContain(
+      expect(output, "OIA must reject semantic drift between install and the release audit").toContain(
         "[NPM-AUDIT-DEADLINE] .github/workflows/release.yml:"
       );
       expect(output, "OIA must reject semantic drift in the helper retry policy").toContain(

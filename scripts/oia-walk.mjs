@@ -1039,9 +1039,10 @@ for (const docFile of DOCS_FILES_TO_SCAN) {
   const wfDir = ".github/workflows";
   const helperCommand = "node scripts/npm-ci-with-retry.mjs";
   const installStepName = "Install deps (npm ci with retry)";
-  const auditCommand = "timeout --kill-after=10s 300s npm run check:audit";
+  const auditCommand = "/usr/bin/timeout --kill-after=10s 300s npm run check:audit";
   const auditStepName = "Audit source and published-consumer dependency graphs";
   const helperRel = "scripts/npm-ci-with-retry.mjs";
+  const helperSha256 = "40b725d11de43cd6b183ff3c52198735c7e27f85ea481f99812e37eb26612701";
   const matrixScriptShell = `\${{ matrix.script_shell }}`;
   const matrixOs = `\${{ matrix.os }}`;
   const matrixNodeVersion = `\${{ matrix.node-version }}`;
@@ -1189,10 +1190,10 @@ for (const docFile of DOCS_FILES_TO_SCAN) {
     ["ci.yml#package-consumer-matrix", "4158b622c017e1e9463d27732c2ef0d4277807309f5e18a3867fb6500837585a"],
     ["ci.yml#mcpb-basic-package", "72f8f9db912e223c63e5245d948adc6c23299a60262bd7ba22d2c106654181f6"],
     ["ci.yml#mcpb-basic-matrix", "428a7037595e3943656994b9fd69aec7639287929316ef9ffbe017c37490ae82"],
-    ["ci.yml#audit", "4c5e769bf213d559fd645f67a63d27de8d280c6d037b3059447ec5180e7434d0"],
+    ["ci.yml#audit", "257a09114a4e895df831ace40f70115b66d7ae38a41eb166ff5dca10df1b245c"],
     ["dist-tag-cleanup.yml#cleanup", "80391e9a5a0ba770920e7798c6b4d8066035884c9b95b9cb5b4d9ff10768e5d5"],
     ["publish-docs.yml#build", "476bc2a8aea0d3def4c805b616058ba0c4aea7f9d940e73a5d9da4b5b977cfba"],
-    ["release.yml#publish", "c568d60a4c2ba539a14360b6a7d050ab8c52a7b3943f871181ae1a5186181638"]
+    ["release.yml#publish", "1336676a0ee7b70b0c1ba51a7d28b8d32dc553cd93eec2b28f83781280bd1905"]
   ]);
   const expectedPreauditDigests = new Map([
     ["ci.yml#audit", "877eb535025aaf14a917f52fd1a871e38a2c26836a6df19f5cc42a31f32eb6f6"],
@@ -1319,7 +1320,8 @@ for (const docFile of DOCS_FILES_TO_SCAN) {
       attemptTimeoutMs !== 60_000 ||
       killGraceMs !== 10_000 ||
       retryDelayMs !== 15_000 ||
-      phaseMs !== 240_000
+      phaseMs !== 240_000 ||
+      createHash("sha256").update(helperSource, "utf8").digest("hex") !== helperSha256
     ) {
       record(
         "NPM-CI-HELPER-POLICY",

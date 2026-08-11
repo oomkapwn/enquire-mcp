@@ -3667,7 +3667,7 @@ if (releaseTransactionExpectationIdentityBootstrapProblems.length !== 0) {
 const NPM_CI_HELPER_COMMAND = "node scripts/npm-ci-with-retry.mjs";
 const NPM_CI_INSTALL_STEP_NAME = "Install deps (npm ci with retry)";
 const NPM_CI_AUDIT_COMMAND = "/usr/bin/timeout --kill-after=10s 300s npm run check:audit";
-const NPM_CI_HELPER_SOURCE_SHA256 = "a50a20df9ca405ddf83b6994cf3d5829f284bcd74b675af9d681e6c3dfd1e795";
+const NPM_CI_HELPER_SOURCE_SHA256 = "97e1ea18490e4cd2d334b0fdc75831e6de32718fe614d6ed32737b797d840797";
 const NPM_CI_ENTRYPOINT_SOURCE_SHA256 = "31e3b1af3bf48c88149b20cd71fa948e492e8e0db45551ae7271a01c36d37b1b";
 const NPM_CI_WORKFLOW_JOB_TIMEOUTS = [
   ["ci.yml", "lint", 5],

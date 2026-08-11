@@ -317,8 +317,8 @@ const MATRIX_TITLE = "keeps release.yml wired to the shared evaluator and an exa
 const SOURCE_COMMIT = "8420e2fca3ed0dac994859a9e9a30b933d5ddf9e";
 const MATRIX_SOURCE_SHA256 = "3fa0b67411e2fc0f4d7c6bce6075ba91eb25edc19a210b5c2f8dd408def6e18b";
 const MATRIX_SLICE_SHA256 = "caca0093c744df9f6c6cdd0e8200fd8df45052e784297079887ea48686c5e07f";
-const CURRENT_HYBRID_SOURCE_SHA256 = "9c75da10a4b5306b5222cfa5d60de11357d855a92826865d4c5f530a5f2a136d";
-const CURRENT_HYBRID_MATRIX_SLICE_SHA256 = "f4413c730a13496d21bcadd0dba30517b7a1100a5777d81161fd9248df210316";
+const CURRENT_HYBRID_SOURCE_SHA256 = "6ed27dc4877546576d8990f994e0927bc0cbbfd6f07294e0a88030bffcb3b9cc";
+const CURRENT_HYBRID_MATRIX_SLICE_SHA256 = "8a8c961725351883f0ac3130f3dc6958191aefbe231af093b45f8c0f05cee019";
 const IDENTITY_FIXTURE_SHA256 = "9ccc4d25c0051d9516c9e7795dc6499a4ad024f33f67cea34776d59d5bbe6ce3";
 const MUTATION_MATCH_COUNT_NODE_SHA256 = "5e57cd7a2f1dd60cc4bda3b10c4a7e906f7e5b9604902eff5e54f20bd0c8f49d";
 const NPM_PROVENANCE_PROBLEM_NODE_SHA256 = "f6f47a5f8eb309db455cf684ca187c5c1ce6dadd0443e4c11475a779a5944334";
@@ -393,7 +393,8 @@ const MIGRATED_NPM_WORKFLOW_IDS = [
   "release.m124",
   "release.m125",
   "release.m126",
-  "release.m127"
+  "release.m127",
+  "release.m128"
 ] as const;
 const MIGRATED_REGISTRY_EVALUATOR_ID_SET: ReadonlySet<string> = new Set<string>(MIGRATED_REGISTRY_EVALUATOR_IDS);
 const MIGRATED_REGISTRY_RUN_ID_SET: ReadonlySet<string> = new Set<string>(MIGRATED_REGISTRY_RUN_IDS);
@@ -2470,12 +2471,12 @@ function scanHybridDeclarativeMatrix(matrix: MatrixScan, problems: string[]): Hy
           problems
         );
         const expectedInventory = {
-          total: 57,
-          first: 54,
+          total: 58,
+          first: 55,
           all: 3,
-          cases: 56,
-          expectations: 56,
-          roots: 56,
+          cases: 57,
+          expectations: 57,
+          roots: 57,
           dependencyOnly: 1
         } as const;
         if (inventory !== null) {
@@ -2818,7 +2819,7 @@ function scanHybridDeclarativeMatrix(matrix: MatrixScan, problems: string[]): Hy
     const observedEntry = registrationSequence[mismatchIndex] ?? "<none>";
     problems.push(
       "release mutation hybrid registrations must be exact contiguous source/m002-m037 and " +
-        "source/m108 dependency/m107,m109-m111 mutation/case and source/m112-m127 mutation/case sequences; " +
+        "source/m108 dependency/m107,m109-m111 mutation/case and source/m112-m128 mutation/case sequences; " +
         `first mismatch ${mismatchIndex + 1}: expected ${expectedEntry}, found ${observedEntry}`
     );
   }
@@ -5647,6 +5648,13 @@ function validateFrozenDeclarativeInvocationMatchingSemantics(manifest: Identity
     companionSlot: null,
     companionHandle: null
   };
+  const npmWorkflowM128: DeclarativeInvocationIdentity = {
+    invocationKind: "npm.workflow",
+    baselineHandle: "releaseWorkflowFixtureSource",
+    mutantHandle: "releaseMutationM128",
+    companionSlot: null,
+    companionHandle: null
+  };
   if (
     !matches("release.m002", evaluator) ||
     !matches("release.m043", run) ||
@@ -5667,6 +5675,7 @@ function validateFrozenDeclarativeInvocationMatchingSemantics(manifest: Identity
     !matches("release.m125", npmWorkflowM125) ||
     !matches("release.m126", npmWorkflowM126) ||
     !matches("release.m127", npmWorkflowM127) ||
+    !matches("release.m128", npmWorkflowM128) ||
     matches("release.m035", { ...integrity, mutantHandle: "releaseMutationM035" }) ||
     matches("release.m111", { ...evaluator, mutantHandle: "releaseMutationM111" }) ||
     matches("release.m043", { ...run, companionSlot: "run" }) ||
@@ -5711,6 +5720,8 @@ function validateFrozenDeclarativeInvocationMatchingSemantics(manifest: Identity
     matches("release.m126", { ...npmWorkflowM126, mutantHandle: "releaseMutationM125" }) ||
     matches("release.m126", { ...npmWorkflowM126, mutantHandle: "releaseMutationM127" }) ||
     matches("release.m127", { ...npmWorkflowM127, mutantHandle: "releaseMutationM126" }) ||
+    matches("release.m127", { ...npmWorkflowM127, mutantHandle: "releaseMutationM128" }) ||
+    matches("release.m128", { ...npmWorkflowM128, mutantHandle: "releaseMutationM127" }) ||
     matches("release.m115", { ...npmWorkflowM115, baselineHandle: "releaseIntegritySource" }) ||
     matches("release.m115", { ...npmWorkflowM115, invocationKind: "npm.contract.release" }) ||
     matches("release.m115", {
@@ -5801,6 +5812,13 @@ function validateFrozenDeclarativeInvocationMatchingSemantics(manifest: Identity
       ...npmWorkflowM127,
       companionSlot: "integrity",
       companionHandle: "releaseIntegritySource"
+    }) ||
+    matches("release.m128", { ...npmWorkflowM128, baselineHandle: "releaseIntegritySource" }) ||
+    matches("release.m128", { ...npmWorkflowM128, invocationKind: "npm.contract.release" }) ||
+    matches("release.m128", {
+      ...npmWorkflowM128,
+      companionSlot: "integrity",
+      companionHandle: "releaseIntegritySource"
     })
   ) {
     problems.push(
@@ -5882,13 +5900,13 @@ function validateHybridPartition(
     .filter((mutation) => mutation.mode === "all")
     .map((mutation) => mutation.id);
   if (
-    declarative.mutations.length !== 57 ||
-    declarativeFirst !== 54 ||
+    declarative.mutations.length !== 58 ||
+    declarativeFirst !== 55 ||
     declarativeAll !== 3 ||
     JSON.stringify(observedAllIds) !== JSON.stringify([...MIGRATED_DECLARATIVE_ALL_IDS])
   ) {
     problems.push(
-      `release mutation hybrid migrated modes must be 57 total / 54 first / exact all m009,m018,m034; ` +
+      `release mutation hybrid migrated modes must be 58 total / 55 first / exact all m009,m018,m034; ` +
         `found ${declarative.mutations.length} / ${declarativeFirst} / ${observedAllIds.join(",")}`
     );
   }
@@ -5957,8 +5975,8 @@ function validateHybridPartition(
       problems.push(`release mutation hybrid case ${observed.id} disagrees with its exact frozen identity`);
     }
   }
-  if (declarative.cases.length !== 56) {
-    problems.push(`release mutation hybrid migrated cases must equal 56; found ${declarative.cases.length}`);
+  if (declarative.cases.length !== 57) {
+    problems.push(`release mutation hybrid migrated cases must equal 57; found ${declarative.cases.length}`);
   }
 
   const frozenLegacyOrder = [...manifest.mutations].sort((left, right) => left.legacyOrder - right.legacyOrder);
@@ -5966,8 +5984,8 @@ function validateHybridPartition(
   const legacyById = new Map<string, LegacyMutationCall>();
   const numericDeclarations = matrix.declarations;
   const stringDeclarations = matrix.declarations;
-  if (matrix.calls.length !== 503) {
-    problems.push(`release mutation hybrid remaining legacy calls must equal 503; found ${matrix.calls.length}`);
+  if (matrix.calls.length !== 502) {
+    problems.push(`release mutation hybrid remaining legacy calls must equal 502; found ${matrix.calls.length}`);
   }
   const comparableLength = Math.min(expectedLegacy.length, matrix.calls.length);
   for (let index = 0; index < comparableLength; index++) {
@@ -6025,18 +6043,18 @@ function validateHybridPartition(
     0
   );
   if (
-    expectedLegacy.length !== 503 ||
-    legacyFirst !== 484 ||
+    expectedLegacy.length !== 502 ||
+    legacyFirst !== 483 ||
     legacyAll !== 19 ||
-    legacyRoots !== 480 ||
+    legacyRoots !== 479 ||
     legacyDependencies !== 23 ||
-    legacyCases.length !== 480 ||
-    legacyChecks !== 485 ||
-    legacyLeaves !== 490
+    legacyCases.length !== 479 ||
+    legacyChecks !== 484 ||
+    legacyLeaves !== 489
   ) {
     problems.push(
-      `release mutation hybrid frozen partition must retain 503=484/19, 480 roots/cases, 23 dependencies, ` +
-        `485 checks and 490 leaves; found ${expectedLegacy.length}=${legacyFirst}/${legacyAll}, ` +
+      `release mutation hybrid frozen partition must retain 502=483/19, 479 roots/cases, 23 dependencies, ` +
+        `484 checks and 489 leaves; found ${expectedLegacy.length}=${legacyFirst}/${legacyAll}, ` +
         `${legacyRoots}/${legacyCases.length}, ${legacyDependencies}, ${legacyChecks}, ${legacyLeaves}`
     );
   }
@@ -6851,9 +6869,9 @@ function validateRemainingLegacyMatchers(
       });
     }
   }
-  if (cases !== 480 || checks !== 485 || leaves !== 490) {
+  if (cases !== 479 || checks !== 484 || leaves !== 489) {
     problems.push(
-      `release mutation hybrid remaining matcher census must be 480 cases / 485 checks / 490 leaves; ` +
+      `release mutation hybrid remaining matcher census must be 479 cases / 484 checks / 489 leaves; ` +
         `found ${cases} / ${checks} / ${leaves}`
     );
   }
@@ -7905,7 +7923,7 @@ export function releaseMutationExactLegacyIdentityAuditProblems(
  * @param matrixSource - Complete current `tests/release-integrity.test.ts` source text.
  * @param manifestSource - Immutable generated schema-v2 manifest JSON bytes.
  * @returns Stable diagnostics; empty only for the exact staged m002-m037 plus topological m108->m107 and
- * m109-m127 hybrid boundary.
+ * m109-m128 hybrid boundary.
  */
 export function releaseMutationIdentityAuditProblems(matrixSource: string, manifestSource: string): string[] {
   return createReleaseMutationIdentityAuditor(manifestSource).auditMatrix(matrixSource);

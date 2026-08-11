@@ -1831,7 +1831,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
         "      replaceExactly(",
         "        mcpbInputs.release,",
         `        \`PUBLISH_ATTEMPTED: \\\${{ steps.npm_publication.outputs.publish_attempted }}\`,`,
-        '        \'PUBLISH_ATTEMPTED: "false"\'',
+        "        'PUBLISH_ATTEMPTED: \"false\"'",
         "      ),"
       ].join("\n"),
       [
@@ -1839,7 +1839,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
         "        replaceExactly(",
         "          mcpbInputs.release,",
         `          \`PUBLISH_ATTEMPTED: \\\${{ steps.npm_publication.outputs.publish_attempted }}\`,`,
-        '          \'PUBLISH_ATTEMPTED: "false"\'',
+        "          'PUBLISH_ATTEMPTED: \"false\"'",
         "        ),",
         "        mcpbInputs.release",
         "      ),"

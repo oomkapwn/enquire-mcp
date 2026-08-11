@@ -546,6 +546,74 @@ function stableApiLabelProblems(apiMd: string, previewVersion: string): string[]
   return problems;
 }
 
+const OIA_REPORT_MARKER =
+  "// ─── Report ─────────────────────────────────────────────────────────────";
+
+/** Keep the OIA reporter on one buffered write and a graceful process exit. */
+function oiaReporterProblems(source: string): string[] {
+  const reporterStart = source.indexOf(OIA_REPORT_MARKER);
+  if (reporterStart < 0) return ["missing OIA report marker"];
+
+  const reporter = source.slice(reporterStart);
+  const problems: string[] = [];
+  const forcedExitCalls = [...reporter.matchAll(/process\.exit\s*\(/gu)].length;
+  if (forcedExitCalls !== 0) problems.push(`reporter uses ${forcedExitCalls} forced process.exit call(s)`);
+
+  const exitCodeAssignments = [...reporter.matchAll(/process\.exitCode\s*=/gu)].length;
+  if (exitCodeAssignments !== 1) {
+    problems.push(`reporter must assign process.exitCode exactly once, found ${exitCodeAssignments}`);
+  }
+  if (!reporter.includes("process.exitCode = reportExitCode;")) {
+    problems.push("reporter exitCode must use the computed reportExitCode");
+  }
+
+  if (
+    !reporter.includes("const reportLines = [];") ||
+    !reporter.includes("const reportText =") ||
+    !reporter.includes('reportLines.join("\\n")')
+  ) {
+    problems.push("reporter must buffer one complete report before writing");
+  }
+  if (!reporter.includes("[oia-walk] Report complete:")) {
+    problems.push("reporter must terminate with a count/exit footer");
+  }
+
+  if (!reporter.includes("const reportStream = findings.length === 0 ? process.stdout : process.stderr;")) {
+    problems.push("reporter must select stdout only for the clean report and stderr otherwise");
+  }
+  const streamWrites = [...reporter.matchAll(/(?:process\.(?:stdout|stderr)|reportStream)\.write\s*\(/gu)].length;
+  if (streamWrites !== 1) {
+    problems.push(`reporter must perform exactly one buffered stream write, found ${streamWrites}`);
+  }
+  const piecemealConsoleCalls = [...reporter.matchAll(/console\.[A-Za-z_$][\w$]*\s*\(/gu)].length;
+  if (piecemealConsoleCalls !== 0) {
+    problems.push(`reporter retains ${piecemealConsoleCalls} piecemeal console call(s)`);
+  }
+  return problems;
+}
+
+/** Prove that the child emitted every declared OIA finding and its terminal receipt. */
+function oiaFindingReportProblems(stderr: string, expectedExitCode: number): string[] {
+  const problems: string[] = [];
+  const headers = [...stderr.matchAll(/^\[oia-walk\] (\d+) finding\(s\):$/gmu)];
+  if (headers.length !== 1) {
+    return [`expected one OIA finding-count header, found ${headers.length}`];
+  }
+
+  const declaredCount = Number.parseInt(headers[0]?.[1] ?? "0", 10);
+  if (declaredCount <= 0) problems.push(`finding-count header must be positive, found ${declaredCount}`);
+  const emittedCount = [...stderr.matchAll(/^  • \[/gmu)].length;
+  if (emittedCount !== declaredCount) {
+    problems.push(`declared ${declaredCount} OIA findings but emitted ${emittedCount}`);
+  }
+
+  const footer = `[oia-walk] Report complete: ${declaredCount} finding(s); exit=${expectedExitCode}.`;
+  if (!stderr.trimEnd().endsWith(footer)) {
+    problems.push(`missing complete OIA report footer for exit ${expectedExitCode}`);
+  }
+  return problems;
+}
+
 describe("docs/code consistency — README mirrors registered MCP surface", () => {
   it("every tool in TOOL_MANIFEST appears in README", async () => {
     const readme = await read("README.md");
@@ -2503,6 +2571,20 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
       await fs.writeFile(npmCiHelperFixture, mutatedNpmCiHelper);
       const oiaFixture = path.join(fixtureRoot, "scripts", "oia-walk.mjs");
       const oiaSource = await fs.readFile(oiaFixture, "utf8");
+      expect(oiaReporterProblems(oiaSource), "OIA reporter must flush one complete report before exit").toEqual([]);
+      const fragmentedForcedExitReporter = replaceExactly(
+        oiaSource,
+        "process.exitCode = reportExitCode;",
+        'process.stderr.write("partial report");\nprocess.exit(reportExitCode);'
+      );
+      expect(
+        oiaReporterProblems(fragmentedForcedExitReporter),
+        "forced reporter exits must remain a rejected regression"
+      ).toContain("reporter uses 1 forced process.exit call(s)");
+      expect(
+        oiaReporterProblems(fragmentedForcedExitReporter),
+        "fragmented reporter output must remain a rejected regression"
+      ).toContain("reporter must perform exactly one buffered stream write, found 2");
       const baselineHelperSha256 = createHash("sha256").update(npmCiHelper, "utf8").digest("hex");
       const mutatedHelperSha256 = createHash("sha256").update(mutatedNpmCiHelper, "utf8").digest("hex");
       await fs.writeFile(
@@ -2530,7 +2612,25 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
         maxBuffer: 2 * 1024 * 1024
       });
       const output = `${oia.stdout ?? ""}${oia.stderr ?? ""}`;
+      expect(oia.error, output).toBeUndefined();
+      expect(oia.signal, output).toBeNull();
       expect(oia.status, output).toBe(1);
+      const failureStderr = oia.stderr ?? "";
+      expect(oiaFindingReportProblems(failureStderr, 1), failureStderr).toEqual([]);
+      const footerStart = failureStderr.lastIndexOf("\n[oia-walk] Report complete:");
+      expect(footerStart, "OIA failure output must expose a removable completion footer").toBeGreaterThan(0);
+      const finalFindingStart = failureStderr.lastIndexOf("\n  • [", footerStart);
+      const guidanceStart = failureStderr.lastIndexOf("\n[oia-walk] Pass --allow", footerStart);
+      expect(finalFindingStart, "OIA failure output must expose a final finding record").toBeGreaterThan(0);
+      expect(guidanceStart, "OIA failure output must expose its terminal guidance").toBeGreaterThan(finalFindingStart);
+      const missingFindingStderr = failureStderr.slice(0, finalFindingStart) + failureStderr.slice(guidanceStart);
+      const missingFindingProblems = oiaFindingReportProblems(missingFindingStderr, 1);
+      expect(missingFindingProblems).toHaveLength(1);
+      expect(missingFindingProblems[0]).toMatch(/^declared \d+ OIA findings but emitted \d+$/u);
+      const truncatedFailureStderr = failureStderr.slice(0, footerStart);
+      expect(oiaFindingReportProblems(truncatedFailureStderr, 1)).toContain(
+        "missing complete OIA report footer for exit 1"
+      );
       for (const file of PUBLIC_READMES) {
         expect(output, `OIA must reject a stale stable-channel claim in ${file}`).toContain(
           `[STALE-DOC-CURRENCY-CLAIM] ${file}:`
@@ -2590,6 +2690,25 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
       expect(output, "OIA must reject semantic drift in the helper retry policy").toContain("[NPM-CI-HELPER-POLICY]");
       expect(output, "OIA must reject a disabled shared entrypoint guard").toContain(
         "[NPM-CI-ENTRYPOINT-IDENTITY] scripts/lib/entrypoint.mjs:"
+      );
+
+      const allowedOia = spawnSync(
+        process.execPath,
+        [path.join(fixtureRoot, "scripts/oia-walk.mjs"), "--skip-network", "--allow"],
+        {
+          cwd: fixtureRoot,
+          encoding: "utf8",
+          timeout: 30_000,
+          maxBuffer: 2 * 1024 * 1024
+        }
+      );
+      const allowedOutput = `${allowedOia.stdout ?? ""}${allowedOia.stderr ?? ""}`;
+      expect(allowedOia.error, allowedOutput).toBeUndefined();
+      expect(allowedOia.signal, allowedOutput).toBeNull();
+      expect(allowedOia.status, allowedOutput).toBe(0);
+      expect(oiaFindingReportProblems(allowedOia.stderr ?? "", 0), allowedOutput).toEqual([]);
+      expect(allowedOutput, "OIA --allow must retain its explicit override receipt").toContain(
+        "[oia-walk] --allow flag set; exiting 0 despite findings."
       );
     } finally {
       await fs.rm(tempRoot, { recursive: true, force: true });

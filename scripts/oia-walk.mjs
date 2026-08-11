@@ -1042,7 +1042,9 @@ for (const docFile of DOCS_FILES_TO_SCAN) {
   const auditCommand = "/usr/bin/timeout --kill-after=10s 300s npm run check:audit";
   const auditStepName = "Audit source and published-consumer dependency graphs";
   const helperRel = "scripts/npm-ci-with-retry.mjs";
-  const helperSha256 = "40b725d11de43cd6b183ff3c52198735c7e27f85ea481f99812e37eb26612701";
+  const helperSha256 = "e8511395bcddcb410cb1b04ac7acd77b0caeec194edec8536be9ba0f9b9de3e3";
+  const entrypointRel = "scripts/lib/entrypoint.mjs";
+  const entrypointSha256 = "31e3b1af3bf48c88149b20cd71fa948e492e8e0db45551ae7271a01c36d37b1b";
   const matrixScriptShell = `\${{ matrix.script_shell }}`;
   const matrixOs = `\${{ matrix.os }}`;
   const matrixNodeVersion = `\${{ matrix.node-version }}`;
@@ -1331,6 +1333,19 @@ for (const docFile of DOCS_FILES_TO_SCAN) {
         "Keep the non-configurable 3 × (60s attempt + 10s total termination grace) + 2 × 15s wait = 240s install policy."
       );
     }
+  }
+  if (
+    !existsSync(join(repoRoot, entrypointRel)) ||
+    createHash("sha256").update(readFileSync(join(repoRoot, entrypointRel), "utf8"), "utf8").digest("hex") !==
+      entrypointSha256
+  ) {
+    record(
+      "NPM-CI-ENTRYPOINT-IDENTITY",
+      entrypointRel,
+      1,
+      "bounded npm-ci entrypoint guard drifted",
+      "Keep the exact realpath-bound entrypoint guard that routes the workflow command into the reviewed helper."
+    );
   }
   let helperCount = 0;
   let helperTokenCount = 0;

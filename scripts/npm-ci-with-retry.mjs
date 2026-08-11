@@ -356,8 +356,7 @@ export async function runNpmCiAttempt(options = {}) {
         code: first.result.code,
         signal: first.result.signal,
         error:
-          first.result.error ??
-          new Error("npm ci leader exited while descendants remained in its POSIX process group")
+          first.result.error ?? new Error("npm ci leader exited while descendants remained in its POSIX process group")
       };
     }
     return {
@@ -398,10 +397,7 @@ function waitForRetry(ms, signal, clock = { setTimeout, clearTimeout }) {
   if (signal?.aborted) return Promise.reject(signal.reason ?? new Error("npm ci retry cancelled"));
   const delay = timer(ms, clock);
   const abort = abortEvent(signal);
-  return Promise.race([
-    delay.promise,
-    abort.promise.then((reason) => Promise.reject(reason))
-  ]).finally(() => {
+  return Promise.race([delay.promise, abort.promise.then((reason) => Promise.reject(reason))]).finally(() => {
     delay.cancel();
     abort.cancel();
   });

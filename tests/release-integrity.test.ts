@@ -3667,7 +3667,8 @@ if (releaseTransactionExpectationIdentityBootstrapProblems.length !== 0) {
 const NPM_CI_HELPER_COMMAND = "node scripts/npm-ci-with-retry.mjs";
 const NPM_CI_INSTALL_STEP_NAME = "Install deps (npm ci with retry)";
 const NPM_CI_AUDIT_COMMAND = "/usr/bin/timeout --kill-after=10s 300s npm run check:audit";
-const NPM_CI_HELPER_SOURCE_SHA256 = "40b725d11de43cd6b183ff3c52198735c7e27f85ea481f99812e37eb26612701";
+const NPM_CI_HELPER_SOURCE_SHA256 = "e8511395bcddcb410cb1b04ac7acd77b0caeec194edec8536be9ba0f9b9de3e3";
+const NPM_CI_ENTRYPOINT_SOURCE_SHA256 = "31e3b1af3bf48c88149b20cd71fa948e492e8e0db45551ae7271a01c36d37b1b";
 const NPM_CI_WORKFLOW_JOB_TIMEOUTS = [
   ["ci.yml", "lint", 5],
   ["ci.yml", "test", 10],
@@ -3880,9 +3881,10 @@ function npmCiHelperNumericPolicyProblems(source: string): string[] {
     : [NPM_CI_HELPER_POLICY_PROBLEM];
 }
 
-function npmCiHelperPolicyProblems(source: string): string[] {
+function npmCiHelperPolicyProblems(source: string, entrypointSource: string): string[] {
   return npmCiHelperNumericPolicyProblems(source).length === 0 &&
-    createHash("sha256").update(source, "utf8").digest("hex") === NPM_CI_HELPER_SOURCE_SHA256
+    createHash("sha256").update(source, "utf8").digest("hex") === NPM_CI_HELPER_SOURCE_SHA256 &&
+    createHash("sha256").update(entrypointSource, "utf8").digest("hex") === NPM_CI_ENTRYPOINT_SOURCE_SHA256
     ? []
     : [NPM_CI_HELPER_POLICY_PROBLEM];
 }
@@ -4109,14 +4111,17 @@ async function assertNpmCiWorkflowContract(): Promise<void> {
       .map((name) => [name, readFileSync(new URL(name, workflowDirectory), "utf8")] as const)
   );
   const helperSource = readFileSync(new URL("../scripts/npm-ci-with-retry.mjs", import.meta.url), "utf8");
-  expect(npmCiHelperPolicyProblems(helperSource)).toEqual([]);
-  const mutateHelperWiring = (needle: string, replacement: string): string => {
-    const index = helperSource.indexOf(needle);
-    if (index < 0 || helperSource.indexOf(needle, index + needle.length) >= 0) {
+  const entrypointSource = readFileSync(new URL("../scripts/lib/entrypoint.mjs", import.meta.url), "utf8");
+  expect(npmCiHelperPolicyProblems(helperSource, entrypointSource)).toEqual([]);
+  const mutateSourceOnce = (source: string, needle: string, replacement: string): string => {
+    const index = source.indexOf(needle);
+    if (index < 0 || source.indexOf(needle, index + needle.length) >= 0) {
       throw new Error(`helper wiring control requires one exact anchor: ${needle}`);
     }
-    return helperSource.slice(0, index) + replacement + helperSource.slice(index + needle.length);
+    return source.slice(0, index) + replacement + source.slice(index + needle.length);
   };
+  const mutateHelperWiring = (needle: string, replacement: string): string =>
+    mutateSourceOnce(helperSource, needle, replacement);
   for (const [needle, replacement] of [
     [
       "processSpec: options.runtime?.processSpec ?? npmCiProcessSpec,",
@@ -4130,16 +4135,22 @@ async function assertNpmCiWorkflowContract(): Promise<void> {
     ["await runNpmCiWithRetry({ signal: controller.signal });", "await runNpmCiAttempt();"],
     ["if (isEntrypoint(import.meta.url)) await main();", "if (false) await main();"]
   ] as const) {
-    expect(npmCiHelperPolicyProblems(mutateHelperWiring(needle, replacement))).toEqual([
-      NPM_CI_HELPER_POLICY_PROBLEM
-    ]);
+    expect(npmCiHelperPolicyProblems(mutateHelperWiring(needle, replacement), entrypointSource)).toEqual(
+      [NPM_CI_HELPER_POLICY_PROBLEM]
+    );
   }
   const passiveMainDecoy =
     mutateHelperWiring(
       "await runNpmCiWithRetry({ signal: controller.signal });",
       "await runNpmCiAttempt();"
     ) + "\n// await runNpmCiWithRetry({ signal: controller.signal });\n";
-  expect(npmCiHelperPolicyProblems(passiveMainDecoy)).toEqual([NPM_CI_HELPER_POLICY_PROBLEM]);
+  expect(npmCiHelperPolicyProblems(passiveMainDecoy, entrypointSource)).toEqual([NPM_CI_HELPER_POLICY_PROBLEM]);
+  const disabledEntrypoint = mutateSourceOnce(
+    entrypointSource,
+    "return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(importMetaUrl));",
+    "return false;"
+  );
+  expect(npmCiHelperPolicyProblems(helperSource, disabledEntrypoint)).toEqual([NPM_CI_HELPER_POLICY_PROBLEM]);
   const syntheticPolicy = (attempts: number, attemptTimeoutMs: number, killGraceMs: number, retryDelayMs: number) =>
     `export const NPM_CI_RETRY_POLICY = Object.freeze({\n` +
     `  attempts: ${attempts},\n` +

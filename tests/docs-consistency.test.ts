@@ -2498,6 +2498,16 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
         npmCiHelperFixture,
         replaceExactly(npmCiHelper, "  attempts: 3,", "  attempts: 4,")
       );
+      const entrypointFixture = path.join(fixtureRoot, "scripts", "lib", "entrypoint.mjs");
+      const entrypointSource = await fs.readFile(entrypointFixture, "utf8");
+      await fs.writeFile(
+        entrypointFixture,
+        replaceExactly(
+          entrypointSource,
+          "return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(importMetaUrl));",
+          "return false;"
+        )
+      );
       const oia = spawnSync(process.execPath, [path.join(fixtureRoot, "scripts/oia-walk.mjs"), "--skip-network"], {
         cwd: fixtureRoot,
         encoding: "utf8",
@@ -2572,6 +2582,9 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
       );
       expect(output, "OIA must reject semantic drift in the helper retry policy").toContain(
         "[NPM-CI-HELPER-POLICY]"
+      );
+      expect(output, "OIA must reject a disabled shared entrypoint guard").toContain(
+        "[NPM-CI-ENTRYPOINT-IDENTITY] scripts/lib/entrypoint.mjs:"
       );
     } finally {
       await fs.rm(tempRoot, { recursive: true, force: true });

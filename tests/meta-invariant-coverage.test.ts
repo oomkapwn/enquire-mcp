@@ -31,7 +31,7 @@ import {
 } from "./release-mutation-identity-audit.js";
 
 const repoRoot = path.resolve(__dirname, "..");
-const RELEASE_MUTATION_IDENTITY_FIXTURE_SHA256 = "cb751e1fa96eb0a29eb59b4ed535d0535c4b228b099c4a148c629b9785893531";
+const RELEASE_MUTATION_IDENTITY_FIXTURE_SHA256 = "9ccc4d25c0051d9516c9e7795dc6499a4ad024f33f67cea34776d59d5bbe6ce3";
 const releaseMutationIdentityFixturePath = path.join(repoRoot, "tests/fixtures/release-mutation-identity.v2.json");
 const releaseIntegritySourcePath = path.join(repoRoot, "tests/release-integrity.test.ts");
 
@@ -165,7 +165,7 @@ const RAW_REPLACE_INVENTORY_FILES = [
 ] as const;
 const EXPECTED_REPOSITORY_MUTATION_HELPER_CALLS = new Map<string, number>([
   ["abs-path-leak-invariant.test.ts", 7],
-  ["docs-consistency.test.ts", 19],
+  ["docs-consistency.test.ts", 29],
   ["write-lifecycle-invariant.test.ts", 19]
 ]);
 const EXPECTED_REPOSITORY_MUTATION_HELPER_IMPORTS = new Map<string, readonly string[]>([

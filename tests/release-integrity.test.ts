@@ -46,6 +46,13 @@ import {
 } from "../scripts/lib/mcpb-safety.mjs";
 // @ts-expect-error — .mjs consumer helpers have no declaration file; the release invariant exercises cleanup behavior.
 import { createOwnedScratch, removeOwnedScratch } from "../scripts/mcpb-consumer.mjs";
+// @ts-expect-error — .mjs workflow helper has no declaration file; tests exercise its injected process core.
+import {
+  NPM_CI_RETRY_POLICY,
+  npmCiProcessSpec,
+  runNpmCiAttempt,
+  runNpmCiWithRetry
+} from "../scripts/npm-ci-with-retry.mjs";
 import { ReleaseMutationPlan } from "./release-mutation-plan.js";
 
 interface WorkflowJob {
@@ -784,12 +791,6 @@ function releaseTriggerProblems(workflow: string): string[] {
     return [RELEASE_TRIGGER_PROBLEM];
   }
   return [];
-}
-
-function hasRunLine(step: YamlRecord | undefined, command: string): boolean {
-  return runBody(step)
-    .split("\n")
-    .some((line) => line.trim() === command);
 }
 
 type MutationReplacer = (match: string, offset: number, source: string) => string;
@@ -3663,6 +3664,1589 @@ if (releaseTransactionExpectationIdentityBootstrapProblems.length !== 0) {
   );
 }
 
+const NPM_CI_HELPER_COMMAND = "node scripts/npm-ci-with-retry.mjs";
+const NPM_CI_INSTALL_STEP_NAME = "Install deps (npm ci with retry)";
+const NPM_CI_AUDIT_COMMAND = "/usr/bin/timeout --kill-after=10s 300s npm run check:audit";
+const NPM_CI_HELPER_SOURCE_SHA256 = "97e1ea18490e4cd2d334b0fdc75831e6de32718fe614d6ed32737b797d840797";
+const NPM_CI_ENTRYPOINT_SOURCE_SHA256 = "31e3b1af3bf48c88149b20cd71fa948e492e8e0db45551ae7271a01c36d37b1b";
+const NPM_CI_WORKFLOW_JOB_TIMEOUTS = [
+  ["ci.yml", "lint", 5],
+  ["ci.yml", "test", 10],
+  ["ci.yml", "test-windows", 20],
+  ["ci.yml", "test-macos", 15],
+  ["ci.yml", "coverage", 10],
+  ["ci.yml", "docs", 10],
+  ["ci.yml", "oia", 10],
+  ["ci.yml", "smoke", 10],
+  ["ci.yml", "protocol-conformance-matrix", 20],
+  ["ci.yml", "package-consumer-matrix", 30],
+  ["ci.yml", "mcpb-basic-package", 40],
+  ["ci.yml", "mcpb-basic-matrix", 30],
+  ["ci.yml", "audit", 12],
+  ["publish-docs.yml", "build", 10],
+  ["release.yml", "publish", 240]
+] as const;
+const NPM_CI_WORKFLOW_PROBLEM =
+  "workflow npm-ci installs must retain the exact bounded helper inventory and composed job budgets";
+const NPM_CI_HELPER_POLICY_PROBLEM =
+  "npm-ci helper must retain POSIX 3x60s, Windows 1x180s, 10s cleanup and the configured 240-second maximum";
+const NPM_CI_MATRIX_SCRIPT_SHELL = `\${{ matrix.script_shell }}`;
+const NPM_CI_MATRIX_OS = `\${{ matrix.os }}`;
+const NPM_CI_MATRIX_NODE_VERSION = `\${{ matrix.node-version }}`;
+const NPM_CI_ALWAYS_CONDITION = `\${{ always() }}`;
+const NPM_CI_JOB_ENVIRONMENTS = new Map<string, Readonly<Record<string, string>>>([
+  ["ci.yml#test", { NPM_CONFIG_ENGINE_STRICT: "true" }],
+  [
+    "ci.yml#test-windows",
+    {
+      NPM_CONFIG_ENGINE_STRICT: "true",
+      NPM_CONFIG_SCRIPT_SHELL: "C:\\Program Files\\Git\\bin\\bash.exe"
+    }
+  ],
+  ["ci.yml#smoke", { NPM_CONFIG_ENGINE_STRICT: "true" }],
+  [
+    "ci.yml#protocol-conformance-matrix",
+    { NPM_CONFIG_ENGINE_STRICT: "true", NPM_CONFIG_SCRIPT_SHELL: NPM_CI_MATRIX_SCRIPT_SHELL }
+  ],
+  [
+    "ci.yml#package-consumer-matrix",
+    { NPM_CONFIG_ENGINE_STRICT: "true", NPM_CONFIG_SCRIPT_SHELL: NPM_CI_MATRIX_SCRIPT_SHELL }
+  ],
+  ["ci.yml#mcpb-basic-package", { NPM_CONFIG_ENGINE_STRICT: "true", NPM_CONFIG_SCRIPT_SHELL: "/bin/bash" }],
+  [
+    "ci.yml#mcpb-basic-matrix",
+    { NPM_CONFIG_ENGINE_STRICT: "true", NPM_CONFIG_SCRIPT_SHELL: NPM_CI_MATRIX_SCRIPT_SHELL }
+  ],
+  ["release.yml#publish", { BASH_ENV: "" }]
+]);
+const NPM_CI_JOB_RUNNERS = new Map<string, string>([
+  ["ci.yml#lint", "ubuntu-latest"],
+  ["ci.yml#test", "ubuntu-latest"],
+  ["ci.yml#test-windows", "windows-2025"],
+  ["ci.yml#test-macos", "macos-latest"],
+  ["ci.yml#coverage", "ubuntu-latest"],
+  ["ci.yml#docs", "ubuntu-latest"],
+  ["ci.yml#oia", "ubuntu-latest"],
+  ["ci.yml#smoke", "ubuntu-latest"],
+  ["ci.yml#protocol-conformance-matrix", NPM_CI_MATRIX_OS],
+  ["ci.yml#package-consumer-matrix", NPM_CI_MATRIX_OS],
+  ["ci.yml#mcpb-basic-package", "ubuntu-latest"],
+  ["ci.yml#mcpb-basic-matrix", NPM_CI_MATRIX_OS],
+  ["ci.yml#audit", "ubuntu-latest"],
+  ["publish-docs.yml#build", "ubuntu-latest"],
+  ["release.yml#publish", "ubuntu-latest"]
+]);
+const NPM_CI_SETUP_INPUTS = new Map<string, Readonly<Record<string, unknown>>>([
+  ["ci.yml#lint", { "node-version": 22, cache: "npm" }],
+  [
+    "ci.yml#test",
+    { "node-version": NPM_CI_MATRIX_NODE_VERSION, cache: "npm", "cache-dependency-path": "package-lock.json" }
+  ],
+  ["ci.yml#test-windows", { "node-version": "22.13.0", cache: "npm", "cache-dependency-path": "package-lock.json" }],
+  ["ci.yml#test-macos", { "node-version": 22, cache: "npm", "cache-dependency-path": "package-lock.json" }],
+  ["ci.yml#coverage", { "node-version": 22, cache: "npm" }],
+  ["ci.yml#docs", { "node-version": 22, cache: "npm" }],
+  ["ci.yml#oia", { "node-version": 22, cache: "npm" }],
+  ["ci.yml#smoke", { "node-version": "22.13.0", cache: "npm" }],
+  [
+    "ci.yml#protocol-conformance-matrix",
+    { "node-version": "22.13.0", cache: "npm", "cache-dependency-path": "package-lock.json" }
+  ],
+  [
+    "ci.yml#package-consumer-matrix",
+    { "node-version": "22.13.0", cache: "npm", "cache-dependency-path": "package-lock.json" }
+  ],
+  [
+    "ci.yml#mcpb-basic-package",
+    { "node-version": "22.13.0", cache: "npm", "cache-dependency-path": "package-lock.json" }
+  ],
+  [
+    "ci.yml#mcpb-basic-matrix",
+    { "node-version": "22.13.0", cache: "npm", "cache-dependency-path": "package-lock.json" }
+  ],
+  ["ci.yml#audit", { "node-version": 22, cache: "npm" }],
+  ["publish-docs.yml#build", { "node-version": 22, cache: "npm" }],
+  [
+    "release.yml#publish",
+    {
+      "node-version": "22.13.0",
+      "registry-url": "https://registry.npmjs.org",
+      cache: "npm",
+      "cache-dependency-path": "package-lock.json"
+    }
+  ]
+]);
+const NPM_CI_PREINSTALL_DIGESTS = new Map<string, string>([
+  ["ci.yml#lint", "559a7e13a198905e6ac358a1914d6e9fa087ad055f55b27c380ae171424f3d6b"],
+  ["ci.yml#test", "0b00c055e9a2707a37043a75423ce6b68004d5750b872ce6cf40e3dcadd1c4db"],
+  ["ci.yml#test-windows", "da943043234f9a375c085802079dc10cf411019cbc03b4747de9af178dc6a9ca"],
+  ["ci.yml#test-macos", "bad0645f602426986294fd032eac707a60440bd897f27a5105c05d54f054cc4e"],
+  ["ci.yml#coverage", "559a7e13a198905e6ac358a1914d6e9fa087ad055f55b27c380ae171424f3d6b"],
+  ["ci.yml#docs", "559a7e13a198905e6ac358a1914d6e9fa087ad055f55b27c380ae171424f3d6b"],
+  ["ci.yml#oia", "559a7e13a198905e6ac358a1914d6e9fa087ad055f55b27c380ae171424f3d6b"],
+  ["ci.yml#smoke", "44d845e567d5c3e9e38e265a970b7d2cbce33377b7ba78137effe85ca99e9110"],
+  ["ci.yml#protocol-conformance-matrix", "7ec0b012fca4c5f77005997e6e4c43ce04b44e55dbf1d1f7ffcc313d1d3c552f"],
+  ["ci.yml#package-consumer-matrix", "7ec0b012fca4c5f77005997e6e4c43ce04b44e55dbf1d1f7ffcc313d1d3c552f"],
+  ["ci.yml#mcpb-basic-package", "7ec0b012fca4c5f77005997e6e4c43ce04b44e55dbf1d1f7ffcc313d1d3c552f"],
+  ["ci.yml#mcpb-basic-matrix", "7ec0b012fca4c5f77005997e6e4c43ce04b44e55dbf1d1f7ffcc313d1d3c552f"],
+  ["ci.yml#audit", "559a7e13a198905e6ac358a1914d6e9fa087ad055f55b27c380ae171424f3d6b"],
+  ["publish-docs.yml#build", "559a7e13a198905e6ac358a1914d6e9fa087ad055f55b27c380ae171424f3d6b"],
+  ["release.yml#publish", "45d78043dcd5f1d0d38219d315b55674296d868fa1faef009ba630af06ced2f6"]
+]);
+const NPM_CI_COMMAND_DIGESTS = new Map<string, string>([
+  ["ci.yml#lint", "85cb42a92181265d2458eb8b7a7aa737143eda0c7d4a6dd3349b4955e49adfcf"],
+  ["ci.yml#test", "530375edb43b6e8f47eae64f7d01e5ebef01db57516588af24110937ac31e5d1"],
+  ["ci.yml#test-windows", "1fee0ec9bd5a5e93e87f317b82dcae8ffc24e8dbacb9dad21ccfe05f4c50d2a6"],
+  ["ci.yml#test-macos", "530375edb43b6e8f47eae64f7d01e5ebef01db57516588af24110937ac31e5d1"],
+  ["ci.yml#coverage", "3e8733a08a6fe5b873546ac5284f4ffaadb924dd4dd04cd8b9557cd56837efe7"],
+  ["ci.yml#docs", "31ee2597c84a4669a98435b0e9bfb95b685b10aaa70205ad8749647e2ab43be5"],
+  ["ci.yml#oia", "03789343a6bc223162c6f26dba4e44d7704d14ecfadb083f32065825f48a8d6b"],
+  ["ci.yml#smoke", "4158b622c017e1e9463d27732c2ef0d4277807309f5e18a3867fb6500837585a"],
+  ["ci.yml#protocol-conformance-matrix", "4158b622c017e1e9463d27732c2ef0d4277807309f5e18a3867fb6500837585a"],
+  ["ci.yml#package-consumer-matrix", "4158b622c017e1e9463d27732c2ef0d4277807309f5e18a3867fb6500837585a"],
+  ["ci.yml#mcpb-basic-package", "72f8f9db912e223c63e5245d948adc6c23299a60262bd7ba22d2c106654181f6"],
+  ["ci.yml#mcpb-basic-matrix", "428a7037595e3943656994b9fd69aec7639287929316ef9ffbe017c37490ae82"],
+  ["ci.yml#audit", "257a09114a4e895df831ace40f70115b66d7ae38a41eb166ff5dca10df1b245c"],
+  ["dist-tag-cleanup.yml#cleanup", "80391e9a5a0ba770920e7798c6b4d8066035884c9b95b9cb5b4d9ff10768e5d5"],
+  ["publish-docs.yml#build", "476bc2a8aea0d3def4c805b616058ba0c4aea7f9d940e73a5d9da4b5b977cfba"],
+  ["release.yml#publish", "1336676a0ee7b70b0c1ba51a7d28b8d32dc553cd93eec2b28f83781280bd1905"]
+]);
+const NPM_CI_PREAUDIT_DIGESTS = new Map<string, string>([
+  ["ci.yml#audit", "877eb535025aaf14a917f52fd1a871e38a2c26836a6df19f5cc42a31f32eb6f6"],
+  ["release.yml#publish", "308eefba014372d2abb1f79273996ce4c8840cb956d3436c7ab2fddcc178d00a"]
+]);
+const NPM_CI_BASH_DEFAULT_JOBS = new Set([
+  "ci.yml#test-windows",
+  "ci.yml#protocol-conformance-matrix",
+  "ci.yml#package-consumer-matrix",
+  "ci.yml#mcpb-basic-matrix"
+]);
+
+function exactNpmCiRecord(value: unknown, expected: Readonly<Record<string, unknown>> | undefined): boolean {
+  if (expected === undefined) return value === undefined;
+  const record = yamlRecord(value);
+  if (record === null) return false;
+  const actualKeys = Object.keys(record).sort();
+  const expectedKeys = Object.keys(expected).sort();
+  return (
+    JSON.stringify(actualKeys) === JSON.stringify(expectedKeys) &&
+    expectedKeys.every((key) => record[key] === expected[key])
+  );
+}
+
+function stableNpmCiWorkflowValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stableNpmCiWorkflowValue);
+  const record = yamlRecord(value);
+  if (record === null) return value;
+  return Object.fromEntries(
+    Object.keys(record)
+      .sort()
+      .map((key) => [key, stableNpmCiWorkflowValue(record[key])])
+  );
+}
+
+function npmCiWorkflowValueDigest(value: unknown): string {
+  const json = JSON.stringify(stableNpmCiWorkflowValue(value));
+  if (json === undefined) throw new Error("workflow digest input must be JSON-serializable");
+  return createHash("sha256").update(json, "utf8").digest("hex");
+}
+
+function npmCiHelperNumericPolicyProblems(source: string): string[] {
+  const match =
+    /export const NPM_CI_RETRY_POLICY = Object\.freeze\(\{\s*attempts:\s*([0-9_]+),\s*attemptTimeoutMs:\s*([0-9_]+),\s*windowsAttempts:\s*([0-9_]+),\s*windowsAttemptTimeoutMs:\s*([0-9_]+),\s*killGraceMs:\s*([0-9_]+),\s*retryDelayMs:\s*([0-9_]+),?\s*\}\);/u.exec(
+      source
+    );
+  const policy = (match?.slice(1) ?? []).map((value) => Number.parseInt(value.split("_").join(""), 10));
+  const [attempts, attemptTimeoutMs, windowsAttempts, windowsAttemptTimeoutMs, killGraceMs, retryDelayMs] = policy;
+  const configuredMaximumMs =
+    attempts === undefined ||
+    attemptTimeoutMs === undefined ||
+    windowsAttempts === undefined ||
+    windowsAttemptTimeoutMs === undefined ||
+    killGraceMs === undefined ||
+    retryDelayMs === undefined
+      ? Number.NaN
+      : Math.max(
+          attempts * (attemptTimeoutMs + killGraceMs) + (attempts - 1) * retryDelayMs,
+          windowsAttempts * (windowsAttemptTimeoutMs + killGraceMs) + (windowsAttempts - 1) * retryDelayMs
+        );
+  return attempts === 3 &&
+    attemptTimeoutMs === 60_000 &&
+    windowsAttempts === 1 &&
+    windowsAttemptTimeoutMs === 180_000 &&
+    killGraceMs === 10_000 &&
+    retryDelayMs === 15_000 &&
+    configuredMaximumMs === 240_000
+    ? []
+    : [NPM_CI_HELPER_POLICY_PROBLEM];
+}
+
+function npmCiHelperPolicyProblems(source: string, entrypointSource: string): string[] {
+  return npmCiHelperNumericPolicyProblems(source).length === 0 &&
+    createHash("sha256").update(source, "utf8").digest("hex") === NPM_CI_HELPER_SOURCE_SHA256 &&
+    createHash("sha256").update(entrypointSource, "utf8").digest("hex") === NPM_CI_ENTRYPOINT_SOURCE_SHA256
+    ? []
+    : [NPM_CI_HELPER_POLICY_PROBLEM];
+}
+
+function npmCiWorkflowProblems(workflows: ReadonlyMap<string, string>): string[] {
+  const problems: string[] = [];
+  const parsed = new Map<string, YamlRecord>();
+  for (const [filename, source] of workflows) {
+    try {
+      const document = yamlRecord(load(source));
+      if (document === null) problems.push(`${filename} must remain one YAML mapping`);
+      else {
+        parsed.set(filename, document);
+        if (
+          NPM_CI_WORKFLOW_JOB_TIMEOUTS.some(([expectedFilename]) => expectedFilename === filename) &&
+          (document.env !== undefined || document.defaults !== undefined)
+        ) {
+          problems.push(`${NPM_CI_WORKFLOW_PROBLEM}: workflow boundary drifted in ${filename}`);
+        }
+      }
+    } catch {
+      problems.push(`${filename} must remain valid YAML`);
+    }
+  }
+
+  let helperCount = 0;
+  let helperTokenCount = 0;
+  let auditTokenCount = 0;
+  const observedNpmCommandIdentities = new Set<string>();
+  const expectedIdentities = new Set(NPM_CI_WORKFLOW_JOB_TIMEOUTS.map(([file, job]) => `${file}#${job}`));
+  const expectedAuditIdentities = new Set(["ci.yml#audit", "release.yml#publish"]);
+  for (const [filename, document] of parsed) {
+    const jobs = yamlRecord(document.jobs) ?? {};
+    for (const [jobId, value] of Object.entries(jobs)) {
+      const job = yamlRecord(value);
+      if (job === null) continue;
+      const steps = yamlSteps(job);
+      const helperSteps = steps.filter((step) => step.run === NPM_CI_HELPER_COMMAND);
+      helperCount += helperSteps.length;
+      if (helperSteps.length > 0 && !expectedIdentities.has(`${filename}#${jobId}`)) {
+        problems.push(`${NPM_CI_WORKFLOW_PROBLEM}: unexpected ${filename}#${jobId}`);
+      }
+      const helperTokenSteps = steps.filter(
+        (step) => typeof step.run === "string" && /scripts\/npm-ci-with-retry\.mjs\b/u.test(step.run)
+      );
+      helperTokenCount += helperTokenSteps.reduce(
+        (count, step) =>
+          count +
+          (typeof step.run === "string" ? [...step.run.matchAll(/scripts\/npm-ci-with-retry\.mjs\b/gu)].length : 0),
+        0
+      );
+      if (
+        helperTokenSteps.some(
+          (step) => step.run !== NPM_CI_HELPER_COMMAND || !expectedIdentities.has(`${filename}#${jobId}`)
+        )
+      ) {
+        problems.push(`${NPM_CI_WORKFLOW_PROBLEM}: noncanonical helper in ${filename}#${jobId}`);
+      }
+      if (steps.some((step) => typeof step.run === "string" && /npm/iu.test(step.run))) {
+        const npmCommands = steps
+          .filter((step) => typeof step.run === "string" && /npm/iu.test(step.run))
+          .map((step) => ({ name: typeof step.name === "string" ? step.name : null, run: step.run }));
+        const identity = `${filename}#${jobId}`;
+        observedNpmCommandIdentities.add(identity);
+        if (npmCiWorkflowValueDigest(npmCommands) !== NPM_CI_COMMAND_DIGESTS.get(identity)) {
+          problems.push(`${NPM_CI_WORKFLOW_PROBLEM}: literal npm command inventory drifted in ${identity}`);
+        }
+      }
+      const auditTokenSteps = steps.filter((step) => typeof step.run === "string" && /\bcheck:audit\b/u.test(step.run));
+      auditTokenCount += auditTokenSteps.reduce(
+        (count, step) =>
+          count + (typeof step.run === "string" ? [...step.run.matchAll(/\bcheck:audit\b/gu)].length : 0),
+        0
+      );
+      if (
+        auditTokenSteps.some(
+          (step) => step.run !== NPM_CI_AUDIT_COMMAND || !expectedAuditIdentities.has(`${filename}#${jobId}`)
+        )
+      ) {
+        problems.push(`${NPM_CI_WORKFLOW_PROBLEM}: unbounded check:audit in ${filename}#${jobId}`);
+      }
+    }
+  }
+
+  for (const [filename, jobId, expectedTimeout] of NPM_CI_WORKFLOW_JOB_TIMEOUTS) {
+    const document = parsed.get(filename);
+    const job = yamlRecord(yamlRecord(document?.jobs)?.[jobId]);
+    if (job === null) {
+      problems.push(`${NPM_CI_WORKFLOW_PROBLEM}: missing ${filename}#${jobId}`);
+      continue;
+    }
+    const steps = yamlSteps(job);
+    const helperSteps = steps.filter((step) => step.run === NPM_CI_HELPER_COMMAND);
+    const helper = helperSteps[0];
+    const helperIndex = helper === undefined ? -1 : steps.indexOf(helper);
+    const preinstallDigest = helperIndex < 0 ? "" : npmCiWorkflowValueDigest(steps.slice(0, helperIndex));
+    const setupIndexes = steps
+      .map((step, index) =>
+        typeof step.uses === "string" && /^actions\/setup-node@[0-9a-f]{40}$/u.test(step.uses) ? index : -1
+      )
+      .filter((index) => index >= 0);
+    const setupStep = setupIndexes.length === 1 ? steps[setupIndexes[0] ?? -1] : undefined;
+    const identity = `${filename}#${jobId}`;
+    const defaults = yamlRecord(job.defaults);
+    const defaultRun = yamlRecord(defaults?.run);
+    const expectsBashDefault = NPM_CI_BASH_DEFAULT_JOBS.has(identity);
+    const defaultBoundaryIsExact = expectsBashDefault
+      ? defaults !== null &&
+        JSON.stringify(Object.keys(defaults).sort()) === JSON.stringify(["run"]) &&
+        defaultRun !== null &&
+        JSON.stringify(Object.keys(defaultRun).sort()) === JSON.stringify(["shell"]) &&
+        defaultRun.shell === "bash"
+      : job.defaults === undefined;
+    const expectedContinueOnError = identity === "ci.yml#test-macos" ? true : undefined;
+    const expectedIf = identity === "ci.yml#smoke" ? NPM_CI_ALWAYS_CONDITION : undefined;
+    if (
+      job["timeout-minutes"] !== expectedTimeout ||
+      job["runs-on"] !== NPM_CI_JOB_RUNNERS.get(identity) ||
+      preinstallDigest !== NPM_CI_PREINSTALL_DIGESTS.get(identity) ||
+      helperSteps.length !== 1 ||
+      JSON.stringify(Object.keys(helper ?? {}).sort()) !== JSON.stringify(["name", "run"]) ||
+      helper?.name !== NPM_CI_INSTALL_STEP_NAME ||
+      setupIndexes.length !== 1 ||
+      JSON.stringify(Object.keys(setupStep ?? {}).sort()) !== JSON.stringify(["uses", "with"]) ||
+      !exactNpmCiRecord(setupStep?.with, NPM_CI_SETUP_INPUTS.get(identity)) ||
+      (setupIndexes[0] ?? Number.MAX_SAFE_INTEGER) >= helperIndex ||
+      job["continue-on-error"] !== expectedContinueOnError ||
+      job.if !== expectedIf ||
+      !defaultBoundaryIsExact ||
+      !exactNpmCiRecord(job.env, NPM_CI_JOB_ENVIRONMENTS.get(identity)) ||
+      job.container !== undefined ||
+      job.services !== undefined
+    ) {
+      problems.push(`${NPM_CI_WORKFLOW_PROBLEM}: invalid ${filename}#${jobId}`);
+    }
+  }
+  if (helperCount !== NPM_CI_WORKFLOW_JOB_TIMEOUTS.length) {
+    problems.push(
+      `${NPM_CI_WORKFLOW_PROBLEM}: expected ${NPM_CI_WORKFLOW_JOB_TIMEOUTS.length} helpers, found ${helperCount}`
+    );
+  }
+  if (helperTokenCount !== NPM_CI_WORKFLOW_JOB_TIMEOUTS.length) {
+    problems.push(
+      `${NPM_CI_WORKFLOW_PROBLEM}: expected ${NPM_CI_WORKFLOW_JOB_TIMEOUTS.length} helper command tokens, found ${helperTokenCount}`
+    );
+  }
+  for (const identity of NPM_CI_COMMAND_DIGESTS.keys()) {
+    if (!observedNpmCommandIdentities.has(identity)) {
+      problems.push(`${NPM_CI_WORKFLOW_PROBLEM}: literal npm command inventory missing in ${identity}`);
+    }
+  }
+
+  let boundedAuditCount = 0;
+  for (const [filename, jobId] of [
+    ["ci.yml", "audit"],
+    ["release.yml", "publish"]
+  ] as const) {
+    const job = yamlRecord(yamlRecord(parsed.get(filename)?.jobs)?.[jobId]);
+    const steps = yamlSteps(job ?? {});
+    const boundedAuditSteps = steps.filter((step) => step.run === NPM_CI_AUDIT_COMMAND);
+    boundedAuditCount += boundedAuditSteps.length;
+    const boundedAudit = boundedAuditSteps[0];
+    const installIndex = steps.findIndex((step) => step.run === NPM_CI_HELPER_COMMAND);
+    const auditIndex = boundedAudit === undefined ? -1 : steps.indexOf(boundedAudit);
+    const preauditDigest = auditIndex < 0 ? "" : npmCiWorkflowValueDigest(steps.slice(0, auditIndex));
+    if (
+      job?.["runs-on"] !== "ubuntu-latest" ||
+      boundedAuditSteps.length !== 1 ||
+      auditIndex <= installIndex ||
+      preauditDigest !== NPM_CI_PREAUDIT_DIGESTS.get(`${filename}#${jobId}`) ||
+      boundedAudit?.name !== "Audit source and published-consumer dependency graphs" ||
+      JSON.stringify(Object.keys(boundedAudit ?? {}).sort()) !== JSON.stringify(["name", "run"])
+    ) {
+      problems.push(`${NPM_CI_WORKFLOW_PROBLEM}: invalid bounded audit in ${filename}#${jobId}`);
+    }
+  }
+  if (boundedAuditCount !== 2) {
+    problems.push(`${NPM_CI_WORKFLOW_PROBLEM}: expected 2 bounded audits, found ${boundedAuditCount}`);
+  }
+  if (auditTokenCount !== 2) {
+    problems.push(`${NPM_CI_WORKFLOW_PROBLEM}: expected 2 audit command tokens, found ${auditTokenCount}`);
+  }
+  return problems;
+}
+
+function mutateNpmCiWorkflow(
+  workflows: ReadonlyMap<string, string>,
+  filename: string,
+  mutate: (document: YamlRecord) => void
+): ReadonlyMap<string, string> {
+  const source = workflows.get(filename);
+  if (source === undefined) throw new Error(`missing workflow mutation source ${filename}`);
+  const document = yamlRecord(JSON.parse(JSON.stringify(load(source))));
+  if (document === null) throw new Error(`workflow mutation source ${filename} must be one mapping`);
+  mutate(document);
+  return new Map(workflows).set(filename, JSON.stringify(document));
+}
+
+function mutableNpmCiJob(document: YamlRecord, jobId: string): YamlRecord {
+  const job = yamlRecord(yamlRecord(document.jobs)?.[jobId]);
+  if (job === null) throw new Error(`missing workflow mutation job ${jobId}`);
+  return job;
+}
+
+function mutableNpmCiInstallStep(job: YamlRecord): YamlRecord {
+  const step = yamlSteps(job).find((candidate) => candidate.run === NPM_CI_HELPER_COMMAND);
+  if (step === undefined) throw new Error("missing canonical workflow install step");
+  return step;
+}
+
+async function assertNpmCiWorkflowContract(): Promise<void> {
+  const workflowDirectory = new URL("../.github/workflows/", import.meta.url);
+  const workflowSources = new Map(
+    readdirSync(workflowDirectory)
+      .filter((name) => /\.ya?ml$/u.test(name))
+      .sort()
+      .map((name) => [name, readFileSync(new URL(name, workflowDirectory), "utf8")] as const)
+  );
+  const helperSource = readFileSync(new URL("../scripts/npm-ci-with-retry.mjs", import.meta.url), "utf8");
+  const entrypointSource = readFileSync(new URL("../scripts/lib/entrypoint.mjs", import.meta.url), "utf8");
+  const failNpmCiControl = (message: string): never => {
+    throw new Error(message);
+  };
+  const expectProblemFragments = (problems: readonly string[], fragments: readonly string[]): void => {
+    for (const fragment of fragments) {
+      expect(
+        problems.some((problem) => problem.includes(fragment)),
+        fragment
+      ).toBe(true);
+    }
+  };
+  expect(npmCiHelperPolicyProblems(helperSource, entrypointSource)).toEqual([]);
+  const mutateSourceOnce = (source: string, needle: string, replacement: string): string => {
+    const index = source.indexOf(needle);
+    if (index < 0 || source.indexOf(needle, index + needle.length) >= 0) {
+      throw new Error(`helper wiring control requires one exact anchor: ${needle}`);
+    }
+    return source.slice(0, index) + replacement + source.slice(index + needle.length);
+  };
+  const mutateHelperWiring = (needle: string, replacement: string): string =>
+    mutateSourceOnce(helperSource, needle, replacement);
+  for (const [needle, replacement] of [
+    ["processSpec: options.runtime?.processSpec ?? npmCiProcessSpec,", "processSpec: options.runtime?.processSpec,"],
+    ["const spec = runtime.processSpec();", "const spec = npmCiProcessSpec();"],
+    ["const attemptRunner = options.attemptRunner ?? runNpmCiAttempt;", "const attemptRunner = options.attemptRunner;"],
+    ["await runNpmCiWithRetry({ signal: controller.signal });", "await runNpmCiAttempt();"],
+    ["if (isEntrypoint(import.meta.url)) await main();", "if (false) await main();"]
+  ] as const) {
+    expect(npmCiHelperPolicyProblems(mutateHelperWiring(needle, replacement), entrypointSource)).toEqual([
+      NPM_CI_HELPER_POLICY_PROBLEM
+    ]);
+  }
+  const passiveMainDecoy =
+    mutateHelperWiring("await runNpmCiWithRetry({ signal: controller.signal });", "await runNpmCiAttempt();") +
+    "\n// await runNpmCiWithRetry({ signal: controller.signal });\n";
+  expect(npmCiHelperPolicyProblems(passiveMainDecoy, entrypointSource)).toEqual([NPM_CI_HELPER_POLICY_PROBLEM]);
+  const disabledEntrypoint = mutateSourceOnce(
+    entrypointSource,
+    "return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(importMetaUrl));",
+    "return false;"
+  );
+  expect(npmCiHelperPolicyProblems(helperSource, disabledEntrypoint)).toEqual([NPM_CI_HELPER_POLICY_PROBLEM]);
+  const syntheticPolicy = (
+    attempts: number,
+    attemptTimeoutMs: number,
+    windowsAttempts: number,
+    windowsAttemptTimeoutMs: number,
+    killGraceMs: number,
+    retryDelayMs: number
+  ) =>
+    `export const NPM_CI_RETRY_POLICY = Object.freeze({\n` +
+    `  attempts: ${attempts},\n` +
+    `  attemptTimeoutMs: ${attemptTimeoutMs},\n` +
+    `  windowsAttempts: ${windowsAttempts},\n` +
+    `  windowsAttemptTimeoutMs: ${windowsAttemptTimeoutMs},\n` +
+    `  killGraceMs: ${killGraceMs},\n` +
+    `  retryDelayMs: ${retryDelayMs}\n` +
+    `});\n`;
+  for (const invalidPolicy of [
+    syntheticPolicy(4, 60_000, 1, 180_000, 10_000, 15_000),
+    syntheticPolicy(3, 0, 1, 180_000, 10_000, 15_000),
+    syntheticPolicy(3, 60_000, 2, 180_000, 10_000, 15_000),
+    syntheticPolicy(3, 60_000, 1, 60_000, 10_000, 15_000),
+    syntheticPolicy(3, 60_000, 1, 180_000, 0, 15_000),
+    syntheticPolicy(3, 60_000, 1, 180_000, 10_000, 0)
+  ]) {
+    expect(npmCiHelperNumericPolicyProblems(invalidPolicy)).toEqual([NPM_CI_HELPER_POLICY_PROBLEM]);
+  }
+  expect(NPM_CI_RETRY_POLICY).toEqual({
+    attempts: 3,
+    attemptTimeoutMs: 60_000,
+    windowsAttempts: 1,
+    windowsAttemptTimeoutMs: 180_000,
+    killGraceMs: 10_000,
+    retryDelayMs: 15_000
+  });
+  expect(Object.isFrozen(NPM_CI_RETRY_POLICY)).toBe(true);
+  expect(helperSource).toContain('if (process.argv.length !== 2) throw new Error("usage:');
+  expect(
+    Math.max(
+      NPM_CI_RETRY_POLICY.attempts * (NPM_CI_RETRY_POLICY.attemptTimeoutMs + NPM_CI_RETRY_POLICY.killGraceMs) +
+        (NPM_CI_RETRY_POLICY.attempts - 1) * NPM_CI_RETRY_POLICY.retryDelayMs,
+      NPM_CI_RETRY_POLICY.windowsAttempts *
+        (NPM_CI_RETRY_POLICY.windowsAttemptTimeoutMs + NPM_CI_RETRY_POLICY.killGraceMs) +
+        (NPM_CI_RETRY_POLICY.windowsAttempts - 1) * NPM_CI_RETRY_POLICY.retryDelayMs
+    )
+  ).toBe(240_000);
+  expect(
+    NPM_CI_RETRY_POLICY.windowsAttempts *
+      (NPM_CI_RETRY_POLICY.windowsAttemptTimeoutMs + NPM_CI_RETRY_POLICY.killGraceMs)
+  ).toBe(190_000);
+
+  const retryLog = { log: () => {}, warn: () => {} };
+  let successfulAttemptCalls = 0;
+  const successfulWaits: number[] = [];
+  await expect(
+    runNpmCiWithRetry({
+      platform: "linux",
+      attemptRunner: async () => {
+        successfulAttemptCalls++;
+        return { ok: successfulAttemptCalls === 3, timedOut: false, code: 1, signal: null, error: null };
+      },
+      wait: async (ms: number) => {
+        successfulWaits.push(ms);
+      },
+      log: retryLog
+    })
+  ).resolves.toBe(3);
+  expect(successfulAttemptCalls).toBe(3);
+  expect(successfulWaits).toEqual([15_000, 15_000]);
+
+  let shortCircuitAttemptCalls = 0;
+  const shortCircuitWaits: number[] = [];
+  await expect(
+    runNpmCiWithRetry({
+      platform: "linux",
+      attemptRunner: async () => {
+        shortCircuitAttemptCalls++;
+        return { ok: shortCircuitAttemptCalls === 2, timedOut: false, code: 1, signal: null, error: null };
+      },
+      wait: async (ms: number) => {
+        shortCircuitWaits.push(ms);
+      },
+      log: retryLog
+    })
+  ).resolves.toBe(2);
+  expect(shortCircuitAttemptCalls).toBe(2);
+  expect(shortCircuitWaits).toEqual([15_000]);
+
+  let exhaustedAttemptCalls = 0;
+  const exhaustedWaits: number[] = [];
+  await expect(
+    runNpmCiWithRetry({
+      platform: "linux",
+      attemptRunner: async () => {
+        exhaustedAttemptCalls++;
+        return { ok: false, timedOut: true, code: null, signal: "SIGKILL", error: null };
+      },
+      wait: async (ms: number) => {
+        exhaustedWaits.push(ms);
+      },
+      log: retryLog
+    })
+  ).rejects.toThrow(/failed after 3 attempts \(timed out\)/u);
+  expect(exhaustedAttemptCalls).toBe(3);
+  expect(exhaustedWaits).toEqual([15_000, 15_000]);
+
+  const npmSpec = npmCiProcessSpec();
+  expect(npmSpec.command).toBe(process.execPath);
+  expect(npmSpec.args.at(-1)).toBe("ci");
+  expect(JSON.stringify(npmSpec)).not.toMatch(/npm\.cmd|cmd\.exe/iu);
+  const childListeners = new Map<string, (...args: unknown[]) => void>();
+  const spawnCalls: Array<{ command: string; args: string[]; options: Record<string, unknown> }> = [];
+  const fakeChild = {
+    pid: 12_345,
+    once(event: string, listener: (...args: unknown[]) => void) {
+      childListeners.set(event, listener);
+      return this;
+    }
+  };
+  const cleanAttempt = runNpmCiAttempt({
+    platform: "linux",
+    runtime: {
+      processSpec: () => ({ command: process.execPath, args: ["/fixed/npm-cli.js", "ci"] }),
+      spawn: (command: string, args: string[], options: Record<string, unknown>) => {
+        spawnCalls.push({ command, args, options });
+        queueMicrotask(() => childListeners.get("exit")?.(0, null));
+        return fakeChild;
+      },
+      setTimeout: () => 1,
+      clearTimeout: () => {},
+      kill: (_pid: number, signal: number | NodeJS.Signals) => {
+        if (signal !== 0) failNpmCiControl("a successful attempt must not signal its process group");
+        throw Object.assign(new Error("group is gone"), { code: "ESRCH" });
+      },
+      taskkill: () => failNpmCiControl("a Linux attempt must not invoke taskkill")
+    }
+  });
+  await expect(cleanAttempt).resolves.toMatchObject({ ok: true, timedOut: false, code: 0, signal: null });
+  expect(spawnCalls).toHaveLength(1);
+  expect(spawnCalls[0]?.command).toBe(process.execPath);
+  expect(spawnCalls[0]?.args).toEqual(["/fixed/npm-cli.js", "ci"]);
+  expect(spawnCalls[0]?.options).toMatchObject({
+    detached: true,
+    shell: false,
+    stdio: "inherit",
+    windowsHide: true
+  });
+
+  const noSuchNpmCiProcess = () => Object.assign(new Error("process group is gone"), { code: "ESRCH" });
+  const createNpmCiChild = (pid: number) => {
+    const listeners = new Map<string, (...args: unknown[]) => void>();
+    const child = {
+      pid,
+      once(event: string, listener: (...args: unknown[]) => void) {
+        listeners.set(event, listener);
+        return this;
+      }
+    };
+    return {
+      child,
+      exit(code: number | null, signal: NodeJS.Signals | null) {
+        const listener = listeners.get("exit");
+        if (listener === undefined) throw new Error("fake npm-ci child has no exit listener");
+        listener(code, signal);
+      }
+    };
+  };
+  const createNpmCiClock = (autoStartCall: number) => {
+    let nowNs = 0n;
+    let timerCalls = 0;
+    let nextTimerId = 0;
+    const activeTimers = new Set<number>();
+    return {
+      nowNs: () => nowNs,
+      setNowMs(ms: number) {
+        nowNs = BigInt(ms) * 1_000_000n;
+      },
+      setTimeout(callback: () => void, ms: number) {
+        timerCalls++;
+        const timerId = ++nextTimerId;
+        activeTimers.add(timerId);
+        if (timerCalls >= autoStartCall) {
+          queueMicrotask(() => {
+            if (!activeTimers.delete(timerId)) return;
+            nowNs += BigInt(ms) * 1_000_000n;
+            callback();
+          });
+        }
+        return timerId;
+      },
+      clearTimeout(timerId: number) {
+        activeTimers.delete(timerId);
+      }
+    };
+  };
+  const fixedNpmCiSpec = () => ({ command: process.execPath, args: ["/fixed/npm-cli.js", "ci"] });
+
+  const beforeDeadlineClock = createNpmCiClock(Number.POSITIVE_INFINITY);
+  const beforeDeadlineChild = createNpmCiChild(20_000);
+  const beforeDeadlineTimerDurations: number[] = [];
+  const beforeDeadlineExitZero = runNpmCiAttempt({
+    platform: "linux",
+    runtime: {
+      processSpec: fixedNpmCiSpec,
+      spawn: () => {
+        queueMicrotask(() => {
+          beforeDeadlineClock.setNowMs(59_999);
+          beforeDeadlineChild.exit(0, null);
+        });
+        return beforeDeadlineChild.child;
+      },
+      setTimeout: (callback: () => void, ms: number) => {
+        beforeDeadlineTimerDurations.push(ms);
+        return beforeDeadlineClock.setTimeout(callback, ms);
+      },
+      clearTimeout: beforeDeadlineClock.clearTimeout,
+      nowNs: beforeDeadlineClock.nowNs,
+      kill: (_pid: number, signal: number | NodeJS.Signals) => {
+        if (signal !== 0) failNpmCiControl("an already-empty process group must not be signalled");
+        throw noSuchNpmCiProcess();
+      },
+      taskkill: () => failNpmCiControl("a Linux attempt must not invoke taskkill")
+    }
+  });
+  await expect(beforeDeadlineExitZero).resolves.toMatchObject({ ok: true, timedOut: false, code: 0, signal: null });
+  expect(beforeDeadlineTimerDurations).toEqual([60_000]);
+
+  const lateClock = createNpmCiClock(Number.POSITIVE_INFINITY);
+  const lateChild = createNpmCiChild(20_001);
+  const lateExitZero = runNpmCiAttempt({
+    platform: "linux",
+    runtime: {
+      processSpec: fixedNpmCiSpec,
+      spawn: () => {
+        queueMicrotask(() => {
+          lateClock.setNowMs(60_000);
+          lateChild.exit(0, null);
+        });
+        return lateChild.child;
+      },
+      setTimeout: lateClock.setTimeout,
+      clearTimeout: lateClock.clearTimeout,
+      nowNs: lateClock.nowNs,
+      kill: (_pid: number, signal: number | NodeJS.Signals) => {
+        if (signal !== 0) failNpmCiControl("an already-empty late process group must not be signalled");
+        throw noSuchNpmCiProcess();
+      },
+      taskkill: () => failNpmCiControl("a Linux attempt must not invoke taskkill")
+    }
+  });
+  await expect(lateExitZero).resolves.toMatchObject({ ok: false, timedOut: true, code: 0, signal: null });
+
+  const timeoutClock = createNpmCiClock(1);
+  const timeoutChild = createNpmCiChild(20_002);
+  const timeoutSignals: NodeJS.Signals[] = [];
+  let timeoutGroupAlive = true;
+  const timedOutAttempt = runNpmCiAttempt({
+    platform: "linux",
+    runtime: {
+      processSpec: fixedNpmCiSpec,
+      spawn: () => timeoutChild.child,
+      setTimeout: timeoutClock.setTimeout,
+      clearTimeout: timeoutClock.clearTimeout,
+      nowNs: timeoutClock.nowNs,
+      kill: (_pid: number, signal: number | NodeJS.Signals) => {
+        if (signal === 0) {
+          if (timeoutGroupAlive) return true;
+          throw noSuchNpmCiProcess();
+        }
+        if (typeof signal !== "string") throw new Error("unexpected numeric npm-ci signal");
+        timeoutSignals.push(signal);
+        if (signal === "SIGKILL") {
+          timeoutGroupAlive = false;
+          timeoutChild.exit(null, "SIGKILL");
+        }
+        return true;
+      },
+      taskkill: () => failNpmCiControl("a Linux attempt must not invoke taskkill")
+    }
+  });
+  await expect(timedOutAttempt).resolves.toMatchObject({
+    ok: false,
+    timedOut: true,
+    code: null,
+    signal: "SIGKILL"
+  });
+  expect(timeoutSignals).toEqual(["SIGTERM", "SIGKILL"]);
+  expect(timeoutGroupAlive).toBe(false);
+
+  const survivingClock = createNpmCiClock(2);
+  const survivingChild = createNpmCiChild(20_003);
+  const survivingSignals: NodeJS.Signals[] = [];
+  let survivingGroupAlive = true;
+  let survivingAttemptCalls = 0;
+  const survivingWaits: number[] = [];
+  await expect(
+    runNpmCiWithRetry({
+      platform: "linux",
+      attemptRunner: async () => {
+        survivingAttemptCalls++;
+        if (survivingAttemptCalls === 2) {
+          expect(survivingGroupAlive).toBe(false);
+          return { ok: true, timedOut: false, code: 0, signal: null, error: null };
+        }
+        return runNpmCiAttempt({
+          platform: "linux",
+          runtime: {
+            processSpec: fixedNpmCiSpec,
+            spawn: () => {
+              queueMicrotask(() => {
+                survivingClock.setNowMs(1_000);
+                survivingChild.exit(0, null);
+              });
+              return survivingChild.child;
+            },
+            setTimeout: survivingClock.setTimeout,
+            clearTimeout: survivingClock.clearTimeout,
+            nowNs: survivingClock.nowNs,
+            kill: (_pid: number, signal: number | NodeJS.Signals) => {
+              if (signal === 0) {
+                if (survivingGroupAlive) return true;
+                throw noSuchNpmCiProcess();
+              }
+              if (typeof signal !== "string") throw new Error("unexpected numeric npm-ci signal");
+              survivingSignals.push(signal);
+              if (signal === "SIGKILL") survivingGroupAlive = false;
+              return true;
+            },
+            taskkill: () => failNpmCiControl("a Linux attempt must not invoke taskkill")
+          }
+        });
+      },
+      wait: async (ms: number) => {
+        survivingWaits.push(ms);
+      },
+      log: retryLog
+    })
+  ).resolves.toBe(2);
+  expect(survivingAttemptCalls).toBe(2);
+  expect(survivingWaits).toEqual([15_000]);
+  expect(survivingSignals).toEqual(["SIGTERM", "SIGKILL"]);
+
+  const persistentClock = createNpmCiClock(1);
+  const persistentChild = createNpmCiChild(20_004);
+  const persistentSignals: NodeJS.Signals[] = [];
+  let persistentAttemptCalls = 0;
+  const persistentWaits: number[] = [];
+  await expect(
+    runNpmCiWithRetry({
+      platform: "linux",
+      attemptRunner: async () => {
+        persistentAttemptCalls++;
+        return runNpmCiAttempt({
+          platform: "linux",
+          runtime: {
+            processSpec: fixedNpmCiSpec,
+            spawn: () => persistentChild.child,
+            setTimeout: persistentClock.setTimeout,
+            clearTimeout: persistentClock.clearTimeout,
+            nowNs: persistentClock.nowNs,
+            kill: (_pid: number, signal: number | NodeJS.Signals) => {
+              if (signal === 0) return true;
+              if (typeof signal !== "string") throw new Error("unexpected numeric npm-ci signal");
+              persistentSignals.push(signal);
+              if (signal === "SIGTERM") persistentChild.exit(null, "SIGTERM");
+              return true;
+            },
+            taskkill: () => failNpmCiControl("a Linux attempt must not invoke taskkill")
+          }
+        });
+      },
+      wait: async (ms: number) => {
+        persistentWaits.push(ms);
+      },
+      log: retryLog
+    })
+  ).rejects.toThrow(/POSIX process group did not disappear/u);
+  expect(persistentAttemptCalls).toBe(1);
+  expect(persistentWaits).toEqual([]);
+  expect(persistentSignals).toEqual(["SIGTERM", "SIGKILL"]);
+
+  const windowsClock = createNpmCiClock(1);
+  const windowsChild = createNpmCiChild(20_005);
+  const windowsTimerDurations: number[] = [];
+  const taskkillCalls: Array<{ command: string; args: string[]; options: Record<string, unknown> }> = [];
+  let windowsTimeoutAttempts = 0;
+  const windowsTimeoutWaits: number[] = [];
+  await expect(
+    runNpmCiWithRetry({
+      platform: "win32",
+      attemptRunner: async () => {
+        windowsTimeoutAttempts++;
+        return runNpmCiAttempt({
+          platform: "win32",
+          runtime: {
+            processSpec: fixedNpmCiSpec,
+            spawn: () => windowsChild.child,
+            spawnSync: (command: string, args: string[], options: Record<string, unknown>) => {
+              taskkillCalls.push({ command, args, options });
+              if (taskkillCalls.length === 1) return { status: 1, signal: null };
+              windowsChild.exit(null, "SIGKILL");
+              return { status: 0, signal: null };
+            },
+            setTimeout: (callback: () => void, ms: number) => {
+              windowsTimerDurations.push(ms);
+              return windowsClock.setTimeout(callback, ms);
+            },
+            clearTimeout: windowsClock.clearTimeout,
+            nowNs: windowsClock.nowNs,
+            kill: () => failNpmCiControl("a Windows attempt must not signal a POSIX group")
+          }
+        });
+      },
+      wait: async (ms: number) => {
+        windowsTimeoutWaits.push(ms);
+      },
+      log: retryLog
+    })
+  ).rejects.toThrow(/Windows timeout is terminal because taskkill cannot prove all descendants/u);
+  expect(windowsTimeoutAttempts).toBe(1);
+  expect(windowsTimeoutWaits).toEqual([]);
+  expect(windowsTimerDurations).toEqual([180_000]);
+  expect(taskkillCalls.map(({ command }) => command)).toEqual([
+    "C:\\Windows\\System32\\taskkill.exe",
+    "C:\\Windows\\System32\\taskkill.exe"
+  ]);
+  expect(taskkillCalls.map(({ args }) => args)).toEqual([
+    ["/PID", "20005", "/T"],
+    ["/PID", "20005", "/T", "/F"]
+  ]);
+  expect(taskkillCalls[0]?.options).toMatchObject({ shell: false, timeout: 8_000, windowsHide: true });
+  expect(taskkillCalls[1]?.options).toMatchObject({ shell: false, timeout: 10_000, windowsHide: true });
+
+  let windowsSuccessAttempts = 0;
+  await expect(
+    runNpmCiWithRetry({
+      platform: "win32",
+      attemptRunner: async (attemptOptions: { platform?: NodeJS.Platform }) => {
+        expect(attemptOptions.platform).toBe("win32");
+        windowsSuccessAttempts++;
+        return { ok: true, timedOut: false, code: 0, signal: null, error: null };
+      },
+      wait: async () => failNpmCiControl("a successful Windows install must not wait for a retry"),
+      log: retryLog
+    })
+  ).resolves.toBe(1);
+  expect(windowsSuccessAttempts).toBe(1);
+
+  let defaultAttemptPlatform: NodeJS.Platform | undefined;
+  await expect(
+    runNpmCiWithRetry({
+      attemptRunner: async (attemptOptions: { platform?: NodeJS.Platform }) => {
+        defaultAttemptPlatform = attemptOptions.platform;
+        return { ok: true, timedOut: false, code: 0, signal: null, error: null };
+      },
+      wait: async () => failNpmCiControl("a successful default-platform install must not wait for a retry"),
+      log: retryLog
+    })
+  ).resolves.toBe(1);
+  expect(defaultAttemptPlatform).toBe(process.platform);
+
+  const windowsExitChild = createNpmCiChild(20_050);
+  let windowsExitAttempts = 0;
+  const windowsExitWaits: number[] = [];
+  await expect(
+    runNpmCiWithRetry({
+      platform: "win32",
+      attemptRunner: async () => {
+        windowsExitAttempts++;
+        return runNpmCiAttempt({
+          platform: "win32",
+          runtime: {
+            processSpec: fixedNpmCiSpec,
+            spawn: () => {
+              queueMicrotask(() => windowsExitChild.exit(1, null));
+              return windowsExitChild.child;
+            },
+            setTimeout: () => 1,
+            clearTimeout: () => {},
+            taskkill: () => failNpmCiControl("an ordinary Windows exit must not invoke taskkill")
+          }
+        });
+      },
+      wait: async (ms: number) => {
+        windowsExitWaits.push(ms);
+      },
+      log: retryLog
+    })
+  ).rejects.toThrow(/failed after 1 attempt \(exit=1 signal=null\)/u);
+  expect(windowsExitAttempts).toBe(1);
+  expect(windowsExitWaits).toEqual([]);
+
+  const failedTaskkillClock = createNpmCiClock(1);
+  const failedTaskkillChild = createNpmCiChild(20_006);
+  const failedTaskkillModes: boolean[] = [];
+  let failedTaskkillAttempts = 0;
+  const failedTaskkillWaits: number[] = [];
+  await expect(
+    runNpmCiWithRetry({
+      platform: "win32",
+      attemptRunner: async () => {
+        failedTaskkillAttempts++;
+        return runNpmCiAttempt({
+          platform: "win32",
+          runtime: {
+            processSpec: fixedNpmCiSpec,
+            spawn: () => failedTaskkillChild.child,
+            setTimeout: failedTaskkillClock.setTimeout,
+            clearTimeout: failedTaskkillClock.clearTimeout,
+            nowNs: failedTaskkillClock.nowNs,
+            kill: () => failNpmCiControl("a Windows attempt must not signal a POSIX group"),
+            taskkill: (_pid: number, force: boolean, timeoutMs: number) => {
+              expect(timeoutMs).toBeGreaterThan(0);
+              failedTaskkillModes.push(force);
+              throw new Error("taskkill unavailable");
+            }
+          }
+        });
+      },
+      wait: async (ms: number) => {
+        failedTaskkillWaits.push(ms);
+      },
+      log: retryLog
+    })
+  ).rejects.toThrow(/Windows taskkill \/T \/F did not complete/u);
+  expect(failedTaskkillAttempts).toBe(1);
+  expect(failedTaskkillWaits).toEqual([]);
+  expect(failedTaskkillModes).toEqual([false, true]);
+
+  const cancellationReason = (signal: "SIGINT" | "SIGTERM") => {
+    const reason = new Error(`cancelled by ${signal}`);
+    Object.defineProperty(reason, "forwardSignal", { value: signal, enumerable: true });
+    return reason;
+  };
+  const raceClock = createNpmCiClock(2);
+  const raceChild = createNpmCiChild(20_007);
+  const raceController = new AbortController();
+  const raceReason = cancellationReason("SIGINT");
+  const raceSignals: NodeJS.Signals[] = [];
+  let raceGroupAlive = true;
+  const exitAbortRace = runNpmCiAttempt({
+    signal: raceController.signal,
+    platform: "linux",
+    runtime: {
+      processSpec: fixedNpmCiSpec,
+      spawn: () => {
+        queueMicrotask(() => {
+          raceChild.exit(0, null);
+          raceController.abort(raceReason);
+        });
+        return raceChild.child;
+      },
+      setTimeout: raceClock.setTimeout,
+      clearTimeout: raceClock.clearTimeout,
+      nowNs: raceClock.nowNs,
+      kill: (_pid: number, signal: number | NodeJS.Signals) => {
+        if (signal === 0) {
+          if (raceGroupAlive) return true;
+          throw noSuchNpmCiProcess();
+        }
+        if (typeof signal !== "string") throw new Error("unexpected numeric npm-ci signal");
+        raceSignals.push(signal);
+        raceGroupAlive = false;
+        return true;
+      },
+      taskkill: () => failNpmCiControl("a Linux attempt must not invoke taskkill")
+    }
+  });
+  await expect(exitAbortRace).rejects.toBe(raceReason);
+  expect(raceSignals).toEqual(["SIGINT"]);
+
+  const termClock = createNpmCiClock(2);
+  const termChild = createNpmCiChild(20_008);
+  const termController = new AbortController();
+  const termReason = cancellationReason("SIGTERM");
+  const termSignals: NodeJS.Signals[] = [];
+  let termGroupAlive = true;
+  const termAbort = runNpmCiAttempt({
+    signal: termController.signal,
+    platform: "linux",
+    runtime: {
+      processSpec: fixedNpmCiSpec,
+      spawn: () => termChild.child,
+      setTimeout: termClock.setTimeout,
+      clearTimeout: termClock.clearTimeout,
+      nowNs: termClock.nowNs,
+      kill: (_pid: number, signal: number | NodeJS.Signals) => {
+        if (signal === 0) {
+          if (termGroupAlive) return true;
+          throw noSuchNpmCiProcess();
+        }
+        if (typeof signal !== "string") throw new Error("unexpected numeric npm-ci signal");
+        termSignals.push(signal);
+        termGroupAlive = false;
+        termChild.exit(null, signal);
+        return true;
+      },
+      taskkill: () => failNpmCiControl("a Linux attempt must not invoke taskkill")
+    }
+  });
+  termController.abort(termReason);
+  await expect(termAbort).rejects.toBe(termReason);
+  expect(termSignals).toEqual(["SIGTERM"]);
+
+  const lateCancelClock = createNpmCiClock(1);
+  const lateCancelChild = createNpmCiChild(20_009);
+  const lateCancelController = new AbortController();
+  const lateCancelReason = cancellationReason("SIGINT");
+  const lateCancelSignals: NodeJS.Signals[] = [];
+  let lateCancelGroupAlive = true;
+  let lateCancelAttemptCalls = 0;
+  const lateCancelWaits: number[] = [];
+  await expect(
+    runNpmCiWithRetry({
+      signal: lateCancelController.signal,
+      platform: "linux",
+      attemptRunner: async () => {
+        lateCancelAttemptCalls++;
+        return runNpmCiAttempt({
+          signal: lateCancelController.signal,
+          platform: "linux",
+          runtime: {
+            processSpec: fixedNpmCiSpec,
+            spawn: () => lateCancelChild.child,
+            setTimeout: lateCancelClock.setTimeout,
+            clearTimeout: lateCancelClock.clearTimeout,
+            nowNs: lateCancelClock.nowNs,
+            kill: (pid: number, signal: number | NodeJS.Signals) => {
+              expect(pid).toBe(-20_009);
+              if (signal === 0) {
+                if (lateCancelGroupAlive) return true;
+                throw noSuchNpmCiProcess();
+              }
+              if (typeof signal !== "string") throw new Error("unexpected numeric npm-ci signal");
+              lateCancelSignals.push(signal);
+              if (signal === "SIGTERM") queueMicrotask(() => lateCancelController.abort(lateCancelReason));
+              if (signal === "SIGKILL") {
+                lateCancelGroupAlive = false;
+                lateCancelChild.exit(null, "SIGKILL");
+              }
+              return true;
+            },
+            taskkill: () => failNpmCiControl("a Linux attempt must not invoke taskkill")
+          }
+        });
+      },
+      wait: async (ms: number) => {
+        lateCancelWaits.push(ms);
+      },
+      log: retryLog
+    })
+  ).rejects.toBe(lateCancelReason);
+  expect(lateCancelAttemptCalls).toBe(1);
+  expect(lateCancelWaits).toEqual([]);
+  expect(lateCancelSignals).toEqual(["SIGTERM", "SIGINT", "SIGKILL"]);
+
+  const latchController = new AbortController();
+  const latchReason = cancellationReason("SIGTERM");
+  let latchAttemptCalls = 0;
+  const latchWaits: number[] = [];
+  await expect(
+    runNpmCiWithRetry({
+      signal: latchController.signal,
+      platform: "linux",
+      attemptRunner: async () => {
+        latchAttemptCalls++;
+        latchController.abort(latchReason);
+        return { ok: true, timedOut: false, code: 0, signal: null, error: null };
+      },
+      wait: async (ms: number) => {
+        latchWaits.push(ms);
+      },
+      log: retryLog
+    })
+  ).rejects.toBe(latchReason);
+  expect(latchAttemptCalls).toBe(1);
+  expect(latchWaits).toEqual([]);
+
+  expect(npmCiWorkflowProblems(workflowSources)).toEqual([]);
+  expectProblemFragments(
+    npmCiWorkflowProblems(
+      mutateNpmCiWorkflow(workflowSources, "ci.yml", (document) => {
+        mutableNpmCiInstallStep(mutableNpmCiJob(document, "lint")).run = "true";
+      })
+    ),
+    ["invalid ci.yml#lint", "found 14"]
+  );
+  expectProblemFragments(
+    npmCiWorkflowProblems(
+      mutateNpmCiWorkflow(workflowSources, "ci.yml", (document) => {
+        mutableNpmCiInstallStep(mutableNpmCiJob(document, "lint")).run = "npm ci";
+      })
+    ),
+    ["literal npm command inventory drifted in ci.yml#lint", "invalid ci.yml#lint"]
+  );
+  expectProblemFragments(
+    npmCiWorkflowProblems(
+      mutateNpmCiWorkflow(workflowSources, "ci.yml", (document) => {
+        mutableNpmCiInstallStep(mutableNpmCiJob(document, "lint")).run = "env CI=true npm ci";
+      })
+    ),
+    ["literal npm command inventory drifted in ci.yml#lint", "invalid ci.yml#lint"]
+  );
+  const yamlAliasBypass = new Map(workflowSources).set(
+    "npm-ci-bypass.yaml",
+    "name: npm-ci-bypass\n" +
+      "on: workflow_dispatch\n" +
+      "x-install: &install npm.cmd ci\n" +
+      "jobs:\n" +
+      "  bypass:\n" +
+      "    runs-on: windows-2025\n" +
+      "    timeout-minutes: 10\n" +
+      "    steps:\n" +
+      "      - { name: Alias install, run: *install }\n" +
+      "  bypass-exe:\n" +
+      "    runs-on: windows-2025\n" +
+      "    timeout-minutes: 10\n" +
+      "    steps:\n" +
+      "      - { name: Executable install, run: NPM.EXE ci }\n" +
+      "  bypass-quoted:\n" +
+      "    runs-on: ubuntu-latest\n" +
+      "    timeout-minutes: 10\n" +
+      "    steps:\n" +
+      "      - { name: Quoted install, run: '\"npm\" ci' }\n" +
+      "  bypass-shell-wrapper:\n" +
+      "    runs-on: ubuntu-latest\n" +
+      "    timeout-minutes: 10\n" +
+      "    steps:\n" +
+      "      - { name: Shell wrapped install, run: 'bash -c \"npm ci\"' }\n" +
+      "  bypass-redirection:\n" +
+      "    runs-on: ubuntu-latest\n" +
+      "    timeout-minutes: 10\n" +
+      "    steps:\n" +
+      "      - { name: Redirected install, run: 'npm ci>install.log' }\n" +
+      "  bypass-middle-redirection:\n" +
+      "    runs-on: ubuntu-latest\n" +
+      "    timeout-minutes: 10\n" +
+      "    steps:\n" +
+      "      - { name: Mid-command redirection, run: 'npm>install.log ci' }\n" +
+      "  bypass-quoted-subcommand:\n" +
+      "    runs-on: ubuntu-latest\n" +
+      "    timeout-minutes: 10\n" +
+      "    steps:\n" +
+      "      - { name: Quoted subcommand, run: 'npm \"ci\"' }\n" +
+      "  bypass-bash-continuation:\n" +
+      "    runs-on: ubuntu-latest\n" +
+      "    timeout-minutes: 10\n" +
+      "    steps:\n" +
+      "      - name: Continued Bash install\n" +
+      "        run: |\n" +
+      "          npm \\\n" +
+      "            ci\n" +
+      "  bypass-powershell-continuation:\n" +
+      "    runs-on: windows-2025\n" +
+      "    timeout-minutes: 10\n" +
+      "    steps:\n" +
+      "      - name: Continued PowerShell install\n" +
+      "        run: |\n" +
+      "          npm `\n" +
+      "            ci\n"
+  );
+  expect(npmCiWorkflowProblems(yamlAliasBypass)).toContain(
+    `${NPM_CI_WORKFLOW_PROBLEM}: literal npm command inventory drifted in npm-ci-bypass.yaml#bypass`
+  );
+  expect(npmCiWorkflowProblems(yamlAliasBypass)).toContain(
+    `${NPM_CI_WORKFLOW_PROBLEM}: literal npm command inventory drifted in npm-ci-bypass.yaml#bypass-exe`
+  );
+  expect(npmCiWorkflowProblems(yamlAliasBypass)).toContain(
+    `${NPM_CI_WORKFLOW_PROBLEM}: literal npm command inventory drifted in npm-ci-bypass.yaml#bypass-quoted`
+  );
+  expect(npmCiWorkflowProblems(yamlAliasBypass)).toContain(
+    `${NPM_CI_WORKFLOW_PROBLEM}: literal npm command inventory drifted in npm-ci-bypass.yaml#bypass-shell-wrapper`
+  );
+  expect(npmCiWorkflowProblems(yamlAliasBypass)).toContain(
+    `${NPM_CI_WORKFLOW_PROBLEM}: literal npm command inventory drifted in npm-ci-bypass.yaml#bypass-redirection`
+  );
+  expect(npmCiWorkflowProblems(yamlAliasBypass)).toContain(
+    `${NPM_CI_WORKFLOW_PROBLEM}: literal npm command inventory drifted in npm-ci-bypass.yaml#bypass-middle-redirection`
+  );
+  expect(npmCiWorkflowProblems(yamlAliasBypass)).toContain(
+    `${NPM_CI_WORKFLOW_PROBLEM}: literal npm command inventory drifted in npm-ci-bypass.yaml#bypass-quoted-subcommand`
+  );
+  expect(npmCiWorkflowProblems(yamlAliasBypass)).toContain(
+    `${NPM_CI_WORKFLOW_PROBLEM}: literal npm command inventory drifted in npm-ci-bypass.yaml#bypass-bash-continuation`
+  );
+  expect(npmCiWorkflowProblems(yamlAliasBypass)).toContain(
+    `${NPM_CI_WORKFLOW_PROBLEM}: literal npm command inventory drifted in npm-ci-bypass.yaml#bypass-powershell-continuation`
+  );
+  const plainNewlineCommand = new Map(workflowSources).set(
+    "npm-ci-plain-newline.yaml",
+    "name: npm-ci-plain-newline\n" +
+      "on: workflow_dispatch\n" +
+      "jobs:\n" +
+      "  plain:\n" +
+      "    runs-on: ubuntu-latest\n" +
+      "    timeout-minutes: 10\n" +
+      "    steps:\n" +
+      "      - name: Separate commands\n" +
+      "        run: |\n" +
+      "          npm\n" +
+      "          ci\n"
+  );
+  expect(npmCiWorkflowProblems(plainNewlineCommand)).toContain(
+    `${NPM_CI_WORKFLOW_PROBLEM}: literal npm command inventory drifted in npm-ci-plain-newline.yaml#plain`
+  );
+  for (const command of [
+    "npm clean-install",
+    "npm ic",
+    "npm install-clean",
+    "npm isntall-clean",
+    "@npm.cmd ci",
+    "npm.ps1 ci",
+    "npm 2>&1 ci",
+    "node scripts//NPM-CI-WITH-RETRY.mjs",
+    "echo npm ci",
+    "npm run ci"
+  ]) {
+    expect(
+      npmCiWorkflowProblems(
+        mutateNpmCiWorkflow(workflowSources, "ci.yml", (document) => {
+          const steps = mutableNpmCiJob(document, "lint").steps;
+          if (!Array.isArray(steps)) throw new Error("literal npm inventory mutation requires steps");
+          steps.push({ name: "Unreviewed npm-bearing command", run: command });
+        })
+      ),
+      command
+    ).toContain(`${NPM_CI_WORKFLOW_PROBLEM}: literal npm command inventory drifted in ci.yml#lint`);
+  }
+  expectProblemFragments(
+    npmCiWorkflowProblems(
+      mutateNpmCiWorkflow(workflowSources, "ci.yml", (document) => {
+        mutableNpmCiInstallStep(mutableNpmCiJob(document, "lint")).run = "node scripts/npm-ci-with-retry.mjs || true";
+      })
+    ),
+    ["noncanonical helper in ci.yml#lint", "invalid ci.yml#lint", "expected 15 helpers, found 14"]
+  );
+  expectProblemFragments(
+    npmCiWorkflowProblems(
+      mutateNpmCiWorkflow(workflowSources, "ci.yml", (document) => {
+        const lint = mutableNpmCiJob(document, "lint");
+        const steps = lint.steps;
+        if (!Array.isArray(steps)) throw new Error("lint mutation requires steps");
+        const installIndex = steps.findIndex((step) => yamlRecord(step)?.run === NPM_CI_HELPER_COMMAND);
+        if (installIndex < 0) throw new Error("lint mutation requires install");
+        steps.splice(installIndex + 1, 0, JSON.parse(JSON.stringify(steps[installIndex])));
+      })
+    ),
+    ["invalid ci.yml#lint", "found 16"]
+  );
+  expect(
+    npmCiWorkflowProblems(
+      mutateNpmCiWorkflow(workflowSources, "ci.yml", (document) => {
+        mutableNpmCiInstallStep(mutableNpmCiJob(document, "lint"))["continue-on-error"] = true;
+      })
+    )
+  ).toContain(`${NPM_CI_WORKFLOW_PROBLEM}: invalid ci.yml#lint`);
+  expect(
+    npmCiWorkflowProblems(
+      mutateNpmCiWorkflow(workflowSources, "ci.yml", (document) => {
+        const lint = mutableNpmCiJob(document, "lint");
+        const steps = lint.steps;
+        if (!Array.isArray(steps)) throw new Error("lint mutation requires steps");
+        const setupIndex = steps.findIndex(
+          (step) =>
+            typeof yamlRecord(step)?.uses === "string" &&
+            String(yamlRecord(step)?.uses).startsWith("actions/setup-node@")
+        );
+        const installIndex = steps.findIndex((step) => yamlRecord(step)?.run === NPM_CI_HELPER_COMMAND);
+        if (setupIndex < 0 || installIndex < 0) throw new Error("lint mutation requires setup and install");
+        [steps[setupIndex], steps[installIndex]] = [steps[installIndex], steps[setupIndex]];
+      })
+    )
+  ).toContain(`${NPM_CI_WORKFLOW_PROBLEM}: invalid ci.yml#lint`);
+  expect(
+    npmCiWorkflowProblems(
+      mutateNpmCiWorkflow(workflowSources, "ci.yml", (document) => {
+        mutableNpmCiJob(document, "lint")["runs-on"] = "self-hosted";
+      })
+    )
+  ).toContain(`${NPM_CI_WORKFLOW_PROBLEM}: invalid ci.yml#lint`);
+  expect(
+    npmCiWorkflowProblems(
+      mutateNpmCiWorkflow(workflowSources, "ci.yml", (document) => {
+        mutableNpmCiJob(document, "oia")["timeout-minutes"] = 9;
+      })
+    )
+  ).toContain(`${NPM_CI_WORKFLOW_PROBLEM}: invalid ci.yml#oia`);
+  expect(
+    npmCiWorkflowProblems(
+      mutateNpmCiWorkflow(workflowSources, "ci.yml", (document) => {
+        mutableNpmCiJob(document, "lint")["continue-on-error"] = true;
+      })
+    )
+  ).toContain(`${NPM_CI_WORKFLOW_PROBLEM}: invalid ci.yml#lint`);
+  expect(
+    npmCiWorkflowProblems(
+      mutateNpmCiWorkflow(workflowSources, "ci.yml", (document) => {
+        mutableNpmCiJob(document, "lint").if = `\${{ false }}`;
+      })
+    )
+  ).toContain(`${NPM_CI_WORKFLOW_PROBLEM}: invalid ci.yml#lint`);
+  expect(
+    npmCiWorkflowProblems(
+      mutateNpmCiWorkflow(workflowSources, "ci.yml", (document) => {
+        mutableNpmCiJob(document, "lint").defaults = { run: { shell: "bash -e {0}" } };
+      })
+    )
+  ).toContain(`${NPM_CI_WORKFLOW_PROBLEM}: invalid ci.yml#lint`);
+  expect(
+    npmCiWorkflowProblems(
+      mutateNpmCiWorkflow(workflowSources, "ci.yml", (document) => {
+        mutableNpmCiJob(document, "lint").env = { NODE_OPTIONS: "--require ./bypass.cjs" };
+      })
+    )
+  ).toContain(`${NPM_CI_WORKFLOW_PROBLEM}: invalid ci.yml#lint`);
+  expect(
+    npmCiWorkflowProblems(
+      mutateNpmCiWorkflow(workflowSources, "ci.yml", (document) => {
+        mutableNpmCiJob(document, "lint").container = "node:22";
+      })
+    )
+  ).toContain(`${NPM_CI_WORKFLOW_PROBLEM}: invalid ci.yml#lint`);
+  expect(
+    npmCiWorkflowProblems(
+      mutateNpmCiWorkflow(workflowSources, "ci.yml", (document) => {
+        mutableNpmCiJob(document, "lint").services = { npm: { image: "node:22" } };
+      })
+    )
+  ).toContain(`${NPM_CI_WORKFLOW_PROBLEM}: invalid ci.yml#lint`);
+  expect(
+    npmCiWorkflowProblems(
+      mutateNpmCiWorkflow(workflowSources, "ci.yml", (document) => {
+        document.defaults = { run: { shell: "bash -e {0}" } };
+      })
+    )
+  ).toContain(`${NPM_CI_WORKFLOW_PROBLEM}: workflow boundary drifted in ci.yml`);
+  expect(
+    npmCiWorkflowProblems(
+      mutateNpmCiWorkflow(workflowSources, "ci.yml", (document) => {
+        document.env = { NODE_OPTIONS: "--require ./workflow-bypass.cjs" };
+      })
+    )
+  ).toContain(`${NPM_CI_WORKFLOW_PROBLEM}: workflow boundary drifted in ci.yml`);
+  expect(
+    npmCiWorkflowProblems(
+      mutateNpmCiWorkflow(workflowSources, "ci.yml", (document) => {
+        const auditStep = yamlSteps(mutableNpmCiJob(document, "audit")).find(
+          (step) => step.run === NPM_CI_AUDIT_COMMAND
+        );
+        if (auditStep === undefined) throw new Error("audit mutation requires bounded command");
+        auditStep.run = "npm run check:audit";
+      })
+    )
+  ).toEqual(
+    expect.arrayContaining([
+      `${NPM_CI_WORKFLOW_PROBLEM}: unbounded check:audit in ci.yml#audit`,
+      `${NPM_CI_WORKFLOW_PROBLEM}: invalid bounded audit in ci.yml#audit`,
+      `${NPM_CI_WORKFLOW_PROBLEM}: expected 2 bounded audits, found 1`
+    ])
+  );
+  expect(
+    npmCiWorkflowProblems(
+      mutateNpmCiWorkflow(workflowSources, "release.yml", (document) => {
+        const auditStep = yamlSteps(mutableNpmCiJob(document, "publish")).find(
+          (step) => step.run === NPM_CI_AUDIT_COMMAND
+        );
+        if (auditStep === undefined) throw new Error("release audit mutation requires bounded command");
+        auditStep.run = "npm run check:audit";
+      })
+    )
+  ).toEqual(
+    expect.arrayContaining([
+      `${NPM_CI_WORKFLOW_PROBLEM}: unbounded check:audit in release.yml#publish`,
+      `${NPM_CI_WORKFLOW_PROBLEM}: invalid bounded audit in release.yml#publish`,
+      `${NPM_CI_WORKFLOW_PROBLEM}: expected 2 bounded audits, found 1`
+    ])
+  );
+  expect(
+    npmCiWorkflowProblems(
+      mutateNpmCiWorkflow(workflowSources, "ci.yml", (document) => {
+        const audit = mutableNpmCiJob(document, "audit");
+        const steps = audit.steps;
+        if (!Array.isArray(steps)) throw new Error("preaudit mutation requires steps");
+        const auditIndex = steps.findIndex((step) => yamlRecord(step)?.run === NPM_CI_AUDIT_COMMAND);
+        if (auditIndex < 0) throw new Error("preaudit mutation requires bounded audit");
+        steps.splice(auditIndex, 0, {
+          name: "Poison audit shell",
+          run:
+            'printf "%s\\n" "exit 0" > "$RUNNER_TEMP/audit-bypass.sh"\n' +
+            'printf "%s\\n" "BASH_ENV=$RUNNER_TEMP/audit-bypass.sh" >> "$GITHUB_ENV"'
+        });
+      })
+    )
+  ).toContain(`${NPM_CI_WORKFLOW_PROBLEM}: invalid bounded audit in ci.yml#audit`);
+  expect(
+    npmCiWorkflowProblems(
+      mutateNpmCiWorkflow(workflowSources, "ci.yml", (document) => {
+        const checkout = yamlSteps(mutableNpmCiJob(document, "lint")).find(
+          (step) => typeof step.uses === "string" && step.uses.startsWith("actions/checkout@")
+        );
+        if (checkout === undefined) throw new Error("lint mutation requires checkout");
+        checkout.with = { ref: "refs/heads/main" };
+      })
+    )
+  ).toContain(`${NPM_CI_WORKFLOW_PROBLEM}: invalid ci.yml#lint`);
+  expect(
+    npmCiWorkflowProblems(
+      mutateNpmCiWorkflow(workflowSources, "ci.yml", (document) => {
+        const lint = mutableNpmCiJob(document, "lint");
+        const steps = lint.steps;
+        if (!Array.isArray(steps)) throw new Error("lint mutation requires steps");
+        const installIndex = steps.findIndex((step) => yamlRecord(step)?.run === NPM_CI_HELPER_COMMAND);
+        if (installIndex < 0) throw new Error("lint mutation requires install");
+        steps.splice(installIndex, 0, {
+          name: "Poison helper environment",
+          run: 'echo "NODE_OPTIONS=--require ./bypass.cjs" >> "$GITHUB_ENV"'
+        });
+      })
+    )
+  ).toContain(`${NPM_CI_WORKFLOW_PROBLEM}: invalid ci.yml#lint`);
+  expect(
+    npmCiWorkflowProblems(
+      mutateNpmCiWorkflow(workflowSources, "ci.yml", (document) => {
+        const setup = yamlSteps(mutableNpmCiJob(document, "lint")).find(
+          (step) => typeof step.uses === "string" && step.uses.startsWith("actions/setup-node@")
+        );
+        if (setup === undefined) throw new Error("lint mutation requires setup-node");
+        setup["continue-on-error"] = true;
+      })
+    )
+  ).toContain(`${NPM_CI_WORKFLOW_PROBLEM}: invalid ci.yml#lint`);
+  expect(
+    npmCiWorkflowProblems(
+      mutateNpmCiWorkflow(workflowSources, "ci.yml", (document) => {
+        const setup = yamlSteps(mutableNpmCiJob(document, "lint")).find(
+          (step) => typeof step.uses === "string" && step.uses.startsWith("actions/setup-node@")
+        );
+        const inputs = yamlRecord(setup?.with);
+        if (inputs === null) throw new Error("lint mutation requires setup-node inputs");
+        inputs["node-version"] = 18;
+      })
+    )
+  ).toContain(`${NPM_CI_WORKFLOW_PROBLEM}: invalid ci.yml#lint`);
+  expect(
+    npmCiWorkflowProblems(
+      mutateNpmCiWorkflow(workflowSources, "ci.yml", (document) => {
+        const lint = mutableNpmCiJob(document, "lint");
+        const steps = lint.steps;
+        if (!Array.isArray(steps)) throw new Error("third-audit mutation requires steps");
+        steps.push({ name: "Unexpected audit", run: NPM_CI_AUDIT_COMMAND });
+      })
+    )
+  ).toEqual(
+    expect.arrayContaining([
+      `${NPM_CI_WORKFLOW_PROBLEM}: unbounded check:audit in ci.yml#lint`,
+      `${NPM_CI_WORKFLOW_PROBLEM}: expected 2 audit command tokens, found 3`
+    ])
+  );
+  expect(
+    npmCiWorkflowProblems(
+      mutateNpmCiWorkflow(workflowSources, "ci.yml", (document) => {
+        const auditStep = yamlSteps(mutableNpmCiJob(document, "audit")).find(
+          (step) => step.run === NPM_CI_AUDIT_COMMAND
+        );
+        if (auditStep === undefined) throw new Error("wrapped-audit mutation requires bounded command");
+        auditStep.run = "echo preparing\nnpm run check:audit";
+      })
+    )
+  ).toEqual(
+    expect.arrayContaining([
+      `${NPM_CI_WORKFLOW_PROBLEM}: unbounded check:audit in ci.yml#audit`,
+      `${NPM_CI_WORKFLOW_PROBLEM}: invalid bounded audit in ci.yml#audit`,
+      `${NPM_CI_WORKFLOW_PROBLEM}: expected 2 bounded audits, found 1`
+    ])
+  );
+  expect(
+    npmCiWorkflowProblems(
+      mutateNpmCiWorkflow(workflowSources, "publish-docs.yml", (document) => {
+        mutableNpmCiInstallStep(mutableNpmCiJob(document, "build")).run = "true";
+      })
+    )
+  ).toContain(`${NPM_CI_WORKFLOW_PROBLEM}: invalid publish-docs.yml#build`);
+  expect(
+    npmCiWorkflowProblems(
+      mutateNpmCiWorkflow(workflowSources, "release.yml", (document) => {
+        mutableNpmCiInstallStep(mutableNpmCiJob(document, "publish")).run = "true";
+      })
+    )
+  ).toContain(`${NPM_CI_WORKFLOW_PROBLEM}: invalid release.yml#publish`);
+  expectProblemFragments(
+    npmCiWorkflowProblems(
+      mutateNpmCiWorkflow(workflowSources, "ci.yml", (document) => {
+        const jobs = yamlRecord(document.jobs);
+        if (jobs === null) throw new Error("unexpected-job mutation requires jobs");
+        jobs["unexpected-install"] = JSON.parse(JSON.stringify(mutableNpmCiJob(document, "lint")));
+      })
+    ),
+    ["unexpected ci.yml#unexpected-install", "found 16"]
+  );
+}
+
 function nodeFloorCiProblems(workflow: string, enginesNode: unknown): string[] {
   const floorMatch = typeof enginesNode === "string" ? /^>=(\d+\.\d+\.\d+)$/.exec(enginesNode) : null;
   if (!floorMatch) return ["engines.node must be one exact >=X.Y.Z floor"];
@@ -3741,8 +5325,8 @@ function nodeFloorCiProblems(workflow: string, enginesNode: unknown): string[] {
   }
 
   const install = namedStep(testSteps, "Install deps (npm ci with retry)");
-  if (!hasRunLine(install, "npm ci && break")) {
-    problems.push("test floor job missing executable npm ci retry");
+  if (install?.run !== NPM_CI_HELPER_COMMAND) {
+    problems.push("test floor job missing bounded npm ci helper");
   }
   if (!testSteps.some((step) => step.run === "npm run build")) {
     problems.push("test floor job missing npm run build");
@@ -3810,8 +5394,8 @@ function nodeFloorCiProblems(workflow: string, enginesNode: unknown): string[] {
       problems.push("test-windows platform and case-insensitive filesystem assertion is missing");
     }
     const windowsInstall = namedStep(windowsSteps, "Install deps (npm ci with retry)");
-    if (!hasRunLine(windowsInstall, "npm ci && break")) {
-      problems.push("test-windows missing executable npm ci retry");
+    if (windowsInstall?.run !== NPM_CI_HELPER_COMMAND) {
+      problems.push("test-windows missing bounded npm ci helper");
     }
     if (!windowsSteps.some((step) => step.run === "npm run build")) {
       problems.push("test-windows missing npm run build");
@@ -3951,7 +5535,7 @@ function nodeFloorCiProblems(workflow: string, enginesNode: unknown): string[] {
       jobEnv?.NPM_CONFIG_ENGINE_STRICT !== "true" ||
       jobEnv?.NPM_CONFIG_SCRIPT_SHELL !== `\${{ matrix.script_shell }}` ||
       yamlRecord(setup?.with)?.["node-version"] !== floor ||
-      !hasRunLine(install, "npm ci && break") ||
+      install?.run !== NPM_CI_HELPER_COMMAND ||
       (!isMcpb && !jobSteps.some((step) => step.run === "npm run build")) ||
       !scripts.every((script) => jobSteps.some((step) => step.run === script)) ||
       jobSteps.some((step) => "continue-on-error" in step || "if" in step)
@@ -4042,7 +5626,7 @@ function nodeFloorCiProblems(workflow: string, enginesNode: unknown): string[] {
       packageEnv?.NPM_CONFIG_ENGINE_STRICT !== "true" ||
       packageEnv?.NPM_CONFIG_SCRIPT_SHELL !== "/bin/bash" ||
       yamlRecord(setup?.with)?.["node-version"] !== floor ||
-      !hasRunLine(install, "npm ci && break") ||
+      install?.run !== NPM_CI_HELPER_COMMAND ||
       yamlRecord(mcpbPackageJob.outputs)?.artifact_name !== `\${{ steps.artifact_identity.outputs.name }}` ||
       artifactIdentity?.id !== "artifact_identity" ||
       artifactIdentity?.run !== 'echo "name=mcpb-basic-candidate-$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"' ||
@@ -4276,8 +5860,8 @@ function nodeFloorCiProblems(workflow: string, enginesNode: unknown): string[] {
     problems.push(`smoke must run exact engines.node floor ${floor}`);
   }
   const smokeInstall = namedStep(smokeSteps, "Install deps (npm ci with retry)");
-  if (!hasRunLine(smokeInstall, "npm ci && break")) {
-    problems.push("smoke job missing executable npm ci retry");
+  if (smokeInstall?.run !== NPM_CI_HELPER_COMMAND) {
+    problems.push("smoke job missing bounded npm ci helper");
   }
   if (!smokeSteps.some((step) => step.run === "npm run build")) {
     problems.push("smoke job missing npm run build");
@@ -8822,7 +10406,8 @@ describe("release identity and exact required-job gate", () => {
     ).toMatchObject({ state: "pending", pending: ["CI workflow run"] });
   });
 
-  it("distinguishes in-progress from completed non-success jobs", () => {
+  it("distinguishes in-progress from completed non-success jobs", async () => {
+    await assertNpmCiWorkflowContract();
     const pending = allSuccessful().map((item) => (item.name === "docs" ? job("docs", 50, null, "in_progress") : item));
     expect(evaluateChecks(pending)).toMatchObject({ state: "pending", pending: ["docs"] });
 

@@ -81,6 +81,7 @@ const EXPECTED_COVERAGE_CLOSURE_FILES = [
   "scripts/lib/entrypoint.mjs",
   "scripts/lib/mcpb-safety.mjs",
   "scripts/mcpb-consumer.mjs",
+  "scripts/npm-ci-with-retry.mjs",
   "tests/helpers/exact-source-mutation.ts",
   "tests/meta-invariant-coverage.test.ts",
   "tests/release-integrity.test.ts",
@@ -112,7 +113,7 @@ const EXPECTED_TEST_STEP_FINGERPRINTS = [
   "3ef4af68ef144f12dd555f182fb78c286413a5c20503a3491c8a1a7ea3554af7",
   "edca7cfed3ff243cb4a555e1d498c0aaf00c3beea661e07b0a4b29201526d909",
   "d6afccf6f68cf1593c09c268ca358cc0def948d0f8b14ee047128a5a6e366627",
-  "482dd9afb6aebb67a4b2e8a0f9f4433aae08356375f9e600dd2fe767d8253f1b",
+  "338e29c470a015d92698b8184b65ee481976a1a24ad813eab912c20460a2a937",
   "44d96178c110e1ceeaa809d554c1bc392079517800a7a155792ee34206ef2c0e",
   "dbaf53cd3dfd2d8bc4d6f741915bc861d1ac27b5cf842aee668e9bef8e011843",
   "59d90db08cea0405ca3033ef2e00b11406b56244d0007ed5c0423684052640bc"
@@ -120,7 +121,7 @@ const EXPECTED_TEST_STEP_FINGERPRINTS = [
 const EXPECTED_COVERAGE_STEP_FINGERPRINTS = [
   "3ef4af68ef144f12dd555f182fb78c286413a5c20503a3491c8a1a7ea3554af7",
   "2873c30795c24c8e23b779c04f85e269a194d6d7f89baddd3888d1f619855563",
-  "482dd9afb6aebb67a4b2e8a0f9f4433aae08356375f9e600dd2fe767d8253f1b",
+  "338e29c470a015d92698b8184b65ee481976a1a24ad813eab912c20460a2a937",
   "44d96178c110e1ceeaa809d554c1bc392079517800a7a155792ee34206ef2c0e",
   "3bfd312da192922a8ddd4c6e7e5e3473d3ddc2743dbc73e40281975dd9848268",
   "e69e201d4b1395014e59ae019d60395c73b33f3fe3dd112653fb524f5d34fd55",

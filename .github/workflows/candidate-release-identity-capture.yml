@@ -1,0 +1,70 @@
+name: Candidate release identity capture
+
+on:
+  push:
+    branches:
+      - codex/bounded-npm-ci-20260811
+
+permissions:
+  contents: read
+
+concurrency:
+  group: candidate-release-identity-capture-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24
+      - name: Install dependencies through the bounded candidate helper
+        run: node scripts/npm-ci-with-retry.mjs
+      - name: Format only the candidate JavaScript and TypeScript surfaces
+        run: |
+          ./node_modules/.bin/biome check --write \
+            scripts/npm-ci-with-retry.mjs \
+            scripts/oia-walk.mjs \
+            tests/docs-consistency.test.ts \
+            tests/no-internal-imports.test.ts \
+            tests/release-integrity.test.ts
+      - name: Preserve formatter-final candidate bytes
+        run: |
+          mkdir -p capture/formatted/scripts capture/formatted/tests
+          cp scripts/npm-ci-with-retry.mjs capture/formatted/scripts/npm-ci-with-retry.mjs
+          cp scripts/oia-walk.mjs capture/formatted/scripts/oia-walk.mjs
+          cp tests/docs-consistency.test.ts capture/formatted/tests/docs-consistency.test.ts
+          cp tests/no-internal-imports.test.ts capture/formatted/tests/no-internal-imports.test.ts
+          cp tests/release-integrity.test.ts capture/formatted/tests/release-integrity.test.ts
+      - name: Restore the immutable historical mutation oracle
+        run: |
+          git show \
+            8420e2fca3ed0dac994859a9e9a30b933d5ddf9e:tests/release-integrity.test.ts \
+            > tests/release-integrity.test.ts
+      - name: Capture the candidate external-source projection
+        run: |
+          node scripts/generate-release-mutation-identity.mjs \
+            > capture/release-mutation-identity.v2.json
+      - name: Measure the exact candidate release body
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          RELEASE_BODY_DIR=$(mktemp -d "$RUNNER_TEMP/enquire-release-body-capture.XXXXXX")
+          node scripts/check-release-integrity.mjs release-body-create \
+            "$VERSION" "$RELEASE_BODY_DIR/release-notes.md" < CHANGELOG.md \
+            > capture/release-body-receipt.json
+      - name: Seal the capture payload
+        run: |
+          find capture -type f -print0 | sort -z | xargs -0 sha256sum > capture/SHA256SUMS
+          cat capture/SHA256SUMS
+          cat capture/release-body-receipt.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: candidate-release-mutation-identity
+          path: capture
+          retention-days: 1
+          compression-level: 0

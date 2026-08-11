@@ -9,7 +9,7 @@ import { isEntrypoint } from "./lib/entrypoint.mjs";
  * Fixed workflow policy. The numeric policy exposes no helper-specific
  * environment or argv override.
  * `killGraceMs` is one inclusive termination envelope: graceful signalling,
- * forced termination, and exit/tree-disappearance verification must all fit.
+ * forced termination, and the required platform-specific cleanup checks must fit.
  *
  * @type {Readonly<{attempts:number,attemptTimeoutMs:number,killGraceMs:number,retryDelayMs:number}>}
  * @example
@@ -226,7 +226,7 @@ async function terminateAttemptTree(
   }
 
   if (observation.current() !== null) {
-    throw new Error("npm ci Windows leader exited before taskkill could prove process-tree termination");
+    throw new Error("npm ci Windows leader exited before taskkill could act on the live tree");
   }
   let gracefulError = null;
   try {
@@ -242,18 +242,18 @@ async function terminateAttemptTree(
   try {
     runtime.taskkill(pid, true, remainingMs(terminationDeadlineNs, runtime.nowNs));
   } catch (error) {
-    throw new Error("npm ci Windows process tree could not be forcefully terminated", {
+    throw new Error("npm ci Windows taskkill /T /F did not complete inside the termination envelope", {
       cause: gracefulError === null ? error : new AggregateError([gracefulError, error])
     });
   }
   if (await waitForConditionUntil(() => observation.current() !== null, terminationDeadlineNs, runtime)) {
     return observation.current();
   }
-  throw new Error("npm ci Windows process tree did not exit inside the termination envelope");
+  throw new Error("npm ci Windows leader did not exit inside the termination envelope");
 }
 
 /**
- * Execute one npm-ci attempt under a process-tree deadline.
+ * Execute one npm-ci attempt under a fixed process deadline.
  *
  * @param {{signal?:AbortSignal,platform?:NodeJS.Platform,runtime?:object}} [options] - Testable runtime seams.
  * @returns {Promise<{ok:boolean,timedOut:boolean,code:number|null,signal:string|null,error:unknown}>} Attempt result.
@@ -312,7 +312,7 @@ export async function runNpmCiAttempt(options = {}) {
   if (first.kind === "exit" && first.result.observedNs < attemptDeadlineNs && options.signal?.aborted) {
     const reason = options.signal.reason ?? new Error("npm ci retry cancelled");
     if (platform === "win32") {
-      throw new Error("npm ci Windows leader exited before cancellation could prove process-tree termination", {
+      throw new Error("npm ci Windows leader exited before cancellation could actuate bounded taskkill cleanup", {
         cause: reason
       });
     }
@@ -333,10 +333,10 @@ export async function runNpmCiAttempt(options = {}) {
 
   if (first.kind === "exit" && first.result.observedNs < attemptDeadlineNs) {
     // POSIX retains a queryable process-group identity after its leader exits,
-    // so prove the group is empty before retry. Windows taskkill cannot prove a
-    // tree from an already-dead parent PID; ordinary npm exit is therefore the
-    // Windows retry boundary, while timeout/abort paths below require live /T
-    // control and fail closed if that proof cannot be obtained.
+    // so prove the group is empty before retry. Windows taskkill cannot act on
+    // a tree through an already-dead parent PID; ordinary npm exit is therefore
+    // the narrow Windows retry boundary. Timeout below remains terminal even
+    // after bounded taskkill actuation and leader observation.
     if (platform !== "win32" && posixGroupExists(child.pid, runtime.kill)) {
       const cleanupDeadlineNs = deadlineAfter(runtime.nowNs, NPM_CI_RETRY_POLICY.killGraceMs);
       await terminateAttemptTree(
@@ -384,6 +384,15 @@ export async function runNpmCiAttempt(options = {}) {
   );
   const cancellation = first.kind === "abort" ? first.reason : currentAbortReason(options.signal);
   if (cancellation !== null) throw cancellation;
+  if (first.kind === "timeout" && platform === "win32") {
+    // taskkill /T observes only the process tree reachable from the leader at
+    // invocation time. Even a successful forced call plus leader exit cannot
+    // prove that a raced, reparented or breakaway descendant released every
+    // workspace resource. A fresh hosted runner is the only safe retry scope.
+    throw new Error(
+      "npm ci Windows timeout is terminal because taskkill cannot prove all descendants and workspace resources are gone"
+    );
+  }
   return {
     ok: false,
     timedOut: true,
@@ -404,7 +413,7 @@ function waitForRetry(ms, signal, clock = { setTimeout, clearTimeout }) {
 }
 
 /**
- * Run the fixed three-attempt npm-ci policy.
+ * Run the fixed at-most-three-attempt npm-ci policy.
  *
  * @param {{signal?:AbortSignal,attemptRunner?:Function,wait?:Function,log?:Console}} [options] - Test seams.
  * @returns {Promise<number>} One-based successful attempt number.

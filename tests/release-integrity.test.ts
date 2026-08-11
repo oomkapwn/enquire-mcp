@@ -4488,24 +4488,38 @@ async function assertNpmCiWorkflowContract(): Promise<void> {
   const windowsClock = createNpmCiClock(1);
   const windowsChild = createNpmCiChild(20_005);
   const taskkillCalls: Array<{ command: string; args: string[]; options: Record<string, unknown> }> = [];
-  const windowsTimeout = runNpmCiAttempt({
-    platform: "win32",
-    runtime: {
-      processSpec: fixedNpmCiSpec,
-      spawn: () => windowsChild.child,
-      spawnSync: (command: string, args: string[], options: Record<string, unknown>) => {
-        taskkillCalls.push({ command, args, options });
-        if (taskkillCalls.length === 1) return { status: 1, signal: null };
-        windowsChild.exit(null, "SIGKILL");
-        return { status: 0, signal: null };
+  let windowsTimeoutAttempts = 0;
+  const windowsTimeoutWaits: number[] = [];
+  await expect(
+    runNpmCiWithRetry({
+      attemptRunner: async () => {
+        windowsTimeoutAttempts++;
+        return runNpmCiAttempt({
+          platform: "win32",
+          runtime: {
+            processSpec: fixedNpmCiSpec,
+            spawn: () => windowsChild.child,
+            spawnSync: (command: string, args: string[], options: Record<string, unknown>) => {
+              taskkillCalls.push({ command, args, options });
+              if (taskkillCalls.length === 1) return { status: 1, signal: null };
+              windowsChild.exit(null, "SIGKILL");
+              return { status: 0, signal: null };
+            },
+            setTimeout: windowsClock.setTimeout,
+            clearTimeout: windowsClock.clearTimeout,
+            nowNs: windowsClock.nowNs,
+            kill: () => failNpmCiControl("a Windows attempt must not signal a POSIX group")
+          }
+        });
       },
-      setTimeout: windowsClock.setTimeout,
-      clearTimeout: windowsClock.clearTimeout,
-      nowNs: windowsClock.nowNs,
-      kill: () => failNpmCiControl("a Windows attempt must not signal a POSIX group")
-    }
-  });
-  await expect(windowsTimeout).resolves.toMatchObject({ ok: false, timedOut: true, signal: "SIGKILL" });
+      wait: async (ms: number) => {
+        windowsTimeoutWaits.push(ms);
+      },
+      log: retryLog
+    })
+  ).rejects.toThrow(/Windows timeout is terminal because taskkill cannot prove all descendants/u);
+  expect(windowsTimeoutAttempts).toBe(1);
+  expect(windowsTimeoutWaits).toEqual([]);
   expect(taskkillCalls.map(({ command }) => command)).toEqual([
     "C:\\Windows\\System32\\taskkill.exe",
     "C:\\Windows\\System32\\taskkill.exe"
@@ -4516,6 +4530,38 @@ async function assertNpmCiWorkflowContract(): Promise<void> {
   ]);
   expect(taskkillCalls[0]?.options).toMatchObject({ shell: false, timeout: 8_000, windowsHide: true });
   expect(taskkillCalls[1]?.options).toMatchObject({ shell: false, timeout: 10_000, windowsHide: true });
+
+  const windowsExitChildren = [createNpmCiChild(20_050), createNpmCiChild(20_051)];
+  let windowsExitAttempts = 0;
+  const windowsExitWaits: number[] = [];
+  await expect(
+    runNpmCiWithRetry({
+      attemptRunner: async () => {
+        const attemptIndex = windowsExitAttempts++;
+        const attemptChild = windowsExitChildren[attemptIndex];
+        if (attemptChild === undefined) throw new Error("unexpected extra Windows npm-ci attempt");
+        return runNpmCiAttempt({
+          platform: "win32",
+          runtime: {
+            processSpec: fixedNpmCiSpec,
+            spawn: () => {
+              queueMicrotask(() => attemptChild.exit(attemptIndex === 0 ? 1 : 0, null));
+              return attemptChild.child;
+            },
+            setTimeout: () => 1,
+            clearTimeout: () => {},
+            taskkill: () => failNpmCiControl("an ordinary Windows exit must not invoke taskkill")
+          }
+        });
+      },
+      wait: async (ms: number) => {
+        windowsExitWaits.push(ms);
+      },
+      log: retryLog
+    })
+  ).resolves.toBe(2);
+  expect(windowsExitAttempts).toBe(2);
+  expect(windowsExitWaits).toEqual([15_000]);
 
   const failedTaskkillClock = createNpmCiClock(1);
   const failedTaskkillChild = createNpmCiChild(20_006);
@@ -4548,7 +4594,7 @@ async function assertNpmCiWorkflowContract(): Promise<void> {
       },
       log: retryLog
     })
-  ).rejects.toThrow(/Windows process tree could not be forcefully terminated/u);
+  ).rejects.toThrow(/Windows taskkill \/T \/F did not complete/u);
   expect(failedTaskkillAttempts).toBe(1);
   expect(failedTaskkillWaits).toEqual([]);
   expect(failedTaskkillModes).toEqual([false, true]);

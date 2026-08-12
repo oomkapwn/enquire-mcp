@@ -6119,9 +6119,7 @@ function validateHybridPartition(
       frozen.id === "release.m108"
         ? frozen.role === "dependency" && frozen.ownerRoot === "release.m107" && frozen.replacementDependency === null
         : frozen.id === "release.m140"
-          ? frozen.role === "dependency" &&
-            frozen.ownerRoot === "release.m139" &&
-            frozen.replacementDependency === null
+          ? frozen.role === "dependency" && frozen.ownerRoot === "release.m139" && frozen.replacementDependency === null
           : frozen.id === "release.m139"
             ? frozen.role === "root" &&
               frozen.ownerRoot === frozen.id &&

@@ -991,9 +991,7 @@ function releaseOracleAdapterShapeMessage(requirements: ReleaseOracleAdapterRequ
       names.length === 1
         ? `only an enumerable ${names[0]} data function`
         : `exactly enumerable ${
-            names.length === 2
-              ? `${names[0]} and ${names[1]}`
-              : `${names.slice(0, -1).join(", ")}, and ${names.at(-1)}`
+            names.length === 2 ? `${names[0]} and ${names[1]}` : `${names.slice(0, -1).join(", ")}, and ${names.at(-1)}`
           } data functions`;
     return `release oracle adapters must contain ${description}`;
   }
@@ -1269,11 +1267,7 @@ function validateReleaseOracleAdapters(
       writable: false
     });
   }
-  if (
-    requirements.npmEvaluatorProblems &&
-    npmEvaluatorDescriptor !== undefined &&
-    "value" in npmEvaluatorDescriptor
-  ) {
+  if (requirements.npmEvaluatorProblems && npmEvaluatorDescriptor !== undefined && "value" in npmEvaluatorDescriptor) {
     defineObjectPropertyIntrinsic(closed, "npmEvaluatorProblems", {
       configurable: false,
       enumerable: true,

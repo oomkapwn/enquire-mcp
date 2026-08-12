@@ -3070,15 +3070,15 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
     const legacyM156CallNode = [
       "replaceExactly(",
       "        mcpbInputs.integrity,",
-      "        '[\"publicKey\", \"tlogEntries\", \"timestampVerificationData\"]',",
-      "        '[\"x509CertificateChain\", \"tlogEntries\", \"timestampVerificationData\"]'",
+      '        \'["publicKey", "tlogEntries", "timestampVerificationData"]\',',
+      '        \'["x509CertificateChain", "tlogEntries", "timestampVerificationData"]\'',
       "      )"
     ].join("\n");
     const discardedM156CallNode = [
       "replaceExactly(",
       "          mcpbInputs.integrity,",
-      "          '[\"publicKey\", \"tlogEntries\", \"timestampVerificationData\"]',",
-      "          '[\"x509CertificateChain\", \"tlogEntries\", \"timestampVerificationData\"]'",
+      '          \'["publicKey", "tlogEntries", "timestampVerificationData"]\',',
+      '          \'["x509CertificateChain", "tlogEntries", "timestampVerificationData"]\'',
       "        )"
     ].join("\n");
     expect(sha256Text(legacyM156CallNode)).toBe("323e26c7e9e96b1679e2f607360b5b8c28aa561c28ac5c5c69cf195e59b415ba");

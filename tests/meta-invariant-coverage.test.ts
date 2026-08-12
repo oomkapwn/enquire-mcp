@@ -2896,7 +2896,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
     // NEGATIVE control: non-Registry shared arrays also require the root call's
     // resulting mutant, not a comma expression that returns the clean source. The
     // current topology has two frozen roots; wrapping multiline m150 reindents its
-    // call-node bytes, changing the frozen SHA and leaving exactly one bound owner.
+    // call-node bytes, invalidating the m150 identity, root, check, and matcher leaf.
     const legacyM150CallNode = [
       "replaceExactly(",
       "        mcpbInputs.release,",
@@ -2922,9 +2922,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       expect.arrayContaining([
         expect.stringMatching(/release mutation hybrid current source must retain exact SHA-256/),
         expect.stringMatching(/release mutation hybrid current matrix slice must retain exact SHA-256/),
-        expect.stringMatching(
-          /release mutation hybrid shared primary matcher 3df3ee2e.*exact closed iterable\/runtime topology for 1 frozen root/
-        )
+        expect.stringMatching(/release mutation hybrid legacy case release\.case\.m150 has no remaining root call/)
       ])
     );
 

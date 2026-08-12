@@ -875,9 +875,9 @@ function checkInvariantHasNegativeCoverage(filename: string, content: string): s
 
 describe("META-invariant: exact structural census + NEGATIVE control coverage", () => {
   // PR #443 raised hybrid candidate-audit invocations from 24 to 53; the m109-m110
-  // migration adds 12 bounded candidates for 65 total, and m111, paired m112-m113, m114-m143,
-  // plus the nested m108->m107 and m140->m139 dependency pairs reuse those exact candidate
-  // slots without adding another full matrix scan. The last
+  // migration adds 12 bounded candidates for 65 total, and m111, paired m112-m113, m114-m144,
+  // plus the nested m108->m107, m140->m139, and m145->m144 dependency pairs reuse those exact
+  // candidate slots without adding another full matrix scan. The last
   // measured 53-candidate run completed the synchronous work in 323.7s; remote CI must
   // prove this exact candidate within the unchanged scoped 480s and 10-minute job circuit breakers.
   beforeAll(async () => {
@@ -1040,7 +1040,19 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       "      NPM_PROVENANCE_AUDIT_COMMAND",
       "    );"
     ].join("\n");
-    for (const [label, registryReplacement, releaseWorkflowReplacement, npmAuditCommandReplacement] of [
+    const npmProvenanceEvaluatorCommandSourceBlock = [
+      "    const npmProvenanceEvaluatorCommandSource = releaseMutationPlan.registerSource(",
+      '      "fragment.npm-provenance-evaluator-command",',
+      "      NPM_PROVENANCE_EVALUATOR_COMMAND",
+      "    );"
+    ].join("\n");
+    for (const [
+      label,
+      registryReplacement,
+      releaseWorkflowReplacement,
+      npmAuditCommandReplacement,
+      npmEvaluatorCommandReplacement
+    ] of [
       [
         "id",
         '    const registryPublishStepSource = releaseMutationPlan.registerSource("workflow.registry-step", registryRun);',
@@ -1054,6 +1066,12 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
           "    const npmProvenanceAuditCommandSource = releaseMutationPlan.registerSource(",
           '      "fragment.npm-provenance-command",',
           "      NPM_PROVENANCE_AUDIT_COMMAND",
+          "    );"
+        ].join("\n"),
+        [
+          "    const npmProvenanceEvaluatorCommandSource = releaseMutationPlan.registerSource(",
+          '      "fragment.npm-provenance-evaluator",',
+          "      NPM_PROVENANCE_EVALUATOR_COMMAND",
           "    );"
         ].join("\n")
       ],
@@ -1069,6 +1087,12 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
         [
           "    const npmProvenanceAuditCommandSource = releaseMutationPlan.registerSource(",
           '      "fragment.npm-provenance-audit-command",',
+          "      releaseIntegrityText",
+          "    );"
+        ].join("\n"),
+        [
+          "    const npmProvenanceEvaluatorCommandSource = releaseMutationPlan.registerSource(",
+          '      "fragment.npm-provenance-evaluator-command",',
           "      releaseIntegrityText",
           "    );"
         ].join("\n")
@@ -1087,6 +1111,12 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
           '      "fragment.npm-provenance-audit-command",',
           "      NPM_PROVENANCE_AUDIT_COMMAND",
           "    );"
+        ].join("\n"),
+        [
+          "    const npmEvaluatorCommandSource = releaseMutationPlan.registerSource(",
+          '      "fragment.npm-provenance-evaluator-command",',
+          "      NPM_PROVENANCE_EVALUATOR_COMMAND",
+          "    );"
         ].join("\n")
       ]
     ] as const) {
@@ -1096,15 +1126,20 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
         releaseWorkflowSourceBlock,
         releaseWorkflowReplacement
       );
-      const sourceDrift = replaceExactly(
+      const npmAuditCommandSourceDrift = replaceExactly(
         releaseWorkflowSourceDrift,
         npmProvenanceAuditCommandSourceBlock,
         npmAuditCommandReplacement
       );
+      const sourceDrift = replaceExactly(
+        npmAuditCommandSourceDrift,
+        npmProvenanceEvaluatorCommandSourceBlock,
+        npmEvaluatorCommandReplacement
+      );
       const sourceBindingProblems = preparedAudit
         .auditMatrix(sourceDrift)
         .filter((problem) => problem.startsWith("release mutation hybrid sources must bind "));
-      expect(sourceBindingProblems, `derived source ${label} drift`).toHaveLength(3);
+      expect(sourceBindingProblems, `derived source ${label} drift`).toHaveLength(4);
     }
 
     // NEGATIVE control: the derived Registry source is admitted only after its exact
@@ -1211,9 +1246,9 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       ])
     );
 
-    // NEGATIVE control: append the thirty-five exact historical root call-node byte spans after
-    // the frozen legacy tail. The m107 and m139 roots retain their nested m108 and m140
-    // dependencies, so one resurrection of either root must fail both frozen XOR identities.
+    // NEGATIVE control: append the thirty-six exact historical root call-node byte spans after
+    // the frozen legacy tail. The m107, m139, and m144 roots retain their nested m108, m140,
+    // and m145 dependencies, so one resurrection of a root must fail both frozen XOR identities.
     // Earlier insertion would shift
     // unrelated positional identities, while different inner indentation would not
     // reproduce the pinned legacy span hashes and therefore would not exercise the detector.
@@ -1427,6 +1462,14 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       `        \`              \${NPM_PROVENANCE_EVALUATOR_COMMAND}\``,
       "      )"
     ].join("\n");
+    const legacyM145CallNode = 'replaceExactly(NPM_PROVENANCE_EVALUATOR_COMMAND, " --kill-after=5s", "")';
+    const legacyM144CallNode = [
+      "replaceExactly(",
+      "        mcpbInputs.release,",
+      "        NPM_PROVENANCE_EVALUATOR_COMMAND,",
+      '        replaceExactly(NPM_PROVENANCE_EVALUATOR_COMMAND, " --kill-after=5s", "")',
+      "      )"
+    ].join("\n");
     expect(sha256Text(legacyM108CallNode)).toBe("067bacefc171385fbf496ba6d7e25ad9403569d2a8daeba29e483e8c486507b8");
     expect(sha256Text(legacyM107CallNode)).toBe("b67c164531f5a0702f1ceb3ec750cf4df6f655ac68d12fbb31bf04db35ca5325");
     expect(sha256Text(legacyM109CallNode)).toBe("24c05d112a2d846080b17c7413f555c37b2c50a54975f16a985d8b1018b2d711");
@@ -1464,6 +1507,8 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
     expect(sha256Text(legacyM141CallNode)).toBe("0c17b17d96cb980db5f16f68efa9b4046f90988aa619cb19f859983e259ac221");
     expect(sha256Text(legacyM142CallNode)).toBe("18c5bdae69d4094f22db3355424611092d3d5fc4327938f01aadc1edc345c691");
     expect(sha256Text(legacyM143CallNode)).toBe("a9207d636e7fd957467c1c611fcfc148606acbb3f951bcc51b79d2bf3afa0a49");
+    expect(sha256Text(legacyM145CallNode)).toBe("824892c0d06ddf0a0b8cb334a8003e67a31a81d14cb9950e7c4565ff3edb7aa2");
+    expect(sha256Text(legacyM144CallNode)).toBe("a64078e44ccd14141709207517fb0162e64931b8058b0e39302069643c677439");
     const resurrectedRegistryRoots = replaceExactly(
       matrixSource,
       finalRequiredReleaseCheck,
@@ -1503,6 +1548,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
         `    void ${legacyM141CallNode};`,
         `    void ${legacyM142CallNode};`,
         `    void ${legacyM143CallNode};`,
+        `    void ${legacyM144CallNode};`,
         finalRequiredReleaseCheck
       ].join("\n")
     );
@@ -1619,6 +1665,12 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
         ),
         expect.stringMatching(
           /release mutation hybrid frozen ID release\.m143 must exist in exactly one legacy XOR declarative representation; found 1\/1/
+        ),
+        expect.stringMatching(
+          /release mutation hybrid frozen ID release\.m145 must exist in exactly one legacy XOR declarative representation; found 1\/1/
+        ),
+        expect.stringMatching(
+          /release mutation hybrid frozen ID release\.m144 must exist in exactly one legacy XOR declarative representation; found 1\/1/
         )
       ])
     );
@@ -1747,9 +1799,18 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
     const m143BlockStart = matrixSource.indexOf(
       '    const releaseMutationM143 = releaseMutationPlan.registerMutation("release.m143", {'
     );
+    const npmProvenanceEvaluatorCommandSourceStart = matrixSource.indexOf(
+      "    const npmProvenanceEvaluatorCommandSource = releaseMutationPlan.registerSource("
+    );
+    const m145BlockStart = matrixSource.indexOf(
+      '    const releaseMutationM145 = releaseMutationPlan.registerMutation("release.m145", {'
+    );
+    const m144BlockStart = matrixSource.indexOf(
+      '    const releaseMutationM144 = releaseMutationPlan.registerMutation("release.m144", {'
+    );
     const declarativeSealStart = matrixSource.indexOf(
       "    const releaseMutationProblems = releaseMutationPlan.seal();",
-      m143BlockStart
+      m144BlockStart
     );
     expect(m108BlockStart).toBeGreaterThan(0);
     expect(m107BlockStart).toBeGreaterThan(m108BlockStart);
@@ -1790,7 +1851,10 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
     expect(m141BlockStart).toBeGreaterThan(m139BlockStart);
     expect(m142BlockStart).toBeGreaterThan(m141BlockStart);
     expect(m143BlockStart).toBeGreaterThan(m142BlockStart);
-    expect(declarativeSealStart).toBeGreaterThan(m143BlockStart);
+    expect(npmProvenanceEvaluatorCommandSourceStart).toBeGreaterThan(m143BlockStart);
+    expect(m145BlockStart).toBeGreaterThan(npmProvenanceEvaluatorCommandSourceStart);
+    expect(m144BlockStart).toBeGreaterThan(m145BlockStart);
+    expect(declarativeSealStart).toBeGreaterThan(m144BlockStart);
     const swappedRegistryDependencyDeclarations = [
       matrixSource.slice(0, m108BlockStart),
       matrixSource.slice(m107BlockStart, m109BlockStart),
@@ -1828,6 +1892,21 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       ])
     );
 
+    const swappedNpmEvaluatorDependencyDeclarations = [
+      matrixSource.slice(0, m145BlockStart),
+      matrixSource.slice(m144BlockStart, declarativeSealStart),
+      matrixSource.slice(m145BlockStart, m144BlockStart),
+      matrixSource.slice(declarativeSealStart)
+    ].join("");
+    expect(preparedAudit.auditMatrix(swappedNpmEvaluatorDependencyDeclarations)).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/release mutation hybrid declarative allowlist must be exact/),
+        expect.stringMatching(
+          /release mutation hybrid registrations must be exact contiguous.*expected mutation:release\.m145, found mutation:release\.m144/
+        )
+      ])
+    );
+
     // NEGATIVE controls: the nested dependency must remain a mutation-backed replacement,
     // and cannot be promoted to the root of m139's otherwise unchanged case.
     const m139NeedleLine = "      needle: NPM_PROVENANCE_AUDIT_COMMAND,";
@@ -1857,6 +1936,35 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       ])
     );
 
+    // NEGATIVE controls: the evaluator dependency must remain a mutation-backed replacement,
+    // and cannot be promoted to the root of m144's otherwise unchanged case.
+    const m144NeedleLine = "      needle: NPM_PROVENANCE_EVALUATOR_COMMAND,";
+    const m144ReplacementDependencyBlock = [m144NeedleLine, "      replacement: releaseMutationM145,"].join("\n");
+    const sourceBackedM144Replacement = replaceExactly(
+      matrixSource,
+      m144ReplacementDependencyBlock,
+      [m144NeedleLine, "      replacement: npmProvenanceEvaluatorCommandSource,"].join("\n")
+    );
+    expect(preparedAudit.auditMatrix(sourceBackedM144Replacement)).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(
+          /release mutation hybrid descriptor release\.m144 (?:must contain exact literal passive values|disagrees with its exact frozen semantics)/
+        )
+      ])
+    );
+    const conflatedM144DependencyRoot = replaceExactly(
+      matrixSource,
+      ['      id: "release.case.m144",', "      root: releaseMutationM144,"].join("\n"),
+      ['      id: "release.case.m144",', "      root: releaseMutationM145,"].join("\n")
+    );
+    expect(preparedAudit.auditMatrix(conflatedM144DependencyRoot)).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(
+          /release mutation hybrid case release\.case\.m144 disagrees with its exact frozen identity/
+        )
+      ])
+    );
+
     const m107SourceDependencyDrift = replaceExactly(
       matrixSource,
       "      source: releaseMutationM108,",
@@ -1872,8 +1980,18 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       m139ReplacementDependencyBlock,
       [m139NeedleLine, "      replacement: NPM_PROVENANCE_AUDIT_COMMAND,"].join("\n")
     );
-    const m109CompanionDrift = replaceExactly(
+    const m145SourceHandleDrift = replaceExactly(
       m139ReplacementDependencyDrift,
+      "      source: npmProvenanceEvaluatorCommandSource,",
+      "      source: releaseWorkflowFixtureSource,"
+    );
+    const m144ReplacementDependencyDrift = replaceExactly(
+      m145SourceHandleDrift,
+      m144ReplacementDependencyBlock,
+      [m144NeedleLine, "      replacement: NPM_PROVENANCE_EVALUATOR_COMMAND,"].join("\n")
+    );
+    const m109CompanionDrift = replaceExactly(
+      m144ReplacementDependencyDrift,
       [
         '            kind: "registry.step.run",',
         "            baseline: registryPublishStepSource,",
@@ -2311,7 +2429,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
         "            mutant: releaseMutationM142"
       ].join("\n")
     );
-    const npmWorkflowInvocationDrift = replaceExactly(
+    const npmWorkflowM143InvocationDrift = replaceExactly(
       npmWorkflowM142InvocationDrift,
       [
         '            kind: "npm.workflow",',
@@ -2324,6 +2442,19 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
         "            mutant: releaseMutationM143"
       ].join("\n")
     );
+    const npmWorkflowInvocationDrift = replaceExactly(
+      npmWorkflowM143InvocationDrift,
+      [
+        '            kind: "npm.workflow",',
+        "            baseline: releaseWorkflowFixtureSource,",
+        "            mutant: releaseMutationM144"
+      ].join("\n"),
+      [
+        '            kind: "npm.workflow",',
+        "            baseline: releaseIntegritySource,",
+        "            mutant: releaseMutationM144"
+      ].join("\n")
+    );
     expect(preparedAudit.auditMatrix(npmWorkflowInvocationDrift)).toEqual(
       expect.arrayContaining([
         expect.stringMatching(
@@ -2334,6 +2465,12 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
         ),
         expect.stringMatching(
           /release mutation hybrid descriptor release\.m139 must contain exact literal passive values/
+        ),
+        expect.stringMatching(
+          /release mutation hybrid descriptor release\.m145 disagrees with its exact frozen semantics/
+        ),
+        expect.stringMatching(
+          /release mutation hybrid descriptor release\.m144 must contain exact literal passive values/
         ),
         expect.stringMatching(/release mutation hybrid case release\.case\.m109 invocation must retain its exact/),
         expect.stringMatching(/release mutation hybrid case release\.case\.m110 invocation must retain its exact/),
@@ -2368,7 +2505,8 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
         expect.stringMatching(/release mutation hybrid case release\.case\.m139 invocation must retain its exact/),
         expect.stringMatching(/release mutation hybrid case release\.case\.m141 invocation must retain its exact/),
         expect.stringMatching(/release mutation hybrid case release\.case\.m142 invocation must retain its exact/),
-        expect.stringMatching(/release mutation hybrid case release\.case\.m143 invocation must retain its exact/)
+        expect.stringMatching(/release mutation hybrid case release\.case\.m143 invocation must retain its exact/),
+        expect.stringMatching(/release mutation hybrid case release\.case\.m144 invocation must retain its exact/)
       ])
     );
 
@@ -2653,36 +2791,35 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
 
     // NEGATIVE control: non-Registry shared arrays also require the root call's
     // resulting mutant, not a comma expression that returns the clean source. The
-    // current topology has seven frozen roots; wrapping multiline m144 reindents its
-    // outer call-node bytes, changing the frozen SHA and leaving exactly six bound owners.
-    // Its nested m145 replacement dependency executes inside m144 but is not a root owner.
-    const legacyM144CallNode = [
+    // current topology has six frozen roots; wrapping multiline m146 reindents its
+    // call-node bytes, changing the frozen SHA and leaving exactly five bound owners.
+    const legacyM146CallNode = [
       "replaceExactly(",
       "        mcpbInputs.release,",
-      "        NPM_PROVENANCE_EVALUATOR_COMMAND,",
-      '        replaceExactly(NPM_PROVENANCE_EVALUATOR_COMMAND, " --kill-after=5s", "")',
+      '        "for (( attempt=1; attempt<=8; attempt++ )); do",',
+      '        "for (( attempt=1; attempt<=1; attempt++ )); do"',
       "      )"
     ].join("\n");
-    const discardedM144CallNode = [
+    const discardedM146CallNode = [
       "replaceExactly(",
       "          mcpbInputs.release,",
-      "          NPM_PROVENANCE_EVALUATOR_COMMAND,",
-      '          replaceExactly(NPM_PROVENANCE_EVALUATOR_COMMAND, " --kill-after=5s", "")',
+      '          "for (( attempt=1; attempt<=8; attempt++ )); do",',
+      '          "for (( attempt=1; attempt<=1; attempt++ )); do"',
       "        )"
     ].join("\n");
-    expect(sha256Text(legacyM144CallNode)).toBe("a64078e44ccd14141709207517fb0162e64931b8058b0e39302069643c677439");
-    expect(sha256Text(discardedM144CallNode)).toBe("0cd629bcc666e3dace6ae077c42a8bec5d865bec5a72eeaee58cbf59fc7ec69e");
+    expect(sha256Text(legacyM146CallNode)).toBe("0ae283ec909698bbf7da5ba4701e6b322ae7f5c3e9332aa323c5dea7767d79a7");
+    expect(sha256Text(discardedM146CallNode)).toBe("d14bf291f88d1ce11b09005ac2baf137ae6ae0a67df1c88543198522742ea64b");
     const discardedProvenanceRoot = replaceExactly(
       matrixSource,
-      `      ${legacyM144CallNode},`,
-      ["      (", `        ${discardedM144CallNode},`, "        mcpbInputs.release", "      ),"].join("\n")
+      `      ${legacyM146CallNode},`,
+      ["      (", `        ${discardedM146CallNode},`, "        mcpbInputs.release", "      ),"].join("\n")
     );
     expect(preparedAudit.auditMatrix(discardedProvenanceRoot)).toEqual(
       expect.arrayContaining([
         expect.stringMatching(/release mutation hybrid current source must retain exact SHA-256/),
         expect.stringMatching(/release mutation hybrid current matrix slice must retain exact SHA-256/),
         expect.stringMatching(
-          /release mutation hybrid shared primary matcher 3df3ee2e.*exact closed iterable\/runtime topology for 6 frozen root/
+          /release mutation hybrid shared primary matcher 3df3ee2e.*exact closed iterable\/runtime topology for 5 frozen root/
         )
       ])
     );
@@ -2781,8 +2918,8 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
     const stagedRemainingBlock = [
       stagedRemainingCall,
       '    expect(releaseMutationPlan.phase).toBe("executed");',
-      "    expect(releaseMutationPlan.caseExecutions).toBe(71);",
-      "    expect(releaseMutationPlan.expectationExecutions).toBe(71);"
+      "    expect(releaseMutationPlan.caseExecutions).toBe(72);",
+      "    expect(releaseMutationPlan.expectationExecutions).toBe(72);"
     ].join("\n");
     const stagedLifecycleProblem =
       /release mutation hybrid lifecycle must be one clean seal followed by the exact m037 executeThrough\/executeRemaining pair with derived phase and execution censuses/;
@@ -2812,13 +2949,13 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
     );
     const wrongStagedFinalCaseCount = replaceExactly(
       matrixSource,
-      "    expect(releaseMutationPlan.caseExecutions).toBe(71);",
-      "    expect(releaseMutationPlan.caseExecutions).toBe(70);"
+      "    expect(releaseMutationPlan.caseExecutions).toBe(72);",
+      "    expect(releaseMutationPlan.caseExecutions).toBe(71);"
     );
     const wrongStagedFinalCensus = replaceExactly(
       wrongStagedFinalCaseCount,
-      "    expect(releaseMutationPlan.expectationExecutions).toBe(71);",
-      "    expect(releaseMutationPlan.expectationExecutions).toBe(70);"
+      "    expect(releaseMutationPlan.expectationExecutions).toBe(72);",
+      "    expect(releaseMutationPlan.expectationExecutions).toBe(71);"
     );
     expect(preparedAudit.auditMatrix(wrongStagedFinalCensus)).toEqual(
       expect.arrayContaining([expect.stringMatching(stagedLifecycleProblem)])
@@ -2947,7 +3084,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
     );
 
     // NEGATIVE controls: the suffix executes exactly between the shared m038-m106
-    // Registry loop and coupled legacy m145->m144, preserving the frozen global case order.
+    // Registry loop and legacy m146, preserving the frozen global case order.
     const stagedWithoutRemaining = replaceExactly(matrixSource, stagedRemainingBlock, "");
     const earlyStagedRemaining = replaceExactly(
       stagedWithoutRemaining,
@@ -3417,7 +3554,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
         "            mutant: releaseMutationM142"
       ].join("\n")
     );
-    const conflatedNpmOracles = replaceExactly(
+    const conflatedM143NpmOracle = replaceExactly(
       conflatedM142NpmOracle,
       [
         '            kind: "npm.workflow",',
@@ -3430,6 +3567,29 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
         "            mutant: releaseMutationM143"
       ].join("\n")
     );
+    const conflatedM145SourceHandle = replaceExactly(
+      conflatedM143NpmOracle,
+      "      source: npmProvenanceEvaluatorCommandSource,",
+      "      source: releaseWorkflowFixtureSource,"
+    );
+    const conflatedM144ReplacementDependency = replaceExactly(
+      conflatedM145SourceHandle,
+      m144ReplacementDependencyBlock,
+      [m144NeedleLine, "      replacement: releaseMutationM143,"].join("\n")
+    );
+    const conflatedNpmOracles = replaceExactly(
+      conflatedM144ReplacementDependency,
+      [
+        '            kind: "npm.workflow",',
+        "            baseline: releaseWorkflowFixtureSource,",
+        "            mutant: releaseMutationM144"
+      ].join("\n"),
+      [
+        '            kind: "npm.workflow",',
+        "            baseline: releaseIntegritySource,",
+        "            mutant: releaseMutationM144"
+      ].join("\n")
+    );
     expect(preparedAudit.auditMatrix(conflatedNpmOracles)).toEqual(
       expect.arrayContaining([
         expect.stringMatching(
@@ -3437,6 +3597,12 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
         ),
         expect.stringMatching(
           /release mutation hybrid descriptor release\.m139 disagrees with its exact frozen semantics/
+        ),
+        expect.stringMatching(
+          /release mutation hybrid descriptor release\.m145 disagrees with its exact frozen semantics/
+        ),
+        expect.stringMatching(
+          /release mutation hybrid descriptor release\.m144 disagrees with its exact frozen semantics/
         ),
         expect.stringMatching(
           /release mutation hybrid case release\.case\.m111 invocation must retain its exact frozen oracle adapter/
@@ -3629,6 +3795,12 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
         ),
         expect.stringMatching(
           /release mutation hybrid case release\.case\.m143 disagrees with its exact frozen identity/
+        ),
+        expect.stringMatching(
+          /release mutation hybrid case release\.case\.m144 invocation must retain its exact frozen oracle adapter/
+        ),
+        expect.stringMatching(
+          /release mutation hybrid case release\.case\.m144 disagrees with its exact frozen identity/
         )
       ])
     );
@@ -4130,7 +4302,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
     expect(preparedAudit.telemetry()).toEqual({
       fixturePreparations: 1,
       materializedGraphEvaluations: 1,
-      materializedGraphReuses: 67,
+      materializedGraphReuses: 70,
       sourceCatalogueBypasses: 2,
       sourceProjectionBypasses: 0
     });

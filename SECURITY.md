@@ -240,10 +240,10 @@ npm applies `overrides` only from the root project performing an install. The ov
 - **Source checkout:** production advisories at moderate+ and development advisories at high+ fail with an empty allowlist.
 - **Published consumer:** CI packs the actual npm tarball with scripts disabled, uses that artifact as a file dependency in a clean temporary root with no overrides, resolves a lockfile from scratch without running lifecycle scripts, and audits production dependencies at moderate+. This preserves future peer/bundled dependency semantics instead of copying a hand-selected subset of manifest fields. A new advisory fails; a temporary exception also fails once its advisory disappears, forcing removal instead of becoming permanent.
 
-As of the current v4.0.0-rc.3 maintenance line, the clean consumer policy has exactly two configured
+As of the current v4.0.0-rc.3 maintenance line, the published-consumer audit policy has exactly two configured
 temporary upstream exceptions, listed below. The live registry-resolved graph stopped reporting
 [`GHSA-frvp-7c67-39w9`](https://github.com/advisories/GHSA-frvp-7c67-39w9), so the stale-entry gate
-rejected that obsolete exception and it was removed. This is a live consumer-resolution receipt, not
+rejected that now-stale exception and it was removed. This is a live consumer-resolution receipt, not
 a claim about historical package graphs or a rebuilt publication; the already-published rc.3 remains
 unchanged.
 

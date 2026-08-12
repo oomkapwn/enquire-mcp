@@ -521,7 +521,7 @@ if (isEntrypoint(import.meta.url)) {
   }
   if (staleSourceAllowlist.length > 0 || staleConsumerAllowlist.length > 0) {
     console.error(
-      `[check-audit] FAIL — stale allowlist entries (upstream is now clean): ` +
+      `[check-audit] FAIL — stale allowlist entries (advisory absent from current audit report): ` +
         [
           staleSourceAllowlist.length ? `source=${staleSourceAllowlist.join(",")}` : "",
           staleConsumerAllowlist.length ? `consumer=${staleConsumerAllowlist.join(",")}` : ""
@@ -529,7 +529,7 @@ if (isEntrypoint(import.meta.url)) {
           .filter(Boolean)
           .join(" ")
     );
-    console.error("Remove the resolved exception instead of carrying a silent permanent waiver.");
+    console.error("Remove the currently unobserved exception instead of carrying a silent permanent waiver.");
     process.exit(1);
   }
   if (invalidSourceAllowlist.length > 0 || invalidConsumerAllowlist.length > 0) {

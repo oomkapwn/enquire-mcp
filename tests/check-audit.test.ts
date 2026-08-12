@@ -93,7 +93,7 @@ describe("check-audit scoped gate (rc.50)", () => {
     // separately and may neither grow nor silently outlive their upstream issue.
     expect(Object.keys(ALLOWLIST)).toEqual([]);
     expect(Object.keys(CONSUMER_ALLOWLIST).sort()).toEqual(
-      ["GHSA-f88m-g3jw-g9cj", "GHSA-frvp-7c67-39w9", "GHSA-xcpc-8h2w-3j85"].sort()
+      ["GHSA-f88m-g3jw-g9cj", "GHSA-xcpc-8h2w-3j85"].sort()
     );
     expect(invalidAllowlistEntries(CONSUMER_ALLOWLIST)).toEqual([]);
     expect(

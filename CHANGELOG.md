@@ -16,6 +16,7 @@ All notable changes to this project will be documented here. The format follows 
 
 - **The planner gains one closed unary evaluator family.** Invocation shape, adapter presence and exact enumerable data-property shape, clean/mutant materialization, result snapshots, semantic identity, exact problem identity, and execution counters have positive and negative controls; the source scanner separately rejects missing, transplanted, aliased, shadowed, reassigned, wrapped, computed, accessor, or extra adapter surfaces.
 - **Historical topology and order remain explicit.** The m002–m037 prefix stays at 36 cases, `executeRemaining()` finishes at 79 cases/expectations, the m152 legacy call disappears, and the shared evaluator loop now begins at m153 with 36 owners.
+- **The live consumer audit re-arms one upstream boundary.** The registry-resolved graph stopped reporting `GHSA-frvp-7c67-39w9` between exact-head CI attempts, so the stale-entry gate rejected the obsolete RC-only exception and this follow-up removes it. The empty source allowlist remains unchanged; only the two still-observed transformers exceptions remain in the consumer allowlist.
 - **Release and product state remain out of scope.** No workflow, runtime/product code, package or lockfile, version, tag, publication state, dist-tag, fixture regeneration, or cleanup action is changed by this boundary; the already-published rc.3 is not rebuilt or republished.
 
 ### Declarative npm-workflow exact publish-command mutation m151

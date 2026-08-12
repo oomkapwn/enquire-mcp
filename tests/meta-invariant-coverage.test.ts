@@ -1489,8 +1489,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       '        \'[ "$AUDIT_EXIT" -eq 0 ] || [ "$EVALUATOR_EXIT" -eq 0 ]\'',
       "      )"
     ].join("\n");
-    const legacyM151CallNode =
-      `replaceExactly(mcpbInputs.release, MCPB_EXACT_NPM_PUBLISH, \`\${MCPB_EXACT_NPM_PUBLISH}\\n\${MCPB_EXACT_NPM_PUBLISH}\`)`;
+    const legacyM151CallNode = `replaceExactly(mcpbInputs.release, MCPB_EXACT_NPM_PUBLISH, \`\${MCPB_EXACT_NPM_PUBLISH}\\n\${MCPB_EXACT_NPM_PUBLISH}\`)`;
     expect(sha256Text(legacyM108CallNode)).toBe("067bacefc171385fbf496ba6d7e25ad9403569d2a8daeba29e483e8c486507b8");
     expect(sha256Text(legacyM107CallNode)).toBe("b67c164531f5a0702f1ceb3ec750cf4df6f655ac68d12fbb31bf04db35ca5325");
     expect(sha256Text(legacyM109CallNode)).toBe("24c05d112a2d846080b17c7413f555c37b2c50a54975f16a985d8b1018b2d711");

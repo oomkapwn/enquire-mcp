@@ -2665,9 +2665,21 @@ function releaseMutationInventoryProblems(source: string): string[] {
               );
             }
             if (
+              id.text === "fragment.npm-provenance-audit-command" &&
+              (handle !== "npmProvenanceAuditCommandSource" ||
+                !ts.isIdentifier(value) ||
+                value.text !== "NPM_PROVENANCE_AUDIT_COMMAND")
+            ) {
+              const position = sourceFile.getLineAndCharacterOfPosition(start);
+              problems.push(
+                `release mutation declarative fragment.npm-provenance-audit-command source requires the exact npmProvenanceAuditCommandSource/NPM_PROVENANCE_AUDIT_COMMAND binding at ${position.line + 1}:${position.character + 1}`
+              );
+            }
+            if (
               id.text !== "script.release-integrity" &&
               id.text !== "workflow.registry-publish-step" &&
-              id.text !== "fixture.release-workflow"
+              id.text !== "fixture.release-workflow" &&
+              id.text !== "fragment.npm-provenance-audit-command"
             ) {
               const position = sourceFile.getLineAndCharacterOfPosition(start);
               problems.push(
@@ -2774,7 +2786,7 @@ function releaseMutationInventoryProblems(source: string): string[] {
               !passiveString(replacement) ||
               (replacement !== undefined &&
                 ts.isIdentifier(replacement) &&
-                declarativeSourceHandles.has(replacement.text))
+                !declarativeMutationHandles.has(replacement.text))
             ) {
               const position = sourceFile.getLineAndCharacterOfPosition(descriptor.getStart(sourceFile));
               problems.push(
@@ -11821,7 +11833,7 @@ done`;
       oracleSource.slice(matrixBodyOffset)
     ].join("");
     expect(releaseMutationInventoryProblems(extraProjectMutation)).toContain(
-      "release mutation hybrid inventory expected 538 first / 22 all, found 539 first / 22 all (legacy 474/19; declarative 65/3; cases 67)"
+      "release mutation hybrid inventory expected 538 first / 22 all, found 539 first / 22 all (legacy 472/19; declarative 67/3; cases 68)"
     );
     const outsideMutation = `${oracleSource}\nvoid replaceAllExactly("inventory", "inventory", "mutant");\n`;
     expect(releaseMutationInventoryProblems(outsideMutation)).toContain(
@@ -11835,7 +11847,7 @@ done`;
       oracleSource.slice(firstProjectCallOffset + "replaceExactly(".length)
     ].join("");
     expect(releaseMutationInventoryProblems(projectModeDrift)).toContain(
-      "release mutation hybrid inventory expected 538 first / 22 all, found 537 first / 23 all (legacy 472/20; declarative 65/3; cases 67)"
+      "release mutation hybrid inventory expected 538 first / 22 all, found 537 first / 23 all (legacy 470/20; declarative 67/3; cases 68)"
     );
     const hybridDeclarativeMutation = oracleSource;
     const declarativeBatchStartToken = "    const releaseIntegrityText = mcpbInputs.integrity;";
@@ -11894,6 +11906,21 @@ done`;
     ].join("");
     expect(releaseMutationInventoryProblems(transplantedReleaseWorkflowFixtureSource)).toContainEqual(
       expect.stringMatching(/fixture\.release-workflow source requires the exact/)
+    );
+    const npmProvenanceAuditCommandSourceToken = [
+      '"fragment.npm-provenance-audit-command",',
+      "NPM_PROVENANCE_AUDIT_COMMAND"
+    ].join("\n      ");
+    const npmProvenanceAuditCommandSourceOffset = declarativeBatchOffset(npmProvenanceAuditCommandSourceToken);
+    const transplantedNpmProvenanceAuditCommandSource = [
+      hybridDeclarativeMutation.slice(0, npmProvenanceAuditCommandSourceOffset),
+      ['"fragment.npm-provenance-audit-command",', "releaseIntegrityText"].join("\n      "),
+      hybridDeclarativeMutation.slice(
+        npmProvenanceAuditCommandSourceOffset + npmProvenanceAuditCommandSourceToken.length
+      )
+    ].join("");
+    expect(releaseMutationInventoryProblems(transplantedNpmProvenanceAuditCommandSource)).toContainEqual(
+      expect.stringMatching(/fragment\.npm-provenance-audit-command source requires the exact/)
     );
     const releaseIntegrityAliasToken = "const releaseIntegrityText = mcpbInputs.integrity;";
     const releaseIntegrityAliasOffset = declarativeBatchOffset(releaseIntegrityAliasToken);
@@ -11978,6 +12005,16 @@ done`;
         expect.stringMatching(/descriptor replacement must be one passive string value or mutation handle/)
       );
     }
+    const m139ReplacementHandleToken = "      replacement: releaseMutationM140,";
+    const m139ReplacementHandleOffset = declarativeBatchOffset(m139ReplacementHandleToken);
+    const sourceBackedM139Replacement = [
+      hybridDeclarativeMutation.slice(0, m139ReplacementHandleOffset),
+      "      replacement: npmProvenanceAuditCommandSource,",
+      hybridDeclarativeMutation.slice(m139ReplacementHandleOffset + m139ReplacementHandleToken.length)
+    ].join("");
+    expect(releaseMutationInventoryProblems(sourceBackedM139Replacement)).toContainEqual(
+      expect.stringMatching(/descriptor replacement must be one passive string value or mutation handle/)
+    );
     const caseRootToken = 'id: "release.case.m002",\n      root: releaseMutationM002';
     const caseRootOffset = firstCaseOffset(caseRootToken);
     const sourceRootDeclarativeCase = [
@@ -12529,7 +12566,7 @@ done`;
         .join("legacyMigratedExactly(")
     ].join("");
     expect(releaseMutationInventoryProblems(legacyFreeMatrix)).toContain(
-      "release mutation final closed graph expected 560 unique descriptors / 536 cases and roots / 541 expectations / 24 dependency-only, found 68 descriptors / 67 cases / 67 roots / 67 expectations / 1 dependency-only"
+      "release mutation final closed graph expected 560 unique descriptors / 536 cases and roots / 541 expectations / 24 dependency-only, found 70 descriptors / 68 cases / 68 roots / 68 expectations / 2 dependency-only"
     );
     const loopGeneratedDeclarative = [
       oracleSource.slice(0, matrixBodyOffset),
@@ -12672,7 +12709,7 @@ done`;
       expect.stringMatching(/must be one explicit straight-line case/)
     );
     expect(iterableLiteralProblems).toContain(
-      "release mutation hybrid inventory expected 538 first / 22 all, found 539 first / 22 all (legacy 474/19; declarative 65/3; cases 67)"
+      "release mutation hybrid inventory expected 538 first / 22 all, found 539 first / 22 all (legacy 472/19; declarative 67/3; cases 68)"
     );
     const nestedStraightLineMutation = [
       oracleSource.slice(0, matrixBodyOffset),
@@ -12684,7 +12721,7 @@ done`;
       expect.stringMatching(/must be one explicit straight-line case/)
     );
     expect(nestedStraightLineProblems).toContain(
-      "release mutation hybrid inventory expected 538 first / 22 all, found 540 first / 22 all (legacy 475/19; declarative 65/3; cases 67)"
+      "release mutation hybrid inventory expected 538 first / 22 all, found 540 first / 22 all (legacy 473/19; declarative 67/3; cases 68)"
     );
     const earlyReturnMutation = [
       oracleSource.slice(0, matrixBodyOffset),
@@ -14963,13 +15000,13 @@ done`;
 
     const releaseIntegrityText = mcpbInputs.integrity;
     const releaseMutationPlan = new ReleaseMutationPlan({
-      total: 68,
-      first: 65,
+      total: 70,
+      first: 67,
       all: 3,
-      cases: 67,
-      expectations: 67,
-      roots: 67,
-      dependencyOnly: 1
+      cases: 68,
+      expectations: 68,
+      roots: 68,
+      dependencyOnly: 2
     });
     const releaseIntegritySource = releaseMutationPlan.registerSource("script.release-integrity", releaseIntegrityText);
     const releaseMutationM002 = releaseMutationPlan.registerMutation("release.m002", {
@@ -17168,6 +17205,55 @@ done`;
         }
       ]
     });
+    const npmProvenanceAuditCommandSource = releaseMutationPlan.registerSource(
+      "fragment.npm-provenance-audit-command",
+      NPM_PROVENANCE_AUDIT_COMMAND
+    );
+    const releaseMutationM140 = releaseMutationPlan.registerMutation("release.m140", {
+      mode: "first",
+      source: npmProvenanceAuditCommandSource,
+      needle: " --kill-after=10s",
+      replacement: "",
+      expectedOccurrences: 1,
+      witness: {
+        kind: "token",
+        anchor: " --kill-after=10s",
+        before: 1,
+        after: 0
+      }
+    });
+    const releaseMutationM139 = releaseMutationPlan.registerMutation("release.m139", {
+      mode: "first",
+      source: releaseWorkflowFixtureSource,
+      needle: NPM_PROVENANCE_AUDIT_COMMAND,
+      replacement: releaseMutationM140,
+      expectedOccurrences: 1,
+      witness: {
+        kind: "token",
+        anchor: NPM_PROVENANCE_AUDIT_COMMAND,
+        before: 1,
+        after: 0
+      }
+    });
+    releaseMutationPlan.registerCase({
+      id: "release.case.m139",
+      root: releaseMutationM139,
+      checks: [
+        {
+          invoke: {
+            kind: "npm.workflow",
+            baseline: releaseWorkflowFixtureSource,
+            mutant: releaseMutationM139
+          },
+          expectation: {
+            id: "release.expectation.m139.primary",
+            kind: "problem",
+            problem:
+              "npm provenance must bind the tag-push context before the sole publish and verify two exact attestations without credentials"
+          }
+        }
+      ]
+    });
     const releaseMutationProblems = releaseMutationPlan.seal();
     expect(releaseMutationProblems).toEqual([]);
     releaseMutationPlan.executeThrough(releaseMutationM037, {
@@ -17708,16 +17794,11 @@ done`;
     }
     releaseMutationPlan.executeRemaining();
     expect(releaseMutationPlan.phase).toBe("executed");
-    expect(releaseMutationPlan.caseExecutions).toBe(67);
-    expect(releaseMutationPlan.expectationExecutions).toBe(67);
+    expect(releaseMutationPlan.caseExecutions).toBe(68);
+    expect(releaseMutationPlan.expectationExecutions).toBe(68);
 
     // Mutation oracle: workflow ordering, token isolation, exact verifier pin, and read-only convergence.
     for (const weakenedProvenanceWorkflow of [
-      replaceExactly(
-        mcpbInputs.release,
-        NPM_PROVENANCE_AUDIT_COMMAND,
-        replaceExactly(NPM_PROVENANCE_AUDIT_COMMAND, " --kill-after=10s", "")
-      ),
       replaceExactly(mcpbInputs.release, "--json --include-attestations --omit=optional", "--json --omit=optional"),
       replaceExactly(
         mcpbInputs.release,

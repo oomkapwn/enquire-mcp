@@ -1217,7 +1217,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
     expect(preparedAudit.auditMatrix(weakenedM110Replacement)).toEqual(
       expect.arrayContaining([
         expect.stringMatching(
-          /release mutation hybrid descriptor release\.m110 disagrees with its exact frozen semantics/
+          /release mutation hybrid descriptor release\.m110 must contain exact literal passive values/
         )
       ])
     );

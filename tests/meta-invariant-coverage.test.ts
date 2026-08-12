@@ -2357,16 +2357,16 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       [
         "      replaceExactly(",
         "        mcpbInputs.release,",
-        '        \'.packages["node_modules/@oomkapwn/enquire-mcp"].integrity == $integrity\',',
-        '        \'.packages["node_modules/@oomkapwn/enquire-mcp"].version == $version\'',
+        "        '.packages[\"node_modules/@oomkapwn/enquire-mcp\"].integrity == $integrity',",
+        "        '.packages[\"node_modules/@oomkapwn/enquire-mcp\"].version == $version'",
         "      ),"
       ].join("\n"),
       [
         "      (",
         "        replaceExactly(",
         "          mcpbInputs.release,",
-        '          \'.packages["node_modules/@oomkapwn/enquire-mcp"].integrity == $integrity\',',
-        '          \'.packages["node_modules/@oomkapwn/enquire-mcp"].version == $version\'',
+        "          '.packages[\"node_modules/@oomkapwn/enquire-mcp\"].integrity == $integrity',",
+        "          '.packages[\"node_modules/@oomkapwn/enquire-mcp\"].version == $version'",
         "        ),",
         "        mcpbInputs.release",
         "      ),"

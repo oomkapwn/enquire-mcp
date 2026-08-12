@@ -3098,8 +3098,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
     // the comma expression changes its call-node bytes, invalidating the m157
     // identity, root, check, and matcher leaf while leaving the shared matcher
     // with exactly 31 bound owners.
-    const legacyM157CallNode =
-      'replaceExactly(mcpbInputs.integrity, "verified.tlogEntries.length === 0", "false")';
+    const legacyM157CallNode = 'replaceExactly(mcpbInputs.integrity, "verified.tlogEntries.length === 0", "false")';
     const discardedM157CallNode = [
       "replaceExactly(",
       "          mcpbInputs.integrity,",

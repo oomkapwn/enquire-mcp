@@ -2785,6 +2785,24 @@ function releaseMutationInventoryProblems(source: string): string[] {
                 ts.isIdentifier(value) ||
                 (ts.isTemplateExpression(value) &&
                   value.templateSpans.every((span) => ts.isIdentifier(span.expression))));
+            const exactM151TokenDeltaWitnessAnchor = (value: ts.Expression | undefined): boolean =>
+              value !== undefined &&
+              value.getText(sourceFile) === "MCPB_EXACT_NPM_PUBLISH.slice(0, 512)" &&
+              ts.isCallExpression(value) &&
+              value.questionDotToken === undefined &&
+              value.typeArguments === undefined &&
+              value.arguments.length === 2 &&
+              ts.isPropertyAccessExpression(value.expression) &&
+              value.expression.questionDotToken === undefined &&
+              ts.isIdentifier(value.expression.expression) &&
+              value.expression.expression.text === "MCPB_EXACT_NPM_PUBLISH" &&
+              value.expression.name.text === "slice" &&
+              value.arguments[0] !== undefined &&
+              ts.isNumericLiteral(value.arguments[0]) &&
+              value.arguments[0].text === "0" &&
+              value.arguments[1] !== undefined &&
+              ts.isNumericLiteral(value.arguments[1]) &&
+              value.arguments[1].text === "512";
             const needle = descriptorProperty("needle")[0]?.initializer;
             if (descriptorProperty("needle").length !== 1 || !passiveString(needle)) {
               const position = sourceFile.getLineAndCharacterOfPosition(descriptor.getStart(sourceFile));
@@ -2865,10 +2883,16 @@ function releaseMutationInventoryProblems(source: string): string[] {
                 );
               }
               const witnessAnchor = witnessProperty("anchor")[0]?.initializer;
-              if (witnessProperty("anchor").length !== 1 || !passiveString(witnessAnchor)) {
+              const witnessAnchorIsExact =
+                id !== undefined && ts.isStringLiteral(id) && id.text === "release.m151"
+                  ? exactM151TokenDeltaWitnessAnchor(witnessAnchor)
+                  : passiveString(witnessAnchor);
+              if (witnessProperty("anchor").length !== 1 || !witnessAnchorIsExact) {
                 const position = sourceFile.getLineAndCharacterOfPosition(witness.getStart(sourceFile));
                 problems.push(
-                  `release mutation declarative witness anchor must be one passive identifier/string value at ${position.line + 1}:${position.character + 1}`
+                  `release mutation declarative witness anchor must be one passive identifier/string value, ` +
+                    `with release.m151 fixed to exact MCPB_EXACT_NPM_PUBLISH.slice(0, 512) at ` +
+                    `${position.line + 1}:${position.character + 1}`
                 );
               }
               const before = witnessProperty("before")[0]?.initializer;
@@ -11845,7 +11869,7 @@ done`;
       oracleSource.slice(matrixBodyOffset)
     ].join("");
     expect(releaseMutationInventoryProblems(extraProjectMutation)).toContain(
-      "release mutation hybrid inventory expected 538 first / 22 all, found 539 first / 22 all (legacy 462/19; declarative 77/3; cases 77)"
+      "release mutation hybrid inventory expected 538 first / 22 all, found 539 first / 22 all (legacy 461/19; declarative 78/3; cases 78)"
     );
     const outsideMutation = `${oracleSource}\nvoid replaceAllExactly("inventory", "inventory", "mutant");\n`;
     expect(releaseMutationInventoryProblems(outsideMutation)).toContain(
@@ -11859,12 +11883,12 @@ done`;
       oracleSource.slice(firstProjectCallOffset + "replaceExactly(".length)
     ].join("");
     expect(releaseMutationInventoryProblems(projectModeDrift)).toContain(
-      "release mutation hybrid inventory expected 538 first / 22 all, found 537 first / 23 all (legacy 460/20; declarative 77/3; cases 77)"
+      "release mutation hybrid inventory expected 538 first / 22 all, found 537 first / 23 all (legacy 459/20; declarative 78/3; cases 78)"
     );
     const hybridDeclarativeMutation = oracleSource;
     const declarativeBatchStartToken = "    const releaseIntegrityText = mcpbInputs.integrity;";
     const declarativeBatchEndToken =
-      "    // Mutation oracle: workflow ordering, token isolation, exact verifier pin, and read-only convergence.";
+      "    // Mutation oracle: semantic evaluator source must retain every exact binding and fail-closed cardinality.";
     const declarativeBatchStart = hybridDeclarativeMutation.indexOf(declarativeBatchStartToken, matrixBodyOffset);
     expect(declarativeBatchStart).toBeGreaterThan(matrixBodyOffset);
     const declarativeBatchEnd = hybridDeclarativeMutation.indexOf(declarativeBatchEndToken, declarativeBatchStart);
@@ -12014,6 +12038,36 @@ done`;
         expect.stringMatching(/descriptor replacement must be one passive string value or mutation handle/),
         expect.stringMatching(/witness anchor must be one passive identifier\/string value/)
       ])
+    );
+    const m151WitnessAnchorPrefix = "        anchor: MCPB_EXACT_NPM_PUBLISH";
+    const m151WitnessAnchorToken = `${m151WitnessAnchorPrefix}.slice(0, 512),`;
+    const m151WitnessAnchorOffset = declarativeBatchOffset(m151WitnessAnchorToken);
+    for (const nonExactM151WitnessAnchor of [
+      "        anchor: MCPB_EXACT_NPM_PUBLISH_RUN.slice(0, 512),",
+      `${m151WitnessAnchorPrefix}.slice(1, 512),`,
+      `${m151WitnessAnchorPrefix}.slice(0, 511),`,
+      `${m151WitnessAnchorPrefix}.slice(0, 5_12),`,
+      `${m151WitnessAnchorPrefix}.substring(0, 512),`,
+      `${m151WitnessAnchorPrefix},`
+    ]) {
+      const nonExactM151Witness = [
+        hybridDeclarativeMutation.slice(0, m151WitnessAnchorOffset),
+        nonExactM151WitnessAnchor,
+        hybridDeclarativeMutation.slice(m151WitnessAnchorOffset + m151WitnessAnchorToken.length)
+      ].join("");
+      expect(releaseMutationInventoryProblems(nonExactM151Witness)).toContainEqual(
+        expect.stringMatching(/release\.m151 fixed to exact MCPB_EXACT_NPM_PUBLISH\.slice\(0, 512\)/)
+      );
+    }
+    const m150WitnessAnchorToken = "        anchor: NPM_PROVENANCE_SUCCESS_CONDITION,";
+    const m150WitnessAnchorOffset = declarativeBatchOffset(m150WitnessAnchorToken);
+    const slicedM150WitnessAnchor = [
+      hybridDeclarativeMutation.slice(0, m150WitnessAnchorOffset),
+      m151WitnessAnchorToken,
+      hybridDeclarativeMutation.slice(m150WitnessAnchorOffset + m150WitnessAnchorToken.length)
+    ].join("");
+    expect(releaseMutationInventoryProblems(slicedM150WitnessAnchor)).toContainEqual(
+      expect.stringMatching(/witness anchor must be one passive identifier\/string value/)
     );
     const m138ReplacementTemplateToken = [
       "      replacement: `              $",
@@ -12603,7 +12657,7 @@ done`;
         .join("legacyMigratedExactly(")
     ].join("");
     expect(releaseMutationInventoryProblems(legacyFreeMatrix)).toContain(
-      "release mutation final closed graph expected 560 unique descriptors / 536 cases and roots / 541 expectations / 24 dependency-only, found 80 descriptors / 77 cases / 77 roots / 77 expectations / 3 dependency-only"
+      "release mutation final closed graph expected 560 unique descriptors / 536 cases and roots / 541 expectations / 24 dependency-only, found 81 descriptors / 78 cases / 78 roots / 78 expectations / 3 dependency-only"
     );
     const loopGeneratedDeclarative = [
       oracleSource.slice(0, matrixBodyOffset),
@@ -12746,7 +12800,7 @@ done`;
       expect.stringMatching(/must be one explicit straight-line case/)
     );
     expect(iterableLiteralProblems).toContain(
-      "release mutation hybrid inventory expected 538 first / 22 all, found 539 first / 22 all (legacy 462/19; declarative 77/3; cases 77)"
+      "release mutation hybrid inventory expected 538 first / 22 all, found 539 first / 22 all (legacy 461/19; declarative 78/3; cases 78)"
     );
     const nestedStraightLineMutation = [
       oracleSource.slice(0, matrixBodyOffset),
@@ -12758,7 +12812,7 @@ done`;
       expect.stringMatching(/must be one explicit straight-line case/)
     );
     expect(nestedStraightLineProblems).toContain(
-      "release mutation hybrid inventory expected 538 first / 22 all, found 540 first / 22 all (legacy 463/19; declarative 77/3; cases 77)"
+      "release mutation hybrid inventory expected 538 first / 22 all, found 540 first / 22 all (legacy 462/19; declarative 78/3; cases 78)"
     );
     const earlyReturnMutation = [
       oracleSource.slice(0, matrixBodyOffset),
@@ -15037,12 +15091,12 @@ done`;
 
     const releaseIntegrityText = mcpbInputs.integrity;
     const releaseMutationPlan = new ReleaseMutationPlan({
-      total: 80,
-      first: 77,
+      total: 81,
+      first: 78,
       all: 3,
-      cases: 77,
-      expectations: 77,
-      roots: 77,
+      cases: 78,
+      expectations: 78,
+      roots: 78,
       dependencyOnly: 3
     });
     const releaseIntegritySource = releaseMutationPlan.registerSource("script.release-integrity", releaseIntegrityText);
@@ -17596,6 +17650,38 @@ done`;
         }
       ]
     });
+    const releaseMutationM151 = releaseMutationPlan.registerMutation("release.m151", {
+      mode: "first",
+      source: releaseWorkflowFixtureSource,
+      needle: MCPB_EXACT_NPM_PUBLISH,
+      replacement: `${MCPB_EXACT_NPM_PUBLISH}\n${MCPB_EXACT_NPM_PUBLISH}`,
+      expectedOccurrences: 1,
+      witness: {
+        kind: "token",
+        anchor: MCPB_EXACT_NPM_PUBLISH.slice(0, 512),
+        before: 1,
+        after: 2
+      }
+    });
+    releaseMutationPlan.registerCase({
+      id: "release.case.m151",
+      root: releaseMutationM151,
+      checks: [
+        {
+          invoke: {
+            kind: "npm.workflow",
+            baseline: releaseWorkflowFixtureSource,
+            mutant: releaseMutationM151
+          },
+          expectation: {
+            id: "release.expectation.m151.primary",
+            kind: "problem",
+            problem:
+              "npm provenance must bind the tag-push context before the sole publish and verify two exact attestations without credentials"
+          }
+        }
+      ]
+    });
     const releaseMutationProblems = releaseMutationPlan.seal();
     expect(releaseMutationProblems).toEqual([]);
     releaseMutationPlan.executeThrough(releaseMutationM037, {
@@ -18136,15 +18222,8 @@ done`;
     }
     releaseMutationPlan.executeRemaining();
     expect(releaseMutationPlan.phase).toBe("executed");
-    expect(releaseMutationPlan.caseExecutions).toBe(77);
-    expect(releaseMutationPlan.expectationExecutions).toBe(77);
-
-    // Mutation oracle: workflow ordering, token isolation, exact verifier pin, and read-only convergence.
-    for (const weakenedProvenanceWorkflow of [
-      replaceExactly(mcpbInputs.release, MCPB_EXACT_NPM_PUBLISH, `${MCPB_EXACT_NPM_PUBLISH}\n${MCPB_EXACT_NPM_PUBLISH}`)
-    ]) {
-      expect(npmProvenanceWorkflowProblems(weakenedProvenanceWorkflow)).toContain(NPM_PROVENANCE_CONTRACT_PROBLEM);
-    }
+    expect(releaseMutationPlan.caseExecutions).toBe(78);
+    expect(releaseMutationPlan.expectationExecutions).toBe(78);
 
     // Mutation oracle: semantic evaluator source must retain every exact binding and fail-closed cardinality.
     for (const weakenedProvenanceEvaluator of [

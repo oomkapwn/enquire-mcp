@@ -1787,10 +1787,12 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
 
     // NEGATIVE controls: the nested dependency must remain a mutation-backed replacement,
     // and cannot be promoted to the root of m139's otherwise unchanged case.
+    const m139NeedleLine = "      needle: NPM_PROVENANCE_AUDIT_COMMAND,";
+    const m139ReplacementDependencyBlock = [m139NeedleLine, "      replacement: releaseMutationM140,"].join("\n");
     const sourceBackedM139Replacement = replaceExactly(
       matrixSource,
-      "      replacement: releaseMutationM140,",
-      "      replacement: npmProvenanceAuditCommandSource,"
+      m139ReplacementDependencyBlock,
+      [m139NeedleLine, "      replacement: npmProvenanceAuditCommandSource,"].join("\n")
     );
     expect(preparedAudit.auditMatrix(sourceBackedM139Replacement)).toEqual(
       expect.arrayContaining([
@@ -1824,8 +1826,8 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
     );
     const m139ReplacementDependencyDrift = replaceExactly(
       m140SourceHandleDrift,
-      "      replacement: releaseMutationM140,",
-      "      replacement: NPM_PROVENANCE_AUDIT_COMMAND,"
+      m139ReplacementDependencyBlock,
+      [m139NeedleLine, "      replacement: NPM_PROVENANCE_AUDIT_COMMAND,"].join("\n")
     );
     const m109CompanionDrift = replaceExactly(
       m139ReplacementDependencyDrift,
@@ -3274,8 +3276,8 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
     );
     const conflatedM139ReplacementDependency = replaceExactly(
       conflatedM140SourceHandle,
-      "      replacement: releaseMutationM140,",
-      "      replacement: releaseMutationM138,"
+      m139ReplacementDependencyBlock,
+      [m139NeedleLine, "      replacement: releaseMutationM138,"].join("\n")
     );
     const conflatedNpmOracles = replaceExactly(
       conflatedM139ReplacementDependency,

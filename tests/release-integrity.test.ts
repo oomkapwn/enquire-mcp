@@ -985,6 +985,7 @@ const RELEASE_MUTATION_PROJECT_DEPENDENCY_ONLY_COUNT = 24;
 const RELEASE_MUTATION_REGISTRY_ADAPTER_PROPERTY = "registryEvaluatorProblems";
 const RELEASE_MUTATION_REGISTRY_STEP_ADAPTER_PROPERTY = "registryStepProblems";
 const RELEASE_MUTATION_NPM_ADAPTER_PROPERTY = "npmContractProblems";
+const RELEASE_MUTATION_NPM_EVALUATOR_ADAPTER_PROPERTY = "npmEvaluatorProblems";
 const RELEASE_MUTATION_NPM_WORKFLOW_ADAPTER_PROPERTY = "npmWorkflowProblems";
 const RELEASE_MUTATION_REGISTRY_PROBLEM =
   "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics";
@@ -1526,6 +1527,11 @@ function releaseMutationInventoryProblems(source: string): string[] {
   let npmContractAliasInitializers = 0;
   let npmContractWrites = 0;
   let otherNpmContractReferences = 0;
+  let directNpmEvaluatorDeclarations = 0;
+  let otherNpmEvaluatorBindings = 0;
+  let npmEvaluatorAliasInitializers = 0;
+  let npmEvaluatorWrites = 0;
+  let otherNpmEvaluatorReferences = 0;
   let directNpmWorkflowDeclarations = 0;
   let otherNpmWorkflowBindings = 0;
   let npmWorkflowAliasInitializers = 0;
@@ -1541,6 +1547,7 @@ function releaseMutationInventoryProblems(source: string): string[] {
       if (name.text === "mcpRegistryStepProblems") otherRegistryStepBindings++;
       if (name.text === "mcpRegistryRunProblems") otherRegistryRunBindings++;
       if (name.text === "npmProvenanceContractProblems") otherNpmContractBindings++;
+      if (name.text === "npmProvenanceEvaluatorProblems") otherNpmEvaluatorBindings++;
       if (name.text === "npmProvenanceWorkflowProblems") otherNpmWorkflowBindings++;
       return;
     }
@@ -1566,7 +1573,7 @@ function releaseMutationInventoryProblems(source: string): string[] {
   };
   const releaseOracleAdapterIdentity = (
     property: ts.ObjectLiteralElementLike
-  ): "npm.contract" | "npm.workflow" | "registry.evaluator" | "registry.step" | null => {
+  ): "npm.contract" | "npm.evaluator" | "npm.workflow" | "registry.evaluator" | "registry.step" | null => {
     if (!ts.isPropertyAssignment(property) || !ts.isIdentifier(property.name)) return null;
     if (
       property.name.text === RELEASE_MUTATION_REGISTRY_ADAPTER_PROPERTY &&
@@ -1590,6 +1597,13 @@ function releaseMutationInventoryProblems(source: string): string[] {
       return "npm.contract";
     }
     if (
+      property.name.text === RELEASE_MUTATION_NPM_EVALUATOR_ADAPTER_PROPERTY &&
+      ts.isIdentifier(property.initializer) &&
+      property.initializer.text === "npmProvenanceEvaluatorProblems"
+    ) {
+      return "npm.evaluator";
+    }
+    if (
       property.name.text === RELEASE_MUTATION_NPM_WORKFLOW_ADAPTER_PROPERTY &&
       ts.isIdentifier(property.initializer) &&
       property.initializer.text === "npmProvenanceWorkflowProblems"
@@ -1603,7 +1617,7 @@ function releaseMutationInventoryProblems(source: string): string[] {
       value === undefined ||
       !ts.isObjectLiteralExpression(value) ||
       value.properties.length < 1 ||
-      value.properties.length > 4
+      value.properties.length > 5
     ) {
       return false;
     }
@@ -1615,12 +1629,14 @@ function releaseMutationInventoryProblems(source: string): string[] {
     requiresRegistryEvaluator: boolean,
     requiresRegistryStep: boolean,
     requiresNpmContract: boolean,
+    requiresNpmEvaluator: boolean,
     requiresNpmWorkflow: boolean
   ): value is ts.ObjectLiteralExpression => {
     const expectedIdentities = [
       ...(requiresRegistryEvaluator ? (["registry.evaluator"] as const) : []),
       ...(requiresRegistryStep ? (["registry.step"] as const) : []),
       ...(requiresNpmContract ? (["npm.contract"] as const) : []),
+      ...(requiresNpmEvaluator ? (["npm.evaluator"] as const) : []),
       ...(requiresNpmWorkflow ? (["npm.workflow"] as const) : [])
     ];
     if (
@@ -1761,6 +1777,7 @@ function releaseMutationInventoryProblems(source: string): string[] {
         node.name?.text === "mcpRegistryStepProblems" ||
         node.name?.text === "mcpRegistryRunProblems" ||
         node.name?.text === "npmProvenanceContractProblems" ||
+        node.name?.text === "npmProvenanceEvaluatorProblems" ||
         node.name?.text === "npmProvenanceWorkflowProblems")
     ) {
       if (node.name?.text === "mcpRegistryEvaluatorProblems") {
@@ -1775,6 +1792,9 @@ function releaseMutationInventoryProblems(source: string): string[] {
       } else if (node.name?.text === "npmProvenanceContractProblems") {
         if (node.parent === sourceFile) directNpmContractDeclarations++;
         else otherNpmContractBindings++;
+      } else if (node.name?.text === "npmProvenanceEvaluatorProblems") {
+        if (node.parent === sourceFile) directNpmEvaluatorDeclarations++;
+        else otherNpmEvaluatorBindings++;
       } else if (node.parent === sourceFile) directNpmWorkflowDeclarations++;
       else otherNpmWorkflowBindings++;
     } else if (ts.isVariableDeclaration(node) || ts.isParameter(node)) {
@@ -1826,6 +1846,14 @@ function releaseMutationInventoryProblems(source: string): string[] {
       ts.isVariableDeclaration(node) &&
       node.initializer !== undefined &&
       ts.isIdentifier(node.initializer) &&
+      node.initializer.text === "npmProvenanceEvaluatorProblems"
+    ) {
+      npmEvaluatorAliasInitializers++;
+    }
+    if (
+      ts.isVariableDeclaration(node) &&
+      node.initializer !== undefined &&
+      ts.isIdentifier(node.initializer) &&
       node.initializer.text === "npmProvenanceWorkflowProblems"
     ) {
       npmWorkflowAliasInitializers++;
@@ -1857,6 +1885,13 @@ function releaseMutationInventoryProblems(source: string): string[] {
       assignmentTargetContainsIdentifier(node.left, "npmProvenanceContractProblems")
     ) {
       npmContractWrites++;
+    }
+    if (
+      ts.isBinaryExpression(node) &&
+      assignmentOperatorKinds.has(node.operatorToken.kind) &&
+      assignmentTargetContainsIdentifier(node.left, "npmProvenanceEvaluatorProblems")
+    ) {
+      npmEvaluatorWrites++;
     }
     if (
       ts.isBinaryExpression(node) &&
@@ -1896,6 +1931,13 @@ function releaseMutationInventoryProblems(source: string): string[] {
     if (
       (ts.isPrefixUnaryExpression(node) || ts.isPostfixUnaryExpression(node)) &&
       (node.operator === ts.SyntaxKind.PlusPlusToken || node.operator === ts.SyntaxKind.MinusMinusToken) &&
+      assignmentTargetContainsIdentifier(node.operand, "npmProvenanceEvaluatorProblems")
+    ) {
+      npmEvaluatorWrites++;
+    }
+    if (
+      (ts.isPrefixUnaryExpression(node) || ts.isPostfixUnaryExpression(node)) &&
+      (node.operator === ts.SyntaxKind.PlusPlusToken || node.operator === ts.SyntaxKind.MinusMinusToken) &&
       assignmentTargetContainsIdentifier(node.operand, "npmProvenanceWorkflowProblems")
     ) {
       npmWorkflowWrites++;
@@ -1927,6 +1969,13 @@ function releaseMutationInventoryProblems(source: string): string[] {
       assignmentTargetContainsIdentifier(node.initializer, "npmProvenanceContractProblems")
     ) {
       npmContractWrites++;
+    }
+    if (
+      (ts.isForOfStatement(node) || ts.isForInStatement(node)) &&
+      !ts.isVariableDeclarationList(node.initializer) &&
+      assignmentTargetContainsIdentifier(node.initializer, "npmProvenanceEvaluatorProblems")
+    ) {
+      npmEvaluatorWrites++;
     }
     if (
       (ts.isForOfStatement(node) || ts.isForInStatement(node)) &&
@@ -2009,6 +2058,19 @@ function releaseMutationInventoryProblems(source: string): string[] {
         parent.arguments.length === 2;
       if (!exactDeclaration && !exactDirectCall && !isExactReleaseOracleAdapterInitializer(node)) {
         otherNpmContractReferences++;
+      }
+    }
+    if (ts.isIdentifier(node) && node.text === "npmProvenanceEvaluatorProblems") {
+      const parent = node.parent;
+      const exactDeclaration = ts.isFunctionDeclaration(parent) && parent.name === node && parent.parent === sourceFile;
+      const exactDirectCall =
+        ts.isCallExpression(parent) &&
+        parent.expression === node &&
+        parent.questionDotToken === undefined &&
+        parent.typeArguments === undefined &&
+        parent.arguments.length === 1;
+      if (!exactDeclaration && !exactDirectCall && !isExactReleaseOracleAdapterInitializer(node)) {
+        otherNpmEvaluatorReferences++;
       }
     }
     if (ts.isIdentifier(node) && node.text === "npmProvenanceWorkflowProblems") {
@@ -2138,6 +2200,26 @@ function releaseMutationInventoryProblems(source: string): string[] {
   if (otherNpmContractReferences !== 0) {
     problems.push(
       `release mutation npm contract adapter may only be called directly or occupy the exact execute adapter slot; found ${otherNpmContractReferences} other reference(s)`
+    );
+  }
+  if (directNpmEvaluatorDeclarations !== 1 || otherNpmEvaluatorBindings !== 0) {
+    problems.push(
+      `release mutation npm evaluator adapter must have one top-level function declaration and no other runtime bindings; found direct ${directNpmEvaluatorDeclarations}, other ${otherNpmEvaluatorBindings}`
+    );
+  }
+  if (npmEvaluatorAliasInitializers !== 0) {
+    problems.push(
+      `release mutation npm evaluator adapter must not have alias initializers; found ${npmEvaluatorAliasInitializers}`
+    );
+  }
+  if (npmEvaluatorWrites !== 0) {
+    problems.push(
+      `release mutation npm evaluator adapter binding must never be reassigned; found ${npmEvaluatorWrites} write(s)`
+    );
+  }
+  if (otherNpmEvaluatorReferences !== 0) {
+    problems.push(
+      `release mutation npm evaluator adapter may only be called directly or occupy the exact execute adapter slot; found ${otherNpmEvaluatorReferences} other reference(s)`
     );
   }
   if (directNpmWorkflowDeclarations !== 1 || otherNpmWorkflowBindings !== 0) {
@@ -2291,6 +2373,7 @@ function releaseMutationInventoryProblems(source: string): string[] {
   type DeclarativeInvocationKind =
     | "fixture.text"
     | "fixture.throw"
+    | "npm.evaluator"
     | "npm.contract.release"
     | "npm.contract.integrity"
     | "npm.workflow"
@@ -3104,6 +3187,7 @@ function releaseMutationInventoryProblems(source: string): string[] {
         } else if (
           kind.text === "fixture.text" ||
           kind.text === "fixture.throw" ||
+          kind.text === "npm.evaluator" ||
           kind.text === "npm.contract.release" ||
           kind.text === "npm.contract.integrity" ||
           kind.text === "npm.workflow" ||
@@ -3121,6 +3205,7 @@ function releaseMutationInventoryProblems(source: string): string[] {
         }
         const expectedInvocationProperties =
           invocationKind === "fixture.text" ||
+          invocationKind === "npm.evaluator" ||
           invocationKind === "npm.workflow" ||
           invocationKind === "registry.evaluator"
             ? ["kind", "baseline", "mutant"]
@@ -3216,6 +3301,7 @@ function releaseMutationInventoryProblems(source: string): string[] {
           mutant !== undefined &&
           ts.isIdentifier(mutant) &&
           (invocationKind === "fixture.text" ||
+            invocationKind === "npm.evaluator" ||
             invocationKind === "npm.workflow" ||
             invocationKind === "registry.evaluator" ||
             ((invocationKind === "registry.step.run" ||
@@ -3314,7 +3400,8 @@ function releaseMutationInventoryProblems(source: string): string[] {
               ? RELEASE_MUTATION_REGISTRY_PROBLEM
               : invocationKind === "registry.step.run" || invocationKind === "registry.step.integrity"
                 ? RELEASE_MUTATION_REGISTRY_WORKFLOW_PROBLEM
-                : invocationKind === "npm.contract.release" ||
+                : invocationKind === "npm.evaluator" ||
+                    invocationKind === "npm.contract.release" ||
                     invocationKind === "npm.contract.integrity" ||
                     invocationKind === "npm.workflow"
                   ? RELEASE_MUTATION_NPM_PROBLEM
@@ -3422,12 +3509,14 @@ function releaseMutationInventoryProblems(source: string): string[] {
     declarativeInvocationKinds.has("registry.step.run") || declarativeInvocationKinds.has("registry.step.integrity");
   const requiresNpmContractAdapter =
     declarativeInvocationKinds.has("npm.contract.release") || declarativeInvocationKinds.has("npm.contract.integrity");
+  const requiresNpmEvaluatorAdapter = declarativeInvocationKinds.has("npm.evaluator");
   const requiresNpmWorkflowAdapter = declarativeInvocationKinds.has("npm.workflow");
   const exactExecutionAdapterArguments = (call: ts.CallExpression, offset: number): boolean => {
     if (
       !requiresRegistryEvaluatorAdapter &&
       !requiresRegistryStepAdapter &&
       !requiresNpmContractAdapter &&
+      !requiresNpmEvaluatorAdapter &&
       !requiresNpmWorkflowAdapter
     ) {
       return call.arguments.length === offset;
@@ -3439,6 +3528,7 @@ function releaseMutationInventoryProblems(source: string): string[] {
         requiresRegistryEvaluatorAdapter,
         requiresRegistryStepAdapter,
         requiresNpmContractAdapter,
+        requiresNpmEvaluatorAdapter,
         requiresNpmWorkflowAdapter
       )
     );
@@ -3447,6 +3537,7 @@ function releaseMutationInventoryProblems(source: string): string[] {
     ...(requiresRegistryEvaluatorAdapter ? [RELEASE_MUTATION_REGISTRY_ADAPTER_PROPERTY] : []),
     ...(requiresRegistryStepAdapter ? [RELEASE_MUTATION_REGISTRY_STEP_ADAPTER_PROPERTY] : []),
     ...(requiresNpmContractAdapter ? [RELEASE_MUTATION_NPM_ADAPTER_PROPERTY] : []),
+    ...(requiresNpmEvaluatorAdapter ? [RELEASE_MUTATION_NPM_EVALUATOR_ADAPTER_PROPERTY] : []),
     ...(requiresNpmWorkflowAdapter ? [RELEASE_MUTATION_NPM_WORKFLOW_ADAPTER_PROPERTY] : [])
   ];
   const requiredAdapterDescription =
@@ -11869,7 +11960,7 @@ done`;
       oracleSource.slice(matrixBodyOffset)
     ].join("");
     expect(releaseMutationInventoryProblems(extraProjectMutation)).toContain(
-      "release mutation hybrid inventory expected 538 first / 22 all, found 539 first / 22 all (legacy 461/19; declarative 78/3; cases 78)"
+      "release mutation hybrid inventory expected 538 first / 22 all, found 539 first / 22 all (legacy 460/19; declarative 79/3; cases 79)"
     );
     const outsideMutation = `${oracleSource}\nvoid replaceAllExactly("inventory", "inventory", "mutant");\n`;
     expect(releaseMutationInventoryProblems(outsideMutation)).toContain(
@@ -11883,7 +11974,7 @@ done`;
       oracleSource.slice(firstProjectCallOffset + "replaceExactly(".length)
     ].join("");
     expect(releaseMutationInventoryProblems(projectModeDrift)).toContain(
-      "release mutation hybrid inventory expected 538 first / 22 all, found 537 first / 23 all (legacy 459/20; declarative 78/3; cases 78)"
+      "release mutation hybrid inventory expected 538 first / 22 all, found 537 first / 23 all (legacy 458/20; declarative 79/3; cases 79)"
     );
     const hybridDeclarativeMutation = oracleSource;
     const declarativeBatchStartToken = "    const releaseIntegrityText = mcpbInputs.integrity;";
@@ -12262,6 +12353,7 @@ done`;
       "  registryEvaluatorProblems: mcpRegistryEvaluatorProblems,",
       "  registryStepProblems: mcpRegistryRunProblems,",
       "  npmContractProblems: npmProvenanceContractProblems,",
+      "  npmEvaluatorProblems: npmProvenanceEvaluatorProblems,",
       "  npmWorkflowProblems: npmProvenanceWorkflowProblems",
       "});",
       'expect(releaseMutationPlan.phase).toBe("partially-executed");',
@@ -12328,6 +12420,7 @@ done`;
       "  registryEvaluatorProblems: mcpRegistryEvaluatorProblems,",
       "  registryStepProblems: mcpRegistryRunProblems,",
       "  npmContractProblems: npmProvenanceContractProblems,",
+      "  npmEvaluatorProblems: npmProvenanceEvaluatorProblems,",
       "  npmWorkflowProblems: npmProvenanceWorkflowProblems",
       "});"
     ].join("\n    ");
@@ -12339,7 +12432,7 @@ done`;
     ].join("");
     expect(releaseMutationInventoryProblems(missingReleaseOracleAdapters)).toContainEqual(
       expect.stringMatching(
-        /executeThrough requires one literal case-root boundary and one exact literal registryEvaluatorProblems\/registryStepProblems\/npmContractProblems\/npmWorkflowProblems adapter object/
+        /executeThrough requires one literal case-root boundary and one exact literal registryEvaluatorProblems\/registryStepProblems\/npmContractProblems\/npmEvaluatorProblems\/npmWorkflowProblems adapter object/
       )
     );
     expect(releaseMutationInventoryProblems(missingReleaseOracleAdapters)).toContain(declarativeLifecycleProblem);
@@ -12349,6 +12442,7 @@ done`;
         "releaseMutationPlan.executeThrough(releaseMutationM037, {",
         "      registryEvaluatorProblems: mcpRegistryEvaluatorProblems,",
         "      npmContractProblems: npmProvenanceContractProblems,",
+        "      npmEvaluatorProblems: npmProvenanceEvaluatorProblems,",
         "      npmWorkflowProblems: npmProvenanceWorkflowProblems",
         "    });"
       ].join("\n    "),
@@ -12356,7 +12450,7 @@ done`;
     ].join("");
     expect(releaseMutationInventoryProblems(missingRegistryStepAdapter)).toContainEqual(
       expect.stringMatching(
-        /executeThrough requires one literal case-root boundary and one exact literal registryEvaluatorProblems\/registryStepProblems\/npmContractProblems\/npmWorkflowProblems adapter object/
+        /executeThrough requires one literal case-root boundary and one exact literal registryEvaluatorProblems\/registryStepProblems\/npmContractProblems\/npmEvaluatorProblems\/npmWorkflowProblems adapter object/
       )
     );
     const missingNpmContractAdapter = [
@@ -12365,6 +12459,7 @@ done`;
         "releaseMutationPlan.executeThrough(releaseMutationM037, {",
         "      registryEvaluatorProblems: mcpRegistryEvaluatorProblems,",
         "      registryStepProblems: mcpRegistryRunProblems,",
+        "      npmEvaluatorProblems: npmProvenanceEvaluatorProblems,",
         "      npmWorkflowProblems: npmProvenanceWorkflowProblems",
         "    });"
       ].join("\n    "),
@@ -12372,7 +12467,24 @@ done`;
     ].join("");
     expect(releaseMutationInventoryProblems(missingNpmContractAdapter)).toContainEqual(
       expect.stringMatching(
-        /executeThrough requires one literal case-root boundary and one exact literal registryEvaluatorProblems\/registryStepProblems\/npmContractProblems\/npmWorkflowProblems adapter object/
+        /executeThrough requires one literal case-root boundary and one exact literal registryEvaluatorProblems\/registryStepProblems\/npmContractProblems\/npmEvaluatorProblems\/npmWorkflowProblems adapter object/
+      )
+    );
+    const missingNpmEvaluatorAdapter = [
+      hybridDeclarativeMutation.slice(0, executeOffset),
+      [
+        "releaseMutationPlan.executeThrough(releaseMutationM037, {",
+        "      registryEvaluatorProblems: mcpRegistryEvaluatorProblems,",
+        "      registryStepProblems: mcpRegistryRunProblems,",
+        "      npmContractProblems: npmProvenanceContractProblems,",
+        "      npmWorkflowProblems: npmProvenanceWorkflowProblems",
+        "    });"
+      ].join("\n    "),
+      hybridDeclarativeMutation.slice(executeOffset + executeToken.length)
+    ].join("");
+    expect(releaseMutationInventoryProblems(missingNpmEvaluatorAdapter)).toContainEqual(
+      expect.stringMatching(
+        /executeThrough requires one literal case-root boundary and one exact literal registryEvaluatorProblems\/registryStepProblems\/npmContractProblems\/npmEvaluatorProblems\/npmWorkflowProblems adapter object/
       )
     );
     const missingNpmWorkflowAdapter = [
@@ -12381,14 +12493,15 @@ done`;
         "releaseMutationPlan.executeThrough(releaseMutationM037, {",
         "      registryEvaluatorProblems: mcpRegistryEvaluatorProblems,",
         "      registryStepProblems: mcpRegistryRunProblems,",
-        "      npmContractProblems: npmProvenanceContractProblems",
+        "      npmContractProblems: npmProvenanceContractProblems,",
+        "      npmEvaluatorProblems: npmProvenanceEvaluatorProblems",
         "    });"
       ].join("\n    "),
       hybridDeclarativeMutation.slice(executeOffset + executeToken.length)
     ].join("");
     expect(releaseMutationInventoryProblems(missingNpmWorkflowAdapter)).toContainEqual(
       expect.stringMatching(
-        /executeThrough requires one literal case-root boundary and one exact literal registryEvaluatorProblems\/registryStepProblems\/npmContractProblems\/npmWorkflowProblems adapter object/
+        /executeThrough requires one literal case-root boundary and one exact literal registryEvaluatorProblems\/registryStepProblems\/npmContractProblems\/npmEvaluatorProblems\/npmWorkflowProblems adapter object/
       )
     );
     const transplantedNpmContractAdapter = [
@@ -12398,12 +12511,29 @@ done`;
         "      registryEvaluatorProblems: mcpRegistryEvaluatorProblems,",
         "      registryStepProblems: mcpRegistryRunProblems,",
         "      npmContractProblems: mcpRegistryRunProblems,",
+        "      npmEvaluatorProblems: npmProvenanceEvaluatorProblems,",
         "      npmWorkflowProblems: npmProvenanceWorkflowProblems",
         "    });"
       ].join("\n    "),
       hybridDeclarativeMutation.slice(executeOffset + executeToken.length)
     ].join("");
     expect(releaseMutationInventoryProblems(transplantedNpmContractAdapter)).toContainEqual(
+      expect.stringMatching(/executeThrough requires one literal case-root boundary and one exact literal/)
+    );
+    const transplantedNpmEvaluatorAdapter = [
+      hybridDeclarativeMutation.slice(0, executeOffset),
+      [
+        "releaseMutationPlan.executeThrough(releaseMutationM037, {",
+        "      registryEvaluatorProblems: mcpRegistryEvaluatorProblems,",
+        "      registryStepProblems: mcpRegistryRunProblems,",
+        "      npmContractProblems: npmProvenanceContractProblems,",
+        "      npmEvaluatorProblems: npmProvenanceContractProblems,",
+        "      npmWorkflowProblems: npmProvenanceWorkflowProblems",
+        "    });"
+      ].join("\n    "),
+      hybridDeclarativeMutation.slice(executeOffset + executeToken.length)
+    ].join("");
+    expect(releaseMutationInventoryProblems(transplantedNpmEvaluatorAdapter)).toContainEqual(
       expect.stringMatching(/executeThrough requires one literal case-root boundary and one exact literal/)
     );
     const transplantedNpmWorkflowAdapter = [
@@ -12413,6 +12543,7 @@ done`;
         "      registryEvaluatorProblems: mcpRegistryEvaluatorProblems,",
         "      registryStepProblems: mcpRegistryRunProblems,",
         "      npmContractProblems: npmProvenanceContractProblems,",
+        "      npmEvaluatorProblems: npmProvenanceEvaluatorProblems,",
         "      npmWorkflowProblems: npmProvenanceContractProblems",
         "    });"
       ].join("\n    "),
@@ -12428,6 +12559,7 @@ done`;
         "      registryEvaluatorProblems: mcpRegistryEvaluatorProblems,",
         "      registryStepProblems: mcpRegistryRunProblems,",
         "      npmContractProblems: npmProvenanceContractProblems,",
+        "      npmEvaluatorProblems: npmProvenanceEvaluatorProblems,",
         "      npmWorkflowProblems: npmProvenanceWorkflowProblems,",
         "      extra: true",
         "    });"
@@ -12444,6 +12576,7 @@ done`;
         '      ["registryEvaluatorProblems"]: mcpRegistryEvaluatorProblems,',
         "      registryStepProblems: mcpRegistryRunProblems,",
         "      npmContractProblems: npmProvenanceContractProblems,",
+        "      npmEvaluatorProblems: npmProvenanceEvaluatorProblems,",
         "      npmWorkflowProblems: npmProvenanceWorkflowProblems",
         "    });"
       ].join("\n    "),
@@ -12464,6 +12597,7 @@ done`;
         "      },",
         "      registryStepProblems: mcpRegistryRunProblems,",
         "      npmContractProblems: npmProvenanceContractProblems,",
+        "      npmEvaluatorProblems: npmProvenanceEvaluatorProblems,",
         "      npmWorkflowProblems: npmProvenanceWorkflowProblems",
         "    });"
       ].join("\n    "),
@@ -12482,6 +12616,7 @@ done`;
         "      ...{ registryEvaluatorProblems: mcpRegistryEvaluatorProblems },",
         "      registryStepProblems: mcpRegistryRunProblems,",
         "      npmContractProblems: npmProvenanceContractProblems,",
+        "      npmEvaluatorProblems: npmProvenanceEvaluatorProblems,",
         "      npmWorkflowProblems: npmProvenanceWorkflowProblems",
         "    });"
       ].join("\n    "),
@@ -12497,6 +12632,7 @@ done`;
         "      registryEvaluatorProblems: (source) => mcpRegistryEvaluatorProblems(source),",
         "      registryStepProblems: mcpRegistryRunProblems,",
         "      npmContractProblems: npmProvenanceContractProblems,",
+        "      npmEvaluatorProblems: npmProvenanceEvaluatorProblems,",
         "      npmWorkflowProblems: npmProvenanceWorkflowProblems",
         "    });"
       ].join("\n    "),
@@ -12513,6 +12649,7 @@ done`;
         "      registryEvaluatorProblems: registryEvaluatorAlias,",
         "      registryStepProblems: mcpRegistryRunProblems,",
         "      npmContractProblems: npmProvenanceContractProblems,",
+        "      npmEvaluatorProblems: npmProvenanceEvaluatorProblems,",
         "      npmWorkflowProblems: npmProvenanceWorkflowProblems",
         "    });"
       ].join("\n    "),
@@ -12621,6 +12758,32 @@ done`;
     expect(releaseMutationInventoryProblems(reassignedNpmContractAdapter)).toContain(
       "release mutation npm contract adapter binding must never be reassigned; found 1 write(s)"
     );
+    const aliasedNpmEvaluatorAdapter = [
+      hybridDeclarativeMutation.slice(0, matrixBodyOffset),
+      "\n    const npmEvaluatorAlias = npmProvenanceEvaluatorProblems;",
+      hybridDeclarativeMutation.slice(matrixBodyOffset)
+    ].join("");
+    expect(releaseMutationInventoryProblems(aliasedNpmEvaluatorAdapter)).toContain(
+      "release mutation npm evaluator adapter must not have alias initializers; found 1"
+    );
+    const shadowedNpmEvaluatorAdapter = [
+      hybridDeclarativeMutation.slice(0, matrixBodyOffset),
+      "\n    const npmProvenanceEvaluatorProblems = (_integrity: string): string[] => [];",
+      hybridDeclarativeMutation.slice(matrixBodyOffset)
+    ].join("");
+    expect(releaseMutationInventoryProblems(shadowedNpmEvaluatorAdapter)).toContainEqual(
+      expect.stringMatching(
+        /npm evaluator adapter must have one top-level function declaration and no other runtime bindings/
+      )
+    );
+    const reassignedNpmEvaluatorAdapter = [
+      hybridDeclarativeMutation.slice(0, matrixBodyOffset),
+      "\n    npmProvenanceEvaluatorProblems = (_integrity: string): string[] => [];",
+      hybridDeclarativeMutation.slice(matrixBodyOffset)
+    ].join("");
+    expect(releaseMutationInventoryProblems(reassignedNpmEvaluatorAdapter)).toContain(
+      "release mutation npm evaluator adapter binding must never be reassigned; found 1 write(s)"
+    );
     const aliasedNpmWorkflowAdapter = [
       hybridDeclarativeMutation.slice(0, matrixBodyOffset),
       "\n    const npmWorkflowAlias = npmProvenanceWorkflowProblems;",
@@ -12657,7 +12820,7 @@ done`;
         .join("legacyMigratedExactly(")
     ].join("");
     expect(releaseMutationInventoryProblems(legacyFreeMatrix)).toContain(
-      "release mutation final closed graph expected 560 unique descriptors / 536 cases and roots / 541 expectations / 24 dependency-only, found 81 descriptors / 78 cases / 78 roots / 78 expectations / 3 dependency-only"
+      "release mutation final closed graph expected 560 unique descriptors / 536 cases and roots / 541 expectations / 24 dependency-only, found 82 descriptors / 79 cases / 79 roots / 79 expectations / 3 dependency-only"
     );
     const loopGeneratedDeclarative = [
       oracleSource.slice(0, matrixBodyOffset),
@@ -12800,7 +12963,7 @@ done`;
       expect.stringMatching(/must be one explicit straight-line case/)
     );
     expect(iterableLiteralProblems).toContain(
-      "release mutation hybrid inventory expected 538 first / 22 all, found 539 first / 22 all (legacy 461/19; declarative 78/3; cases 78)"
+      "release mutation hybrid inventory expected 538 first / 22 all, found 539 first / 22 all (legacy 460/19; declarative 79/3; cases 79)"
     );
     const nestedStraightLineMutation = [
       oracleSource.slice(0, matrixBodyOffset),
@@ -12812,7 +12975,7 @@ done`;
       expect.stringMatching(/must be one explicit straight-line case/)
     );
     expect(nestedStraightLineProblems).toContain(
-      "release mutation hybrid inventory expected 538 first / 22 all, found 540 first / 22 all (legacy 462/19; declarative 78/3; cases 78)"
+      "release mutation hybrid inventory expected 538 first / 22 all, found 540 first / 22 all (legacy 461/19; declarative 79/3; cases 79)"
     );
     const earlyReturnMutation = [
       oracleSource.slice(0, matrixBodyOffset),
@@ -14918,6 +15081,107 @@ done`;
     expect(npmDirtyBaselinePlan.caseExecutions).toBe(1);
     expect(npmDirtyBaselinePlan.expectationExecutions).toBe(1);
 
+    const createNpmEvaluatorPlan = (): ReleaseMutationPlan => {
+      const plan = new ReleaseMutationPlan({
+        total: 1,
+        first: 1,
+        all: 0,
+        cases: 1,
+        expectations: 1,
+        roots: 1,
+        dependencyOnly: 0
+      });
+      const integritySource = plan.registerSource("fixture.npm-evaluator-integrity", "integrity-clean");
+      const integrityRoot = registerFixtureMutation(plan, "mutation.npm-evaluator-integrity", {
+        mode: "first",
+        source: integritySource,
+        needle: "clean",
+        replacement: "mutant",
+        expectedOccurrences: 1,
+        witness: { kind: "token", anchor: "clean", before: 1, after: 0 }
+      });
+      plan.registerCase({
+        id: "case.npm-evaluator",
+        root: integrityRoot,
+        checks: [
+          {
+            invoke: {
+              kind: "npm.evaluator",
+              baseline: integritySource,
+              mutant: integrityRoot
+            },
+            expectation: {
+              id: "expectation.npm-evaluator",
+              kind: "problem",
+              problem: RELEASE_MUTATION_NPM_PROBLEM
+            }
+          }
+        ]
+      });
+      return plan;
+    };
+
+    const npmEvaluatorPositivePlan = createNpmEvaluatorPlan();
+    expect(npmEvaluatorPositivePlan.seal()).toEqual([]);
+    const npmEvaluatorPositiveCalls: string[] = [];
+    npmEvaluatorPositivePlan.execute({
+      npmEvaluatorProblems: (integrity) => {
+        npmEvaluatorPositiveCalls.push(integrity);
+        return integrity === "integrity-clean" ? [] : [RELEASE_MUTATION_NPM_PROBLEM];
+      }
+    });
+    expect(npmEvaluatorPositiveCalls).toEqual(["integrity-clean", "integrity-mutant"]);
+    expect(npmEvaluatorPositivePlan.phase).toBe("executed");
+    expect(npmEvaluatorPositivePlan.caseExecutions).toBe(1);
+    expect(npmEvaluatorPositivePlan.expectationExecutions).toBe(1);
+
+    const npmEvaluatorMissingAdapterPlan = createNpmEvaluatorPlan();
+    expect(npmEvaluatorMissingAdapterPlan.seal()).toEqual([]);
+    expect(() => npmEvaluatorMissingAdapterPlan.execute()).toThrow(
+      "npm.evaluator cases require exact release oracle adapters at execute"
+    );
+    expect(npmEvaluatorMissingAdapterPlan.phase).toBe("failed");
+    expect(npmEvaluatorMissingAdapterPlan.caseExecutions).toBe(0);
+    expect(npmEvaluatorMissingAdapterPlan.expectationExecutions).toBe(0);
+
+    let npmEvaluatorAdapterGetterCalls = 0;
+    const npmEvaluatorAccessorAdapter = {};
+    Object.defineProperty(npmEvaluatorAccessorAdapter, "npmEvaluatorProblems", {
+      enumerable: true,
+      get: () => {
+        npmEvaluatorAdapterGetterCalls++;
+        return () => [];
+      }
+    });
+    const npmEvaluatorAccessorAdapterPlan = createNpmEvaluatorPlan();
+    expect(npmEvaluatorAccessorAdapterPlan.seal()).toEqual([]);
+    expect(() => npmEvaluatorAccessorAdapterPlan.execute(npmEvaluatorAccessorAdapter as never)).toThrow(
+      "release oracle adapters must contain only an enumerable npmEvaluatorProblems data function"
+    );
+    expect(npmEvaluatorAdapterGetterCalls).toBe(0);
+    expect(npmEvaluatorAccessorAdapterPlan.phase).toBe("failed");
+    expect(npmEvaluatorAccessorAdapterPlan.caseExecutions).toBe(0);
+    expect(npmEvaluatorAccessorAdapterPlan.expectationExecutions).toBe(0);
+
+    const npmEvaluatorDirtyBaselinePlan = createNpmEvaluatorPlan();
+    expect(npmEvaluatorDirtyBaselinePlan.seal()).toEqual([]);
+    const npmEvaluatorDirtyBaselineCalls: string[] = [];
+    expect(() =>
+      npmEvaluatorDirtyBaselinePlan.execute({
+        npmEvaluatorProblems: (integrity) => {
+          npmEvaluatorDirtyBaselineCalls.push(integrity);
+          return [RELEASE_MUTATION_NPM_PROBLEM];
+        }
+      })
+    ).toThrow(
+      "release mutation case case.npm-evaluator expectation expectation.npm-evaluator " +
+        "found a problem in the clean baseline"
+    );
+    expect(npmEvaluatorDirtyBaselineCalls).toEqual(["integrity-clean", "integrity-mutant"]);
+    expect(npmEvaluatorDirtyBaselinePlan.phase).toBe("failed");
+    expect(npmEvaluatorDirtyBaselinePlan.caseExecutions).toBe(1);
+    expect(npmEvaluatorDirtyBaselinePlan.expectationExecutions).toBe(1);
+
     const createNpmWorkflowPlan = (): ReleaseMutationPlan => {
       const plan = new ReleaseMutationPlan({
         total: 1,
@@ -15087,16 +15351,17 @@ done`;
     expect(githubReleaseTransactionProblems(workflow)).toEqual([]);
     expect(mcpbContractProblems(mcpbInputs)).toEqual([]);
     expect(npmProvenanceContractProblems(mcpbInputs.release, mcpbInputs.integrity)).toEqual([]);
+    expect(npmProvenanceEvaluatorProblems(mcpbInputs.integrity)).toEqual([]);
     expect(mcpRegistryEvaluatorProblems(mcpbInputs.integrity)).toEqual([]);
 
     const releaseIntegrityText = mcpbInputs.integrity;
     const releaseMutationPlan = new ReleaseMutationPlan({
-      total: 81,
-      first: 78,
+      total: 82,
+      first: 79,
       all: 3,
-      cases: 78,
-      expectations: 78,
-      roots: 78,
+      cases: 79,
+      expectations: 79,
+      roots: 79,
       dependencyOnly: 3
     });
     const releaseIntegritySource = releaseMutationPlan.registerSource("script.release-integrity", releaseIntegrityText);
@@ -17682,12 +17947,45 @@ done`;
         }
       ]
     });
+    const releaseMutationM152 = releaseMutationPlan.registerMutation("release.m152", {
+      mode: "first",
+      source: releaseIntegritySource,
+      needle: "workflowSha: expectedSourceSha",
+      replacement: "workflowSha: declared.workflowSha",
+      expectedOccurrences: 1,
+      witness: {
+        kind: "token",
+        anchor: "workflowSha: expectedSourceSha",
+        before: 1,
+        after: 0
+      }
+    });
+    releaseMutationPlan.registerCase({
+      id: "release.case.m152",
+      root: releaseMutationM152,
+      checks: [
+        {
+          invoke: {
+            kind: "npm.evaluator",
+            baseline: releaseIntegritySource,
+            mutant: releaseMutationM152
+          },
+          expectation: {
+            id: "release.expectation.m152.primary",
+            kind: "problem",
+            problem:
+              "npm provenance must bind the tag-push context before the sole publish and verify two exact attestations without credentials"
+          }
+        }
+      ]
+    });
     const releaseMutationProblems = releaseMutationPlan.seal();
     expect(releaseMutationProblems).toEqual([]);
     releaseMutationPlan.executeThrough(releaseMutationM037, {
       registryEvaluatorProblems: mcpRegistryEvaluatorProblems,
       registryStepProblems: mcpRegistryRunProblems,
       npmContractProblems: npmProvenanceContractProblems,
+      npmEvaluatorProblems: npmProvenanceEvaluatorProblems,
       npmWorkflowProblems: npmProvenanceWorkflowProblems
     });
     expect(releaseMutationPlan.phase).toBe("partially-executed");
@@ -18222,12 +18520,11 @@ done`;
     }
     releaseMutationPlan.executeRemaining();
     expect(releaseMutationPlan.phase).toBe("executed");
-    expect(releaseMutationPlan.caseExecutions).toBe(78);
-    expect(releaseMutationPlan.expectationExecutions).toBe(78);
+    expect(releaseMutationPlan.caseExecutions).toBe(79);
+    expect(releaseMutationPlan.expectationExecutions).toBe(79);
 
     // Mutation oracle: semantic evaluator source must retain every exact binding and fail-closed cardinality.
     for (const weakenedProvenanceEvaluator of [
-      replaceExactly(mcpbInputs.integrity, "workflowSha: expectedSourceSha", "workflowSha: declared.workflowSha"),
       replaceExactly(mcpbInputs.integrity, "statement.subject.length !== 1", "statement.subject.length < 1"),
       replaceExactly(
         mcpbInputs.integrity,

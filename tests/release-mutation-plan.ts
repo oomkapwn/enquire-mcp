@@ -285,6 +285,11 @@ export type ReleaseOracleInvocation =
       readonly mutant: ReleaseMutationHandle;
     }
   | {
+      readonly kind: "npm.evaluator";
+      readonly baseline: ReleaseSourceHandle | ReleaseMutationHandle;
+      readonly mutant: ReleaseMutationHandle;
+    }
+  | {
       readonly kind: "registry.step.run";
       readonly baseline: ReleaseSourceHandle | ReleaseMutationHandle;
       readonly mutant: ReleaseMutationHandle;
@@ -324,6 +329,7 @@ export type ReleaseProblemIdentity =
 type RegistryEvaluatorProblemsAdapter = (source: string) => readonly string[];
 type RegistryStepProblemsAdapter = (run: string, integrity: string) => readonly string[];
 type NpmContractProblemsAdapter = (release: string, integrity: string) => readonly string[];
+type NpmEvaluatorProblemsAdapter = (integrity: string) => readonly string[];
 type NpmWorkflowProblemsAdapter = (release: string) => readonly string[];
 
 /**
@@ -358,6 +364,14 @@ export interface ReleaseOracleAdapters {
    * @returns Closed problem identities observed for those exact bytes.
    */
   readonly npmContractProblems?: NpmContractProblemsAdapter;
+
+  /**
+   * Evaluate one exact release-integrity source through the npm provenance evaluator.
+   *
+   * @param integrity - Planner-materialized baseline or mutant release-integrity bytes.
+   * @returns Closed problem identities observed for those exact bytes.
+   */
+  readonly npmEvaluatorProblems?: NpmEvaluatorProblemsAdapter;
 
   /**
    * Evaluate one exact release workflow independently of its integrity-script companion.
@@ -468,6 +482,11 @@ type ReleaseOracleObservation =
     }
   | {
       readonly kind: "registry.evaluator";
+      readonly baselineProblems: readonly ReleaseProblemIdentity[];
+      readonly mutantProblems: readonly ReleaseProblemIdentity[];
+    }
+  | {
+      readonly kind: "npm.evaluator";
       readonly baselineProblems: readonly ReleaseProblemIdentity[];
       readonly mutantProblems: readonly ReleaseProblemIdentity[];
     }
@@ -902,6 +921,7 @@ function materializeOracleValue(
 
 interface ReleaseOracleAdapterRequirements {
   readonly npmContractProblems: boolean;
+  readonly npmEvaluatorProblems: boolean;
   readonly npmWorkflowProblems: boolean;
   readonly registryEvaluatorProblems: boolean;
   readonly registryStepProblems: boolean;
@@ -909,6 +929,7 @@ interface ReleaseOracleAdapterRequirements {
 
 function releaseOracleAdapterRequirements(cases: readonly PreparedCase[]): ReleaseOracleAdapterRequirements {
   let npmContractProblems = false;
+  let npmEvaluatorProblems = false;
   let npmWorkflowProblems = false;
   let registryEvaluatorProblems = false;
   let registryStepProblems = false;
@@ -934,6 +955,9 @@ function releaseOracleAdapterRequirements(cases: readonly PreparedCase[]): Relea
         case "npm.contract.integrity":
           npmContractProblems = true;
           break;
+        case "npm.evaluator":
+          npmEvaluatorProblems = true;
+          break;
         case "npm.workflow":
           npmWorkflowProblems = true;
           break;
@@ -947,6 +971,7 @@ function releaseOracleAdapterRequirements(cases: readonly PreparedCase[]): Relea
   }
   return freezeObject({
     npmContractProblems,
+    npmEvaluatorProblems,
     npmWorkflowProblems,
     registryEvaluatorProblems,
     registryStepProblems
@@ -954,6 +979,22 @@ function releaseOracleAdapterRequirements(cases: readonly PreparedCase[]): Relea
 }
 
 function releaseOracleAdapterShapeMessage(requirements: ReleaseOracleAdapterRequirements): string {
+  if (requirements.npmEvaluatorProblems) {
+    const names = [
+      ...(requirements.npmContractProblems ? ["npmContractProblems"] : []),
+      "npmEvaluatorProblems",
+      ...(requirements.npmWorkflowProblems ? ["npmWorkflowProblems"] : []),
+      ...(requirements.registryEvaluatorProblems ? ["registryEvaluatorProblems"] : []),
+      ...(requirements.registryStepProblems ? ["registryStepProblems"] : [])
+    ];
+    const description =
+      names.length === 1
+        ? `only an enumerable ${names[0]} data function`
+        : `exactly enumerable ${
+            names.length === 2 ? `${names[0]} and ${names[1]}` : `${names.slice(0, -1).join(", ")}, and ${names.at(-1)}`
+          } data functions`;
+    return `release oracle adapters must contain ${description}`;
+  }
   if (requirements.npmWorkflowProblems) {
     if (requirements.npmContractProblems) {
       if (requirements.registryEvaluatorProblems && requirements.registryStepProblems) {
@@ -1042,11 +1083,15 @@ function validateReleaseOracleAdapters(
   if (value === undefined) {
     if (
       !requirements.npmContractProblems &&
+      !requirements.npmEvaluatorProblems &&
       !requirements.npmWorkflowProblems &&
       !requirements.registryEvaluatorProblems &&
       !requirements.registryStepProblems
     ) {
       return undefined;
+    }
+    if (requirements.npmEvaluatorProblems) {
+      throw new errorConstructor("npm.evaluator cases require exact release oracle adapters at execute");
     }
     if (requirements.npmWorkflowProblems) {
       if (requirements.npmContractProblems) {
@@ -1115,6 +1160,7 @@ function validateReleaseOracleAdapters(
   }
   if (
     !requirements.npmContractProblems &&
+    !requirements.npmEvaluatorProblems &&
     !requirements.npmWorkflowProblems &&
     !requirements.registryEvaluatorProblems &&
     !requirements.registryStepProblems
@@ -1143,6 +1189,7 @@ function validateReleaseOracleAdapters(
   const keys = ownKeysIntrinsic(descriptors);
   let expectedCount = 0;
   if (requirements.npmContractProblems) expectedCount++;
+  if (requirements.npmEvaluatorProblems) expectedCount++;
   if (requirements.npmWorkflowProblems) expectedCount++;
   if (requirements.registryEvaluatorProblems) expectedCount++;
   if (requirements.registryStepProblems) expectedCount++;
@@ -1152,10 +1199,12 @@ function validateReleaseOracleAdapters(
     if (
       key === undefined ||
       (key !== "npmContractProblems" &&
+        key !== "npmEvaluatorProblems" &&
         key !== "npmWorkflowProblems" &&
         key !== "registryEvaluatorProblems" &&
         key !== "registryStepProblems") ||
       (key === "npmContractProblems" && !requirements.npmContractProblems) ||
+      (key === "npmEvaluatorProblems" && !requirements.npmEvaluatorProblems) ||
       (key === "npmWorkflowProblems" && !requirements.npmWorkflowProblems) ||
       (key === "registryEvaluatorProblems" && !requirements.registryEvaluatorProblems) ||
       (key === "registryStepProblems" && !requirements.registryStepProblems)
@@ -1165,6 +1214,7 @@ function validateReleaseOracleAdapters(
   }
 
   const npmDescriptor = descriptors.npmContractProblems;
+  const npmEvaluatorDescriptor = descriptors.npmEvaluatorProblems;
   const npmWorkflowDescriptor = descriptors.npmWorkflowProblems;
   const evaluatorDescriptor = descriptors.registryEvaluatorProblems;
   const stepDescriptor = descriptors.registryStepProblems;
@@ -1174,6 +1224,12 @@ function validateReleaseOracleAdapters(
       "value" in npmDescriptor &&
       npmDescriptor.enumerable &&
       typeof npmDescriptor.value === "function");
+  const exactNpmEvaluator =
+    !requirements.npmEvaluatorProblems ||
+    (npmEvaluatorDescriptor !== undefined &&
+      "value" in npmEvaluatorDescriptor &&
+      npmEvaluatorDescriptor.enumerable &&
+      typeof npmEvaluatorDescriptor.value === "function");
   const exactNpmWorkflow =
     !requirements.npmWorkflowProblems ||
     (npmWorkflowDescriptor !== undefined &&
@@ -1192,12 +1248,13 @@ function validateReleaseOracleAdapters(
       "value" in stepDescriptor &&
       stepDescriptor.enumerable &&
       typeof stepDescriptor.value === "function");
-  if (!exactKeys || !exactNpm || !exactNpmWorkflow || !exactEvaluator || !exactStep) {
+  if (!exactKeys || !exactNpm || !exactNpmEvaluator || !exactNpmWorkflow || !exactEvaluator || !exactStep) {
     throw new errorConstructor(releaseOracleAdapterShapeMessage(requirements));
   }
 
   const closed: {
     npmContractProblems?: NpmContractProblemsAdapter;
+    npmEvaluatorProblems?: NpmEvaluatorProblemsAdapter;
     npmWorkflowProblems?: NpmWorkflowProblemsAdapter;
     registryEvaluatorProblems?: RegistryEvaluatorProblemsAdapter;
     registryStepProblems?: RegistryStepProblemsAdapter;
@@ -1207,6 +1264,14 @@ function validateReleaseOracleAdapters(
       configurable: false,
       enumerable: true,
       value: npmDescriptor.value as NpmContractProblemsAdapter,
+      writable: false
+    });
+  }
+  if (requirements.npmEvaluatorProblems && npmEvaluatorDescriptor !== undefined && "value" in npmEvaluatorDescriptor) {
+    defineObjectPropertyIntrinsic(closed, "npmEvaluatorProblems", {
+      configurable: false,
+      enumerable: true,
+      value: npmEvaluatorDescriptor.value as NpmEvaluatorProblemsAdapter,
       writable: false
     });
   }
@@ -1241,6 +1306,7 @@ type ProblemOracleInvocationKind =
   | "registry.evaluator"
   | "registry.step.run"
   | "registry.step.integrity"
+  | "npm.evaluator"
   | "npm.workflow"
   | "npm.contract.release"
   | "npm.contract.integrity";
@@ -1348,6 +1414,37 @@ function executeReleaseOracleInvocation(
         baselineProblems,
         mutantProblems
       });
+    }
+    case "npm.evaluator": {
+      const npmEvaluatorProblems = adapters?.npmEvaluatorProblems;
+      if (npmEvaluatorProblems === undefined) {
+        throw new errorConstructor("npm.evaluator invocation requires exact release oracle adapters");
+      }
+      const baseline = materializeOracleValue(invocation.baseline, sourceValues, prepared);
+      const mutant = materializeOracleValue(invocation.mutant, sourceValues, prepared);
+      if (baseline === mutant) {
+        throw new errorConstructor("npm.evaluator clean baseline must differ from its mutant");
+      }
+
+      const baselineResult: unknown = applyFunction(npmEvaluatorProblems, undefined, [baseline]);
+      assertAmbientIntrinsics();
+      const baselineProblems = snapshotOracleProblems(
+        baselineResult,
+        "npm.evaluator",
+        "baseline",
+        NPM_PROVENANCE_CONTRACT_PROBLEM
+      );
+      assertAmbientIntrinsics();
+      const mutantResult: unknown = applyFunction(npmEvaluatorProblems, undefined, [mutant]);
+      assertAmbientIntrinsics();
+      const mutantProblems = snapshotOracleProblems(
+        mutantResult,
+        "npm.evaluator",
+        "mutant",
+        NPM_PROVENANCE_CONTRACT_PROBLEM
+      );
+      assertAmbientIntrinsics();
+      return freezeObject({ kind: "npm.evaluator", baselineProblems, mutantProblems });
     }
     case "registry.step.run": {
       const registryStepProblems = adapters?.registryStepProblems;
@@ -1536,6 +1633,8 @@ function sameOracleInvocation(left: ReleaseOracleInvocation, right: ReleaseOracl
       return right.kind === "fixture.text";
     case "registry.evaluator":
       return right.kind === "registry.evaluator";
+    case "npm.evaluator":
+      return right.kind === "npm.evaluator";
     case "registry.step.run":
       return right.kind === "registry.step.run" && left.integrity === right.integrity;
     case "registry.step.integrity":
@@ -2388,6 +2487,7 @@ export class ReleaseMutationPlan {
                   valid = false;
                 }
                 break;
+              case "npm.evaluator":
               case "npm.workflow":
               case "npm.contract.release":
               case "npm.contract.integrity":
@@ -2453,6 +2553,7 @@ export class ReleaseMutationPlan {
       invocation?.kind === "registry.evaluator" ||
       invocation?.kind === "registry.step.run" ||
       invocation?.kind === "registry.step.integrity" ||
+      invocation?.kind === "npm.evaluator" ||
       invocation?.kind === "npm.workflow" ||
       invocation?.kind === "npm.contract.release" ||
       invocation?.kind === "npm.contract.integrity"
@@ -2464,7 +2565,7 @@ export class ReleaseMutationPlan {
         "invocation.kind",
         id,
         "invocation kind must be fixture.text, fixture.throw, registry.evaluator, registry.step.run, " +
-          "registry.step.integrity, npm.workflow, npm.contract.release, or npm.contract.integrity"
+          "registry.step.integrity, npm.evaluator, npm.workflow, npm.contract.release, or npm.contract.integrity"
       );
       valid = false;
     } else {
@@ -2529,7 +2630,12 @@ export class ReleaseMutationPlan {
       closedInvocation = freezeObject({ kind, baseline, mutant: invocationRoot, message });
     } else if (valid && baseline !== null && invocationRoot !== null && kind === "registry.evaluator") {
       closedInvocation = freezeObject({ kind, baseline, mutant: invocationRoot });
-    } else if (valid && baseline !== null && invocationRoot !== null && kind === "npm.workflow") {
+    } else if (
+      valid &&
+      baseline !== null &&
+      invocationRoot !== null &&
+      (kind === "npm.evaluator" || kind === "npm.workflow")
+    ) {
       closedInvocation = freezeObject({ kind, baseline, mutant: invocationRoot });
     } else if (
       valid &&
@@ -2991,6 +3097,7 @@ export class ReleaseMutationPlan {
           }
           return;
         case "npm.workflow":
+        case "npm.evaluator":
         case "npm.contract.release":
         case "npm.contract.integrity":
           if (expectation.problem !== NPM_PROVENANCE_CONTRACT_PROBLEM) {

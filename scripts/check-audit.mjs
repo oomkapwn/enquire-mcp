@@ -60,8 +60,6 @@ export const ALLOWLIST = {
  * Every entry must name the unreachable surface and an upstream removal trigger.
  */
 export const CONSUMER_ALLOWLIST = {
-  "GHSA-frvp-7c67-39w9":
-    "@modelcontextprotocol/node 2.0.0 declares @hono/node-server ^1.19.9, which cannot admit patched >=2.0.5; enquire and the official Node adapter use getRequestListener/toNodeHandler only and never import or mount serveStatic, the sole affected surface. RC-only; stable remains blocked. Remove when https://github.com/modelcontextprotocol/typescript-sdk/issues/2531 is resolved by an official @modelcontextprotocol/node release.",
   "GHSA-xcpc-8h2w-3j85":
     "transformers 4.2.0 pins onnxruntime-node 1.24.3, whose adm-zip ^0.5.16 cannot admit patched 0.6.0; enquire never accepts or extracts caller-supplied ZIP archives. Remove when https://github.com/huggingface/transformers.js/issues/1727 resolves upstream.",
   "GHSA-f88m-g3jw-g9cj":
@@ -523,7 +521,7 @@ if (isEntrypoint(import.meta.url)) {
   }
   if (staleSourceAllowlist.length > 0 || staleConsumerAllowlist.length > 0) {
     console.error(
-      `[check-audit] FAIL — stale allowlist entries (upstream is now clean): ` +
+      `[check-audit] FAIL — stale allowlist entries (advisory absent from current audit report): ` +
         [
           staleSourceAllowlist.length ? `source=${staleSourceAllowlist.join(",")}` : "",
           staleConsumerAllowlist.length ? `consumer=${staleConsumerAllowlist.join(",")}` : ""
@@ -531,7 +529,7 @@ if (isEntrypoint(import.meta.url)) {
           .filter(Boolean)
           .join(" ")
     );
-    console.error("Remove the resolved exception instead of carrying a silent permanent waiver.");
+    console.error("Remove the currently unobserved exception instead of carrying a silent permanent waiver.");
     process.exit(1);
   }
   if (invalidSourceAllowlist.length > 0 || invalidConsumerAllowlist.length > 0) {

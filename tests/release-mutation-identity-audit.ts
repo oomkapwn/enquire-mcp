@@ -262,6 +262,7 @@ interface DeclarativeInvocationIdentity {
 
 type ReleaseOracleAdapterProperty =
   | "npmContractProblems"
+  | "npmEvaluatorProblems"
   | "npmWorkflowProblems"
   | "registryEvaluatorProblems"
   | "registryStepProblems";
@@ -271,6 +272,7 @@ interface ReleaseOracleAdapterBinding {
     | "mcpRegistryEvaluatorProblems"
     | "mcpRegistryRunProblems"
     | "npmProvenanceContractProblems"
+    | "npmProvenanceEvaluatorProblems"
     | "npmProvenanceWorkflowProblems";
   readonly property: ReleaseOracleAdapterProperty;
 }
@@ -319,13 +321,15 @@ const MATRIX_TITLE = "keeps release.yml wired to the shared evaluator and an exa
 const SOURCE_COMMIT = "8420e2fca3ed0dac994859a9e9a30b933d5ddf9e";
 const MATRIX_SOURCE_SHA256 = "3fa0b67411e2fc0f4d7c6bce6075ba91eb25edc19a210b5c2f8dd408def6e18b";
 const MATRIX_SLICE_SHA256 = "caca0093c744df9f6c6cdd0e8200fd8df45052e784297079887ea48686c5e07f";
-const CURRENT_HYBRID_SOURCE_SHA256 = "c7a18b74a261a1905e7702ad15a18c43bf48b163f775e2556a1238f3195f48f1";
-const CURRENT_HYBRID_MATRIX_SLICE_SHA256 = "d93e21fdc047a2f4a3b4ef2f5f758663ba2a338aceb36cf79bcfdd55fd798575";
+const CURRENT_HYBRID_SOURCE_SHA256 = "2690d387ee07a5125586725e590aba96a1d42f762b017c6589cc8619203c72b3";
+const CURRENT_HYBRID_MATRIX_SLICE_SHA256 = "b621f450493e33472427042f7594133fb77618d7fb768e559a05663118e3bac2";
 const IDENTITY_FIXTURE_SHA256 = "9ccc4d25c0051d9516c9e7795dc6499a4ad024f33f67cea34776d59d5bbe6ce3";
 const MUTATION_MATCH_COUNT_NODE_SHA256 = "5e57cd7a2f1dd60cc4bda3b10c4a7e906f7e5b9604902eff5e54f20bd0c8f49d";
 const NPM_PROVENANCE_PROBLEM_NODE_SHA256 = "f6f47a5f8eb309db455cf684ca187c5c1ce6dadd0443e4c11475a779a5944334";
 const NPM_PROVENANCE_DETECTOR_NODE_SHA256 = "c453e6c43d71d042e8609997e13a461891e299b494d84242b02227a0b96a825f";
 const NPM_PROVENANCE_WORKFLOW_DETECTOR_NODE_SHA256 = "1361143df29c345b53371ecd39f8fcc44b607a590ebb0068682303f19885c082";
+const NPM_PROVENANCE_EVALUATOR_DETECTOR_NODE_SHA256 =
+  "99506547faeba03621f4a30f9c2262c3873ec974df5621741e4db01fabb5ef14";
 const REGISTRY_EVALUATOR_PROBLEM_NODE_SHA256 = "4c374cc179d7a95cdf25085358c62e482134824abca913b126167d3bb8397b26";
 const REGISTRY_EVALUATOR_DETECTOR_NODE_SHA256 = "b45c5aed44cf1bff818d5ddac4f80e8fb805e61300f93f77afc299d3e8f0047c";
 const REGISTRY_STEP_DETECTOR_NODE_SHA256 = "5dec02c19d724cf373acc0c9b65fba7309b4b3e5c4ca6cff5422ec5c64e12db6";
@@ -438,6 +442,7 @@ const MIGRATED_NPM_WORKFLOW_IDS = [
   "release.m150",
   "release.m151"
 ] as const;
+const MIGRATED_NPM_EVALUATOR_IDS = ["release.m152"] as const;
 const MIGRATED_REGISTRY_EVALUATOR_ID_SET: ReadonlySet<string> = new Set<string>(MIGRATED_REGISTRY_EVALUATOR_IDS);
 const MIGRATED_REGISTRY_RUN_ID_SET: ReadonlySet<string> = new Set<string>(MIGRATED_REGISTRY_RUN_IDS);
 const MIGRATED_REGISTRY_STEP_INTEGRITY_ID_SET: ReadonlySet<string> = new Set<string>(
@@ -448,13 +453,15 @@ const MIGRATED_NPM_CONTRACT_INTEGRITY_ID_SET: ReadonlySet<string> = new Set<stri
   MIGRATED_NPM_CONTRACT_INTEGRITY_IDS
 );
 const MIGRATED_NPM_WORKFLOW_ID_SET: ReadonlySet<string> = new Set<string>(MIGRATED_NPM_WORKFLOW_IDS);
+const MIGRATED_NPM_EVALUATOR_ID_SET: ReadonlySet<string> = new Set<string>(MIGRATED_NPM_EVALUATOR_IDS);
 const MIGRATED_DECLARATIVE_IDS = [
   ...MIGRATED_REGISTRY_EVALUATOR_IDS,
   ...MIGRATED_REGISTRY_STEP_MUTATION_IDS,
   ...MIGRATED_REGISTRY_STEP_INTEGRITY_IDS,
   ...MIGRATED_NPM_CONTRACT_RELEASE_IDS,
   ...MIGRATED_NPM_CONTRACT_INTEGRITY_IDS,
-  ...MIGRATED_NPM_WORKFLOW_MUTATION_IDS
+  ...MIGRATED_NPM_WORKFLOW_MUTATION_IDS,
+  ...MIGRATED_NPM_EVALUATOR_IDS
 ] as const;
 const MIGRATED_DECLARATIVE_ID_SET: ReadonlySet<string> = new Set<string>(MIGRATED_DECLARATIVE_IDS);
 const MIGRATED_DECLARATIVE_ROOT_IDS = [
@@ -463,7 +470,8 @@ const MIGRATED_DECLARATIVE_ROOT_IDS = [
   ...MIGRATED_REGISTRY_STEP_INTEGRITY_IDS,
   ...MIGRATED_NPM_CONTRACT_RELEASE_IDS,
   ...MIGRATED_NPM_CONTRACT_INTEGRITY_IDS,
-  ...MIGRATED_NPM_WORKFLOW_IDS
+  ...MIGRATED_NPM_WORKFLOW_IDS,
+  ...MIGRATED_NPM_EVALUATOR_IDS
 ] as const;
 const MIGRATED_DECLARATIVE_ALL_IDS: ReadonlySet<string> = new Set<string>([
   "release.m009",
@@ -1933,6 +1941,7 @@ function requiredReleaseOracleAdapterBindings(
     (identityCase) =>
       identityCase.invocationKind === "npm.contract.release" || identityCase.invocationKind === "npm.contract.integrity"
   );
+  const requiresNpmEvaluator = cases.some((identityCase) => identityCase.invocationKind === "npm.evaluator");
   const requiresNpmWorkflow = cases.some((identityCase) => identityCase.invocationKind === "npm.workflow");
   const bindings: ReleaseOracleAdapterBinding[] = [];
   if (requiresEvaluator) {
@@ -1947,6 +1956,9 @@ function requiredReleaseOracleAdapterBindings(
   if (requiresNpmContract) {
     bindings.push({ property: "npmContractProblems", binding: "npmProvenanceContractProblems" });
   }
+  if (requiresNpmEvaluator) {
+    bindings.push({ property: "npmEvaluatorProblems", binding: "npmProvenanceEvaluatorProblems" });
+  }
   if (requiresNpmWorkflow) {
     bindings.push({ property: "npmWorkflowProblems", binding: "npmProvenanceWorkflowProblems" });
   }
@@ -1959,7 +1971,7 @@ function exactReleaseOracleAdapterObject(
 ): value is ts.ObjectLiteralExpression {
   if (
     expectedBindings.length < 1 ||
-    expectedBindings.length > 4 ||
+    expectedBindings.length > 5 ||
     value === undefined ||
     !ts.isObjectLiteralExpression(value) ||
     value.properties.length !== expectedBindings.length
@@ -2354,7 +2366,7 @@ function syntheticAdapterReferencesAreExact(
   source: string,
   expectedBindings: readonly ReleaseOracleAdapterBinding[]
 ): boolean {
-  if (expectedBindings.length < 1 || expectedBindings.length > 4) return false;
+  if (expectedBindings.length < 1 || expectedBindings.length > 5) return false;
   const sourceFile = ts.createSourceFile(
     "release-mutation-adapter-helper-control.ts",
     source,
@@ -2389,13 +2401,23 @@ function validateReleaseOracleAdapterReferenceSemantics(problems: string[]): voi
   const npm: readonly ReleaseOracleAdapterBinding[] = [
     { property: "npmContractProblems", binding: "npmProvenanceContractProblems" }
   ];
+  const npmEvaluator: readonly ReleaseOracleAdapterBinding[] = [
+    { property: "npmEvaluatorProblems", binding: "npmProvenanceEvaluatorProblems" }
+  ];
   const npmWorkflow: readonly ReleaseOracleAdapterBinding[] = [
     { property: "npmWorkflowProblems", binding: "npmProvenanceWorkflowProblems" }
   ];
-  const combined: readonly ReleaseOracleAdapterBinding[] = [...evaluator, ...step, ...npm, ...npmWorkflow];
+  const combined: readonly ReleaseOracleAdapterBinding[] = [
+    ...evaluator,
+    ...step,
+    ...npm,
+    ...npmEvaluator,
+    ...npmWorkflow
+  ];
   const combinedObject =
     "{ registryEvaluatorProblems: mcpRegistryEvaluatorProblems, registryStepProblems: mcpRegistryRunProblems, " +
-    "npmContractProblems: npmProvenanceContractProblems, npmWorkflowProblems: npmProvenanceWorkflowProblems }";
+    "npmContractProblems: npmProvenanceContractProblems, npmEvaluatorProblems: npmProvenanceEvaluatorProblems, " +
+    "npmWorkflowProblems: npmProvenanceWorkflowProblems }";
   if (
     !syntheticAdapterReferencesAreExact(
       "releaseMutationPlan.execute({ registryEvaluatorProblems: mcpRegistryEvaluatorProblems });",
@@ -2413,12 +2435,17 @@ function validateReleaseOracleAdapterReferenceSemantics(problems: string[]): voi
       "releaseMutationPlan.execute({ npmWorkflowProblems: npmProvenanceWorkflowProblems });",
       npmWorkflow
     ) ||
+    !syntheticAdapterReferencesAreExact(
+      "releaseMutationPlan.execute({ npmEvaluatorProblems: npmProvenanceEvaluatorProblems });",
+      npmEvaluator
+    ) ||
     !syntheticAdapterReferencesAreExact(`releaseMutationPlan.execute(${combinedObject});`, combined) ||
     !syntheticAdapterReferencesAreExact(`releaseMutationPlan.executeThrough(root, ${combinedObject});`, combined) ||
     syntheticAdapterReferencesAreExact(
       "releaseMutationPlan.execute({ registryEvaluatorProblems: mcpRegistryRunProblems, " +
         "registryStepProblems: mcpRegistryEvaluatorProblems, " +
         "npmContractProblems: npmProvenanceContractProblems, " +
+        "npmEvaluatorProblems: npmProvenanceEvaluatorProblems, " +
         "npmWorkflowProblems: npmProvenanceWorkflowProblems });",
       combined
     ) ||
@@ -2431,20 +2458,25 @@ function validateReleaseOracleAdapterReferenceSemantics(problems: string[]): voi
       npmWorkflow
     ) ||
     syntheticAdapterReferencesAreExact(
+      "releaseMutationPlan.execute({ npmEvaluatorProblems: npmProvenanceWorkflowProblems });",
+      npmEvaluator
+    ) ||
+    syntheticAdapterReferencesAreExact(
       "releaseMutationPlan.execute({ registryEvaluatorProblems: mcpRegistryEvaluatorProblems });",
       combined
     ) ||
     syntheticAdapterReferencesAreExact(
       "releaseMutationPlan.execute({ npmWorkflowProblems: npmProvenanceWorkflowProblems, " +
         "registryEvaluatorProblems: mcpRegistryEvaluatorProblems, registryStepProblems: mcpRegistryRunProblems, " +
-        "npmContractProblems: npmProvenanceContractProblems });",
+        "npmContractProblems: npmProvenanceContractProblems, " +
+        "npmEvaluatorProblems: npmProvenanceEvaluatorProblems });",
       combined
     ) ||
     syntheticAdapterReferencesAreExact("releaseMutationPlan.execute({});", []) ||
     syntheticAdapterReferencesAreExact(`releaseMutationPlan.executeThrough(${combinedObject}, root);`, combined)
   ) {
     problems.push(
-      "release mutation adapter reference helper must admit only exact one-, two-, three- or four-adapter " +
+      "release mutation adapter reference helper must admit only exact one- through five-adapter " +
         "execute/executeThrough objects"
     );
   }
@@ -2663,12 +2695,12 @@ function scanHybridDeclarativeMatrix(matrix: MatrixScan, problems: string[]): Hy
           problems
         );
         const expectedInventory = {
-          total: 81,
-          first: 78,
+          total: 82,
+          first: 79,
           all: 3,
-          cases: 78,
-          expectations: 78,
-          roots: 78,
+          cases: 79,
+          expectations: 79,
+          roots: 79,
           dependencyOnly: 3
         } as const;
         if (inventory !== null) {
@@ -3040,7 +3072,9 @@ function scanHybridDeclarativeMatrix(matrix: MatrixScan, problems: string[]): Hy
     "mutation:release.m150",
     "case:release.case.m150",
     "mutation:release.m151",
-    "case:release.case.m151"
+    "case:release.case.m151",
+    "mutation:release.m152",
+    "case:release.case.m152"
   ];
   const evaluatorRegistrationCount = 1 + MIGRATED_REGISTRY_EVALUATOR_IDS.length * 2;
   const registryStepRegistrationCount =
@@ -3051,7 +3085,7 @@ function scanHybridDeclarativeMatrix(matrix: MatrixScan, problems: string[]): Hy
       MIGRATED_NPM_CONTRACT_INTEGRITY_IDS.length +
       MIGRATED_NPM_WORKFLOW_PREFIX_IDS.length) *
       2 +
-    26;
+    28;
   const straightLineEvaluatorRegistrations = registrationStatementIndexes
     .slice(0, evaluatorRegistrationCount)
     .every((statementIndex, index) => statementIndex === sourceStatementIndex + index);
@@ -3083,7 +3117,7 @@ function scanHybridDeclarativeMatrix(matrix: MatrixScan, problems: string[]): Hy
       "release mutation hybrid registrations must be exact contiguous source/m002-m037 and " +
         "source/m108 dependency/m107,m109-m111 mutation/case and source/m112-m138 mutation/case then " +
         "fragment source/m140 dependency/m139 mutation/case then m141-m143 mutation/case and " +
-        "fragment source/m145 dependency/m144 mutation/case then m146-m151 mutation/case sequences; " +
+        "fragment source/m145 dependency/m144 mutation/case then m146-m152 mutation/case sequences; " +
         `first mismatch ${mismatchIndex + 1}: expected ${expectedEntry}, found ${observedEntry}`
     );
   }
@@ -3120,7 +3154,35 @@ function scanHybridDeclarativeMatrix(matrix: MatrixScan, problems: string[]): Hy
   if (!exactBaselineAssertion) {
     problems.push("release mutation hybrid prelude must start with one exact clean registry evaluator assertion");
   }
-  const npmBaselineAssertion = exactExpectMatcher(statements[aliasStatementIndex - 2], "toEqual");
+  const exactMcpbInput = (value: ts.Expression | undefined, property: string): boolean =>
+    value !== undefined &&
+    ts.isPropertyAccessExpression(value) &&
+    value.questionDotToken === undefined &&
+    ts.isIdentifier(value.expression) &&
+    value.expression.text === "mcpbInputs" &&
+    value.name.text === property;
+  const npmEvaluatorBaselineAssertion = exactExpectMatcher(statements[aliasStatementIndex - 2], "toEqual");
+  const npmEvaluatorBaselineDetector = npmEvaluatorBaselineAssertion?.actual;
+  const npmEvaluatorIntegrityInput =
+    npmEvaluatorBaselineDetector !== undefined && ts.isCallExpression(npmEvaluatorBaselineDetector)
+      ? npmEvaluatorBaselineDetector.arguments[0]
+      : undefined;
+  const exactNpmEvaluatorBaselineAssertion =
+    npmEvaluatorBaselineAssertion !== null &&
+    npmEvaluatorBaselineDetector !== undefined &&
+    ts.isCallExpression(npmEvaluatorBaselineDetector) &&
+    npmEvaluatorBaselineDetector.questionDotToken === undefined &&
+    npmEvaluatorBaselineDetector.typeArguments === undefined &&
+    ts.isIdentifier(npmEvaluatorBaselineDetector.expression) &&
+    npmEvaluatorBaselineDetector.expression.text === "npmProvenanceEvaluatorProblems" &&
+    npmEvaluatorBaselineDetector.arguments.length === 1 &&
+    exactMcpbInput(npmEvaluatorIntegrityInput, "integrity") &&
+    ts.isArrayLiteralExpression(npmEvaluatorBaselineAssertion.expected) &&
+    npmEvaluatorBaselineAssertion.expected.elements.length === 0;
+  if (!exactNpmEvaluatorBaselineAssertion) {
+    problems.push("release mutation hybrid prelude must retain one exact clean npm provenance evaluator assertion");
+  }
+  const npmBaselineAssertion = exactExpectMatcher(statements[aliasStatementIndex - 3], "toEqual");
   const npmBaselineDetector = npmBaselineAssertion?.actual;
   const npmReleaseInput =
     npmBaselineDetector !== undefined && ts.isCallExpression(npmBaselineDetector)
@@ -3130,13 +3192,6 @@ function scanHybridDeclarativeMatrix(matrix: MatrixScan, problems: string[]): Hy
     npmBaselineDetector !== undefined && ts.isCallExpression(npmBaselineDetector)
       ? npmBaselineDetector.arguments[1]
       : undefined;
-  const exactMcpbInput = (value: ts.Expression | undefined, property: string): boolean =>
-    value !== undefined &&
-    ts.isPropertyAccessExpression(value) &&
-    value.questionDotToken === undefined &&
-    ts.isIdentifier(value.expression) &&
-    value.expression.text === "mcpbInputs" &&
-    value.name.text === property;
   const exactNpmBaselineAssertion =
     npmBaselineAssertion !== null &&
     npmBaselineDetector !== undefined &&
@@ -3209,6 +3264,7 @@ function scanHybridDeclarativeMatrix(matrix: MatrixScan, problems: string[]): Hy
   let requiresRegistryEvaluatorProblems = false;
   let requiresRegistryStepProblems = false;
   let requiresNpmContractProblems = false;
+  let requiresNpmEvaluatorProblems = false;
   let requiresNpmWorkflowProblems = false;
   for (const identityCase of cases) {
     switch (identityCase.invocationKind) {
@@ -3222,6 +3278,9 @@ function scanHybridDeclarativeMatrix(matrix: MatrixScan, problems: string[]): Hy
       case "npm.contract.integrity":
       case "npm.contract.release":
         requiresNpmContractProblems = true;
+        break;
+      case "npm.evaluator":
+        requiresNpmEvaluatorProblems = true;
         break;
       case "npm.workflow":
         requiresNpmWorkflowProblems = true;
@@ -3294,6 +3353,18 @@ function scanHybridDeclarativeMatrix(matrix: MatrixScan, problems: string[]): Hy
         problems.push(
           "release mutation hybrid execute adapter must bind npmContractProblems exactly to " +
             "npmProvenanceContractProblems"
+        );
+      }
+      exact = exact && exactAdapter;
+    }
+    if (requiresNpmEvaluatorProblems) {
+      const adapter = adapters?.get("npmEvaluatorProblems");
+      const exactAdapter =
+        adapter !== undefined && ts.isIdentifier(adapter) && adapter.text === "npmProvenanceEvaluatorProblems";
+      if (!exactAdapter) {
+        problems.push(
+          "release mutation hybrid execute adapter must bind npmEvaluatorProblems exactly to " +
+            "npmProvenanceEvaluatorProblems"
         );
       }
       exact = exact && exactAdapter;
@@ -6083,6 +6154,13 @@ function validateFrozenDeclarativeInvocationMatchingSemantics(manifest: Identity
     companionSlot: null,
     companionHandle: null
   };
+  const npmEvaluatorM152: DeclarativeInvocationIdentity = {
+    invocationKind: "npm.evaluator",
+    baselineHandle: "releaseIntegritySource",
+    mutantHandle: "releaseMutationM152",
+    companionSlot: null,
+    companionHandle: null
+  };
   if (
     !matches("release.m002", evaluator) ||
     !matches("release.m043", run) ||
@@ -6125,6 +6203,7 @@ function validateFrozenDeclarativeInvocationMatchingSemantics(manifest: Identity
     !matches("release.m149", npmWorkflowM149) ||
     !matches("release.m150", npmWorkflowM150) ||
     !matches("release.m151", npmWorkflowM151) ||
+    !matches("release.m152", npmEvaluatorM152) ||
     matches("release.m035", { ...integrity, mutantHandle: "releaseMutationM035" }) ||
     matches("release.m111", { ...evaluator, mutantHandle: "releaseMutationM111" }) ||
     matches("release.m043", { ...run, companionSlot: "run" }) ||
@@ -6215,6 +6294,9 @@ function validateFrozenDeclarativeInvocationMatchingSemantics(manifest: Identity
     matches("release.m150", { ...npmWorkflowM150, mutantHandle: "releaseMutationM149" }) ||
     matches("release.m150", { ...npmWorkflowM150, mutantHandle: "releaseMutationM151" }) ||
     matches("release.m151", { ...npmWorkflowM151, mutantHandle: "releaseMutationM150" }) ||
+    matches("release.m151", { ...npmWorkflowM151, mutantHandle: "releaseMutationM152" }) ||
+    matches("release.m152", { ...npmEvaluatorM152, mutantHandle: "releaseMutationM151" }) ||
+    matches("release.m152", { ...npmEvaluatorM152, mutantHandle: "releaseMutationM153" }) ||
     matches("release.m115", { ...npmWorkflowM115, baselineHandle: "releaseIntegritySource" }) ||
     matches("release.m115", { ...npmWorkflowM115, invocationKind: "npm.contract.release" }) ||
     matches("release.m115", {
@@ -6459,6 +6541,14 @@ function validateFrozenDeclarativeInvocationMatchingSemantics(manifest: Identity
       ...npmWorkflowM151,
       companionSlot: "integrity",
       companionHandle: "releaseIntegritySource"
+    }) ||
+    matches("release.m152", { ...npmEvaluatorM152, baselineHandle: "releaseWorkflowFixtureSource" }) ||
+    matches("release.m152", { ...npmEvaluatorM152, invocationKind: "registry.evaluator" }) ||
+    matches("release.m152", { ...npmEvaluatorM152, invocationKind: "npm.workflow" }) ||
+    matches("release.m152", {
+      ...npmEvaluatorM152,
+      companionSlot: "release",
+      companionHandle: "releaseWorkflowFixtureSource"
     })
   ) {
     problems.push(
@@ -6563,13 +6653,13 @@ function validateHybridPartition(
     .filter((mutation) => mutation.mode === "all")
     .map((mutation) => mutation.id);
   if (
-    declarative.mutations.length !== 81 ||
-    declarativeFirst !== 78 ||
+    declarative.mutations.length !== 82 ||
+    declarativeFirst !== 79 ||
     declarativeAll !== 3 ||
     JSON.stringify(observedAllIds) !== JSON.stringify([...MIGRATED_DECLARATIVE_ALL_IDS])
   ) {
     problems.push(
-      `release mutation hybrid migrated modes must be 81 total / 78 first / exact all m009,m018,m034; ` +
+      `release mutation hybrid migrated modes must be 82 total / 79 first / exact all m009,m018,m034; ` +
         `found ${declarative.mutations.length} / ${declarativeFirst} / ${observedAllIds.join(",")}`
     );
   }
@@ -6601,9 +6691,11 @@ function validateHybridPartition(
               ? "npm.contract.release"
               : rootId !== undefined && MIGRATED_NPM_CONTRACT_INTEGRITY_ID_SET.has(rootId)
                 ? "npm.contract.integrity"
-                : rootId !== undefined && MIGRATED_NPM_WORKFLOW_ID_SET.has(rootId)
-                  ? "npm.workflow"
-                  : null;
+                : rootId !== undefined && MIGRATED_NPM_EVALUATOR_ID_SET.has(rootId)
+                  ? "npm.evaluator"
+                  : rootId !== undefined && MIGRATED_NPM_WORKFLOW_ID_SET.has(rootId)
+                    ? "npm.workflow"
+                    : null;
     if (!exactInvocation) {
       problems.push(
         `release mutation hybrid case ${observed.id} invocation must retain its exact frozen oracle adapter`
@@ -6614,7 +6706,9 @@ function validateHybridPartition(
         ? REGISTRY_EVALUATOR_PROBLEM
         : expectedInvocationKind === "registry.step.run" || expectedInvocationKind === "registry.step.integrity"
           ? REGISTRY_WORKFLOW_PROBLEM
-          : expectedInvocationKind === "npm.contract.release" || expectedInvocationKind === "npm.contract.integrity"
+          : expectedInvocationKind === "npm.contract.release" ||
+              expectedInvocationKind === "npm.contract.integrity" ||
+              expectedInvocationKind === "npm.evaluator"
             ? NPM_PROVENANCE_PROBLEM
             : expectedInvocationKind === "npm.workflow"
               ? NPM_PROVENANCE_PROBLEM
@@ -6638,8 +6732,8 @@ function validateHybridPartition(
       problems.push(`release mutation hybrid case ${observed.id} disagrees with its exact frozen identity`);
     }
   }
-  if (declarative.cases.length !== 78) {
-    problems.push(`release mutation hybrid migrated cases must equal 78; found ${declarative.cases.length}`);
+  if (declarative.cases.length !== 79) {
+    problems.push(`release mutation hybrid migrated cases must equal 79; found ${declarative.cases.length}`);
   }
 
   const frozenLegacyOrder = [...manifest.mutations].sort((left, right) => left.legacyOrder - right.legacyOrder);
@@ -6647,8 +6741,8 @@ function validateHybridPartition(
   const legacyById = new Map<string, LegacyMutationCall>();
   const numericDeclarations = matrix.declarations;
   const stringDeclarations = matrix.declarations;
-  if (matrix.calls.length !== 479) {
-    problems.push(`release mutation hybrid remaining legacy calls must equal 479; found ${matrix.calls.length}`);
+  if (matrix.calls.length !== 478) {
+    problems.push(`release mutation hybrid remaining legacy calls must equal 478; found ${matrix.calls.length}`);
   }
   const comparableLength = Math.min(expectedLegacy.length, matrix.calls.length);
   for (let index = 0; index < comparableLength; index++) {
@@ -6706,18 +6800,18 @@ function validateHybridPartition(
     0
   );
   if (
-    expectedLegacy.length !== 479 ||
-    legacyFirst !== 460 ||
+    expectedLegacy.length !== 478 ||
+    legacyFirst !== 459 ||
     legacyAll !== 19 ||
-    legacyRoots !== 458 ||
+    legacyRoots !== 457 ||
     legacyDependencies !== 21 ||
-    legacyCases.length !== 458 ||
-    legacyChecks !== 463 ||
-    legacyLeaves !== 468
+    legacyCases.length !== 457 ||
+    legacyChecks !== 462 ||
+    legacyLeaves !== 467
   ) {
     problems.push(
-      `release mutation hybrid frozen partition must retain 479=460/19, 458 roots/cases, 21 dependencies, ` +
-        `463 checks and 468 leaves; found ${expectedLegacy.length}=${legacyFirst}/${legacyAll}, ` +
+      `release mutation hybrid frozen partition must retain 478=459/19, 457 roots/cases, 21 dependencies, ` +
+        `462 checks and 467 leaves; found ${expectedLegacy.length}=${legacyFirst}/${legacyAll}, ` +
         `${legacyRoots}/${legacyCases.length}, ${legacyDependencies}, ${legacyChecks}, ${legacyLeaves}`
     );
   }
@@ -7532,9 +7626,9 @@ function validateRemainingLegacyMatchers(
       });
     }
   }
-  if (cases !== 458 || checks !== 463 || leaves !== 468) {
+  if (cases !== 457 || checks !== 462 || leaves !== 467) {
     problems.push(
-      `release mutation hybrid remaining matcher census must be 458 cases / 463 checks / 468 leaves; ` +
+      `release mutation hybrid remaining matcher census must be 457 cases / 462 checks / 467 leaves; ` +
         `found ${cases} / ${checks} / ${leaves}`
     );
   }
@@ -7736,6 +7830,7 @@ function validateReleaseOraclePins(matrix: MatrixScan, declarative: HybridDeclar
   };
   exactNodeHash("mutationMatchCount", MUTATION_MATCH_COUNT_NODE_SHA256);
   exactNodeHash("npmProvenanceContractProblems", NPM_PROVENANCE_DETECTOR_NODE_SHA256);
+  exactNodeHash("npmProvenanceEvaluatorProblems", NPM_PROVENANCE_EVALUATOR_DETECTOR_NODE_SHA256);
   exactNodeHash("npmProvenanceWorkflowProblems", NPM_PROVENANCE_WORKFLOW_DETECTOR_NODE_SHA256);
   exactNodeHash("mcpRegistryEvaluatorProblems", REGISTRY_EVALUATOR_DETECTOR_NODE_SHA256);
   exactNodeHash("mcpRegistryStepProblems", REGISTRY_STEP_DETECTOR_NODE_SHA256);
@@ -7780,6 +7875,11 @@ function validateReleaseOraclePins(matrix: MatrixScan, declarative: HybridDeclar
   let npmWorkflowAliases = 0;
   let npmWorkflowWrites = 0;
   let npmWorkflowOtherReferences = 0;
+  let npmEvaluatorDirectBindings = 0;
+  let npmEvaluatorShadowBindings = 0;
+  let npmEvaluatorAliases = 0;
+  let npmEvaluatorWrites = 0;
+  let npmEvaluatorOtherReferences = 0;
   let runDirectBindings = 0;
   let runShadowBindings = 0;
   let runAliases = 0;
@@ -7801,6 +7901,7 @@ function validateReleaseOraclePins(matrix: MatrixScan, declarative: HybridDeclar
     if (ts.isIdentifier(name)) {
       if (name.text === "mcpRegistryEvaluatorProblems") shadowBindings++;
       if (name.text === "npmProvenanceContractProblems") npmShadowBindings++;
+      if (name.text === "npmProvenanceEvaluatorProblems") npmEvaluatorShadowBindings++;
       if (name.text === "npmProvenanceWorkflowProblems") npmWorkflowShadowBindings++;
       if (name.text === "mcpRegistryStepProblems") stepShadowBindings++;
       if (name.text === "mcpRegistryRunProblems") runShadowBindings++;
@@ -7844,6 +7945,9 @@ function validateReleaseOraclePins(matrix: MatrixScan, declarative: HybridDeclar
     } else if (ts.isFunctionDeclaration(node) && node.name?.text === "npmProvenanceContractProblems") {
       if (node.parent === matrix.sourceFile) npmDirectBindings++;
       else npmShadowBindings++;
+    } else if (ts.isFunctionDeclaration(node) && node.name?.text === "npmProvenanceEvaluatorProblems") {
+      if (node.parent === matrix.sourceFile) npmEvaluatorDirectBindings++;
+      else npmEvaluatorShadowBindings++;
     } else if (ts.isFunctionDeclaration(node) && node.name?.text === "npmProvenanceWorkflowProblems") {
       if (node.parent === matrix.sourceFile) npmWorkflowDirectBindings++;
       else npmWorkflowShadowBindings++;
@@ -7873,6 +7977,7 @@ function validateReleaseOraclePins(matrix: MatrixScan, declarative: HybridDeclar
       const initializer = unwrappedIdentifier(node.initializer);
       if (initializer?.text === "mcpRegistryEvaluatorProblems") aliases++;
       if (initializer?.text === "npmProvenanceContractProblems") npmAliases++;
+      if (initializer?.text === "npmProvenanceEvaluatorProblems") npmEvaluatorAliases++;
       if (initializer?.text === "npmProvenanceWorkflowProblems") npmWorkflowAliases++;
       if (initializer?.text === "mcpRegistryStepProblems") stepAliases++;
       if (initializer?.text === "mcpRegistryRunProblems") runAliases++;
@@ -7891,6 +7996,13 @@ function validateReleaseOraclePins(matrix: MatrixScan, declarative: HybridDeclar
       assignmentTargetContainsIdentifier(node.left, "npmProvenanceContractProblems")
     ) {
       npmWrites++;
+    }
+    if (
+      ts.isBinaryExpression(node) &&
+      ORACLE_BINDING_ASSIGNMENT_OPERATORS.has(node.operatorToken.kind) &&
+      assignmentTargetContainsIdentifier(node.left, "npmProvenanceEvaluatorProblems")
+    ) {
+      npmEvaluatorWrites++;
     }
     if (
       ts.isBinaryExpression(node) &&
@@ -7944,6 +8056,13 @@ function validateReleaseOraclePins(matrix: MatrixScan, declarative: HybridDeclar
     if (
       (ts.isPrefixUnaryExpression(node) || ts.isPostfixUnaryExpression(node)) &&
       (node.operator === ts.SyntaxKind.PlusPlusToken || node.operator === ts.SyntaxKind.MinusMinusToken) &&
+      assignmentTargetContainsIdentifier(node.operand, "npmProvenanceEvaluatorProblems")
+    ) {
+      npmEvaluatorWrites++;
+    }
+    if (
+      (ts.isPrefixUnaryExpression(node) || ts.isPostfixUnaryExpression(node)) &&
+      (node.operator === ts.SyntaxKind.PlusPlusToken || node.operator === ts.SyntaxKind.MinusMinusToken) &&
       assignmentTargetContainsIdentifier(node.operand, "npmProvenanceWorkflowProblems")
     ) {
       npmWorkflowWrites++;
@@ -7989,6 +8108,13 @@ function validateReleaseOraclePins(matrix: MatrixScan, declarative: HybridDeclar
       assignmentTargetContainsIdentifier(node.initializer, "npmProvenanceContractProblems")
     ) {
       npmWrites++;
+    }
+    if (
+      (ts.isForOfStatement(node) || ts.isForInStatement(node)) &&
+      !ts.isVariableDeclarationList(node.initializer) &&
+      assignmentTargetContainsIdentifier(node.initializer, "npmProvenanceEvaluatorProblems")
+    ) {
+      npmEvaluatorWrites++;
     }
     if (
       (ts.isForOfStatement(node) || ts.isForInStatement(node)) &&
@@ -8095,6 +8221,24 @@ function validateReleaseOraclePins(matrix: MatrixScan, declarative: HybridDeclar
         npmWorkflowOtherReferences++;
       }
     }
+    if (ts.isIdentifier(node) && node.text === "npmProvenanceEvaluatorProblems") {
+      const parent = node.parent;
+      const exactDeclaration =
+        ts.isFunctionDeclaration(parent) && parent.name === node && parent.parent === matrix.sourceFile;
+      const exactDirectCall =
+        ts.isCallExpression(parent) &&
+        parent.expression === node &&
+        parent.questionDotToken === undefined &&
+        parent.typeArguments === undefined &&
+        parent.arguments.length === 1;
+      if (
+        !exactDeclaration &&
+        !exactDirectCall &&
+        !isExactReleaseOracleAdapterReference(node, requiredAdapterBindings)
+      ) {
+        npmEvaluatorOtherReferences++;
+      }
+    }
     if (ts.isIdentifier(node) && node.text === "mcpRegistryStepProblems") {
       const parent = node.parent;
       const exactDeclaration =
@@ -8170,6 +8314,18 @@ function validateReleaseOraclePins(matrix: MatrixScan, declarative: HybridDeclar
         `shadows; found ${npmWorkflowDirectBindings}/${npmWorkflowShadowBindings}`
     );
   }
+  if (npmEvaluatorDirectBindings !== 1 || npmEvaluatorShadowBindings !== 0) {
+    problems.push(
+      `release mutation hybrid npm evaluator binding must have one top-level declaration and no runtime ` +
+        `shadows; found ${npmEvaluatorDirectBindings}/${npmEvaluatorShadowBindings}`
+    );
+  }
+  if (npmEvaluatorAliases !== 0 || npmEvaluatorWrites !== 0 || npmEvaluatorOtherReferences !== 0) {
+    problems.push(
+      `release mutation hybrid npm evaluator binding must have no aliases, writes, or indirect references; ` +
+        `found ${npmEvaluatorAliases}/${npmEvaluatorWrites}/${npmEvaluatorOtherReferences}`
+    );
+  }
   if (npmWorkflowAliases !== 0 || npmWorkflowWrites !== 0 || npmWorkflowOtherReferences !== 0) {
     problems.push(
       `release mutation hybrid npm workflow binding must have no aliases, writes, or indirect references; ` +
@@ -8231,6 +8387,7 @@ function validateReleaseOraclePins(matrix: MatrixScan, declarative: HybridDeclar
 
   let baselineAssertions = 0;
   let npmBaselineAssertions = 0;
+  let npmEvaluatorBaselineAssertions = 0;
   let registryRunBaselineAssertions = 0;
   const visit = (node: ts.Node): void => {
     if (
@@ -8293,6 +8450,26 @@ function validateReleaseOraclePins(matrix: MatrixScan, declarative: HybridDeclar
         detector !== undefined &&
         ts.isCallExpression(detector) &&
         ts.isIdentifier(detector.expression) &&
+        detector.expression.text === "npmProvenanceEvaluatorProblems" &&
+        detector.arguments.length === 1 &&
+        detector.arguments[0] !== undefined &&
+        ts.isPropertyAccessExpression(detector.arguments[0]) &&
+        ts.isIdentifier(detector.arguments[0].expression) &&
+        detector.arguments[0].expression.text === "mcpbInputs" &&
+        detector.arguments[0].name.text === "integrity" &&
+        expected !== undefined &&
+        ts.isArrayLiteralExpression(expected) &&
+        expected.elements.length === 0
+      ) {
+        npmEvaluatorBaselineAssertions++;
+      }
+      if (
+        expectCall !== null &&
+        ts.isIdentifier(expectCall.expression) &&
+        expectCall.expression.text === "expect" &&
+        detector !== undefined &&
+        ts.isCallExpression(detector) &&
+        ts.isIdentifier(detector.expression) &&
         detector.expression.text === "mcpRegistryRunProblems" &&
         detector.arguments.length === 2 &&
         detector.arguments[0] !== undefined &&
@@ -8323,6 +8500,12 @@ function validateReleaseOraclePins(matrix: MatrixScan, declarative: HybridDeclar
     problems.push(
       `release mutation hybrid npm contract requires one exact clean baseline assertion; ` +
         `found ${npmBaselineAssertions}`
+    );
+  }
+  if (npmEvaluatorBaselineAssertions !== 1) {
+    problems.push(
+      `release mutation hybrid npm evaluator requires one exact clean baseline assertion; ` +
+        `found ${npmEvaluatorBaselineAssertions}`
     );
   }
   if (registryRunBaselineAssertions !== 1) {
@@ -8587,7 +8770,7 @@ export function releaseMutationExactLegacyIdentityAuditProblems(
  * @param matrixSource - Complete current `tests/release-integrity.test.ts` source text.
  * @param manifestSource - Immutable generated schema-v2 manifest JSON bytes.
  * @returns Stable diagnostics; empty only for the exact staged m002-m037 plus topological m108->m107,
- * m109-m138, replacement-dependent m140->m139, m141-m143, m145->m144, and m146-m151 hybrid boundary.
+ * m109-m138, replacement-dependent m140->m139, m141-m143, m145->m144, m146-m151, and m152 hybrid boundary.
  */
 export function releaseMutationIdentityAuditProblems(matrixSource: string, manifestSource: string): string[] {
   return createReleaseMutationIdentityAuditor(manifestSource).auditMatrix(matrixSource);

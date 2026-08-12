@@ -915,17 +915,14 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
     const nonPassiveM138CallInterpolation = replaceExactly(
       matrixSource,
       ["      replacement: `              $", "{NPM_PROVENANCE_AUDIT_COMMAND}`,"].join(""),
-      '      replacement: `              ${NPM_PROVENANCE_AUDIT_COMMAND.trim()}`,'
+      ["      replacement: `              $", "{NPM_PROVENANCE_AUDIT_COMMAND.trim()}`,"].join("")
     );
     const nonPassiveM138PropertyInterpolation = replaceExactly(
       matrixSource,
       ["      replacement: `              $", "{NPM_PROVENANCE_AUDIT_COMMAND}`,"].join(""),
-      '      replacement: `              ${NPM_PROVENANCE_IDENTITY.auditCommand}`,'
+      ["      replacement: `              $", "{NPM_PROVENANCE_IDENTITY.auditCommand}`,"].join("")
     );
-    for (const nonPassiveM138Interpolation of [
-      nonPassiveM138CallInterpolation,
-      nonPassiveM138PropertyInterpolation
-    ]) {
+    for (const nonPassiveM138Interpolation of [nonPassiveM138CallInterpolation, nonPassiveM138PropertyInterpolation]) {
       expect(preparedAudit.auditMatrix(nonPassiveM138Interpolation)).toEqual(
         expect.arrayContaining([
           expect.stringMatching(/release mutation hybrid current source must retain exact SHA-256/),
@@ -3821,7 +3818,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
     expect(preparedAudit.telemetry()).toEqual({
       fixturePreparations: 1,
       materializedGraphEvaluations: 1,
-      materializedGraphReuses: 62,
+      materializedGraphReuses: 64,
       sourceCatalogueBypasses: 2,
       sourceProjectionBypasses: 0
     });

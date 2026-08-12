@@ -975,7 +975,7 @@ const RELEASE_MUTATION_MATRIX_START = [
   "    const releaseWorkflow = readFileSync(",
   'new URL("../.github/workflows/release.yml", import.meta.url), "utf8");'
 ].join("");
-const RELEASE_MUTATION_SELF_CONTROL_COUNT = 20;
+const RELEASE_MUTATION_SELF_CONTROL_COUNT = 21;
 const RELEASE_MUTATION_PROJECT_FIRST_COUNT = 538;
 const RELEASE_MUTATION_PROJECT_ALL_COUNT = 22;
 const RELEASE_MUTATION_PROJECT_TOTAL_COUNT = RELEASE_MUTATION_PROJECT_FIRST_COUNT + RELEASE_MUTATION_PROJECT_ALL_COUNT;
@@ -11966,8 +11966,8 @@ done`;
       "{NPM_PROVENANCE_AUDIT_COMMAND}`,"
     ].join("");
     for (const nonPassiveM138Replacement of [
-      '      replacement: `              ${NPM_PROVENANCE_AUDIT_COMMAND.trim()}`,',
-      '      replacement: `              ${NPM_PROVENANCE_IDENTITY.auditCommand}`,'
+      ["      replacement: `              $", "{NPM_PROVENANCE_AUDIT_COMMAND.trim()}`,"].join(""),
+      ["      replacement: `              $", "{NPM_PROVENANCE_IDENTITY.auditCommand}`,"].join("")
     ]) {
       const nonPassiveM138Template = replaceExactly(
         hybridDeclarativeMutation,
@@ -17139,14 +17139,12 @@ done`;
     const releaseMutationM138 = releaseMutationPlan.registerMutation("release.m138", {
       mode: "first",
       source: releaseWorkflowFixtureSource,
-      needle:
-        `              /usr/bin/env -i "\${CLEAN_NPM_ENV[@]}" \\\n                ${NPM_PROVENANCE_AUDIT_COMMAND}`,
+      needle: `              /usr/bin/env -i "\${CLEAN_NPM_ENV[@]}" \\\n                ${NPM_PROVENANCE_AUDIT_COMMAND}`,
       replacement: `              ${NPM_PROVENANCE_AUDIT_COMMAND}`,
       expectedOccurrences: 1,
       witness: {
         kind: "token",
-        anchor:
-          `              /usr/bin/env -i "\${CLEAN_NPM_ENV[@]}" \\\n                ${NPM_PROVENANCE_AUDIT_COMMAND}`,
+        anchor: `              /usr/bin/env -i "\${CLEAN_NPM_ENV[@]}" \\\n                ${NPM_PROVENANCE_AUDIT_COMMAND}`,
         before: 1,
         after: 0
       }

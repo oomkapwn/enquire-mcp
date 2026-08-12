@@ -92,9 +92,7 @@ describe("check-audit scoped gate (rc.50)", () => {
     // package's root overrides, so their exact temporary exceptions are tracked
     // separately and may neither grow nor silently outlive the current audit evidence.
     expect(Object.keys(ALLOWLIST)).toEqual([]);
-    expect(Object.keys(CONSUMER_ALLOWLIST).sort()).toEqual(
-      ["GHSA-f88m-g3jw-g9cj", "GHSA-xcpc-8h2w-3j85"].sort()
-    );
+    expect(Object.keys(CONSUMER_ALLOWLIST).sort()).toEqual(["GHSA-f88m-g3jw-g9cj", "GHSA-xcpc-8h2w-3j85"].sort());
     expect(invalidAllowlistEntries(CONSUMER_ALLOWLIST)).toEqual([]);
     expect(
       staleAllowlistEntries(

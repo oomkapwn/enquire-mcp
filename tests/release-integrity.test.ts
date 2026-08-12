@@ -11960,7 +11960,7 @@ done`;
       oracleSource.slice(matrixBodyOffset)
     ].join("");
     expect(releaseMutationInventoryProblems(extraProjectMutation)).toContain(
-      "release mutation hybrid inventory expected 538 first / 22 all, found 539 first / 22 all (legacy 459/19; declarative 80/3; cases 80)"
+      "release mutation hybrid inventory expected 538 first / 22 all, found 539 first / 22 all (legacy 458/19; declarative 81/3; cases 81)"
     );
     const outsideMutation = `${oracleSource}\nvoid replaceAllExactly("inventory", "inventory", "mutant");\n`;
     expect(releaseMutationInventoryProblems(outsideMutation)).toContain(
@@ -11974,7 +11974,7 @@ done`;
       oracleSource.slice(firstProjectCallOffset + "replaceExactly(".length)
     ].join("");
     expect(releaseMutationInventoryProblems(projectModeDrift)).toContain(
-      "release mutation hybrid inventory expected 538 first / 22 all, found 537 first / 23 all (legacy 457/20; declarative 80/3; cases 80)"
+      "release mutation hybrid inventory expected 538 first / 22 all, found 537 first / 23 all (legacy 456/20; declarative 81/3; cases 81)"
     );
     const hybridDeclarativeMutation = oracleSource;
     const declarativeBatchStartToken = "    const releaseIntegrityText = mcpbInputs.integrity;";
@@ -12820,7 +12820,7 @@ done`;
         .join("legacyMigratedExactly(")
     ].join("");
     expect(releaseMutationInventoryProblems(legacyFreeMatrix)).toContain(
-      "release mutation final closed graph expected 560 unique descriptors / 536 cases and roots / 541 expectations / 24 dependency-only, found 83 descriptors / 80 cases / 80 roots / 80 expectations / 3 dependency-only"
+      "release mutation final closed graph expected 560 unique descriptors / 536 cases and roots / 541 expectations / 24 dependency-only, found 84 descriptors / 81 cases / 81 roots / 81 expectations / 3 dependency-only"
     );
     const loopGeneratedDeclarative = [
       oracleSource.slice(0, matrixBodyOffset),
@@ -12963,7 +12963,7 @@ done`;
       expect.stringMatching(/must be one explicit straight-line case/)
     );
     expect(iterableLiteralProblems).toContain(
-      "release mutation hybrid inventory expected 538 first / 22 all, found 539 first / 22 all (legacy 459/19; declarative 80/3; cases 80)"
+      "release mutation hybrid inventory expected 538 first / 22 all, found 539 first / 22 all (legacy 458/19; declarative 81/3; cases 81)"
     );
     const nestedStraightLineMutation = [
       oracleSource.slice(0, matrixBodyOffset),
@@ -12975,7 +12975,7 @@ done`;
       expect.stringMatching(/must be one explicit straight-line case/)
     );
     expect(nestedStraightLineProblems).toContain(
-      "release mutation hybrid inventory expected 538 first / 22 all, found 540 first / 22 all (legacy 460/19; declarative 80/3; cases 80)"
+      "release mutation hybrid inventory expected 538 first / 22 all, found 540 first / 22 all (legacy 459/19; declarative 81/3; cases 81)"
     );
     const earlyReturnMutation = [
       oracleSource.slice(0, matrixBodyOffset),
@@ -15356,12 +15356,12 @@ done`;
 
     const releaseIntegrityText = mcpbInputs.integrity;
     const releaseMutationPlan = new ReleaseMutationPlan({
-      total: 83,
-      first: 80,
+      total: 84,
+      first: 81,
       all: 3,
-      cases: 80,
-      expectations: 80,
-      roots: 80,
+      cases: 81,
+      expectations: 81,
+      roots: 81,
       dependencyOnly: 3
     });
     const releaseIntegritySource = releaseMutationPlan.registerSource("script.release-integrity", releaseIntegrityText);
@@ -18011,6 +18011,38 @@ done`;
         }
       ]
     });
+    const releaseMutationM154 = releaseMutationPlan.registerMutation("release.m154", {
+      mode: "first",
+      source: releaseIntegritySource,
+      needle: "subject.name !== expectedPurl || digest.sha512 !== expectedSha512",
+      replacement: "subject.name !== expectedPurl && digest.sha512 !== expectedSha512",
+      expectedOccurrences: 1,
+      witness: {
+        kind: "token",
+        anchor: "subject.name !== expectedPurl || digest.sha512 !== expectedSha512",
+        before: 1,
+        after: 0
+      }
+    });
+    releaseMutationPlan.registerCase({
+      id: "release.case.m154",
+      root: releaseMutationM154,
+      checks: [
+        {
+          invoke: {
+            kind: "npm.evaluator",
+            baseline: releaseIntegritySource,
+            mutant: releaseMutationM154
+          },
+          expectation: {
+            id: "release.expectation.m154.primary",
+            kind: "problem",
+            problem:
+              "npm provenance must bind the tag-push context before the sole publish and verify two exact attestations without credentials"
+          }
+        }
+      ]
+    });
     const releaseMutationProblems = releaseMutationPlan.seal();
     expect(releaseMutationProblems).toEqual([]);
     releaseMutationPlan.executeThrough(releaseMutationM037, {
@@ -18552,16 +18584,11 @@ done`;
     }
     releaseMutationPlan.executeRemaining();
     expect(releaseMutationPlan.phase).toBe("executed");
-    expect(releaseMutationPlan.caseExecutions).toBe(80);
-    expect(releaseMutationPlan.expectationExecutions).toBe(80);
+    expect(releaseMutationPlan.caseExecutions).toBe(81);
+    expect(releaseMutationPlan.expectationExecutions).toBe(81);
 
     // Mutation oracle: semantic evaluator source must retain every exact binding and fail-closed cardinality.
     for (const weakenedProvenanceEvaluator of [
-      replaceExactly(
-        mcpbInputs.integrity,
-        "subject.name !== expectedPurl || digest.sha512 !== expectedSha512",
-        "subject.name !== expectedPurl && digest.sha512 !== expectedSha512"
-      ),
       replaceExactly(
         mcpbInputs.integrity,
         "predicateType === NPM_PROVENANCE_IDENTITY.publishPredicateType",

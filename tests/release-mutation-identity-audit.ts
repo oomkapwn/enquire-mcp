@@ -2511,7 +2511,7 @@ function exactDeclarativeWitnessProvenance(
 function validateDeclarativeWitnessProvenanceSemantics(problems: string[]): void {
   const sourceText = [
     'const MCPB_EXACT_NPM_PUBLISH = "x".repeat(866);',
-    'const witness = MCPB_EXACT_NPM_PUBLISH.slice(0, 512);'
+    "const witness = MCPB_EXACT_NPM_PUBLISH.slice(0, 512);"
   ].join("\n");
   const sourceFile = ts.createSourceFile("witness.ts", sourceText, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
   const declarations = constDeclarations(sourceFile);
@@ -2525,11 +2525,11 @@ function validateDeclarativeWitnessProvenanceSemantics(problems: string[]): void
     declarations
   );
   const drifted = [
-    'MCPB_EXACT_NPM_PUBLISH_RUN.slice(0, 512)',
-    'MCPB_EXACT_NPM_PUBLISH.slice(1, 512)',
-    'MCPB_EXACT_NPM_PUBLISH.slice(0, 511)',
-    'MCPB_EXACT_NPM_PUBLISH.slice(0, 5_12)',
-    'MCPB_EXACT_NPM_PUBLISH.substring(0, 512)',
+    "MCPB_EXACT_NPM_PUBLISH_RUN.slice(0, 512)",
+    "MCPB_EXACT_NPM_PUBLISH.slice(1, 512)",
+    "MCPB_EXACT_NPM_PUBLISH.slice(0, 511)",
+    "MCPB_EXACT_NPM_PUBLISH.slice(0, 5_12)",
+    "MCPB_EXACT_NPM_PUBLISH.substring(0, 512)",
     "MCPB_EXACT_NPM_PUBLISH"
   ];
   const driftedAccepted = drifted.some((expression) => {

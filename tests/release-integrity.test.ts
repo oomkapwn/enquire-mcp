@@ -975,7 +975,7 @@ const RELEASE_MUTATION_MATRIX_START = [
   "    const releaseWorkflow = readFileSync(",
   'new URL("../.github/workflows/release.yml", import.meta.url), "utf8");'
 ].join("");
-const RELEASE_MUTATION_SELF_CONTROL_COUNT = 20;
+const RELEASE_MUTATION_SELF_CONTROL_COUNT = 21;
 const RELEASE_MUTATION_PROJECT_FIRST_COUNT = 538;
 const RELEASE_MUTATION_PROJECT_ALL_COUNT = 22;
 const RELEASE_MUTATION_PROJECT_TOTAL_COUNT = RELEASE_MUTATION_PROJECT_FIRST_COUNT + RELEASE_MUTATION_PROJECT_ALL_COUNT;
@@ -2756,7 +2756,11 @@ function releaseMutationInventoryProblems(source: string): string[] {
               );
             }
             const passiveString = (value: ts.Expression | undefined): boolean =>
-              value !== undefined && (ts.isStringLiteral(value) || ts.isIdentifier(value));
+              value !== undefined &&
+              (ts.isStringLiteral(value) ||
+                ts.isIdentifier(value) ||
+                (ts.isTemplateExpression(value) &&
+                  value.templateSpans.every((span) => ts.isIdentifier(span.expression))));
             const needle = descriptorProperty("needle")[0]?.initializer;
             if (descriptorProperty("needle").length !== 1 || !passiveString(needle)) {
               const position = sourceFile.getLineAndCharacterOfPosition(descriptor.getStart(sourceFile));
@@ -11817,7 +11821,7 @@ done`;
       oracleSource.slice(matrixBodyOffset)
     ].join("");
     expect(releaseMutationInventoryProblems(extraProjectMutation)).toContain(
-      "release mutation hybrid inventory expected 538 first / 22 all, found 539 first / 22 all (legacy 475/19; declarative 64/3; cases 66)"
+      "release mutation hybrid inventory expected 538 first / 22 all, found 539 first / 22 all (legacy 474/19; declarative 65/3; cases 67)"
     );
     const outsideMutation = `${oracleSource}\nvoid replaceAllExactly("inventory", "inventory", "mutant");\n`;
     expect(releaseMutationInventoryProblems(outsideMutation)).toContain(
@@ -11831,7 +11835,7 @@ done`;
       oracleSource.slice(firstProjectCallOffset + "replaceExactly(".length)
     ].join("");
     expect(releaseMutationInventoryProblems(projectModeDrift)).toContain(
-      "release mutation hybrid inventory expected 538 first / 22 all, found 537 first / 23 all (legacy 473/20; declarative 64/3; cases 66)"
+      "release mutation hybrid inventory expected 538 first / 22 all, found 537 first / 23 all (legacy 472/20; declarative 65/3; cases 67)"
     );
     const hybridDeclarativeMutation = oracleSource;
     const declarativeBatchStartToken = "    const releaseIntegrityText = mcpbInputs.integrity;";
@@ -11957,6 +11961,23 @@ done`;
         expect.stringMatching(/witness anchor must be one passive identifier\/string value/)
       ])
     );
+    const m138ReplacementTemplateToken = [
+      "      replacement: `              $",
+      "{NPM_PROVENANCE_AUDIT_COMMAND}`,"
+    ].join("");
+    for (const nonPassiveM138Replacement of [
+      ["      replacement: `              $", "{NPM_PROVENANCE_AUDIT_COMMAND.trim()}`,"].join(""),
+      ["      replacement: `              $", "{NPM_PROVENANCE_IDENTITY.auditCommand}`,"].join("")
+    ]) {
+      const nonPassiveM138Template = replaceExactly(
+        hybridDeclarativeMutation,
+        m138ReplacementTemplateToken,
+        nonPassiveM138Replacement
+      );
+      expect(releaseMutationInventoryProblems(nonPassiveM138Template)).toContainEqual(
+        expect.stringMatching(/descriptor replacement must be one passive string value or mutation handle/)
+      );
+    }
     const caseRootToken = 'id: "release.case.m002",\n      root: releaseMutationM002';
     const caseRootOffset = firstCaseOffset(caseRootToken);
     const sourceRootDeclarativeCase = [
@@ -12508,7 +12529,7 @@ done`;
         .join("legacyMigratedExactly(")
     ].join("");
     expect(releaseMutationInventoryProblems(legacyFreeMatrix)).toContain(
-      "release mutation final closed graph expected 560 unique descriptors / 536 cases and roots / 541 expectations / 24 dependency-only, found 67 descriptors / 66 cases / 66 roots / 66 expectations / 1 dependency-only"
+      "release mutation final closed graph expected 560 unique descriptors / 536 cases and roots / 541 expectations / 24 dependency-only, found 68 descriptors / 67 cases / 67 roots / 67 expectations / 1 dependency-only"
     );
     const loopGeneratedDeclarative = [
       oracleSource.slice(0, matrixBodyOffset),
@@ -12651,7 +12672,7 @@ done`;
       expect.stringMatching(/must be one explicit straight-line case/)
     );
     expect(iterableLiteralProblems).toContain(
-      "release mutation hybrid inventory expected 538 first / 22 all, found 539 first / 22 all (legacy 475/19; declarative 64/3; cases 66)"
+      "release mutation hybrid inventory expected 538 first / 22 all, found 539 first / 22 all (legacy 474/19; declarative 65/3; cases 67)"
     );
     const nestedStraightLineMutation = [
       oracleSource.slice(0, matrixBodyOffset),
@@ -12663,7 +12684,7 @@ done`;
       expect.stringMatching(/must be one explicit straight-line case/)
     );
     expect(nestedStraightLineProblems).toContain(
-      "release mutation hybrid inventory expected 538 first / 22 all, found 540 first / 22 all (legacy 476/19; declarative 64/3; cases 66)"
+      "release mutation hybrid inventory expected 538 first / 22 all, found 540 first / 22 all (legacy 475/19; declarative 65/3; cases 67)"
     );
     const earlyReturnMutation = [
       oracleSource.slice(0, matrixBodyOffset),
@@ -14942,12 +14963,12 @@ done`;
 
     const releaseIntegrityText = mcpbInputs.integrity;
     const releaseMutationPlan = new ReleaseMutationPlan({
-      total: 67,
-      first: 64,
+      total: 68,
+      first: 65,
       all: 3,
-      cases: 66,
-      expectations: 66,
-      roots: 66,
+      cases: 67,
+      expectations: 67,
+      roots: 67,
       dependencyOnly: 1
     });
     const releaseIntegritySource = releaseMutationPlan.registerSource("script.release-integrity", releaseIntegrityText);
@@ -17115,6 +17136,38 @@ done`;
         }
       ]
     });
+    const releaseMutationM138 = releaseMutationPlan.registerMutation("release.m138", {
+      mode: "first",
+      source: releaseWorkflowFixtureSource,
+      needle: `              /usr/bin/env -i "\${CLEAN_NPM_ENV[@]}" \\\n                ${NPM_PROVENANCE_AUDIT_COMMAND}`,
+      replacement: `              ${NPM_PROVENANCE_AUDIT_COMMAND}`,
+      expectedOccurrences: 1,
+      witness: {
+        kind: "token",
+        anchor: `              /usr/bin/env -i "\${CLEAN_NPM_ENV[@]}" \\\n                ${NPM_PROVENANCE_AUDIT_COMMAND}`,
+        before: 1,
+        after: 0
+      }
+    });
+    releaseMutationPlan.registerCase({
+      id: "release.case.m138",
+      root: releaseMutationM138,
+      checks: [
+        {
+          invoke: {
+            kind: "npm.workflow",
+            baseline: releaseWorkflowFixtureSource,
+            mutant: releaseMutationM138
+          },
+          expectation: {
+            id: "release.expectation.m138.primary",
+            kind: "problem",
+            problem:
+              "npm provenance must bind the tag-push context before the sole publish and verify two exact attestations without credentials"
+          }
+        }
+      ]
+    });
     const releaseMutationProblems = releaseMutationPlan.seal();
     expect(releaseMutationProblems).toEqual([]);
     releaseMutationPlan.executeThrough(releaseMutationM037, {
@@ -17655,16 +17708,11 @@ done`;
     }
     releaseMutationPlan.executeRemaining();
     expect(releaseMutationPlan.phase).toBe("executed");
-    expect(releaseMutationPlan.caseExecutions).toBe(66);
-    expect(releaseMutationPlan.expectationExecutions).toBe(66);
+    expect(releaseMutationPlan.caseExecutions).toBe(67);
+    expect(releaseMutationPlan.expectationExecutions).toBe(67);
 
     // Mutation oracle: workflow ordering, token isolation, exact verifier pin, and read-only convergence.
     for (const weakenedProvenanceWorkflow of [
-      replaceExactly(
-        mcpbInputs.release,
-        `              /usr/bin/env -i "\${CLEAN_NPM_ENV[@]}" \\\n                ${NPM_PROVENANCE_AUDIT_COMMAND}`,
-        `              ${NPM_PROVENANCE_AUDIT_COMMAND}`
-      ),
       replaceExactly(
         mcpbInputs.release,
         NPM_PROVENANCE_AUDIT_COMMAND,

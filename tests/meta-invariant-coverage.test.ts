@@ -2610,18 +2610,11 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       "        )"
     ].join("\n");
     expect(sha256Text(legacyM142CallNode)).toBe("18c5bdae69d4094f22db3355424611092d3d5fc4327938f01aadc1edc345c691");
-    expect(sha256Text(discardedM142CallNode)).toBe(
-      "367af212a4d2d869291d3ebeafdd335a9383d1686630c043e526ca8bf1eef5dd"
-    );
+    expect(sha256Text(discardedM142CallNode)).toBe("367af212a4d2d869291d3ebeafdd335a9383d1686630c043e526ca8bf1eef5dd");
     const discardedProvenanceRoot = replaceExactly(
       matrixSource,
       `      ${legacyM142CallNode},`,
-      [
-        "      (",
-        `        ${discardedM142CallNode},`,
-        "        mcpbInputs.release",
-        "      ),"
-      ].join("\n")
+      ["      (", `        ${discardedM142CallNode},`, "        mcpbInputs.release", "      ),"].join("\n")
     );
     expect(preparedAudit.auditMatrix(discardedProvenanceRoot)).toEqual(
       expect.arrayContaining([

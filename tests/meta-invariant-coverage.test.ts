@@ -3150,14 +3150,14 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       "replaceExactly(",
       "        mcpbInputs.integrity,",
       '        "/^SHA256:[A-Za-z0-9+/]{43}$/u.test(publicKey.hint)",',
-      '        \'publicKey.hint.startsWith("SHA256:")\'',
+      "        'publicKey.hint.startsWith(\"SHA256:\")'",
       "      )"
     ].join("\n");
     const discardedM159CallNode = [
       "replaceExactly(",
       "          mcpbInputs.integrity,",
       '          "/^SHA256:[A-Za-z0-9+/]{43}$/u.test(publicKey.hint)",',
-      '          \'publicKey.hint.startsWith("SHA256:")\'',
+      "          'publicKey.hint.startsWith(\"SHA256:\")'",
       "        )"
     ].join("\n");
     expect(sha256Text(legacyM159CallNode)).toBe("7c632cbce18feb63cf7622544dc1a02025b5426de18206d6b2417d01baae4822");

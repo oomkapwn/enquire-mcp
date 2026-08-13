@@ -3289,14 +3289,14 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       "replaceExactly(",
       "        mcpbInputs.integrity,",
       '        "leafCertificate = new X509Certificate(certificateDer);",',
-      "        `leafCertificate = { subjectAltName: \\`URI:\\${expectedSignerUri}\\` };`",
+      `        \`leafCertificate = { subjectAltName: \\\`URI:\\\${expectedSignerUri}\\\` };\``,
       "      )"
     ].join("\n");
     const discardedM164CallNode = [
       "replaceExactly(",
       "          mcpbInputs.integrity,",
       '          "leafCertificate = new X509Certificate(certificateDer);",',
-      "          `leafCertificate = { subjectAltName: \\`URI:\\${expectedSignerUri}\\` };`",
+      `          \`leafCertificate = { subjectAltName: \\\`URI:\\\${expectedSignerUri}\\\` };\``,
       "        )"
     ].join("\n");
     expect(sha256Text(legacyM164CallNode)).toBe("fff8d6c5a7629ddf8f195b635d8cd5567c6d3e16b98e9773900353ea7cfb4f82");

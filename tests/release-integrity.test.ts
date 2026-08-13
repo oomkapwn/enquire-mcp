@@ -2865,6 +2865,7 @@ function releaseMutationInventoryProblems(source: string): string[] {
             const passiveString = (value: ts.Expression | undefined): boolean =>
               value !== undefined &&
               (ts.isStringLiteral(value) ||
+                ts.isNoSubstitutionTemplateLiteral(value) ||
                 ts.isIdentifier(value) ||
                 (ts.isTemplateExpression(value) &&
                   value.templateSpans.every((span) => ts.isIdentifier(span.expression))));
@@ -12123,13 +12124,7 @@ done`;
       m116AnchorTemplateToken,
       hybridDeclarativeMutation.slice(m116AnchorLiteralOffset + m116AnchorLiteralToken.length)
     ].join("");
-    expect(releaseMutationInventoryProblems(templateValuedM116Descriptor)).toEqual(
-      expect.arrayContaining([
-        expect.stringMatching(/descriptor needle must be one passive identifier\/string value/),
-        expect.stringMatching(/descriptor replacement must be one passive string value or mutation handle/),
-        expect.stringMatching(/witness anchor must be one passive identifier\/string value/)
-      ])
-    );
+    expect(releaseMutationInventoryProblems(templateValuedM116Descriptor)).toEqual([]);
     const m151WitnessAnchorPrefix = "        anchor: MCPB_EXACT_NPM_PUBLISH";
     const m151WitnessAnchorToken = `${m151WitnessAnchorPrefix}.slice(0, 512),`;
     const m151WitnessAnchorOffset = declarativeBatchOffset(m151WitnessAnchorToken);

@@ -1593,7 +1593,8 @@ async function filterCurrentHybridHits(
   let embedMask: boolean[];
   try {
     if (ftsEntries.length > 512 || embedEntries.length > 512) return [];
-    ftsMask = ftsEntries.length > 0 && ftsIndex ? ftsIndex.currentSourceReceiptMask(ftsEntries.map((e) => e.receipt)) : [];
+    ftsMask =
+      ftsEntries.length > 0 && ftsIndex ? ftsIndex.currentSourceReceiptMask(ftsEntries.map((e) => e.receipt)) : [];
     embedMask =
       embedEntries.length > 0 && embedReceiptReader
         ? embedReceiptReader.currentSourceReceiptMask(embedEntries.map((e) => e.receipt))

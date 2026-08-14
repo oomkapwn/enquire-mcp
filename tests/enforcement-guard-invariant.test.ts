@@ -329,11 +329,7 @@ function publicReceiptLeakViolations(search: string, registry: string): string[]
   const sections = [
     {
       label: "diagnostic FTS helper",
-      body: slice(
-        search,
-        "return admittedMatches.map((match) => ({",
-        "  }));\n}\n\n/**\n * Read one stored FTS chunk"
-      )
+      body: slice(search, "return admittedMatches.map((match) => ({", "  }));\n}\n\n/**\n * Read one stored FTS chunk")
     },
     {
       label: "diagnostic FTS map",

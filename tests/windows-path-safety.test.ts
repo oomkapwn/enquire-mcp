@@ -1250,7 +1250,7 @@ describe("VaultWatcher physical-alias convergence (S-8e)", () => {
     }
   });
 
-  it("retains prior rows when admission is transiently unavailable", async () => {
+  it("retains but quarantines prior rows when admission is transiently unavailable", async () => {
     const fixture = await seedWindowsWatcherFixture({
       "Protected.md": "# Protected\n\nadmissionoldmarker\n",
       "Gone.md": "# Gone\n\nadmissiongonemarker\n"
@@ -1304,12 +1304,25 @@ describe("VaultWatcher physical-alias convergence (S-8e)", () => {
       expect(admissionAttempts).toBeGreaterThan(0);
       expect(admissionAttempts).toBeLessThanOrEqual(8);
       const retained = await snapshotWindowsWatcherState(fixture, markers);
-      expectMarkerPaths(retained, "admissionoldmarker", ["Protected.md"]);
-      expectMarkerPaths(retained, "admissionnewmarker", []);
-      expectMarkerPaths(retained, "admissiongonemarker", []);
+      // Physical source_state/sidecar rows are retained for recovery, but the
+      // source-scoped DB quarantine hides both lexical and semantic egress.
+      // The sidecar snapshot is deliberately not an output authority.
+      expect(markerPaths(retained.ftsByMarker, "admissionoldmarker")).toEqual([]);
+      expect(markerPaths(retained.embedByMarker, "admissionoldmarker")).toEqual([]);
+      expect(markerPathsInHnsw(retained, "admissionoldmarker")).toEqual(["Protected.md"]);
+      expect(markerPaths(retained.ftsByMarker, "admissionnewmarker")).toEqual([]);
+      expect(markerPaths(retained.embedByMarker, "admissionnewmarker")).toEqual([]);
+      expect(markerPaths(retained.ftsByMarker, "admissiongonemarker")).toEqual([]);
+      expect(markerPaths(retained.embedByMarker, "admissiongonemarker")).toEqual([]);
       expect(retained.embedPaths).toEqual(["Protected.md"]);
       expect(fixture.reindexedPaths).toEqual([]);
-      expect(watcherAuditsMatch(retained, 1)).toBe(true);
+      expect(retained.ftsAudit).toMatchObject({
+        declared_files: 1,
+        indexed_files: 1,
+        mismatched_files: 1
+      });
+      expect(retained.embedAudit).toMatchObject({ indexed_files: 1, mismatched_files: 1 });
+      expect(watcherAuditsMatch(retained, 1)).toBe(false);
     } finally {
       await closeWindowsWatcherFixture(fixture);
     }

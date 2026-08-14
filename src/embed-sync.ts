@@ -231,6 +231,7 @@ export async function syncEmbedDb(
   const known = new Map<string, number>();
   // Scope to kind="md" so markdown sync cannot delete PDF rows.
   for (const state of db.getSourceStates("md")) known.set(state.rel_path, state.mtime_ms);
+  const quarantined = new Set(db.getQuarantinedPaths("md"));
 
   const live = new Set<string>();
   let added = 0;
@@ -246,7 +247,7 @@ export async function syncEmbedDb(
   for (const entry of entries) {
     live.add(entry.relPath);
     const prevMtime = known.get(entry.relPath);
-    if (prevMtime !== undefined && prevMtime === entry.mtimeMs) {
+    if (!quarantined.has(entry.relPath) && prevMtime !== undefined && prevMtime === entry.mtimeMs) {
       unchanged += 1;
       processed += 1;
       continue;
@@ -256,6 +257,7 @@ export async function syncEmbedDb(
       if (result === null) {
         empty += 1;
         processed += 1;
+        if (mode === "strict") db.quarantineSource(entry.relPath, "md");
         strictFileFailure(mode, "Markdown", entry.relPath, "note has no embeddable chunks");
         db.deleteNote(entry.relPath);
         continue;
@@ -273,6 +275,7 @@ export async function syncEmbedDb(
       failed += 1;
       const detail = err instanceof Error ? err.message : String(err);
       process.stderr.write(`enquire: skipping ${entry.relPath} during embed sync — ${detail}\n`);
+      db.quarantineSource(entry.relPath, "md");
       strictFileFailure(mode, "Markdown", entry.relPath, detail, err);
     }
     processed += 1;
@@ -292,6 +295,9 @@ export async function syncEmbedDb(
       db.deleteNote(relPath);
       deleted += 1;
     }
+  }
+  for (const relPath of quarantined) {
+    if (!live.has(relPath) && !known.has(relPath)) db.deleteNote(relPath);
   }
 
   return enforceFinalCompleteness(
@@ -350,6 +356,7 @@ export async function syncPdfEmbedDb(
   const entries = await vault.listFilesByExtension(".pdf");
   const known = new Map<string, number>();
   for (const state of db.getSourceStates("pdf")) known.set(state.rel_path, state.mtime_ms);
+  const quarantined = new Set(db.getQuarantinedPaths("pdf"));
 
   const live = new Set<string>();
   let added = 0;
@@ -365,7 +372,7 @@ export async function syncPdfEmbedDb(
   for (const entry of entries) {
     live.add(entry.relPath);
     const prevMtime = known.get(entry.relPath);
-    if (prevMtime !== undefined && prevMtime === entry.mtimeMs) {
+    if (!quarantined.has(entry.relPath) && prevMtime !== undefined && prevMtime === entry.mtimeMs) {
       unchanged += 1;
       processed += 1;
       continue;
@@ -375,9 +382,14 @@ export async function syncPdfEmbedDb(
       if (result === null) {
         empty += 1;
         processed += 1;
+        if (mode === "strict") db.quarantineSource(entry.relPath, "pdf");
         strictFileFailure(mode, "PDF", entry.relPath, "PDF is image-only, scanned, or empty");
+        // A prior failed attempt may have left only a durable quarantine
+        // marker (no source_state/embedding rows). A successful empty result
+        // is still authoritative and must clear that marker idempotently, or
+        // every later sync would retry the same healthy image-only PDF.
+        db.deleteNote(entry.relPath);
         if (prevMtime !== undefined) {
-          db.deleteNote(entry.relPath);
           process.stderr.write(
             `enquire: dropping stale embed rows for ${entry.relPath} — PDF is now image-only / scanned (or empty after extraction)\n`
           );
@@ -394,6 +406,7 @@ export async function syncPdfEmbedDb(
       failed += 1;
       const detail = err instanceof Error ? err.message : String(err);
       process.stderr.write(`enquire: skipping ${entry.relPath} during pdf-embed sync — ${detail}\n`);
+      db.quarantineSource(entry.relPath, "pdf");
       strictFileFailure(mode, "PDF", entry.relPath, detail, err);
     }
     processed += 1;
@@ -414,6 +427,9 @@ export async function syncPdfEmbedDb(
       db.deleteNote(relPath);
       deleted += 1;
     }
+  }
+  for (const relPath of quarantined) {
+    if (!live.has(relPath) && !known.has(relPath)) db.deleteNote(relPath);
   }
 
   return enforceFinalCompleteness(

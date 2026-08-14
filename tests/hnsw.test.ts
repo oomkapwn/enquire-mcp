@@ -5,8 +5,8 @@
 //     the expected nearest neighbors for crafted query vectors
 //   • Recall@K is high (≥ 95%) on a deterministic synthetic corpus —
 //     the IR-standard correctness check
-//   • hnswResultsToHits maps labels → hits and converts cosine distance
-//     back to similarity correctly
+//   • legacy and receipt-bearing HNSW hit conversion preserve their distinct
+//     public shapes and convert cosine distance back to similarity correctly
 //   • EmbedDb.getAllVectors returns rows with stable labels, copies
 //     vectors (no shared buffer aliasing), and skips corrupt rows
 //   • Failure modes: dim mismatch throws, empty input is safe
@@ -16,7 +16,12 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { EmbedDb } from "../src/embed-db.js";
-import { buildHnsw, hnswResultsToHits, loadHnswFromDisk } from "../src/hnsw.js";
+import {
+  buildHnsw,
+  hnswResultsToHits,
+  hnswResultsToReceiptHits,
+  loadHnswFromDisk
+} from "../src/hnsw.js";
 import { adaptiveHnswRefill, assertHnswModelMatchesEmbedder, selectUsableHnswContext } from "../src/tools/search.js";
 
 /** L2-normalize a Float32Array in place; returns it for chaining. */
@@ -172,8 +177,8 @@ describe("buildHnsw + searchKnn (v2.13.0)", () => {
 });
 
 describe("hnswResultsToHits (v2.13.0)", () => {
-  it("maps labels to hits and converts cosine distance to similarity", () => {
-    const rowByLabel = new Map<
+  it("preserves legacy hits while the additive helper carries current receipts", () => {
+    const legacyRows = new Map<
       number,
       {
         rel_path: string;
@@ -184,7 +189,7 @@ describe("hnswResultsToHits (v2.13.0)", () => {
         kind: "md" | "pdf";
       }
     >();
-    rowByLabel.set(7, {
+    legacyRows.set(7, {
       rel_path: "notes/a.md",
       chunk_index: 0,
       line_start: 1,
@@ -192,7 +197,7 @@ describe("hnswResultsToHits (v2.13.0)", () => {
       text_preview: "Hello world",
       kind: "md"
     });
-    rowByLabel.set(13, {
+    legacyRows.set(13, {
       rel_path: "papers/b.pdf",
       chunk_index: 2,
       line_start: 10,
@@ -200,14 +205,47 @@ describe("hnswResultsToHits (v2.13.0)", () => {
       text_preview: "[page: 3] Some content",
       kind: "pdf"
     });
-    const hits = hnswResultsToHits({ labels: [7, 13], distances: [0.1, 0.4] }, rowByLabel);
-    expect(hits).toHaveLength(2);
+    const result = { labels: [7, 13], distances: [0.1, 0.4] };
+    const legacyHits = hnswResultsToHits(result, legacyRows);
+    expect(legacyHits).toHaveLength(2);
     // distance 0.1 → similarity 0.9
-    expect(hits[0]?.score).toBeCloseTo(0.9, 5);
-    expect(hits[0]?.rel_path).toBe("notes/a.md");
-    expect(hits[0]?.kind).toBe("md");
-    expect(hits[1]?.score).toBeCloseTo(0.6, 5);
-    expect(hits[1]?.kind).toBe("pdf");
+    expect(legacyHits[0]?.score).toBeCloseTo(0.9, 5);
+    expect(legacyHits[0]?.rel_path).toBe("notes/a.md");
+    expect(legacyHits[0]?.kind).toBe("md");
+    expect(legacyHits[0]?.text_preview).toBe("Hello world");
+    expect(legacyHits[0]).not.toHaveProperty("indexed_mtime_ms");
+    expect(legacyHits[0]).not.toHaveProperty("indexed_revision");
+    expect(legacyHits[1]?.score).toBeCloseTo(0.6, 5);
+    expect(legacyHits[1]?.kind).toBe("pdf");
+
+    const receiptRows = new Map(
+      [...legacyRows].map(([label, row]) => [
+        label,
+        {
+          ...row,
+          indexed_mtime_ms: label === 7 ? 1700000000001 : 1700000000002,
+          indexed_revision: label === 7 ? 11 : 12
+        }
+      ] as const)
+    );
+    const receiptHits = hnswResultsToReceiptHits(result, receiptRows);
+    expect(receiptHits).toHaveLength(2);
+    expect(receiptHits[0]?.score).toBeCloseTo(0.9, 5);
+    expect(receiptHits[0]).toEqual(
+      expect.objectContaining({
+        rel_path: "notes/a.md",
+        indexed_mtime_ms: 1700000000001,
+        indexed_revision: 11
+      })
+    );
+    expect(receiptHits[1]?.score).toBeCloseTo(0.6, 5);
+    expect(receiptHits[1]).toEqual(
+      expect.objectContaining({
+        rel_path: "papers/b.pdf",
+        indexed_mtime_ms: 1700000000002,
+        indexed_revision: 12
+      })
+    );
   });
 
   it("silently drops labels not in rowByLabel (e.g. row deleted between build + query)", () => {
@@ -218,11 +256,17 @@ describe("hnswResultsToHits (v2.13.0)", () => {
       line_start: 1,
       line_end: 1,
       text_preview: "x",
-      kind: "md"
+      kind: "md",
+      indexed_mtime_ms: 1700000000001,
+      indexed_revision: 11
     });
-    const hits = hnswResultsToHits({ labels: [7, 99, 7], distances: [0.1, 0.2, 0.3] }, rowByLabel);
+    const result = { labels: [7, 99, 7], distances: [0.1, 0.2, 0.3] };
+    const hits = hnswResultsToHits(result, rowByLabel);
+    const receiptHits = hnswResultsToReceiptHits(result, rowByLabel);
     // 99 is missing; 7 appears twice
     expect(hits.length).toBe(2);
+    expect(receiptHits.length).toBe(2);
+    expect(receiptHits.map((hit) => hit.indexed_revision)).toEqual([11, 11]);
   });
 });
 
@@ -618,7 +662,7 @@ describe("assertHnswModelMatchesEmbedder (v3.6.2 HN-4)", () => {
   it("routes a quarantined live graph to EmbedDb while preserving a healthy HNSW route", () => {
     const health = { hnswUsable: true };
     const context = {
-      index: { searchKnn: () => ({ labels: [], distances: [] }) },
+      index: { size: 0, searchKnn: () => ({ labels: [], distances: [] }) },
       rowByLabel: new Map(),
       modelAlias: "multilingual",
       health

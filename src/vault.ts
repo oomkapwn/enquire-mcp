@@ -88,7 +88,7 @@ export interface FileEntry {
 export interface CachedNote {
   /** Raw file content (UTF-8). */
   content: string;
-  /** Parsed structure — see {@link ParsedNote}. */
+  /** Parsed structure — see `ParsedNote`. */
   parsed: ParsedNote;
   /** mtime at parse time. Used to detect stale cache entries. */
   mtimeMs: number;
@@ -513,7 +513,7 @@ export class Vault {
   /**
    * Resolve a vault-relative or absolute path to an absolute path, after
    * asserting the result stays inside the vault root. This is the
-   * lexical guard; {@link resolveSafePath} additionally walks symlinks.
+   * lexical guard; `resolveSafePath` additionally walks symlinks.
    *
    * @param p - Path string (relative or absolute).
    * @returns Absolute path.
@@ -773,7 +773,7 @@ export class Vault {
   /**
    * Read and parse a markdown note. Returns the cached entry when the
    * file's mtime hasn't changed; otherwise reads from disk, parses via
-   * {@link parseNote}, and caches the result (LRU-evicting the oldest
+   * `parseNote`, and caches the result (LRU-evicting the oldest
    * entry when at capacity).
    *
    * @param relOrAbs - Vault-relative or absolute path to a `.md` file.
@@ -1036,7 +1036,7 @@ export class Vault {
    * Any unexpected stat/realpath failure or physical escape fails closed.
    */
   /**
-   * Public alias for {@link canonicalRelForPrivacyCheck}. v3.7.16 P1-6 —
+   * Public alias for `canonicalRelForPrivacyCheck`. v3.7.16 P1-6 —
    * used by `renameNote` wrapper in `src/tools/write.ts` to fail-fast on
    * case-insensitive-FS variants before doing O(N) backlink-rewrite work.
    * The inner `renameFile` also does this check; this public surface lets
@@ -1118,7 +1118,7 @@ export class Vault {
    *  in `src/tools/write.ts` for the orchestration).
    *
    *  v3.7.16 P1-6 — destination privacy filter uses
-   *  {@link canonicalRelForPrivacyCheck} (case-insensitive-FS bypass
+   *  `canonicalRelForPrivacyCheck` (case-insensitive-FS bypass
    *  closure; parity with `writeNote`). */
   /**
    * v3.10.0-rc.61 (WRITE-3) — true iff `fromAbs`/`toAbs` differ only in case AND resolve to the
@@ -1632,7 +1632,7 @@ export const MAX_GLOB_PATTERN_LEN = 1024;
  * `globToRegex(...).test(...)`.
  *
  * v3.10.0-rc.71 (post-rc.66 re-sweep, ReDoS class — closes the rc.68 sibling): matching
- * is now a NON-backtracking DP ({@link matchWildcardTokens}), NOT a `RegExp`. The
+ * is now a NON-backtracking DP (`matchWildcardTokens`), NOT a `RegExp`. The
  * pre-rc.71 `globToRegex` compiled `*`→`[^/]*` / `**`→`.*` and (rc.68) collapsed only
  * ADJACENT unbounded quantifiers. A glob with wildcards SEPARATED BY LITERALS
  * (`*a*a*…` → `^[^/]*a[^/]*a…$`, or `**a**a…`) was still catastrophic — the rc.68

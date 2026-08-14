@@ -31,6 +31,8 @@ import { countLineBreaks, stripTrailingSlashes } from "./wildcard-match.js";
 const BM25_WEIGHT_CONTENT = 1.0;
 const BM25_WEIGHT_TITLE = 10.0;
 const BM25_WEIGHT_ALIASES = 5.0;
+const MAX_SOURCE_REVISION = Number.MAX_SAFE_INTEGER;
+const MAX_SOURCE_RECEIPT_BATCH = 512;
 
 /**
  * Extract the searchable alias strings from a note's frontmatter. Obsidian
@@ -147,6 +149,30 @@ export type TokenizeMode = "unicode61" | "trigram";
 /** Content-source kind. v2.7.0 added `pdf`; v2.8.0 indexes them. */
 export type ChunkKind = "md" | "pdf";
 
+function isChunkKind(value: unknown): value is ChunkKind {
+  return value === "md" || value === "pdf";
+}
+
+/**
+ * Provenance receipt consumed by {@link FtsIndex.currentSourceReceiptMask}.
+ *
+ * @example
+ * ```ts
+ * const [hit] = index.searchWithReceipts("retrieval", { limit: 1 });
+ * if (hit) index.currentSourceReceiptMask([hit]);
+ * ```
+ */
+export interface FtsSourceReceipt {
+  /** Vault-relative path of the indexed source. */
+  rel_path: string;
+  /** Content-source kind. */
+  kind: ChunkKind;
+  /** Source mtime selected in the same snapshot as the indexed bytes. */
+  indexed_mtime_ms: number;
+  /** Monotonic ledger revision selected in that snapshot. */
+  indexed_revision: number;
+}
+
 /** A single hit from {@link FtsIndex.search}. `snippet` carries the
  *  FTS5 `snippet(...)` output (matched terms wrapped in `«»`). */
 export interface FtsSearchHit {
@@ -165,6 +191,37 @@ export interface FtsSearchHit {
   score: number;
   /** v2.8.0 — content-source kind. Defaults to "md" for backward compat. */
   kind: ChunkKind;
+}
+
+/**
+ * Internal-authority FTS hit returned by {@link FtsIndex.searchWithReceipts}.
+ * It extends the legacy {@link FtsSearchHit} shape with the source receipt
+ * required for a caller-owned live-vault admission check.
+ *
+ * @example
+ * ```ts
+ * const [hit] = index.searchWithReceipts("retrieval", { limit: 1 });
+ * if (hit) index.currentSourceReceiptMask([hit]);
+ * ```
+ */
+export type FtsReceiptSearchHit = FtsSearchHit & FtsSourceReceipt;
+
+/**
+ * Raw FTS chunk plus the source receipt selected with the same persisted bytes.
+ *
+ * @example
+ * ```ts
+ * const chunk = index.getChunkWithReceipt("Projects/plan.md", 0);
+ * if (chunk) index.currentSourceReceiptMask([chunk]);
+ * ```
+ */
+export interface FtsReceiptChunk extends FtsSourceReceipt {
+  /** Verbatim source chunk without synthetic FTS enrichment. */
+  content: string;
+  /** One-based first source line represented by the chunk. */
+  line_start: number;
+  /** One-based final source line represented by the chunk. */
+  line_end: number;
 }
 
 /** Error-handling mode for the Markdown-to-FTS sync routine. */
@@ -204,7 +261,7 @@ export interface FtsSyncReport {
   indexed_chunks: number;
   /** Unique paths rejected by the physical audit. */
   mismatched_files: number;
-  /** SHA-256 over the exact kind-scoped source-state and chunk payload, or null when unaudited. */
+  /** SHA-256 over the exact kind-scoped state, revision ledger, quarantine, and chunks; null when unaudited. */
   manifest_sha256: string | null;
   /** Derived raw-equation result; publication guards recompute it independently. */
   complete: boolean;
@@ -221,8 +278,8 @@ export interface FtsKindAudit {
   /** Actual physical chunk rows stored for the requested kind. */
   indexed_chunks: number;
   /**
-   * Unique paths whose declaration, row shape, kind, or contiguous chunk
-   * range is invalid, including chunk-only paths and globally invalid kinds.
+   * Unique paths whose declaration, revision, row shape, kind, or contiguous
+   * chunk range is invalid, including chunk-only paths and globally invalid kinds.
    */
   mismatched_files: number;
 }
@@ -440,8 +497,25 @@ export class FtsIndex {
         process.stderr.write(`enquire: rebuilding fts5 index (${reason.join("; ")})\n`);
         // DROP rather than DELETE — schema may have changed (e.g. v1 → v2 added
         // the `tags` column). DROP IF EXISTS handles a fresh DB too.
-        db.exec("DROP TABLE IF EXISTS chunks; DROP TABLE IF EXISTS source_state;");
+        db.exec(`
+          DROP TABLE IF EXISTS chunks;
+          DROP TABLE IF EXISTS source_state;
+          DROP TABLE IF EXISTS source_quarantine;
+          DROP TABLE IF EXISTS source_revision;
+        `);
       }
+
+      // Trigger names are additive-schema authority. Recreate them on every
+      // open inside this transaction so a legacy, partial, or no-op same-name
+      // definition cannot silently survive CREATE TRIGGER IF NOT EXISTS.
+      db.exec(`
+        DROP TRIGGER IF EXISTS source_state_revision_insert;
+        DROP TRIGGER IF EXISTS source_state_revision_update;
+        DROP TRIGGER IF EXISTS source_state_revision_delete;
+        DROP TRIGGER IF EXISTS source_quarantine_revision_insert;
+        DROP TRIGGER IF EXISTS source_quarantine_revision_update;
+        DROP TRIGGER IF EXISTS source_quarantine_revision_delete;
+      `);
 
       db.exec(`
         CREATE VIRTUAL TABLE IF NOT EXISTS chunks USING fts5(
@@ -465,6 +539,103 @@ export class FtsIndex {
           kind TEXT NOT NULL DEFAULT 'md',
           indexed_at TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS source_quarantine (
+          rel_path TEXT NOT NULL,
+          kind TEXT NOT NULL,
+          PRIMARY KEY (rel_path, kind)
+        ) WITHOUT ROWID;
+        CREATE TABLE IF NOT EXISTS source_revision (
+          rel_path TEXT NOT NULL,
+          kind TEXT NOT NULL CHECK (kind IN ('md', 'pdf')),
+          revision INTEGER NOT NULL CHECK (
+            typeof(revision) = 'integer'
+            AND revision BETWEEN 1 AND ${MAX_SOURCE_REVISION}
+          ),
+          PRIMARY KEY (rel_path, kind)
+        ) WITHOUT ROWID;
+
+        INSERT OR IGNORE INTO source_revision (rel_path, kind, revision)
+        SELECT rel_path, kind, 1
+        FROM source_state
+        WHERE kind IN ('md', 'pdf')
+        UNION
+        SELECT rel_path, kind, 1
+        FROM source_quarantine
+        WHERE kind IN ('md', 'pdf');
+
+        CREATE TRIGGER IF NOT EXISTS source_state_revision_insert
+        AFTER INSERT ON source_state
+        WHEN NEW.kind IN ('md', 'pdf')
+        BEGIN
+          INSERT INTO source_revision (rel_path, kind, revision)
+          VALUES (NEW.rel_path, NEW.kind, 1)
+          ON CONFLICT(rel_path, kind) DO UPDATE
+          SET revision = source_revision.revision + 1;
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS source_state_revision_update
+        AFTER UPDATE ON source_state
+        BEGIN
+          INSERT INTO source_revision (rel_path, kind, revision)
+          SELECT OLD.rel_path, OLD.kind, 1
+          WHERE OLD.kind IN ('md', 'pdf')
+            AND (OLD.rel_path <> NEW.rel_path OR OLD.kind <> NEW.kind)
+          ON CONFLICT(rel_path, kind) DO UPDATE
+          SET revision = source_revision.revision + 1;
+
+          INSERT INTO source_revision (rel_path, kind, revision)
+          SELECT NEW.rel_path, NEW.kind, 1
+          WHERE NEW.kind IN ('md', 'pdf')
+          ON CONFLICT(rel_path, kind) DO UPDATE
+          SET revision = source_revision.revision + 1;
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS source_state_revision_delete
+        AFTER DELETE ON source_state
+        WHEN OLD.kind IN ('md', 'pdf')
+        BEGIN
+          INSERT INTO source_revision (rel_path, kind, revision)
+          VALUES (OLD.rel_path, OLD.kind, 1)
+          ON CONFLICT(rel_path, kind) DO UPDATE
+          SET revision = source_revision.revision + 1;
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS source_quarantine_revision_insert
+        AFTER INSERT ON source_quarantine
+        WHEN NEW.kind IN ('md', 'pdf')
+        BEGIN
+          INSERT INTO source_revision (rel_path, kind, revision)
+          VALUES (NEW.rel_path, NEW.kind, 1)
+          ON CONFLICT(rel_path, kind) DO UPDATE
+          SET revision = source_revision.revision + 1;
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS source_quarantine_revision_update
+        AFTER UPDATE ON source_quarantine
+        BEGIN
+          INSERT INTO source_revision (rel_path, kind, revision)
+          SELECT OLD.rel_path, OLD.kind, 1
+          WHERE OLD.kind IN ('md', 'pdf')
+            AND (OLD.rel_path <> NEW.rel_path OR OLD.kind <> NEW.kind)
+          ON CONFLICT(rel_path, kind) DO UPDATE
+          SET revision = source_revision.revision + 1;
+
+          INSERT INTO source_revision (rel_path, kind, revision)
+          SELECT NEW.rel_path, NEW.kind, 1
+          WHERE NEW.kind IN ('md', 'pdf')
+          ON CONFLICT(rel_path, kind) DO UPDATE
+          SET revision = source_revision.revision + 1;
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS source_quarantine_revision_delete
+        AFTER DELETE ON source_quarantine
+        WHEN OLD.kind IN ('md', 'pdf')
+        BEGIN
+          INSERT INTO source_revision (rel_path, kind, revision)
+          VALUES (OLD.rel_path, OLD.kind, 1)
+          ON CONFLICT(rel_path, kind) DO UPDATE
+          SET revision = source_revision.revision + 1;
+        END;
       `);
 
       // writeMeta inside the same transaction — keeps meta + schema
@@ -533,6 +704,11 @@ export class FtsIndex {
       kind !== undefined
         ? db.prepare("SELECT rel_path, mtime_ms FROM source_state WHERE kind = ?").all<SourceStateRow>(kind)
         : db.prepare("SELECT rel_path, mtime_ms FROM source_state").all<SourceStateRow>();
+    const quarantinedRows =
+      kind !== undefined
+        ? db.prepare("SELECT rel_path FROM source_quarantine WHERE kind = ?").all<{ rel_path: string }>(kind)
+        : db.prepare("SELECT rel_path FROM source_quarantine").all<{ rel_path: string }>();
+    const quarantined = new Set(quarantinedRows.map((row) => row.rel_path));
     const storedMap = new Map<string, number>();
     for (const r of stored) storedMap.set(r.rel_path, r.mtime_ms);
     const live = new Map<string, number>();
@@ -544,13 +720,140 @@ export class FtsIndex {
     for (const [relPath, mtimeMs] of live) {
       const prev = storedMap.get(relPath);
       if (prev === undefined) added.push(relPath);
-      else if (prev !== mtimeMs) updated.push(relPath);
+      else if (prev !== mtimeMs || quarantined.has(relPath)) updated.push(relPath);
       else unchanged.push(relPath);
     }
-    const deleted: string[] = [];
-    for (const relPath of storedMap.keys()) if (!live.has(relPath)) deleted.push(relPath);
+    const deleted = new Set<string>();
+    for (const relPath of storedMap.keys()) if (!live.has(relPath)) deleted.add(relPath);
+    for (const relPath of quarantined) if (!live.has(relPath)) deleted.add(relPath);
 
-    return { added, updated, deleted, unchanged };
+    return { added, updated, deleted: [...deleted], unchanged };
+  }
+
+  /**
+   * Hide a source's retained rows from every public FTS read until the same
+   * source is successfully reindexed or dropped. The marker is durable so a
+   * failed refresh cannot become visible again after process restart.
+   *
+   * @param relPath - Vault-relative source path whose indexed bytes are stale.
+   * @param kind - Content-source kind; defaults to Markdown for watcher/sync callers.
+   * @returns Nothing.
+   * @example
+   * ```ts
+   * index.quarantineFile("Private/rotated.md");
+   * ```
+   */
+  quarantineFile(relPath: string, kind: ChunkKind = "md"): void {
+    if (!isChunkKind(kind)) throw new Error(`Unsupported FTS source kind: ${String(kind)}`);
+    const db = this.requireDb();
+    db.prepare("INSERT OR IGNORE INTO source_quarantine (rel_path, kind) VALUES (?, ?)").run(relPath, kind);
+  }
+
+  /**
+   * Verify a bounded receipt batch in one synchronous SQLite read snapshot.
+   * Empty input returns immediately. Oversized input is rejected before any
+   * allocation or SQLite work; malformed entries receive false verdicts while
+   * preserving positional association for the accepted batch.
+   *
+   * @param receipts - Persisted source receipts to verify, in caller order.
+   * @returns One current/not-current verdict per accepted input receipt.
+   * @throws {RangeError} If more than 512 receipts are supplied.
+   * @example
+   * ```ts
+   * const current = index.currentSourceReceiptMask(index.searchWithReceipts("retrieval"));
+   * ```
+   */
+  currentSourceReceiptMask(receipts: readonly FtsSourceReceipt[]): boolean[] {
+    if (!Array.isArray(receipts)) return [];
+    if (receipts.length === 0) return [];
+    if (receipts.length > MAX_SOURCE_RECEIPT_BATCH) {
+      throw new RangeError(`FTS source receipt batch exceeds ${MAX_SOURCE_RECEIPT_BATCH} entries`);
+    }
+    const db = this.requireDb();
+    const current = db.prepare(
+      `SELECT 1 AS current
+       FROM source_state AS state
+       JOIN source_revision AS ledger
+         ON ledger.rel_path = state.rel_path
+        AND ledger.kind = state.kind
+       WHERE state.rel_path = ?
+         AND state.kind = ?
+         AND state.kind IN ('md', 'pdf')
+         AND typeof(state.mtime_ms) IN ('integer', 'real')
+         AND state.mtime_ms = ?
+         AND typeof(ledger.revision) = 'integer'
+         AND ledger.revision BETWEEN 1 AND ${MAX_SOURCE_REVISION}
+         AND ledger.revision = ?
+         AND NOT EXISTS (
+           SELECT 1
+           FROM source_quarantine AS quarantined
+           WHERE quarantined.rel_path = state.rel_path
+             AND quarantined.kind = state.kind
+         )
+       LIMIT 1`
+    );
+    const readSnapshot = db.transaction((): boolean[] =>
+      receipts.map((receipt) => {
+        if (
+          typeof receipt !== "object" ||
+          receipt === null ||
+          typeof receipt.rel_path !== "string" ||
+          receipt.rel_path.length === 0 ||
+          !isChunkKind(receipt.kind) ||
+          !Number.isFinite(receipt.indexed_mtime_ms) ||
+          Math.abs(receipt.indexed_mtime_ms) > MAX_SOURCE_REVISION ||
+          !Number.isSafeInteger(receipt.indexed_revision) ||
+          receipt.indexed_revision < 1
+        ) {
+          return false;
+        }
+        return (
+          current.get<{ current: 1 }>(
+            receipt.rel_path,
+            receipt.kind,
+            receipt.indexed_mtime_ms,
+            receipt.indexed_revision
+          )?.current === 1
+        );
+      })
+    );
+    return readSnapshot();
+  }
+
+  /**
+   * Verify that one internal FTS receipt still names the source generation
+   * currently eligible for egress. The monotonic revision closes same-mtime
+   * replacement and delete/re-add ABA gaps that an mtime-only comparison
+   * cannot distinguish. This convenience wrapper uses the same atomic batch
+   * verifier as multi-hit callers.
+   *
+   * @param relPath - Vault-relative source path carried by the hit.
+   * @param kind - Content-source kind carried by the hit.
+   * @param indexedMtimeMs - Source mtime committed with the indexed bytes.
+   * @param indexedRevision - Monotonic revision committed with the indexed bytes.
+   * @returns True only for a finite, safe, non-quarantined current receipt.
+   * @example
+   * ```ts
+   * const hit = index.searchWithReceipts("retrieval", { limit: 1 })[0];
+   * const current = hit
+   *   ? index.isCurrentSourceReceipt(hit.rel_path, hit.kind, hit.indexed_mtime_ms, hit.indexed_revision)
+   *   : false;
+   * ```
+   */
+  isCurrentSourceReceipt(
+    relPath: string,
+    kind: ChunkKind,
+    indexedMtimeMs: number,
+    indexedRevision: number
+  ): boolean {
+    return this.currentSourceReceiptMask([
+      {
+        rel_path: relPath,
+        kind,
+        indexed_mtime_ms: indexedMtimeMs,
+        indexed_revision: indexedRevision
+      }
+    ])[0] === true;
   }
 
   /**
@@ -560,7 +863,8 @@ export class FtsIndex {
    * `n_chunks`, the same number of physical rows, and one valid row at every
    * integer index in `0..n_chunks - 1`. The audit also rejects invalid line
    * ranges or raw-content storage, chunk-only paths, a different kind on a
-   * declared path, and invalid kinds anywhere in either table. Those global
+   * declared path, missing/invalid source revisions, quarantine markers for
+   * the requested kind, and invalid kinds anywhere in the index. Those global
    * checks deliberately fail closed so a scoped markdown or PDF audit cannot
    * certify an index whose other rows have unknown provenance.
    *
@@ -576,13 +880,17 @@ export class FtsIndex {
    * ```
    */
   auditKind(kind: ChunkKind): FtsKindAudit {
+    if (!isChunkKind(kind)) throw new Error(`Unsupported FTS source kind: ${String(kind)}`);
     const db = this.requireDb();
     const row = db
       .prepare(
         `WITH declared AS (
-           SELECT rel_path, n_chunks
-           FROM source_state
-           WHERE kind = ?
+           SELECT state.rel_path, state.mtime_ms, state.n_chunks, ledger.revision
+           FROM source_state AS state
+           LEFT JOIN source_revision AS ledger
+             ON ledger.rel_path = state.rel_path
+            AND ledger.kind = state.kind
+           WHERE state.kind = ?
          ),
          actual AS (
            SELECT
@@ -628,8 +936,12 @@ export class FtsIndex {
            WHERE
              typeof(d.rel_path) <> 'text'
              OR d.rel_path = ''
+             OR typeof(d.mtime_ms) NOT IN ('integer', 'real')
+             OR d.mtime_ms NOT BETWEEN -${MAX_SOURCE_REVISION} AND ${MAX_SOURCE_REVISION}
              OR typeof(d.n_chunks) <> 'integer'
              OR d.n_chunks <= 0
+             OR typeof(d.revision) <> 'integer'
+             OR d.revision NOT BETWEEN 1 AND ${MAX_SOURCE_REVISION}
              OR COALESCE(a.actual_count, 0) <> d.n_chunks
              OR COALESCE(a.distinct_index_count, 0) <> d.n_chunks
              OR COALESCE(a.invalid_row_count, 0) <> 0
@@ -652,6 +964,23 @@ export class FtsIndex {
            SELECT rel_path
            FROM source_state
            WHERE typeof(kind) <> 'text' OR kind NOT IN ('md', 'pdf')
+           UNION
+           SELECT rel_path
+           FROM source_quarantine
+           WHERE kind = ?
+              OR typeof(kind) <> 'text'
+              OR kind NOT IN ('md', 'pdf')
+           UNION
+           SELECT rel_path
+           FROM source_revision
+           WHERE (kind = ? AND (
+                typeof(rel_path) <> 'text'
+                OR rel_path = ''
+                OR typeof(revision) <> 'integer'
+                OR revision NOT BETWEEN 1 AND ${MAX_SOURCE_REVISION}
+              ))
+              OR typeof(kind) <> 'text'
+              OR kind NOT IN ('md', 'pdf')
          )
          SELECT
            (SELECT COUNT(*) FROM declared) AS declared_files,
@@ -660,7 +989,7 @@ export class FtsIndex {
            COALESCE((SELECT SUM(actual_count) FROM actual), 0) AS indexed_chunks,
            (SELECT COUNT(*) FROM mismatched) AS mismatched_files`
       )
-      .get<FtsKindAudit>(kind, kind, kind);
+      .get<FtsKindAudit>(kind, kind, kind, kind, kind);
     return (
       row ?? {
         declared_files: 0,
@@ -677,17 +1006,19 @@ export class FtsIndex {
    * content kind without materializing all rows in memory.
    *
    * The manifest is intended for before/after integrity checks in strict
-   * evidence runs. It includes source mtimes and timestamps as well as every
-   * stored searchable and metadata column, so an in-place mutation that keeps
-   * aggregate counts unchanged still changes the digest.
+   * evidence runs. It includes source mtimes, monotonic revision tombstones,
+   * timestamps, every stored searchable/metadata column, and durable
+   * quarantine markers, so an in-place mutation that keeps aggregate counts
+   * unchanged still changes the digest.
    *
    * @param kind - Content-source kind to fingerprint.
    * @returns Lowercase SHA-256 digest of the ordered physical rows.
    */
   fingerprintKind(kind: ChunkKind): string {
+    if (!isChunkKind(kind)) throw new Error(`Unsupported FTS source kind: ${String(kind)}`);
     const db = this.requireDb();
     const hash = createHash("sha256");
-    hash.update("enquire-fts-kind-manifest-v1;");
+    hash.update("enquire-fts-kind-manifest-v2;");
     for (const row of db
       .prepare(
         `SELECT rel_path, mtime_ms, n_chunks, kind, indexed_at
@@ -708,6 +1039,31 @@ export class FtsIndex {
       updateManifestValue(hash, row.n_chunks);
       updateManifestValue(hash, row.kind);
       updateManifestValue(hash, row.indexed_at);
+    }
+    for (const row of db
+      .prepare(
+        `SELECT rel_path, kind, revision
+         FROM source_revision
+         WHERE kind = ?
+         ORDER BY rel_path`
+      )
+      .iterate<{ rel_path: string; kind: string; revision: number }>(kind)) {
+      hash.update("revision;");
+      updateManifestValue(hash, row.rel_path);
+      updateManifestValue(hash, row.kind);
+      updateManifestValue(hash, row.revision);
+    }
+    for (const row of db
+      .prepare(
+        `SELECT rel_path, kind
+         FROM source_quarantine
+         WHERE kind = ?
+         ORDER BY rel_path`
+      )
+      .iterate<{ rel_path: string; kind: string }>(kind)) {
+      hash.update("quarantine;");
+      updateManifestValue(hash, row.rel_path);
+      updateManifestValue(hash, row.kind);
     }
     for (const row of db
       .prepare(
@@ -746,7 +1102,7 @@ export class FtsIndex {
     return hash.digest("hex");
   }
 
-  /** Drop a file's chunks + state row. Idempotent.
+  /** Drop a file's chunks, state row, and quarantine marker. Idempotent.
    *
    * v3.7.18 R-8 — wrapped in `db.transaction()` for atomicity. Pre-3.7.18
    * the two DELETE statements ran independently; a crash / SIGKILL / DB
@@ -765,6 +1121,7 @@ export class FtsIndex {
         relPath
       );
       db.prepare("DELETE FROM source_state WHERE rel_path = ?").run(relPath);
+      db.prepare("DELETE FROM source_quarantine WHERE rel_path = ?").run(relPath);
     });
     txn();
   }
@@ -839,8 +1196,15 @@ export class FtsIndex {
         );
       });
       db.prepare(
-        "INSERT OR REPLACE INTO source_state (rel_path, mtime_ms, n_chunks, kind, indexed_at) VALUES (?, ?, ?, 'md', ?)"
+        `INSERT INTO source_state (rel_path, mtime_ms, n_chunks, kind, indexed_at)
+         VALUES (?, ?, ?, 'md', ?)
+         ON CONFLICT(rel_path) DO UPDATE SET
+           mtime_ms = excluded.mtime_ms,
+           n_chunks = excluded.n_chunks,
+           kind = excluded.kind,
+           indexed_at = excluded.indexed_at`
       ).run(relPath, mtimeMs, chunks.length, new Date().toISOString());
+      db.prepare("DELETE FROM source_quarantine WHERE rel_path = ?").run(relPath);
     });
     txn();
     return chunks.length;
@@ -888,15 +1252,54 @@ export class FtsIndex {
         insert.run(c.text, i === 0 ? pdfTitle : "", scopeTokens, relPath, i, c.lineStart, c.lineEnd, c.text);
       });
       db.prepare(
-        "INSERT OR REPLACE INTO source_state (rel_path, mtime_ms, n_chunks, kind, indexed_at) VALUES (?, ?, ?, 'pdf', ?)"
+        `INSERT INTO source_state (rel_path, mtime_ms, n_chunks, kind, indexed_at)
+         VALUES (?, ?, ?, 'pdf', ?)
+         ON CONFLICT(rel_path) DO UPDATE SET
+           mtime_ms = excluded.mtime_ms,
+           n_chunks = excluded.n_chunks,
+           kind = excluded.kind,
+           indexed_at = excluded.indexed_at`
       ).run(relPath, mtimeMs, chunks.length, new Date().toISOString());
+      db.prepare("DELETE FROM source_quarantine WHERE rel_path = ?").run(relPath);
     });
     txn();
     return chunks.length;
   }
 
   /**
-   * BM25-ranked search over chunk content. Folder + tag + recency filters
+   * BM25-ranked search with the stable, receipt-free public result shape.
+   * This compatibility wrapper applies the same provenance and quarantine
+   * joins as {@link searchWithReceipts}, then strips internal receipt fields.
+   *
+   * @param rawQuery - User query string. Whitespace-only returns `[]`.
+   * @param opts.limit - Max results. Default 25.
+   * @param opts.folder - Vault-relative prefix filter.
+   * @param opts.tag - Exact-tag membership filter.
+   * @param opts.sinceMtimeMs - Recency filter in source mtime milliseconds.
+   * @returns Receipt-free hits sorted by descending score.
+   * @example
+   * ```ts
+   * const hits = index.search("vector retrieval", { limit: 25 });
+   * ```
+   */
+  search(
+    rawQuery: string,
+    opts: { limit?: number; folder?: string; tag?: string; sinceMtimeMs?: number } = {}
+  ): FtsSearchHit[] {
+    return this.searchWithReceipts(rawQuery, opts).map((hit) => ({
+      rel_path: hit.rel_path,
+      chunk_index: hit.chunk_index,
+      line_start: hit.line_start,
+      line_end: hit.line_end,
+      snippet: hit.snippet,
+      score: hit.score,
+      kind: hit.kind
+    }));
+  }
+
+  /**
+   * BM25-ranked search over chunk content with persisted source receipts.
+   * Folder + tag + recency filters
    * are pushed down to the SQL layer. Hyphenated identifiers (e.g.
    * `"claude-telegram"`) are quote-escaped via {@link safeFts5Query} so
    * FTS5 doesn't interpret `-` as the `NOT` operator.
@@ -908,19 +1311,40 @@ export class FtsIndex {
    *   tag, not `core-team` for `core`).
    * @param opts.sinceMtimeMs - Recency filter — only return chunks from
    *   files modified at or after this mtime.
-   * @returns Sorted hits (score desc). Empty array if no usable query
-   *   tokens or no matches.
+   * @returns Provenance-bound, non-quarantined hits sorted by descending
+   *   score. Each hit carries the `source_state` mtime and monotonic revision
+   *   committed with its indexed bytes; callers that own a live {@link Vault}
+   *   must compare both before exposing persisted text. Empty array if no
+   *   usable query tokens or no matches.
+   * @example
+   * ```ts
+   * const hits = index.searchWithReceipts("vector retrieval", { limit: 25 });
+   * const current = index.currentSourceReceiptMask(hits);
+   * ```
    */
-  search(
+  searchWithReceipts(
     rawQuery: string,
     opts: { limit?: number; folder?: string; tag?: string; sinceMtimeMs?: number } = {}
-  ): FtsSearchHit[] {
+  ): FtsReceiptSearchHit[] {
     const db = this.requireDb();
     const limit = opts.limit ?? 25;
     const safe = safeFts5Query(rawQuery);
     if (!safe) return [];
     let matchQuery = `{content title aliases} : (${safe})`;
-    const where: string[] = ["chunks MATCH ?"];
+    const where: string[] = [
+      "chunks MATCH ?",
+      "chunks.kind IN ('md', 'pdf')",
+      "typeof(source_state.mtime_ms) IN ('integer', 'real')",
+      `source_state.mtime_ms BETWEEN -${MAX_SOURCE_REVISION} AND ${MAX_SOURCE_REVISION}`,
+      "typeof(source_revision.revision) = 'integer'",
+      `source_revision.revision BETWEEN 1 AND ${MAX_SOURCE_REVISION}`,
+      `NOT EXISTS (
+        SELECT 1
+        FROM source_quarantine AS quarantined
+        WHERE quarantined.rel_path = chunks.rel_path
+          AND quarantined.kind = chunks.kind
+      )`
+    ];
     const params: unknown[] = [matchQuery];
     if (opts.folder) {
       // Prefix-equality via substr — avoids GLOB pattern semantics so folder
@@ -958,9 +1382,13 @@ export class FtsIndex {
       where.push("(',' || chunks.tags || ',') LIKE ? ESCAPE '\\'");
       params.push(`%,${literalTag},%`);
     }
-    let join = "";
+    const join = `JOIN source_state
+                    ON chunks.rel_path = source_state.rel_path
+                   AND chunks.kind = source_state.kind
+                  JOIN source_revision
+                    ON chunks.rel_path = source_revision.rel_path
+                   AND chunks.kind = source_revision.kind`;
     if (opts.sinceMtimeMs !== undefined) {
-      join = "JOIN source_state ON chunks.rel_path = source_state.rel_path";
       where.push("source_state.mtime_ms >= ?");
       params.push(opts.sinceMtimeMs);
     }
@@ -968,6 +1396,8 @@ export class FtsIndex {
       SELECT chunks.rel_path AS rel_path, chunks.chunk_index AS chunk_index,
              chunks.line_start AS line_start, chunks.line_end AS line_end,
              chunks.kind AS kind,
+             source_state.mtime_ms AS indexed_mtime_ms,
+             source_revision.revision AS indexed_revision,
              snippet(chunks, 0, '«', '»', '…', 25) AS snippet,
              bm25(chunks, ${BM25_WEIGHT_CONTENT}, ${BM25_WEIGHT_TITLE}, ${BM25_WEIGHT_ALIASES}, ${BM25_WEIGHT_SCOPE}) AS score
       FROM chunks
@@ -983,6 +1413,8 @@ export class FtsIndex {
       line_start: number;
       line_end: number;
       kind: string | null;
+      indexed_mtime_ms: number;
+      indexed_revision: number;
       snippet: string;
       score: number;
     }>(...params);
@@ -995,26 +1427,96 @@ export class FtsIndex {
       // bump (legacy DBs auto-rebuild via a schema-version mismatch, but the
       // null fallback is defense-in-depth).
       kind: (r.kind === "pdf" ? "pdf" : "md") as ChunkKind,
+      indexed_mtime_ms: r.indexed_mtime_ms,
+      indexed_revision: r.indexed_revision,
       snippet: r.snippet,
       score: -r.score // BM25 is negative; flip so higher = better for callers
     }));
   }
 
   /**
-   * Fetch a single chunk by (rel_path, chunk_index). Backs the
+   * Fetch a single raw chunk with the stable receipt-free public shape.
+   * This compatibility wrapper delegates to {@link getChunkWithReceipt} and
+   * strips the internal authority fields.
+   *
+   * @param relPath - Exact vault-relative source path from a prior FTS hit.
+   * @param chunkIndex - Zero-based chunk index within that source.
+   * @returns Verbatim chunk content and line bounds, or null when unavailable.
+   * @example
+   * ```ts
+   * const chunk = index.getChunk("Projects/plan.md", 0);
+   * ```
+   */
+  getChunk(relPath: string, chunkIndex: number): { content: string; line_start: number; line_end: number } | null {
+    const chunk = this.getChunkWithReceipt(relPath, chunkIndex);
+    return chunk
+      ? {
+          content: chunk.content,
+          line_start: chunk.line_start,
+          line_end: chunk.line_end
+        }
+      : null;
+  }
+
+  /**
+   * Fetch a receipt-bound chunk by (rel_path, chunk_index). Backs the
    * `obsidian://chunk/{chunkIndex}/{+notePath}` resource so MCP clients can
    * deep-link into specific chunks returned by a prior search. Returns the
    * RAW chunk text (the unenriched original); the FTS5 `content` column
    * additionally carries a synthetic wikilink-targets meta-line for recall,
-   * which would otherwise pollute resource responses (audit v0.10.4 P1).
+   * which would otherwise pollute resource responses (audit v0.10.4 P1). The
+   * returned source mtime and monotonic revision are selected in the same SQL
+   * snapshot as the bytes; callers that own a live {@link Vault} must compare
+   * both before exposing persisted content.
+   *
+   * @param relPath - Exact vault-relative source path from a prior FTS hit.
+   * @param chunkIndex - Zero-based chunk index within that source.
+   * @returns Receipt-bound raw content, or null when the row is absent,
+   *   orphaned, invalid-kind, or quarantined.
+   * @example
+   * ```ts
+   * const chunk = index.getChunkWithReceipt("Projects/plan.md", 0);
+   * ```
    */
-  getChunk(relPath: string, chunkIndex: number): { content: string; line_start: number; line_end: number } | null {
+  getChunkWithReceipt(relPath: string, chunkIndex: number): FtsReceiptChunk | null {
     const db = this.requireDb();
-    const sql =
-      "SELECT raw_content AS content, line_start, line_end FROM chunks WHERE chunks MATCH ? AND rel_path = ? AND chunk_index = ?";
+    const sql = `
+      SELECT chunks.rel_path AS rel_path, chunks.raw_content AS content, chunks.line_start AS line_start,
+             chunks.line_end AS line_end, chunks.kind AS kind,
+             source_state.mtime_ms AS indexed_mtime_ms,
+             source_revision.revision AS indexed_revision
+      FROM chunks
+      JOIN source_state
+        ON chunks.rel_path = source_state.rel_path
+       AND chunks.kind = source_state.kind
+      JOIN source_revision
+        ON chunks.rel_path = source_revision.rel_path
+       AND chunks.kind = source_revision.kind
+      WHERE chunks MATCH ?
+        AND chunks.rel_path = ?
+        AND chunks.chunk_index = ?
+        AND chunks.kind IN ('md', 'pdf')
+        AND typeof(source_state.mtime_ms) IN ('integer', 'real')
+        AND source_state.mtime_ms BETWEEN -${MAX_SOURCE_REVISION} AND ${MAX_SOURCE_REVISION}
+        AND typeof(source_revision.revision) = 'integer'
+        AND source_revision.revision BETWEEN 1 AND ${MAX_SOURCE_REVISION}
+        AND NOT EXISTS (
+          SELECT 1
+          FROM source_quarantine AS quarantined
+          WHERE quarantined.rel_path = chunks.rel_path
+            AND quarantined.kind = chunks.kind
+        )`;
     const row = db
       .prepare(sql)
-      .get<{ content: string; line_start: number; line_end: number }>(
+      .get<{
+        rel_path: string;
+        content: string;
+        line_start: number;
+        line_end: number;
+        kind: ChunkKind;
+        indexed_mtime_ms: number;
+        indexed_revision: number;
+      }>(
         `scope_tokens : ${ftsPathToken(relPath)}`,
         relPath,
         chunkIndex
@@ -1105,6 +1607,7 @@ export async function syncFtsIndex(
       if (addedPaths.has(relPath)) added += 1;
       else updated += 1;
     } catch (error) {
+      idx.quarantineFile(relPath, "md");
       if (mode === "strict") throw error;
       failed += 1;
       processed += 1;

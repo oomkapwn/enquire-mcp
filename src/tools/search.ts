@@ -1,5 +1,6 @@
 import * as path from "node:path";
-import type { FtsIndex, FtsSearchHit } from "../fts5.js";
+import type { EmbedReceiptReader, EmbedReceiptSearchHit, EmbedSourceReceipt } from "../embed-db.js";
+import type { FtsIndex, FtsSearchHit, FtsSourceReceipt } from "../fts5.js";
 import { foldName, foldTag, lookupFoldedKey, nfcLower } from "../name-fold.js";
 import { computeStaleness, recencyScore } from "../staleness.js";
 import type { FileEntry, Vault } from "../vault.js";
@@ -808,6 +809,11 @@ export interface EmbedHit {
   kind: "md" | "pdf";
 }
 
+// The committed generation is process-private orchestration metadata, not a
+// new MCP response field. Hybrid search consumes it before cloning/returning
+// an embedding hit so the public JSON contract stays unchanged.
+const embedHitReceipts = new WeakMap<EmbedHit, EmbedSourceReceipt>();
+
 /**
  * Envelope returned by {@link embeddingsSearch}.
  *
@@ -833,12 +839,15 @@ export interface EmbedSearchResponse {
  * v2.13.0 — optional HNSW context. When passed, embeddingsSearch routes
  * the k-NN lookup through the in-memory approximate nearest-neighbor index
  * instead of the O(n) brute-force cosine in EmbedDb.search().
- * `rowByLabel` is the label → source-row mapping established at HNSW
- * build time (typically labels are `embeddings.id`, set in
+ * `rowByLabel` is sidecar/bootstrap metadata established at HNSW build time
+ * (typically labels are `embeddings.id`, set in
  * `EmbedDb.getAllVectors()`).
  */
 export interface HnswSearchContext {
-  index: { searchKnn(q: Float32Array, k: number, opts?: { ef?: number }): { labels: number[]; distances: number[] } };
+  index: {
+    readonly size: number;
+    searchKnn(q: Float32Array, k: number, opts?: { ef?: number }): { labels: number[]; distances: number[] };
+  };
   rowByLabel: ReadonlyMap<
     number,
     {
@@ -1217,10 +1226,10 @@ export async function embeddingsSearch(
     // bypassing the privacy contract — same shape as the writeNote bug.
     // We over-fetch by 2× to keep top-K stable when many hits get filtered.
     const overFetch = limit * 2;
-    let rawHits: import("../embed-db.js").EmbedSearchHit[];
-    let hnswResultsToHits: typeof import("../hnsw.js").hnswResultsToHits | null = null;
+    let rawHits: EmbedReceiptSearchHit[];
+    let hnswResultsToReceiptHits: typeof import("../hnsw.js").hnswResultsToReceiptHits | null = null;
     if (hnsw && hnsw.health?.hnswUsable !== false) {
-      ({ hnswResultsToHits } = await import("../hnsw.js"));
+      ({ hnswResultsToReceiptHits } = await import("../hnsw.js"));
     }
     if (watcherSemanticRouteIsQuarantined(watcherHealth)) {
       throw new Error(
@@ -1243,9 +1252,12 @@ export async function embeddingsSearch(
       // v3.9.0-rc.3 R-10 — adaptive refill loop. Closes the ">66% excluded"
       // under-return class that rc.9's static multiplier could not fully
       // solve. See `adaptiveHnswRefill` for the algorithm.
-      const maxLabels = Math.max(usableHnsw.rowByLabel.size, 1);
+      // Native graph cardinality, not sidecar metadata, bounds adaptive refill.
+      // A partial/malformed rowsByLabel map must not remain a recall or query-
+      // amplification authority now that current EmbedDb hydration owns labels.
+      const maxLabels = Math.max(usableHnsw.index.size, 1);
       const initialK = Math.min(Math.max(overFetch * 3, 50), maxLabels);
-      if (!hnswResultsToHits) {
+      if (!hnswResultsToReceiptHits) {
         throw new Error("HNSW helper unavailable for a healthy prepared route");
       }
       const folderPrefix = args.folder ? `${stripTrailingSlashes(args.folder)}/` : null;
@@ -1256,7 +1268,13 @@ export async function embeddingsSearch(
         searchKnn: (k) =>
           usableHnsw.index.searchKnn(qVec, k, usableHnsw.ef !== undefined ? { ef: usableHnsw.ef } : undefined),
         filter: (labels, distances) => {
-          let h = hnswResultsToHits({ labels, distances }, usableHnsw.rowByLabel);
+          // The persisted HNSW sidecar is only a graph/bootstrap artifact. Its
+          // preview metadata is not an egress authority: hydrate every native
+          // label from the currently-open EmbedDb so missing, orphaned, or
+          // quarantined rows disappear and each surviving hit carries the
+          // source-state receipt committed with its bytes.
+          const hydratedRows = db.getSearchRowsByIds(labels);
+          let h = hnswResultsToReceiptHits({ labels, distances }, hydratedRows);
           if (folderPrefix) h = h.filter((row) => row.rel_path.startsWith(folderPrefix));
           h = h.filter((row) => row.score >= minScore);
           // Privacy filter applied here too so the refill loop's "did we
@@ -1267,23 +1285,39 @@ export async function embeddingsSearch(
         }
       });
     } else {
-      rawHits = db.search(qVec, overFetch, { folder: args.folder, minScore });
+      rawHits = db.searchWithReceipts(qVec, overFetch, { folder: args.folder, minScore });
     }
     // v3.10.0-rc.22 (audit M8) — terminal privacy filter via the shared,
     // unit-tested helper (was an inline `.filter` the security test only
     // reimplemented, never exercised).
     const stringAdmittedHits = filterExcludedEmbedHits(rawHits, (p) => vault.isExcluded(p));
-    const hits = await filterLiveVaultHits(vault, stringAdmittedHits, (hit) => hit.rel_path, limit);
-    const matches: EmbedHit[] = hits.map((h) => ({
-      path: h.rel_path,
-      title: stripMd(path.basename(h.rel_path)),
-      score: Math.round(h.score * 10000) / 10000,
-      snippet: h.text_preview.slice(0, 240),
-      chunk_index: h.chunk_index,
-      line_start: h.line_start,
-      line_end: h.line_end,
-      kind: h.kind
-    }));
+    const hits = await filterLiveVaultHits(
+      vault,
+      stringAdmittedHits,
+      (hit) => hit.rel_path,
+      limit,
+      (hit) => hit,
+      (receipts) => db.currentSourceReceiptMask(receipts)
+    );
+    const matches: EmbedHit[] = hits.map((h) => {
+      const match: EmbedHit = {
+        path: h.rel_path,
+        title: stripMd(path.basename(h.rel_path)),
+        score: Math.round(h.score * 10000) / 10000,
+        snippet: h.text_preview.slice(0, 240),
+        chunk_index: h.chunk_index,
+        line_start: h.line_start,
+        line_end: h.line_end,
+        kind: h.kind
+      };
+      embedHitReceipts.set(match, {
+        rel_path: h.rel_path,
+        kind: h.kind,
+        indexed_mtime_ms: h.indexed_mtime_ms,
+        indexed_revision: h.indexed_revision
+      });
+      return match;
+    });
     return {
       query: args.query,
       method: "embeddings-cosine",
@@ -1402,6 +1436,40 @@ export interface SearchHybridHit {
   explain?: SearchHitExplain;
 }
 
+interface HybridHitGenerationReceipts {
+  bm25?: FtsSourceReceipt;
+  embeddings?: EmbedSourceReceipt;
+}
+
+interface PersistedSourceReceipt {
+  rel_path: string;
+  kind: "md" | "pdf";
+  indexed_mtime_ms: number;
+  indexed_revision: number;
+}
+
+type CurrentSourceReceiptMask = (receipts: readonly PersistedSourceReceipt[]) => boolean[];
+
+// Receipt metadata is deliberately process-private. Public MCP result objects
+// retain their established JSON shape, while single- and multi-query
+// orchestration can still perform one last generation check after every await.
+const hybridHitGenerationReceipts = new WeakMap<SearchHybridHit, HybridHitGenerationReceipts>();
+
+async function openHybridEmbedReceiptReader(
+  vault: Vault,
+  embedFile: string | null,
+  hits: readonly SearchHybridHit[]
+): Promise<EmbedReceiptReader | null> {
+  const needsReader = hits.some((hit) => hybridHitGenerationReceipts.get(hit)?.embeddings !== undefined);
+  if (!needsReader || embedFile === null) return null;
+  try {
+    const { openEmbedReceiptReader } = await import("../embed-db.js");
+    return await openEmbedReceiptReader(embedFile, vault.root);
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Envelope returned by {@link searchHybrid}.
  *
@@ -1438,6 +1506,115 @@ export interface SearchHybridResponse {
   reranked?: { applied: boolean; pairs?: number; reason?: string };
   total_candidates: number;
   matches: SearchHybridHit[];
+}
+
+/**
+ * Re-admit final hybrid objects immediately before a public return. This is
+ * later than ranker/frontmatter/freshness awaits, so a source replaced during
+ * orchestration cannot carry an older persisted snippet into the response.
+ *
+ * @param vault - Live vault whose current generation is authoritative.
+ * @param hits - Fully assembled single- or multi-query hits.
+ * @returns Current regular-file hits with every internal receipt matched.
+ */
+async function filterCurrentHybridHits(
+  vault: Vault,
+  hits: readonly SearchHybridHit[],
+  ftsIndex: FtsIndex | null,
+  embedReceiptReader: EmbedReceiptReader | null
+): Promise<SearchHybridHit[]> {
+  const verdicts = new Map<string, Promise<boolean>>();
+  const verdictFor = (hit: SearchHybridHit): Promise<boolean> => {
+    const receipts = hybridHitGenerationReceipts.get(hit);
+    // Run mandatory-receipt admission before consulting the per-path cache:
+    // a TF-IDF-only hit and a persisted hit with a lost WeakMap association
+    // can otherwise share the same undefined-receipt cache key.
+    if (
+      hit.per_signal.bm25 &&
+      (receipts?.bm25 === undefined ||
+        receipts.bm25.rel_path !== hit.path ||
+        receipts.bm25.kind !== hit.kind ||
+        !Number.isFinite(receipts.bm25.indexed_mtime_ms) ||
+        !Number.isSafeInteger(receipts.bm25.indexed_revision))
+    ) {
+      return Promise.resolve(false);
+    }
+    if (
+      hit.per_signal.embeddings &&
+      (receipts?.embeddings === undefined ||
+        receipts.embeddings.rel_path !== hit.path ||
+        receipts.embeddings.kind !== hit.kind ||
+        !Number.isFinite(receipts.embeddings.indexed_mtime_ms) ||
+        !Number.isSafeInteger(receipts.embeddings.indexed_revision))
+    ) {
+      return Promise.resolve(false);
+    }
+    const key =
+      `${hit.path}\0${String(receipts?.bm25?.indexed_mtime_ms)}:${String(receipts?.bm25?.indexed_revision)}` +
+      `\0${String(receipts?.embeddings?.indexed_mtime_ms)}:${String(receipts?.embeddings?.indexed_revision)}`;
+    const cached = verdicts.get(key);
+    if (cached) return cached;
+    const verdict = (async () => {
+      if (vault.isExcluded(hit.path)) return false;
+      try {
+        const live = await vault.stat(hit.path);
+        if (!live.isFile) return false;
+        for (const receipt of [receipts?.bm25, receipts?.embeddings]) {
+          if (
+            receipt !== undefined &&
+            (!Number.isFinite(receipt.indexed_mtime_ms) || live.mtimeMs !== receipt.indexed_mtime_ms)
+          ) {
+            return false;
+          }
+        }
+        return true;
+      } catch {
+        return false;
+      }
+    })();
+    verdicts.set(key, verdict);
+    return verdict;
+  };
+  const admitted = await Promise.all(hits.map(async (hit) => ((await verdictFor(hit)) ? hit : null)));
+  const liveHits = admitted.filter((hit): hit is SearchHybridHit => hit !== null);
+
+  // All live filesystem awaits are complete. Validate each store's receipts in
+  // one synchronous SQLite snapshot, then return without another await. This
+  // linearizes same-mtime reindex/quarantine/delete mutations against egress.
+  const ftsEntries = liveHits.flatMap((hit) => {
+    const receipt = hybridHitGenerationReceipts.get(hit)?.bm25;
+    return receipt ? [{ hit, receipt }] : [];
+  });
+  const embedEntries = liveHits.flatMap((hit) => {
+    const receipt = hybridHitGenerationReceipts.get(hit)?.embeddings;
+    return receipt ? [{ hit, receipt }] : [];
+  });
+  let ftsMask: boolean[];
+  let embedMask: boolean[];
+  try {
+    if (ftsEntries.length > 512 || embedEntries.length > 512) return [];
+    ftsMask =
+      ftsEntries.length > 0 && ftsIndex
+        ? ftsIndex.currentSourceReceiptMask(ftsEntries.map((e) => e.receipt))
+        : [];
+    embedMask =
+      embedEntries.length > 0 && embedReceiptReader
+        ? embedReceiptReader.currentSourceReceiptMask(embedEntries.map((e) => e.receipt))
+        : [];
+  } catch {
+    return liveHits.filter((hit) => {
+      const receipts = hybridHitGenerationReceipts.get(hit);
+      return receipts?.bm25 === undefined && receipts?.embeddings === undefined;
+    });
+  }
+  const stale = new Set<SearchHybridHit>();
+  ftsEntries.forEach(({ hit }, index) => {
+    if (ftsMask[index] !== true) stale.add(hit);
+  });
+  embedEntries.forEach(({ hit }, index) => {
+    if (embedMask[index] !== true) stale.add(hit);
+  });
+  return liveHits.filter((hit) => !stale.has(hit));
 }
 
 /**
@@ -1556,13 +1733,18 @@ export function filterExcludedEmbedHits<T extends { rel_path: string }>(
  *
  * Admission is bounded to 16 concurrent stats, preserves ranking order, caches
  * duplicate-path verdicts, and stops once `limit` admitted rows are collected.
- * Missing, unreadable, excluded, physically hidden, or non-regular-file paths
- * fail closed.
+ * Missing, unstatable, excluded, physically hidden, or non-regular-file paths
+ * fail closed. Persisted callers additionally supply `receiptOf` and one
+ * synchronous `currentReceiptMask`; those rows are admitted only when their
+ * mtime matches the live file and the store still validates the same monotonic
+ * source revision after every awaited stat has completed.
  *
  * @param vault - Vault whose current lexical and physical policy is authoritative.
  * @param hits - Ranked persisted-index rows to validate.
  * @param pathOf - Extracts a bare vault-relative path from one row.
  * @param limit - Maximum admitted rows to return.
+ * @param receiptOf - Optional persisted-generation receipt extractor.
+ * @param currentReceiptMask - Mandatory terminal batch validator when receipts are supplied.
  * @returns Admitted rows in their original ranking order.
  * @example
  * ```ts
@@ -1573,38 +1755,68 @@ export async function filterLiveVaultHits<T>(
   vault: Vault,
   hits: readonly T[],
   pathOf: (hit: T) => string,
-  limit = hits.length
+  limit = hits.length,
+  receiptOf?: (hit: T) => PersistedSourceReceipt | undefined,
+  currentReceiptMask?: CurrentSourceReceiptMask
 ): Promise<T[]> {
   if (limit <= 0 || hits.length === 0) return [];
   const verdicts = new Map<string, Promise<boolean>>();
-  const admitted: T[] = [];
+  const candidates = hits.map((hit) => ({
+    hit,
+    relPath: pathOf(hit),
+    receipt: receiptOf?.(hit)
+  }));
+  const admitted: Array<(typeof candidates)[number]> = [];
   const batchSize = 16;
 
-  const admit = (relPath: string): Promise<boolean> => {
-    const cached = verdicts.get(relPath);
+  const admit = (relPath: string, receipt: PersistedSourceReceipt | undefined): Promise<boolean> => {
+    const verdictKey = receiptOf
+      ? `${relPath}\0${String(receipt?.kind)}:${String(receipt?.indexed_mtime_ms)}:${String(receipt?.indexed_revision)}`
+      : relPath;
+    const cached = verdicts.get(verdictKey);
     if (cached) return cached;
     const verdict = (async () => {
       if (vault.isExcluded(relPath)) return false;
+      if (
+        receiptOf &&
+        (receipt === undefined ||
+          receipt.rel_path !== relPath ||
+          (receipt.kind !== "md" && receipt.kind !== "pdf") ||
+          !Number.isFinite(receipt.indexed_mtime_ms) ||
+          !Number.isSafeInteger(receipt.indexed_revision))
+      ) {
+        return false;
+      }
       try {
         const stat = await vault.stat(relPath);
-        return stat.isFile;
+        return stat.isFile && (!receiptOf || stat.mtimeMs === receipt?.indexed_mtime_ms);
       } catch {
         return false;
       }
     })();
-    verdicts.set(relPath, verdict);
+    verdicts.set(verdictKey, verdict);
     return verdict;
   };
 
-  for (let offset = 0; offset < hits.length && admitted.length < limit; offset += batchSize) {
-    const batch = hits.slice(offset, offset + batchSize);
-    const batchVerdicts = await Promise.all(batch.map((hit) => admit(pathOf(hit))));
+  for (let offset = 0; offset < candidates.length && admitted.length < limit; offset += batchSize) {
+    const batch = candidates.slice(offset, offset + batchSize);
+    const batchVerdicts = await Promise.all(batch.map(({ relPath, receipt }) => admit(relPath, receipt)));
     for (let i = 0; i < batch.length && admitted.length < limit; i += 1) {
-      const hit = batch[i];
-      if (hit !== undefined && batchVerdicts[i] === true) admitted.push(hit);
+      const candidate = batch[i];
+      if (candidate !== undefined && batchVerdicts[i] === true) admitted.push(candidate);
     }
   }
-  return admitted;
+  if (!receiptOf) return admitted.map(({ hit }) => hit);
+  if (!currentReceiptMask) return [];
+  const receipts = admitted.map(({ receipt, relPath }) => (receipt?.rel_path === relPath ? receipt : undefined));
+  if (receipts.some((receipt) => receipt === undefined)) return [];
+  if (receipts.length > 512) return [];
+  try {
+    const mask = currentReceiptMask(receipts as PersistedSourceReceipt[]);
+    return admitted.filter((_candidate, index) => mask[index] === true).map(({ hit }) => hit);
+  } catch {
+    return [];
+  }
 }
 
 /**
@@ -1629,18 +1841,29 @@ export async function searchLiveFts(
   // v2.0.0-beta.2 P0 — the persistent DB may retain rows that became
   // private after indexing. Over-fetch, then apply both lexical and live
   // physical admission before a stored snippet leaves the process.
-  const rawMatches = idx.search(args.query, {
+  const rawMatches = idx.searchWithReceipts(args.query, {
     limit: userLimit * 2,
     folder: args.folder,
     tag: args.tag,
     sinceMtimeMs: args.sinceMtimeMs
   });
-  return filterLiveVaultHits(
+  const admittedMatches = await filterLiveVaultHits(
     vault,
     rawMatches.filter((match) => !vault.isExcluded(match.rel_path)),
     (match) => match.rel_path,
-    userLimit
+    userLimit,
+    (match) => match,
+    (receipts) => idx.currentSourceReceiptMask(receipts)
   );
+  return admittedMatches.map((match) => ({
+    rel_path: match.rel_path,
+    chunk_index: match.chunk_index,
+    line_start: match.line_start,
+    line_end: match.line_end,
+    snippet: match.snippet,
+    score: match.score,
+    kind: match.kind
+  }));
 }
 
 /**
@@ -1674,17 +1897,28 @@ export async function readLiveFtsChunk(
   }
   // v2.0.0-beta.2 P0 — stale index rows never bypass current user filters.
   if (vault.isExcluded(relPath)) throw notFound();
-  // mcpvault transfer audit — string admission is insufficient after an
-  // in-vault symlink swap or file-to-directory replacement. Re-admit the
-  // current physical source before returning stored bytes.
+  // Read the receipt-bound row before the live stat. FtsIndex excludes
+  // orphaned/quarantined rows; the exact mtime comparison below then prevents
+  // retained bytes from a previous regular-file generation leaving the
+  // process while a watcher or fail-soft bulk refresh has not converged.
+  const chunk = idx.getChunkWithReceipt(relPath, chunkIndex);
+  if (!chunk) throw notFound();
   try {
     const stat = await vault.stat(relPath);
-    if (!stat.isFile) throw notFound();
+    if (!stat.isFile || stat.mtimeMs !== chunk.indexed_mtime_ms) throw notFound();
+    if (
+      !idx.isCurrentSourceReceipt(
+        relPath,
+        chunk.kind,
+        chunk.indexed_mtime_ms,
+        chunk.indexed_revision
+      )
+    ) {
+      throw notFound();
+    }
   } catch {
     throw notFound();
   }
-  const chunk = idx.getChunk(relPath, chunkIndex);
-  if (!chunk) throw notFound();
   return {
     rel_path: relPath,
     chunk_index: chunkIndex,
@@ -1920,6 +2154,8 @@ export async function searchHybrid(
     line_end?: number;
     /** v2.8.0: content-source kind ("md" | "pdf"). */
     kind: "md" | "pdf";
+    indexed_mtime_ms: number;
+    indexed_revision: number;
   }> = [];
   if (ctx.ftsIndex) {
     try {
@@ -1927,12 +2163,14 @@ export async function searchHybrid(
       // chunk-collapse + RRF. The .fts5.db can contain entries from when the
       // index was built without exclusion flags (or with different flags).
       // Pre-fix, BM25 search returned excluded chunks via the hybrid pipeline.
-      const rawFtsHits = ctx.ftsIndex.search(args.query, { limit: fanOutK, folder: args.folder });
+      const rawFtsHits = ctx.ftsIndex.searchWithReceipts(args.query, { limit: fanOutK, folder: args.folder });
       const ftsHits = await filterLiveVaultHits(
         vault,
         rawFtsHits.filter((h) => !vault.isExcluded(h.rel_path)),
         (hit) => hit.rel_path,
-        fanOutK
+        fanOutK,
+        (hit) => hit,
+        (receipts) => ctx.ftsIndex?.currentSourceReceiptMask(receipts) ?? receipts.map(() => false)
       );
       // v2.2.0: granularity branch.
       //   "note"  → collapse multi-chunk hits per note (best-rank wins),
@@ -1947,7 +2185,9 @@ export async function searchHybrid(
           chunk_index: h.chunk_index,
           line_start: h.line_start,
           line_end: h.line_end,
-          kind: h.kind
+          kind: h.kind,
+          indexed_mtime_ms: h.indexed_mtime_ms,
+          indexed_revision: h.indexed_revision
         }));
       } else {
         const bestPerNote = new Map<
@@ -1960,6 +2200,8 @@ export async function searchHybrid(
             line_start: number;
             line_end: number;
             kind: "md" | "pdf";
+            indexed_mtime_ms: number;
+            indexed_revision: number;
           }
         >();
         ftsHits.forEach((h, i) => {
@@ -1972,7 +2214,9 @@ export async function searchHybrid(
               chunk_index: h.chunk_index,
               line_start: h.line_start,
               line_end: h.line_end,
-              kind: h.kind
+              kind: h.kind,
+              indexed_mtime_ms: h.indexed_mtime_ms,
+              indexed_revision: h.indexed_revision
             });
           }
         });
@@ -1984,7 +2228,9 @@ export async function searchHybrid(
           chunk_index: b.chunk_index,
           line_start: b.line_start,
           line_end: b.line_end,
-          kind: b.kind
+          kind: b.kind,
+          indexed_mtime_ms: b.indexed_mtime_ms,
+          indexed_revision: b.indexed_revision
         }));
         // Re-sort to ensure 1-based ranks are consecutive after dedup.
         bm25Ranked.sort((a, b) => a.rank - b.rank);
@@ -2035,6 +2281,8 @@ export async function searchHybrid(
     line_end?: number;
     /** v2.8.0: content-source kind ("md" | "pdf"). */
     kind: "md" | "pdf";
+    indexed_mtime_ms: number;
+    indexed_revision: number;
   }> = [];
   if (watcherSemanticRouteIsQuarantined(ctx.watcherHealth)) {
     signalErrors.embeddings =
@@ -2056,16 +2304,25 @@ export async function searchHybrid(
       );
       // v2.2.0: granularity branch — same shape as BM25 above.
       if (granularity === "block") {
-        embedRanked = embed.matches.map((m, i) => ({
-          id: `${m.path}#${m.chunk_index ?? 0}`,
-          rank: i + 1,
-          score: m.score,
-          snippet: m.snippet,
-          chunk_index: m.chunk_index,
-          line_start: m.line_start,
-          line_end: m.line_end,
-          kind: m.kind
-        }));
+        embedRanked = embed.matches.map((m, i) => {
+          const id = `${m.path}#${m.chunk_index ?? 0}`;
+          const receipt = embedHitReceipts.get(m);
+          if (receipt === undefined) {
+            throw new Error("Embedding hit lost its internal source-generation receipt");
+          }
+          return {
+            id,
+            rank: i + 1,
+            score: m.score,
+            snippet: m.snippet,
+            chunk_index: m.chunk_index,
+            line_start: m.line_start,
+            line_end: m.line_end,
+            kind: m.kind,
+            indexed_mtime_ms: receipt.indexed_mtime_ms,
+            indexed_revision: receipt.indexed_revision
+          };
+        });
       } else {
         const bestPerNote = new Map<
           string,
@@ -2077,9 +2334,15 @@ export async function searchHybrid(
             line_start: number;
             line_end: number;
             kind: "md" | "pdf";
+            indexed_mtime_ms: number;
+            indexed_revision: number;
           }
         >();
         embed.matches.forEach((m, i) => {
+          const receipt = embedHitReceipts.get(m);
+          if (receipt === undefined) {
+            throw new Error("Embedding hit lost its internal source-generation receipt");
+          }
           const existing = bestPerNote.get(m.path);
           if (!existing || i < existing.rank) {
             bestPerNote.set(m.path, {
@@ -2089,7 +2352,9 @@ export async function searchHybrid(
               chunk_index: m.chunk_index,
               line_start: m.line_start,
               line_end: m.line_end,
-              kind: m.kind
+              kind: m.kind,
+              indexed_mtime_ms: receipt.indexed_mtime_ms,
+              indexed_revision: receipt.indexed_revision
             });
           }
         });
@@ -2101,7 +2366,9 @@ export async function searchHybrid(
           chunk_index: b.chunk_index,
           line_start: b.line_start,
           line_end: b.line_end,
-          kind: b.kind
+          kind: b.kind,
+          indexed_mtime_ms: b.indexed_mtime_ms,
+          indexed_revision: b.indexed_revision
         }));
         embedRanked.sort((a, b) => a.rank - b.rank);
         for (let i = 0; i < embedRanked.length; i++) {
@@ -2492,6 +2759,16 @@ export async function searchHybrid(
     try {
       const live = await vault.stat(pathForFilter);
       if (!live.isFile) continue;
+      // A candidate may spend time in TF-IDF, graph, reranker, recency, or
+      // feedback awaits after its persisted ranker arm was first admitted.
+      // Re-check every persisted evidence receipt immediately before choosing
+      // a stored snippet for the response. Conservatively drop the whole fused
+      // candidate if either contributing persisted generation is no longer
+      // current; the next call can retrieve the new live generation.
+      const bm25Receipt = bm25Map.get(f.id);
+      const embedReceipt = embedMap.get(f.id);
+      if (bm25Receipt !== undefined && live.mtimeMs !== bm25Receipt.indexed_mtime_ms) continue;
+      if (embedReceipt !== undefined && live.mtimeMs !== embedReceipt.indexed_mtime_ms) continue;
     } catch {
       continue;
     }
@@ -2567,6 +2844,31 @@ export async function searchHybrid(
         ? { reranker_score: Math.round(rerankerScore * 100000) / 100000 }
         : {})
     };
+    const generationReceipts: HybridHitGenerationReceipts = {
+      ...(bm
+        ? {
+            bm25: {
+              rel_path: pathPart,
+              kind: bm.kind,
+              indexed_mtime_ms: bm.indexed_mtime_ms,
+              indexed_revision: bm.indexed_revision
+            }
+          }
+        : {}),
+      ...(emb
+        ? {
+            embeddings: {
+              rel_path: pathPart,
+              kind: emb.kind,
+              indexed_mtime_ms: emb.indexed_mtime_ms,
+              indexed_revision: emb.indexed_revision
+            }
+          }
+        : {})
+    };
+    if (generationReceipts.bm25 !== undefined || generationReceipts.embeddings !== undefined) {
+      hybridHitGenerationReceipts.set(hit, generationReceipts);
+    }
     // S-5 — assemble the per-stage explanation from the accumulators. `final_rank`
     // is this hit's 0-based position in the returned matches (= current length).
     if (explain) {
@@ -2618,6 +2920,19 @@ export async function searchHybrid(
     // node:fs/promises import failed (should never happen) — skip enrichment.
   }
 
+  // Last await before this public method returns: repeat current-generation
+  // admission after every frontmatter/reranker/freshness await above.
+  const embedReceiptReader = await openHybridEmbedReceiptReader(vault, ctx.embedFile, matches);
+  let currentMatches: SearchHybridHit[];
+  try {
+    currentMatches = await filterCurrentHybridHits(vault, matches, ctx.ftsIndex, embedReceiptReader);
+  } finally {
+    embedReceiptReader?.close();
+  }
+  currentMatches.forEach((match, finalRank) => {
+    if (match.explain) match.explain.final_rank = finalRank;
+  });
+
   // v2.0.0-beta.2 P1 fix: surface signal_errors only when at least one
   // ranker actually failed. Omit the key when all signals ran cleanly so
   // happy-path responses stay narrow.
@@ -2627,7 +2942,7 @@ export async function searchHybrid(
     k: RRF_K,
     signals_used: signalsUsed,
     total_candidates: fused.length,
-    matches
+    matches: currentMatches
   };
   if (Object.keys(signalErrors).length > 0) {
     response.signal_errors = signalErrors;
@@ -2750,7 +3065,11 @@ export async function searchHybridMulti(
       const h = bestHit.get(f.id);
       // rc.12 — round to 5dp, parity with the single-query path (which rounds
       // at response build); pre-rc.12 the multi path emitted raw RRF floats.
-      return h ? { ...h, score: Math.round(f.score * 100000) / 100000 } : null;
+      if (!h) return null;
+      const cloned = { ...h, score: Math.round(f.score * 100000) / 100000 };
+      const receipts = hybridHitGenerationReceipts.get(h);
+      if (receipts) hybridHitGenerationReceipts.set(cloned, receipts);
+      return cloned;
     })
     .filter((h): h is SearchHybridHit => h !== null);
 
@@ -2778,6 +3097,17 @@ export async function searchHybridMulti(
       : { applied: true, pairs: subReranked.reduce((n, r) => n + (r.pairs ?? 0), 0) };
   }
 
+  // Sub-query hits can age while later phrasings are still running. Re-admit
+  // the re-fused display objects after all sub-query awaits, immediately before
+  // the only public multi-query return.
+  const embedReceiptReader = await openHybridEmbedReceiptReader(vault, ctx.embedFile, matches);
+  let currentMatches: SearchHybridHit[];
+  try {
+    currentMatches = await filterCurrentHybridHits(vault, matches, ctx.ftsIndex, embedReceiptReader);
+  } finally {
+    embedReceiptReader?.close();
+  }
+
   return {
     query: queries.join(" | "),
     method: "rrf",
@@ -2786,7 +3116,7 @@ export async function searchHybridMulti(
     ...(Object.keys(signalErrors).length > 0 ? { signal_errors: signalErrors } : {}),
     ...(reranked !== undefined ? { reranked } : {}),
     total_candidates: bestHit.size,
-    matches
+    matches: currentMatches
   };
 }
 

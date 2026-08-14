@@ -152,13 +152,25 @@ export function registerFtsTools(server: McpServer, idx: FtsIndex, vault: Vault)
         if (Number.isFinite(t)) sinceMtimeMs = t;
         else throw new Error(`Invalid 'since' value (expected ISO date): ${args.since}`);
       }
-      const matches = await searchLiveFts(vault, idx, {
+      const admittedMatches = await searchLiveFts(vault, idx, {
         query: args.query,
         folder: args.folder,
         tag: args.tag,
         sinceMtimeMs,
         limit: args.limit
       });
+      // Generation receipts are an internal admission capability, not MCP
+      // response data. Preserve the established diagnostic-tool JSON shape
+      // after searchLiveFts has consumed each receipt against the live Vault.
+      const matches = admittedMatches.map((match) => ({
+        rel_path: match.rel_path,
+        chunk_index: match.chunk_index,
+        line_start: match.line_start,
+        line_end: match.line_end,
+        snippet: match.snippet,
+        score: match.score,
+        kind: match.kind
+      }));
       return textResult({
         query: args.query,
         total_chunks: idx.totalChunks(),

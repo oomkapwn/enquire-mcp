@@ -105,9 +105,21 @@ describe("searchHybrid + reranker (v2.9.0)", () => {
     await fs.writeFile(path.join(root, "high.md"), "Saturn V rocket guidance computer Apollo program engineering.\n");
     idx = new FtsIndex({ file: dbFile, vaultRoot: root, tokenize: "unicode61" });
     await idx.open();
-    idx.reindexFile("low.md", Date.now(), "Rocket notes — quick mention. Other unrelated topics.");
-    idx.reindexFile("mid.md", Date.now(), "Rocket fuel chemistry: oxidizer + propellant balance, trade-offs.");
-    idx.reindexFile("high.md", Date.now(), "Saturn V rocket guidance computer Apollo program engineering.");
+    idx.reindexFile(
+      "low.md",
+      (await fs.stat(path.join(root, "low.md"))).mtimeMs,
+      "Rocket notes — quick mention. Other unrelated topics."
+    );
+    idx.reindexFile(
+      "mid.md",
+      (await fs.stat(path.join(root, "mid.md"))).mtimeMs,
+      "Rocket fuel chemistry: oxidizer + propellant balance, trade-offs."
+    );
+    idx.reindexFile(
+      "high.md",
+      (await fs.stat(path.join(root, "high.md"))).mtimeMs,
+      "Saturn V rocket guidance computer Apollo program engineering."
+    );
   });
 
   afterAll(async () => {

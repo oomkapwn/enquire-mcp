@@ -1165,7 +1165,10 @@ export async function syncPdfFtsIndex(
   const updatedSet = new Set(diff.updated);
   for (const relPath of [...diff.added, ...diff.updated]) {
     const entry = pdfEntries.find((e) => e.relPath === relPath);
-    if (!entry) continue;
+    if (!entry) {
+      idx.quarantineFile(relPath, "pdf");
+      continue;
+    }
     try {
       const buf = await vault.readBinaryFile(entry.absPath);
       const result = await extractPdfText(buf);
@@ -1178,8 +1181,12 @@ export async function syncPdfFtsIndex(
       // indexed), we drop the previous rows. Pure adds with no text are
       // still just skipped (nothing to delete).
       if (!result.hasText) {
+        // dropFile is intentionally idempotent: besides removing any prior
+        // chunks/source receipt, it clears a durable quarantine marker left by
+        // an earlier failed ADD. Without this call, a now-healthy image-only
+        // source with no source_state would remain quarantined forever.
+        idx.dropFile(relPath);
         if (updatedSet.has(relPath)) {
-          idx.dropFile(relPath);
           process.stderr.write(
             `enquire: dropping stale rows for ${relPath} during pdf-fts5 sync — PDF is now image-only / scanned (previous text-extracted chunks removed)\n`
           );
@@ -1192,6 +1199,7 @@ export async function syncPdfFtsIndex(
       }
       idx.reindexPdfFile(relPath, entry.mtimeMs, result.pages);
     } catch (err) {
+      idx.quarantineFile(relPath, "pdf");
       process.stderr.write(
         `enquire: skipping ${relPath} during pdf-fts5 sync — ${err instanceof Error ? err.message : String(err)}\n`
       );

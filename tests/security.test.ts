@@ -613,6 +613,7 @@ describe("Persistent indexes — search-time privacy filter (v2.0.0-beta.2)", ()
     await fs.mkdir(path.join(proot, "Public"), { recursive: true });
     await fs.writeFile(path.join(proot, "Personal", "diary.md"), "secret diary entry about authentication tokens");
     await fs.writeFile(path.join(proot, "Public", "auth.md"), "public OAuth authentication notes");
+    await fs.writeFile(path.join(proot, "Public", "sibling.md"), "public sibling_generation_control notes");
   });
   afterEach(async () => {
     await fs.rm(proot, { recursive: true, force: true });
@@ -702,6 +703,71 @@ describe("Persistent indexes — search-time privacy filter (v2.0.0-beta.2)", ()
       if (aliasCreated) {
         await expect(readLiveFtsChunk(vServe, idx, "VisibleAlias/note.md", 0)).rejects.toThrow(/Chunk not found/);
       }
+
+      // Durable-revision controls: mutate the store at the SAME mtime after
+      // each route has already materialized the old bytes and awaited its live
+      // stat. The terminal synchronous receipt check must reject those bytes;
+      // an unrelated current source remains available.
+      const publicPath = path.join(proot, "Public", "auth.md");
+      const publicContent = await fs.readFile(publicPath, "utf8");
+      const publicMtimeMs = (await fs.stat(publicPath)).mtimeMs;
+      const originalStat = vServe.stat.bind(vServe);
+      let diagnosticReindexed = false;
+      vServe.stat = async (relOrAbs) => {
+        const live = await originalStat(relOrAbs);
+        if (!diagnosticReindexed && relOrAbs === "Public/auth.md") {
+          diagnosticReindexed = true;
+          idx.reindexFile("Public/auth.md", publicMtimeMs, "same-mtime diagnostic replacement", [], []);
+        }
+        return live;
+      };
+      try {
+        expect(await callFts("OAuth")).toEqual([]);
+      } finally {
+        vServe.stat = originalStat;
+      }
+      expect(diagnosticReindexed).toBe(true);
+      expect((await callFts("sibling_generation_control")).map((hit) => hit.rel_path)).toEqual([
+        "Public/sibling.md"
+      ]);
+
+      idx.reindexFile("Public/auth.md", publicMtimeMs, publicContent, [], []);
+      let chunkReindexed = false;
+      vServe.stat = async (relOrAbs) => {
+        const live = await originalStat(relOrAbs);
+        if (!chunkReindexed && relOrAbs === "Public/auth.md") {
+          chunkReindexed = true;
+          idx.reindexFile("Public/auth.md", publicMtimeMs, "same-mtime chunk replacement", [], []);
+        }
+        return live;
+      };
+      try {
+        await expect(readLiveFtsChunk(vServe, idx, "Public/auth.md", 0)).rejects.toThrow(/Chunk not found/);
+      } finally {
+        vServe.stat = originalStat;
+      }
+      expect(chunkReindexed).toBe(true);
+      idx.reindexFile("Public/auth.md", publicMtimeMs, publicContent, [], []);
+
+      // AH-1 positive + mutation control: a matching source-state receipt is
+      // public, but retained bytes from an older regular-file generation are
+      // rejected by every shared FTS egress even before cleanup/reindex.
+      const publicReceipt = idx
+        .searchWithReceipts("OAuth", { limit: 10 })
+        .find((hit) => hit.rel_path === "Public/auth.md")?.indexed_mtime_ms;
+      expect(publicReceipt).toBeTypeOf("number");
+      await fs.writeFile(path.join(proot, "Public", "auth.md"), "current replacement generation");
+      const changedTime = new Date((publicReceipt ?? 0) + 5000);
+      await fs.utimes(path.join(proot, "Public", "auth.md"), changedTime, changedTime);
+      expect(idx.search("OAuth", { limit: 10 }).some((hit) => hit.rel_path === "Public/auth.md")).toBe(true);
+      expect(await callFts("OAuth")).toEqual([]);
+      await expect(readLiveFtsChunk(vServe, idx, "Public/auth.md", 0)).rejects.toThrow(/Chunk not found/);
+      const staleHybrid = await searchHybrid(
+        vServe,
+        { query: "OAuth", limit: 10 },
+        { ftsIndex: idx, embedFile: path.join(proot, "nonexistent.embed.db") }
+      );
+      expect(staleHybrid.matches.every((match) => match.path !== "Public/auth.md")).toBe(true);
     } finally {
       idx.close();
     }
@@ -722,7 +788,8 @@ describe("Persistent indexes — search-time privacy filter (v2.0.0-beta.2)", ()
     db.upsertNote("Personal/diary.md", 1000, [
       { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "secret diary", vector: l2([1, 0, 0, 0]) }
     ]);
-    db.upsertNote("Public/auth.md", 1000, [
+    const publicMtime = (await fs.stat(path.join(proot, "Public", "auth.md"))).mtimeMs;
+    db.upsertNote("Public/auth.md", publicMtime, [
       { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "public auth", vector: l2([0.99, 0.14, 0, 0]) }
     ]);
     db.upsertNote(".secret.md", 1000, [
@@ -753,13 +820,26 @@ describe("Persistent indexes — search-time privacy filter (v2.0.0-beta.2)", ()
     // is applied via the vault layer.
     const vServe = new Vault(proot, { excludeGlobs: ["Personal/**"] });
     await vServe.ensureExists();
-    // Direct EmbedDb.search would return both rows — that's expected; we
-    // filter at the embeddingsSearch layer (vault.isExcluded post-filter).
+    // Direct legacy EmbedDb.search returns all rows without internal receipts;
+    // the receipt-bearing sibling feeds the actual egress guards below.
     const db2 = new EmbedDb({ file, vaultRoot: proot, modelAlias: "multilingual", dim });
     await db2.open();
     try {
-      const rawHits = db2.search(l2([1, 0, 0, 0]), 10);
-      expect(rawHits.length).toBe(5); // public, two hidden classes, physical-hidden alias, stale directory
+      const legacyRawHits = db2.search(l2([1, 0, 0, 0]), 10);
+      expect(legacyRawHits.length).toBe(5); // public, two hidden classes, physical-hidden alias, stale directory
+      expect(legacyRawHits[0]).not.toHaveProperty("indexed_mtime_ms");
+      const rawHits = db2.searchWithReceipts(l2([1, 0, 0, 0]), 10);
+      expect(
+        rawHits.map((hit) => ({
+          rel_path: hit.rel_path,
+          chunk_index: hit.chunk_index,
+          line_start: hit.line_start,
+          line_end: hit.line_end,
+          text_preview: hit.text_preview,
+          score: hit.score,
+          kind: hit.kind
+        }))
+      ).toEqual(legacyRawHits);
       // v3.10.0-rc.22 (audit M8) — call the ACTUAL helper embeddingsSearch
       // applies (search.ts:~1100/1106), not an inline reimplementation. If the
       // real filter regresses, this now fails (it was vacuous theater before).
@@ -769,8 +849,75 @@ describe("Persistent indexes — search-time privacy filter (v2.0.0-beta.2)", ()
         "Replaced.md",
         "VisibleEmbedAlias/note.md"
       ]);
-      const liveFiltered = await filterLiveVaultHits(vServe, filtered, (hit) => hit.rel_path, 10);
+      const liveFiltered = await filterLiveVaultHits(
+        vServe,
+        filtered,
+        (hit) => hit.rel_path,
+        10,
+        (hit) => hit,
+        (receipts) => db2.currentSourceReceiptMask(receipts)
+      );
       expect(liveFiltered.map((hit) => hit.rel_path)).toEqual(["Public/auth.md"]);
+
+      // Same-mtime store mutation after the awaited stat: the helper has the
+      // old preview and a matching filesystem mtime, so only the terminal
+      // monotonic-revision snapshot can refuse it.
+      const originalStat = vServe.stat.bind(vServe);
+      let embedReindexed = false;
+      vServe.stat = async (relOrAbs) => {
+        const live = await originalStat(relOrAbs);
+        if (!embedReindexed && relOrAbs === "Public/auth.md") {
+          embedReindexed = true;
+          db2.upsertNote("Public/auth.md", publicMtime, [
+            {
+              chunkIndex: 0,
+              lineStart: 1,
+              lineEnd: 1,
+              textPreview: "same-mtime embed replacement",
+              vector: l2([0.99, 0.14, 0, 0])
+            }
+          ]);
+        }
+        return live;
+      };
+      try {
+        const sameMtimeFiltered = await filterLiveVaultHits(
+          vServe,
+          filtered,
+          (hit) => hit.rel_path,
+          10,
+          (hit) => hit,
+          (receipts) => db2.currentSourceReceiptMask(receipts)
+        );
+        expect(sameMtimeFiltered.every((hit) => hit.rel_path !== "Public/auth.md")).toBe(true);
+      } finally {
+        vServe.stat = originalStat;
+      }
+      expect(embedReindexed).toBe(true);
+      db2.upsertNote("Public/auth.md", publicMtime, [
+        { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "public auth", vector: l2([0.99, 0.14, 0, 0]) }
+      ]);
+
+      // Mutation control: the old preview remains physically searchable in
+      // EmbedDb, but a later regular-file generation cannot pass the shared
+      // receipt guard. This does not rely on exclusion or file deletion.
+      await fs.writeFile(path.join(proot, "Public", "auth.md"), "rotated public generation");
+      const changedTime = new Date(publicMtime + 5000);
+      await fs.utimes(path.join(proot, "Public", "auth.md"), changedTime, changedTime);
+      const retainedLegacy = db2.search(l2([1, 0, 0, 0]), 10);
+      expect(
+        retainedLegacy.some((hit) => hit.rel_path === "Public/auth.md" && hit.text_preview === "public auth")
+      ).toBe(true);
+      const retained = db2.searchWithReceipts(l2([1, 0, 0, 0]), 10);
+      const afterMutation = await filterLiveVaultHits(
+        vServe,
+        filterExcludedEmbedHits(retained, (p) => vServe.isExcluded(p)),
+        (hit) => hit.rel_path,
+        10,
+        (hit) => hit,
+        (receipts) => db2.currentSourceReceiptMask(receipts)
+      );
+      expect(afterMutation.every((hit) => hit.rel_path !== "Public/auth.md")).toBe(true);
     } finally {
       db2.close();
     }

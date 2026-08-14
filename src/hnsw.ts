@@ -33,7 +33,7 @@
 // Users tuning for recall can pass `--hnsw-ef-search` to widen the search
 // beam (default 100; higher is generally more accurate and slower).
 
-import type { EmbedSearchHit } from "./embed-db.js";
+import type { EmbedReceiptSearchHit, EmbedSearchHit } from "./embed-db.js";
 import { importOptionalDependency, optionalDepDetail } from "./optional-dep.js";
 
 /** A single labeled vector — used to populate the index. */
@@ -64,11 +64,17 @@ export interface HnswPersistedMeta {
   /**
    * Embed-db signature at write time — when this differs from the current
    * embed-db's signature, the persisted index is stale and should be
-   * rebuilt. We use rowcount + max-id + dim as a tractable signature
-   * (full content-hash would require reading every vector).
+   * rebuilt. The database signature binds current receipt-backed rowcount,
+   * max-id, dimension, model, quantization, schema, and (when non-empty) a
+   * quarantine digest; a full content hash would require reading every vector.
    */
   signature: string;
-  /** Row label → source row map needed to reconstruct hits. JSON-friendly. */
+  /**
+   * Row label → source-row snapshot retained for persistence diagnostics and
+   * watcher graph maintenance. Search output must rehydrate labels through
+   * `EmbedDb.getSearchRowsByIds()`; this sidecar preview is never an egress
+   * authority. JSON-friendly and deliberately receipt-free for format v1.
+   */
   rowsByLabel: Record<
     string,
     {
@@ -577,12 +583,19 @@ export async function loadHnswFromDisk(
 }
 
 /**
- * Convert HNSW search results to EmbedSearchHit using a label → source-row
- * lookup. The label was assigned by the caller at build time (typically
- * `EmbedDb.getAllVectors()` returns rows with sequential integer labels);
- * we just reverse the mapping. Distance → cosine similarity: cosine
- * distance is `1 - cosine_similarity`, so we flip back here so callers
- * can compare HNSW + brute-force scores apples-to-apples.
+ * Convert HNSW search results to legacy, receipt-free {@link EmbedSearchHit}
+ * rows using a label-to-source-row lookup. This compatibility helper does not
+ * establish live-source authority and must not be used directly for persisted
+ * content egress; use {@link hnswResultsToReceiptHits} with current EmbedDb
+ * hydration for that path.
+ *
+ * @param result Labels and cosine distances returned by the native HNSW index.
+ * @param rowByLabel Receipt-free source rows keyed by the labels assigned at build time.
+ * @returns Legacy hits for labels present in the supplied lookup.
+ * @example
+ * ```ts
+ * const hits = hnswResultsToHits(result, loaded.rowsByLabel);
+ * ```
  */
 export function hnswResultsToHits(
   result: { labels: number[]; distances: number[] },
@@ -616,6 +629,48 @@ export function hnswResultsToHits(
       text_preview: row.text_preview,
       score,
       kind: row.kind
+    });
+  }
+  return hits;
+}
+
+/**
+ * Convert HNSW search results to receipt-bearing embedding hits using current
+ * rows hydrated from `EmbedDb.getSearchRowsByIds()`. Persisted HNSW sidecar
+ * previews are never an authority for this helper: stale, quarantined, or
+ * missing labels must already be absent from the supplied EmbedDb lookup.
+ * Cosine distance is converted back to similarity as `1 - distance`.
+ *
+ * @param result Labels and cosine distances returned by the native HNSW index.
+ * @param rowByLabel Current receipt-bearing EmbedDb rows keyed by embedding id.
+ * @returns Receipt-bearing hits for labels still present in the current EmbedDb.
+ * @example
+ * ```ts
+ * const rows = embedDb.getSearchRowsByIds(result.labels);
+ * const hits = hnswResultsToReceiptHits(result, rows);
+ * ```
+ */
+export function hnswResultsToReceiptHits(
+  result: { labels: number[]; distances: number[] },
+  rowByLabel: ReadonlyMap<number, Omit<EmbedReceiptSearchHit, "score">>
+): EmbedReceiptSearchHit[] {
+  const hits: EmbedReceiptSearchHit[] = [];
+  for (let i = 0; i < result.labels.length; i++) {
+    const label = result.labels[i];
+    const distance = result.distances[i];
+    if (label === undefined || distance === undefined) continue;
+    const row = rowByLabel.get(label);
+    if (!row) continue;
+    hits.push({
+      rel_path: row.rel_path,
+      chunk_index: row.chunk_index,
+      line_start: row.line_start,
+      line_end: row.line_end,
+      text_preview: row.text_preview,
+      score: 1 - distance,
+      kind: row.kind,
+      indexed_mtime_ms: row.indexed_mtime_ms,
+      indexed_revision: row.indexed_revision
     });
   }
   return hits;

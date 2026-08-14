@@ -1,18 +1,21 @@
 {
   "$schema": "https://typedoc.org/schema.json",
 
-  // Entry points — src/index.ts is the slim CLI / public-surface entry,
-  // src/tools/index.ts is the barrel re-exporting all 46 tools across 5
-  // domain modules (read / write / search / media / meta), and
-  // src/tool-manifest.ts is the machine-readable TOOL_MANIFEST array
-  // (single source of truth used by tool-registry.ts + docs-consistency
-  // tests). Together these give TypeDoc the full TSDoc surface added in
-  // v3.6.0-rc.3 (44 tools at that release; now 46 + 19 prompts + ~50 helpers + ~2200 lines of
-  // doc-comments) without dragging internal files into the API reference.
+  // Entry points mirror every public code subpath in package.json (the
+  // package.json data export itself has no TypeScript surface). Keeping this
+  // list class-complete prevents a new exported helper from bypassing the
+  // TypeDoc warnings-as-errors gate simply because it lives outside the root
+  // or tools barrels.
   "entryPoints": [
     "src/index.ts",
+    "src/bases.ts",
+    "src/communities.ts",
+    "src/embed-db.ts",
+    "src/fts5.ts",
+    "src/hnsw.ts",
     "src/tools/index.ts",
-    "src/tool-manifest.ts"
+    "src/tool-manifest.ts",
+    "src/vault.ts"
   ],
 
   // Generated HTML goes to docs/api-reference/. This directory is gitignored.

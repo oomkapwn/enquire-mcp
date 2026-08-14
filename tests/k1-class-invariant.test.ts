@@ -37,7 +37,7 @@ import { tmpdir } from "node:os";
 import * as path from "node:path";
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
-import { replaceExactly } from "./helpers/exact-source-mutation.js";
+import { replaceAllExactly, replaceExactly } from "./helpers/exact-source-mutation.js";
 
 // v3.7.0 M-3: scan ALL of src/ recursively (was hardcoded ["src", "src/tools"]
 // in v3.6.4). When new sub-directories are added (e.g. src/managers/), they
@@ -2101,7 +2101,7 @@ describe("K-1 class invariant (v3.6.3 methodological guard; recursive scan since
     const cliRootFiltersRemoved = replaceExactly(
       replaceExactly(
         replaceExactly(
-          replaceExactly(
+          replaceAllExactly(
             cliSource,
             "discoverFtsIndexConfig(indexFile, v.root)",
             "discoverFtsIndexConfig(indexFile)",
@@ -2707,8 +2707,7 @@ describe("K-1 class invariant (v3.6.3 methodological guard; recursive scan since
     const ftsOpenCallBeforeGuard = replaceExactly(
       ftsSource,
       "      this.db = new Ctor(this.file) as Db;\n",
-      "      this.db = new Ctor(this.file) as Db;\n" +
-        '      this.db.exec("CREATE TABLE admission_bypass(x)");\n'
+      "      this.db = new Ctor(this.file) as Db;\n" + '      this.db.exec("CREATE TABLE admission_bypass(x)");\n'
     );
     expect(admissionOrderProblems(ftsOpenCallBeforeGuard, FTS_ADMISSION_ORDER)).toContain(
       "FTS open: call runs between live handle and first guard"
@@ -2716,8 +2715,7 @@ describe("K-1 class invariant (v3.6.3 methodological guard; recursive scan since
     const embedOpenCallBeforeGuard = replaceExactly(
       embedSource,
       "      this.db = new Ctor(this.file) as Db;\n",
-      "      this.db = new Ctor(this.file) as Db;\n" +
-        '      this.db.prepare("DELETE FROM embeddings").run();\n'
+      "      this.db = new Ctor(this.file) as Db;\n" + '      this.db.prepare("DELETE FROM embeddings").run();\n'
     );
     expect(admissionOrderProblems(embedOpenCallBeforeGuard, EMBED_ADMISSION_ORDER)).toContain(
       "Embed open: call runs between live handle and first guard"
@@ -2864,8 +2862,7 @@ describe("K-1 class invariant (v3.6.3 methodological guard; recursive scan since
     const ftsTxnCallBetweenGuardAndContinuity = replaceExactly(
       ftsSource,
       "      const admission = this.inspectAdmission();\n",
-      "      const admission = this.inspectAdmission();\n" +
-        '      db.exec("CREATE TABLE admission_bypass(x)");\n'
+      "      const admission = this.inspectAdmission();\n" + '      db.exec("CREATE TABLE admission_bypass(x)");\n'
     );
     expect(admissionOrderProblems(ftsTxnCallBetweenGuardAndContinuity, FTS_ADMISSION_ORDER)).toContain(
       "FTS bootstrap: guarded callback leading statement grammar changed"

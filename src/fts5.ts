@@ -620,6 +620,7 @@ const FTS_SOURCE_REVISION_CREATE_SQL = `CREATE TABLE IF NOT EXISTS source_revisi
 function normalizeFtsAdmissionSql(sql: string): string {
   let normalized = "";
   let inLiteral = false;
+  let omitsFollowingSpace = false;
   let pendingSpace = false;
   for (let index = 0; index < sql.length; index++) {
     const char = sql[index];
@@ -640,13 +641,18 @@ function normalizeFtsAdmissionSql(sql: string): string {
       pendingSpace = normalized.length > 0;
       continue;
     }
-    if (pendingSpace) normalized += " ";
+    // Parenthesis/comma spacing is not part of SQLite DDL identity. The
+    // separate state keeps punctuation inside a literal semantically opaque.
+    const punctuation = char === "(" || char === ")" || char === ",";
+    if (pendingSpace && !punctuation && !omitsFollowingSpace) normalized += " ";
     pendingSpace = false;
     if (char === "'") {
       normalized += char;
       inLiteral = true;
+      omitsFollowingSpace = false;
     } else {
       normalized += char.toLowerCase();
+      omitsFollowingSpace = char === "(" || char === ",";
     }
   }
   if (normalized.endsWith(";")) normalized = normalized.slice(0, -1).trimEnd();
@@ -830,9 +836,7 @@ function hasExactFtsAdmissionTable(
 ): boolean {
   if (normalizeFtsAdmissionSql(actualSql) !== normalizeFtsAdmissionSql(expectedSql)) return false;
   const columns = db
-    .prepare(
-      "SELECT cid, name, type, \"notnull\", dflt_value, pk FROM pragma_table_info(?) ORDER BY cid LIMIT ?"
-    )
+    .prepare('SELECT cid, name, type, "notnull", dflt_value, pk FROM pragma_table_info(?) ORDER BY cid LIMIT ?')
     .all<SqliteColumnInfo>(table, expectedColumns.length + 1);
   return (
     columns.length === expectedColumns.length &&
@@ -1362,7 +1366,7 @@ export class FtsIndex {
         .all<SqliteColumnInfo>();
       sourceStateColumns = db
         .prepare(
-          "SELECT cid, name, type, \"notnull\", dflt_value, pk " +
+          'SELECT cid, name, type, "notnull", dflt_value, pk ' +
             "FROM pragma_table_info('source_state') ORDER BY cid LIMIT 6"
         )
         .all<SqliteColumnInfo>();

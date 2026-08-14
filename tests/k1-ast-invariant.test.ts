@@ -79,10 +79,7 @@ interface ToolchainPackage {
 interface ProductionFilePin {
   constructors: Readonly<Record<"EmbedDb" | "FtsIndex", number>>;
   discoveries: Readonly<
-    Record<
-      "discoverEmbedDbConfig" | "discoverEmbedDbConfigCached" | "discoverFtsIndexConfig",
-      number
-    >
+    Record<"discoverEmbedDbConfig" | "discoverEmbedDbConfigCached" | "discoverFtsIndexConfig", number>
   >;
   imports: readonly string[];
   k1Opens: number;
@@ -440,10 +437,7 @@ function callableKindForImport(importedName: string, moduleName: string): Callab
     if (importedName === "discoverEmbedDbConfig") return "embed-discovery";
     if (importedName === "discoverEmbedDbConfigCached") return "embed-discovery";
   }
-  if (
-    moduleName === "./fts5.js" ||
-    moduleName === "../fts5.js"
-  ) {
+  if (moduleName === "./fts5.js" || moduleName === "../fts5.js") {
     if (importedName === "discoverFtsIndexConfig") return "fts-discovery";
     if (importedName === "assertTokenizeMode") return "assert-tokenize";
   }
@@ -502,9 +496,7 @@ function promiseAllImportModules(node: ts.Expression): Array<string | undefined>
   }
   const imports = expression.arguments[0];
   if (!imports || !ts.isArrayLiteralExpression(imports)) return undefined;
-  return imports.elements.map((element) =>
-    ts.isSpreadElement(element) ? undefined : dynamicImportModule(element)
-  );
+  return imports.elements.map((element) => (ts.isSpreadElement(element) ? undefined : dynamicImportModule(element)));
 }
 
 function collectRelevantImportBindings(sourceFile: ts.SourceFile): string[] {
@@ -536,9 +528,7 @@ function collectRelevantImportBindings(sourceFile: ts.SourceFile): string[] {
         if (element.isTypeOnly) continue;
         const importedName = element.propertyName?.text ?? element.name.text;
         if (RELEVANT_IMPORT_NAMES.has(importedName)) {
-          imports.push(
-            `${statement.moduleSpecifier.text}|${importedName}|${element.name.text}`
-          );
+          imports.push(`${statement.moduleSpecifier.text}|${importedName}|${element.name.text}`);
         }
       }
     }
@@ -631,8 +621,8 @@ function analyzePinnedProductionSource(
   let k1Opens = 0;
   function visit(node: ts.Node): void {
     if (ts.isNewExpression(node) && ts.isIdentifier(node.expression)) {
-      const constructor = constructorAliases.get(node.expression.text);
-      if (constructor) constructors[constructor] += 1;
+      const constructorKind = constructorAliases.get(node.expression.text);
+      if (constructorKind) constructors[constructorKind] += 1;
     } else if (ts.isCallExpression(node)) {
       if (ts.isIdentifier(node.expression)) {
         const discovery = discoveryAliases.get(node.expression.text);
@@ -676,9 +666,7 @@ function isAuthorityModuleSpecifier(moduleName: string, sourceFile: ts.SourceFil
   const sourcePath = path.isAbsolute(sourceFile.fileName)
     ? sourceFile.fileName
     : path.resolve(process.cwd(), sourceFile.fileName);
-  const resolvedStem = path
-    .resolve(path.dirname(sourcePath), moduleName)
-    .replace(/\.[cm]?[jt]s$/, "");
+  const resolvedStem = path.resolve(path.dirname(sourcePath), moduleName).replace(/\.[cm]?[jt]s$/, "");
   return ["embed-db", "embeddings", "fts5", "tool-registry"].some(
     (name) => resolvedStem === path.resolve(process.cwd(), "src", name)
   );
@@ -707,8 +695,7 @@ function hasUnpinnedK1Surface(sourceFile: ts.SourceFile): boolean {
       ts.isStringLiteralLike(statement.moduleSpecifier) &&
       isAuthorityModuleSpecifier(statement.moduleSpecifier.text, sourceFile) &&
       (statement.importClause?.name ||
-        (statement.importClause?.namedBindings &&
-          ts.isNamespaceImport(statement.importClause.namedBindings)))
+        (statement.importClause?.namedBindings && ts.isNamespaceImport(statement.importClause.namedBindings)))
     ) {
       return true;
     }
@@ -751,8 +738,7 @@ function hasUnpinnedK1Surface(sourceFile: ts.SourceFile): boolean {
     if (
       ts.isNewExpression(node) &&
       ((ts.isIdentifier(node.expression) && CONSTRUCTORS.has(node.expression.text)) ||
-        (ts.isPropertyAccessExpression(node.expression) &&
-          CONSTRUCTORS.has(node.expression.name.text)))
+        (ts.isPropertyAccessExpression(node.expression) && CONSTRUCTORS.has(node.expression.name.text)))
     ) {
       found = true;
       return;
@@ -820,10 +806,7 @@ function createDataFlowContext(
 
   function variableContainer(node: ts.VariableDeclaration): ts.Node {
     const declarationList = node.parent;
-    if (
-      ts.isVariableDeclarationList(declarationList) &&
-      (declarationList.flags & ts.NodeFlags.BlockScoped) === 0
-    ) {
+    if (ts.isVariableDeclarationList(declarationList) && (declarationList.flags & ts.NodeFlags.BlockScoped) === 0) {
       let current: ts.Node | undefined = node.parent;
       while (current && current !== scope) {
         if (isFunctionWithBody(current)) return current.body ?? current;
@@ -916,11 +899,7 @@ function createDataFlowContext(
     return undefined;
   }
 
-  function markObjectImportBindings(
-    pattern: ts.ObjectBindingPattern,
-    moduleName: string,
-    container: ts.Node
-  ): void {
+  function markObjectImportBindings(pattern: ts.ObjectBindingPattern, moduleName: string, container: ts.Node): void {
     for (const element of pattern.elements) {
       if (!ts.isIdentifier(element.name)) continue;
       const propertyName = element.propertyName;
@@ -1017,9 +996,7 @@ function createDataFlowContext(
   ): string | undefined {
     if (ts.isPropertyAccessExpression(expression)) return expression.name.text;
     const argument = expression.argumentExpression;
-    return argument && (ts.isStringLiteralLike(argument) || ts.isNumericLiteral(argument))
-      ? argument.text
-      : undefined;
+    return argument && (ts.isStringLiteralLike(argument) || ts.isNumericLiteral(argument)) ? argument.text : undefined;
   }
 
   function objectLiteralAt(
@@ -1278,8 +1255,7 @@ function sameLexicalValue(leftNode: ts.Expression, rightNode: ts.Expression, con
     const end = Math.max(left.getStart(), right.getStart());
     return (
       !localCallableWasInvokedBetween(start, end, context) &&
-      (typeof leftPath.root === "string" ||
-        !bindingWasCapturedByClosureBetween(leftPath.root, start, end, context)) &&
+      (typeof leftPath.root === "string" || !bindingWasCapturedByClosureBetween(leftPath.root, start, end, context)) &&
       !pathWasMutatedBetween(leftPath, start, end, context)
     );
   }
@@ -1409,11 +1385,7 @@ function nearestNonDominatingIf(write: ts.Expression, use: ts.Node, scope: ts.No
   return undefined;
 }
 
-function closureMutatesBinding(
-  body: FunctionWithBody,
-  binding: LexicalBinding,
-  context: DataFlowContext
-): boolean {
+function closureMutatesBinding(body: FunctionWithBody, binding: LexicalBinding, context: DataFlowContext): boolean {
   let mutated = false;
   function visit(node: ts.Node): void {
     if (mutated || (node !== body && isFunctionWithBody(node))) return;
@@ -1435,11 +1407,7 @@ function closureMutatesBinding(
   return mutated;
 }
 
-function closureReferencesBinding(
-  body: FunctionWithBody,
-  binding: LexicalBinding,
-  context: DataFlowContext
-): boolean {
+function closureReferencesBinding(body: FunctionWithBody, binding: LexicalBinding, context: DataFlowContext): boolean {
   let referenced = false;
   function visit(node: ts.Node): void {
     if (referenced) return;
@@ -1506,14 +1474,8 @@ function bindingWasCapturedByClosureBetween(
   return captured;
 }
 
-function localCallableWasInvokedBetween(
-  startPosition: number,
-  endPosition: number,
-  context: DataFlowContext
-): boolean {
-  return context.localInvocationPositions.some(
-    (position) => position > startPosition && position < endPosition
-  );
+function localCallableWasInvokedBetween(startPosition: number, endPosition: number, context: DataFlowContext): boolean {
+  return context.localInvocationPositions.some((position) => position > startPosition && position < endPosition);
 }
 
 function expressionReferencesParameter(
@@ -1592,12 +1554,7 @@ function explicitOptionFromFlag(
     !ts.isCallExpression(call) ||
     !ts.isPropertyAccessExpression(call.expression) ||
     call.expression.name.text !== "getOptionValueSource" ||
-    !expressionReferencesParameter(
-      call.expression.expression,
-      context,
-      beforePosition,
-      seenBindings
-    )
+    !expressionReferencesParameter(call.expression.expression, context, beforePosition, seenBindings)
   ) {
     return undefined;
   }
@@ -1680,11 +1637,7 @@ function isReviewedFallback(
   }
   if (ts.isCallExpression(expression) && ts.isIdentifier(expression.expression)) {
     const callable = resolvedCallable(expression.expression, context);
-    if (
-      callable !== "assert-tokenize" &&
-      callable !== "parse-quantization" &&
-      callable !== "resolve-model"
-    ) {
+    if (callable !== "assert-tokenize" && callable !== "parse-quantization" && callable !== "resolve-model") {
       return false;
     }
     return expression.arguments.every((argument) =>
@@ -2239,8 +2192,8 @@ function expressionCarriesConfiguredValue(
  * `SAFE_LOOKBACK_LINES` lines above the constructor line. Anchored regex
  * defeats false positives from prose mentioning the phrase to NEGATE it.
  */
-function hasSafeComment(sourceFile: ts.SourceFile, sourceText: string, constructor: ts.NewExpression): boolean {
-  let statement: ts.Node = constructor;
+function hasSafeComment(sourceFile: ts.SourceFile, sourceText: string, constructorNode: ts.NewExpression): boolean {
+  let statement: ts.Node = constructorNode;
   while (
     statement.parent &&
     !ts.isBlock(statement.parent) &&
@@ -2249,7 +2202,7 @@ function hasSafeComment(sourceFile: ts.SourceFile, sourceText: string, construct
   ) {
     statement = statement.parent;
   }
-  const ctorLine = sourceFile.getLineAndCharacterOfPosition(constructor.getStart(sourceFile)).line;
+  const ctorLine = sourceFile.getLineAndCharacterOfPosition(constructorNode.getStart(sourceFile)).line;
   const comments = ts.getLeadingCommentRanges(sourceText, statement.getFullStart()) ?? [];
   return comments.some((comment) => {
     if (comment.kind !== ts.SyntaxKind.SingleLineCommentTrivia) return false;
@@ -2261,11 +2214,11 @@ function hasSafeComment(sourceFile: ts.SourceFile, sourceText: string, construct
 
 function isReviewedSafeClearOnlySite(
   filePath: string,
-  constructor: ts.NewExpression
+  constructorNode: ts.NewExpression
 ): boolean {
   const normalized = filePath.replaceAll("\\", "/");
   if (normalized !== "src/cli.ts" && !normalized.endsWith("/src/cli.ts")) return false;
-  const declaration = constructor.parent;
+  const declaration = constructorNode.parent;
   if (!ts.isVariableDeclaration(declaration) || !ts.isIdentifier(declaration.name)) return false;
   let statement: ts.Node = declaration;
   while (statement.parent && !ts.isBlock(statement.parent) && !ts.isSourceFile(statement.parent)) {
@@ -2273,7 +2226,7 @@ function isReviewedSafeClearOnlySite(
   }
   const parent = statement.parent;
   if (!parent || (!ts.isBlock(parent) && !ts.isSourceFile(parent))) return false;
-  const index = parent.statements.findIndex((candidate) => candidate === statement);
+  const index = parent.statements.indexOf(statement as ts.Statement);
   const next = index >= 0 ? parent.statements[index + 1] : undefined;
   if (!next) return false;
   let exactClearCall = false;
@@ -2384,17 +2337,17 @@ function collectDiscoveryBindings(
 }
 
 function constructorInstanceBinding(
-  constructor: ts.NewExpression,
+  constructorNode: ts.NewExpression,
   context: DataFlowContext
 ): LexicalBinding | undefined {
-  const parent = constructor.parent;
-  if (ts.isVariableDeclaration(parent) && ts.isIdentifier(parent.name) && parent.initializer === constructor) {
+  const parent = constructorNode.parent;
+  if (ts.isVariableDeclaration(parent) && ts.isIdentifier(parent.name) && parent.initializer === constructorNode) {
     return resolveBinding(parent.name, context);
   }
   if (
     ts.isBinaryExpression(parent) &&
     parent.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
-    parent.right === constructor &&
+    parent.right === constructorNode &&
     ts.isIdentifier(parent.left)
   ) {
     return resolveBinding(parent.left, context);
@@ -2420,7 +2373,7 @@ function isAwaitedCall(call: ts.CallExpression): boolean {
 
 function openControlDominatesConstructor(
   call: ts.CallExpression,
-  constructor: ts.NewExpression,
+  constructorNode: ts.NewExpression,
   scope: ts.Node
 ): boolean {
   if (!isSyntacticallyReachable(call, scope)) return false;
@@ -2463,7 +2416,7 @@ function openControlDominatesConstructor(
     ) {
       controlledRegion = parent.catchClause;
     }
-    if (controlledRegion && !isDescendantOf(constructor, controlledRegion)) return false;
+    if (controlledRegion && !isDescendantOf(constructorNode, controlledRegion)) return false;
     if (parent === scope) break;
     child = parent;
     parent = parent.parent;
@@ -2500,13 +2453,13 @@ function catchInvalidatesInstance(
 }
 
 function constructorBindingIsConfinedToTry(
-  constructor: ts.NewExpression,
+  constructorNode: ts.NewExpression,
   statement: ts.TryStatement
 ): boolean {
-  const declaration = constructor.parent;
+  const declaration = constructorNode.parent;
   if (
     !ts.isVariableDeclaration(declaration) ||
-    declaration.initializer !== constructor ||
+    declaration.initializer !== constructorNode ||
     !ts.isVariableDeclarationList(declaration.parent) ||
     (declaration.parent.flags & ts.NodeFlags.BlockScoped) === 0
   ) {
@@ -2517,7 +2470,7 @@ function constructorBindingIsConfinedToTry(
 
 function openTryCatchesAreSafe(
   call: ts.CallExpression,
-  constructor: ts.NewExpression,
+  constructorNode: ts.NewExpression,
   instance: LexicalBinding,
   context: DataFlowContext
 ): boolean {
@@ -2529,7 +2482,7 @@ function openTryCatchesAreSafe(
       ts.isTryStatement(parent) &&
       isDescendantOf(call, parent.tryBlock) &&
       parent.catchClause &&
-      !constructorBindingIsConfinedToTry(constructor, parent) &&
+      !constructorBindingIsConfinedToTry(constructorNode, parent) &&
       !catchInvalidatesInstance(parent.catchClause, instance, context)
     ) {
       return false;
@@ -2565,12 +2518,12 @@ function accessOrDescendantWasMutatedBetween(
 }
 
 function openUsesSameDiscovery(
-  constructor: ts.NewExpression,
+  constructorNode: ts.NewExpression,
   context: DataFlowContext,
   options: ReadonlyMap<string, ts.Expression>,
   authority: AuthorityKind
 ): boolean {
-  const instance = constructorInstanceBinding(constructor, context);
+  const instance = constructorInstanceBinding(constructorNode, context);
   if (!instance) return false;
   let sharedDiscovery: Set<LexicalBinding> | undefined;
   for (const [name, value] of options) {
@@ -2581,7 +2534,7 @@ function openUsesSameDiscovery(
         ? sources
         : new Set([...sharedDiscovery].filter((binding) => sources.has(binding)));
   }
-  if (!sharedDiscovery || sharedDiscovery.size !== 1) return false;
+  if (sharedDiscovery?.size !== 1) return false;
   const expectedDiscovery = [...sharedDiscovery][0];
   if (!expectedDiscovery) return false;
 
@@ -2590,7 +2543,7 @@ function openUsesSameDiscovery(
     if (node !== context.scope && isFunctionWithBody(node)) return;
     if (
       ts.isIdentifier(node) &&
-      node.getStart() > constructor.getStart() &&
+      node.getStart() > constructorNode.getStart() &&
       resolveBinding(node, context) === instance
     ) {
       firstUsePosition = Math.min(firstUsePosition, node.getStart());
@@ -2610,13 +2563,13 @@ function openUsesSameDiscovery(
       resolveBinding(node.expression.expression, context) === instance &&
       node.expression.expression.getStart() === firstUsePosition &&
       isAwaitedCall(node) &&
-      openControlDominatesConstructor(node, constructor, context.scope) &&
-      openTryCatchesAreSafe(node, constructor, instance, context)
+      openControlDominatesConstructor(node, constructorNode, context.scope) &&
+      openTryCatchesAreSafe(node, constructorNode, instance, context)
     ) {
       const argument = node.arguments[0];
       const exactArgument = argument ? unwrapExpression(argument) : undefined;
       const configuredWrite = expectedDiscovery.writes.find(
-        (candidate) => candidate.position < constructor.getStart()
+        (candidate) => candidate.position < constructorNode.getStart()
       );
       const openedWrite = expectedDiscovery.writes.find(
         (candidate) => candidate.position < (exactArgument?.getStart() ?? 0)
@@ -2628,29 +2581,29 @@ function openUsesSameDiscovery(
         resolveBinding(exactArgument, context) === expectedDiscovery &&
         configuredWrite !== undefined &&
         openedWrite === configuredWrite &&
-        !localCallableWasInvokedBetween(constructor.getStart(), node.getStart(), context) &&
+        !localCallableWasInvokedBetween(constructorNode.getStart(), node.getStart(), context) &&
         !bindingWasCapturedByClosureBetween(
           instance,
-          constructor.getStart(),
+          constructorNode.getStart(),
           node.getStart(),
           context
         ) &&
         !bindingWasReferencedByInvokedClosure(
           instance,
-          constructor.getStart(),
+          constructorNode.getStart(),
           node.getStart(),
           context
         ) &&
         !bindingWasMutatedByClosure(
           expectedDiscovery,
-          constructor.getStart(),
+          constructorNode.getStart(),
           exactArgument.getStart(),
           context
         ) &&
         (!discoveryPath ||
           !accessOrDescendantWasMutatedBetween(
             discoveryPath,
-            constructor.getStart(),
+            constructorNode.getStart(),
             exactArgument.getStart(),
             context
           ));

@@ -263,13 +263,25 @@ describe("embeddings serve-offline enforcement (rc.42 F1)", () => {
         );
       }
 
+      // NEGATIVE control: a guard beside a present malformed artifact cannot
+      // authorize recovery guidance or deletion. Preserve both logical bytes
+      // and the interlock, and return only the stable path-free refusal.
       await fs.writeFile(embedFile, "stranded full-edition embedding index");
-      await armWatcherActivationGuard(embedFile);
+      const malformedGuard = await armWatcherActivationGuard(embedFile);
+      await expect(prepareServerDeps({ vault })).rejects.toThrow("Embedding index ownership could not be verified");
+      await expect(fs.readFile(embedFile, "utf8")).resolves.toBe("stranded full-edition embedding index");
+      expect((await fs.lstat(watcherActivationGuardPath(embedFile))).isDirectory()).toBe(true);
+      await releaseWatcherActivationGuard(malformedGuard);
+      await fs.rm(embedFile, { force: true });
 
+      // POSITIVE recovery case: a stranded guard with no database has no
+      // foreign/malformed contents to adopt, so exact quarantine guidance is
+      // safe while the guard remains durable until explicit recovery.
+      await armWatcherActivationGuard(embedFile);
       await expect(prepareServerDeps({ vault })).rejects.toThrow(/embedding-derived indexes are quarantined/);
       const isolated = await prepareServerDeps({ vault, embeddingIndex: false });
       expect(isolated.embedDbFile).toBeNull();
-      await expect(fs.readFile(embedFile, "utf8")).resolves.toBe("stranded full-edition embedding index");
+      await expect(fs.lstat(embedFile)).rejects.toMatchObject({ code: "ENOENT" });
       expect((await fs.lstat(watcherActivationGuardPath(embedFile))).isDirectory()).toBe(true);
     } finally {
       if (previousCacheHome === undefined) delete process.env.XDG_CACHE_HOME;

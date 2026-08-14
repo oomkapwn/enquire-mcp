@@ -333,6 +333,7 @@ const CURRENT_SOURCE_RECEIPT_SQL = `SELECT 1 AS current
 function normalizeSql(sql: string): string {
   let normalized = "";
   let inLiteral = false;
+  let omitsFollowingSpace = false;
   let pendingSpace = false;
   for (let index = 0; index < sql.length; index++) {
     const char = sql[index];
@@ -353,13 +354,19 @@ function normalizeSql(sql: string): string {
       pendingSpace = normalized.length > 0;
       continue;
     }
-    if (pendingSpace) normalized += " ";
+    // Parenthesis/comma spacing is not part of SQLite DDL identity. Keep the
+    // comparison strict on every token and literal byte while admitting the
+    // compact formatting SQLite preserves from historical CREATE statements.
+    const punctuation = char === "(" || char === ")" || char === ",";
+    if (pendingSpace && !punctuation && !omitsFollowingSpace) normalized += " ";
     pendingSpace = false;
     if (char === "'") {
       normalized += char;
       inLiteral = true;
+      omitsFollowingSpace = false;
     } else {
       normalized += char.toLowerCase();
+      omitsFollowingSpace = char === "(" || char === ",";
     }
   }
   if (normalized.endsWith(";")) normalized = normalized.slice(0, -1).trimEnd();
@@ -501,9 +508,7 @@ function hasExactAdmissionColumns(
   expected: readonly EmbedAdmissionColumn[]
 ): boolean {
   const columns = db
-    .prepare(
-      "SELECT cid, name, type, \"notnull\", dflt_value, pk FROM pragma_table_info(?) ORDER BY cid LIMIT ?"
-    )
+    .prepare('SELECT cid, name, type, "notnull", dflt_value, pk FROM pragma_table_info(?) ORDER BY cid LIMIT ?')
     .all<EmbedAdmissionColumn & { cid: number; dflt_value: string | null }>(table, expected.length + 1);
   return (
     columns.length === expected.length &&

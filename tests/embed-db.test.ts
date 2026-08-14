@@ -2517,13 +2517,16 @@ describe("EmbedDb", () => {
 
     // POSITIVE controls: genuine v1-v3 EmbedDb signatures with the exact
     // root are supported legacy provenance and may be destructively rebuilt.
-    // The current v4 preservation path was pinned by db2 above.
+    // The compact meta-table punctuation is intentional: SQLite preserves
+    // caller formatting in sqlite_master, but whitespace around `(`, `)` and
+    // `,` is not part of the historical class identity. The current v4
+    // preservation path was pinned by db2 above.
     for (const legacyVersion of [1, 2, 3]) {
       const legacyFile = path.join(dir, `legacy-v${legacyVersion}.embed.db`);
       const legacy = new Database(legacyFile);
       const kindColumn = legacyVersion >= 2 ? ",\n          kind TEXT NOT NULL DEFAULT 'md'" : "";
       legacy.exec(`
-        CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        CREATE TABLE meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);
         CREATE TABLE embeddings (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           rel_path TEXT NOT NULL,

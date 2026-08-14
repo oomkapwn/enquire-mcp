@@ -2123,7 +2123,7 @@ describe("K-1 class invariant (v3.6.3 methodological guard; recursive scan since
       ])
     );
 
-    const serverRootFiltersRemoved = replaceExactly(
+    const serverRootFiltersRemoved = replaceAllExactly(
       replaceExactly(
         serverSource,
         "discoverFtsIndexConfig(indexFile, vault.root)",

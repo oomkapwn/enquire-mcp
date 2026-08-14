@@ -1725,12 +1725,7 @@ function conditionContainsOwnedDiscriminant(
     ts.isPropertyAccessExpression(discriminant) &&
     discriminant.name.text === "kind" &&
     (!discriminantPath ||
-      !pathWasMutatedBetween(
-        discriminantPath,
-        discriminantPath.originPosition,
-        discriminant.getStart(),
-        context
-      )) &&
+      !pathWasMutatedBetween(discriminantPath, discriminantPath.originPosition, discriminant.getStart(), context)) &&
     expressionCarriesConfiguredValue(
       discriminant.expression,
       context,
@@ -1759,20 +1754,10 @@ function conditionIsReviewedOwnedSelection(
     return false;
   }
   return (
-    (conditionContainsOwnedDiscriminant(
-      expression.left,
-      context,
-      authority,
-      beforePosition,
-      seenBindings
-    ) && isReviewedEmbedOverridePairGuard(expression.right, context, beforePosition, seenBindings)) ||
-    (conditionContainsOwnedDiscriminant(
-      expression.right,
-      context,
-      authority,
-      beforePosition,
-      seenBindings
-    ) && isReviewedEmbedOverridePairGuard(expression.left, context, beforePosition, seenBindings))
+    (conditionContainsOwnedDiscriminant(expression.left, context, authority, beforePosition, seenBindings) &&
+      isReviewedEmbedOverridePairGuard(expression.right, context, beforePosition, seenBindings)) ||
+    (conditionContainsOwnedDiscriminant(expression.right, context, authority, beforePosition, seenBindings) &&
+      isReviewedEmbedOverridePairGuard(expression.left, context, beforePosition, seenBindings))
   );
 }
 
@@ -1792,20 +1777,8 @@ function isPositiveAuthorityPredicate(
   seenBindings: ReadonlySet<LexicalBinding>
 ): boolean {
   return (
-    conditionContainsOwnedDiscriminant(
-      node,
-      context,
-      provenanceFamily(expectedValue),
-      beforePosition,
-      seenBindings
-    ) ||
-    expressionCarriesAnyAuthority(
-      node,
-      context,
-      provenanceFamily(expectedValue),
-      beforePosition,
-      seenBindings
-    )
+    conditionContainsOwnedDiscriminant(node, context, provenanceFamily(expectedValue), beforePosition, seenBindings) ||
+    expressionCarriesAnyAuthority(node, context, provenanceFamily(expectedValue), beforePosition, seenBindings)
   );
 }
 
@@ -1819,10 +1792,7 @@ function isReviewedAuthorityComparison(
   const expression = unwrapExpression(node);
   if (!ts.isBinaryExpression(expression)) return false;
   const operator = expression.operatorToken.kind;
-  if (
-    operator !== ts.SyntaxKind.ExclamationEqualsEqualsToken &&
-    operator !== ts.SyntaxKind.ExclamationEqualsToken
-  ) {
+  if (operator !== ts.SyntaxKind.ExclamationEqualsEqualsToken && operator !== ts.SyntaxKind.ExclamationEqualsToken) {
     return false;
   }
   if (expectedValue !== "quantization") return false;
@@ -1833,14 +1803,16 @@ function isReviewedAuthorityComparison(
       provenanceFamily(expectedValue),
       beforePosition,
       seenBindings
-    ) && isReviewedExplicitConfiguration(expression.right, context, beforePosition, seenBindings)) ||
+    ) &&
+      isReviewedExplicitConfiguration(expression.right, context, beforePosition, seenBindings)) ||
     (expressionCarriesAnyAuthority(
       expression.right,
       context,
       provenanceFamily(expectedValue),
       beforePosition,
       seenBindings
-    ) && isReviewedExplicitConfiguration(expression.left, context, beforePosition, seenBindings))
+    ) &&
+      isReviewedExplicitConfiguration(expression.left, context, beforePosition, seenBindings))
   );
 }
 
@@ -2021,13 +1993,7 @@ function expressionCarriesConfiguredValue(
     if (callable === "resolve-model" && expectedValue === "embed-model") {
       return expression.arguments.some(
         (argument) =>
-          expressionCarriesConfiguredValue(
-            argument,
-            context,
-            "stored-model-alias",
-            beforePosition,
-            seenBindings
-          ) ||
+          expressionCarriesConfiguredValue(argument, context, "stored-model-alias", beforePosition, seenBindings) ||
           expressionCarriesConfiguredValue(argument, context, "modelAlias", beforePosition, seenBindings)
       );
     }
@@ -2039,12 +2005,7 @@ function expressionCarriesConfiguredValue(
       access &&
       (localCallableWasInvokedBetween(access.originPosition, expression.getStart(), context) ||
         (typeof access.root !== "string" &&
-          bindingWasCapturedByClosureBetween(
-            access.root,
-            access.originPosition,
-            expression.getStart(),
-            context
-          )) ||
+          bindingWasCapturedByClosureBetween(access.root, access.originPosition, expression.getStart(), context)) ||
         pathWasMutatedBetween(access, access.originPosition, expression.getStart(), context))
     ) {
       return false;
@@ -2070,13 +2031,7 @@ function expressionCarriesConfiguredValue(
                       : undefined;
     return (
       parentValue !== undefined &&
-      expressionCarriesConfiguredValue(
-        expression.expression,
-        context,
-        parentValue,
-        beforePosition,
-        seenBindings
-      )
+      expressionCarriesConfiguredValue(expression.expression, context, parentValue, beforePosition, seenBindings)
     );
   }
   if (ts.isConditionalExpression(expression)) {
@@ -2125,13 +2080,8 @@ function expressionCarriesConfiguredValue(
         );
       }
       return (
-        conditionIsReviewedOwnedSelection(
-          expression.condition,
-          context,
-          expectedValue,
-          beforePosition,
-          seenBindings
-        ) && isReviewedFallback(expression.whenFalse, context, beforePosition, seenBindings)
+        conditionIsReviewedOwnedSelection(expression.condition, context, expectedValue, beforePosition, seenBindings) &&
+        isReviewedFallback(expression.whenFalse, context, beforePosition, seenBindings)
       );
     }
     if (
@@ -2146,22 +2096,10 @@ function expressionCarriesConfiguredValue(
   if (ts.isBinaryExpression(expression) && expression.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken) {
     const leftNullish = staticNullish(expression.left);
     if (leftNullish === false) {
-      return expressionCarriesConfiguredValue(
-        expression.left,
-        context,
-        expectedValue,
-        beforePosition,
-        seenBindings
-      );
+      return expressionCarriesConfiguredValue(expression.left, context, expectedValue, beforePosition, seenBindings);
     }
     if (leftNullish === true) {
-      return expressionCarriesConfiguredValue(
-        expression.right,
-        context,
-        expectedValue,
-        beforePosition,
-        seenBindings
-      );
+      return expressionCarriesConfiguredValue(expression.right, context, expectedValue, beforePosition, seenBindings);
     }
     const left = expressionCarriesConfiguredValue(
       expression.left,
@@ -2212,10 +2150,7 @@ function hasSafeComment(sourceFile: ts.SourceFile, sourceText: string, construct
   });
 }
 
-function isReviewedSafeClearOnlySite(
-  filePath: string,
-  constructorNode: ts.NewExpression
-): boolean {
+function isReviewedSafeClearOnlySite(filePath: string, constructorNode: ts.NewExpression): boolean {
   const normalized = filePath.replaceAll("\\", "/");
   if (normalized !== "src/cli.ts" && !normalized.endsWith("/src/cli.ts")) return false;
   const declaration = constructorNode.parent;
@@ -2409,11 +2344,7 @@ function openControlDominatesConstructor(
         parent.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken)
     ) {
       controlledRegion = parent.right;
-    } else if (
-      ts.isTryStatement(parent) &&
-      parent.catchClause &&
-      isDescendantOf(child, parent.catchClause)
-    ) {
+    } else if (ts.isTryStatement(parent) && parent.catchClause && isDescendantOf(child, parent.catchClause)) {
       controlledRegion = parent.catchClause;
     }
     if (controlledRegion && !isDescendantOf(constructorNode, controlledRegion)) return false;
@@ -2424,11 +2355,7 @@ function openControlDominatesConstructor(
   return true;
 }
 
-function catchInvalidatesInstance(
-  clause: ts.CatchClause,
-  instance: LexicalBinding,
-  context: DataFlowContext
-): boolean {
+function catchInvalidatesInstance(clause: ts.CatchClause, instance: LexicalBinding, context: DataFlowContext): boolean {
   if (statementDefinitelyThrows(clause.block)) return true;
   const end = clause.block.statements.at(-1) ?? clause.block;
   let invalidated = false;
@@ -2452,10 +2379,7 @@ function catchInvalidatesInstance(
   return invalidated;
 }
 
-function constructorBindingIsConfinedToTry(
-  constructorNode: ts.NewExpression,
-  statement: ts.TryStatement
-): boolean {
+function constructorBindingIsConfinedToTry(constructorNode: ts.NewExpression, statement: ts.TryStatement): boolean {
   const declaration = constructorNode.parent;
   if (
     !ts.isVariableDeclaration(declaration) ||
@@ -2582,24 +2506,9 @@ function openUsesSameDiscovery(
         configuredWrite !== undefined &&
         openedWrite === configuredWrite &&
         !localCallableWasInvokedBetween(constructorNode.getStart(), node.getStart(), context) &&
-        !bindingWasCapturedByClosureBetween(
-          instance,
-          constructorNode.getStart(),
-          node.getStart(),
-          context
-        ) &&
-        !bindingWasReferencedByInvokedClosure(
-          instance,
-          constructorNode.getStart(),
-          node.getStart(),
-          context
-        ) &&
-        !bindingWasMutatedByClosure(
-          expectedDiscovery,
-          constructorNode.getStart(),
-          exactArgument.getStart(),
-          context
-        ) &&
+        !bindingWasCapturedByClosureBetween(instance, constructorNode.getStart(), node.getStart(), context) &&
+        !bindingWasReferencedByInvokedClosure(instance, constructorNode.getStart(), node.getStart(), context) &&
+        !bindingWasMutatedByClosure(expectedDiscovery, constructorNode.getStart(), exactArgument.getStart(), context) &&
         (!discoveryPath ||
           !accessOrDescendantWasMutatedBetween(
             discoveryPath,
@@ -2753,12 +2662,7 @@ function analyzeSource(
 
       if (
         !allowLegacyFixturePeeks &&
-        !openUsesSameDiscovery(
-          node,
-          dataFlow,
-          options,
-          className === "EmbedDb" ? "embed" : "fts"
-        )
+        !openUsesSameDiscovery(node, dataFlow, options, className === "EmbedDb" ? "embed" : "fts")
       ) {
         unguarded.push({
           file: filePath,
@@ -2776,19 +2680,11 @@ function analyzeSource(
 }
 
 async function analyzeFile(filePath: string, allowLegacyFixturePeeks = false): Promise<UnguardedSite[]> {
-  return analyzeSource(
-    filePath,
-    await fs.readFile(filePath, "utf8"),
-    allowLegacyFixturePeeks,
-    true
-  );
+  return analyzeSource(filePath, await fs.readFile(filePath, "utf8"), allowLegacyFixturePeeks, true);
 }
 
 function isTsImplementationFile(name: string): boolean {
-  return (
-    /\.(?:ts|tsx|mts|cts)$/.test(name) &&
-    !/\.d\.(?:ts|mts|cts)$/.test(name)
-  );
+  return /\.(?:ts|tsx|mts|cts)$/.test(name) && !/\.d\.(?:ts|mts|cts)$/.test(name);
 }
 
 /** Recursively collect every TypeScript implementation source extension. */
@@ -2843,32 +2739,17 @@ describe("K-1 AST invariant (v3.7.0 M-2 — strengthens v3.6.4 grep-based guard)
       'import type { EmbedDb } from "./embed-db.js";\n' +
       'import type { FtsIndex } from "./fts5.js";\n';
     expect(
-      analyzeSource(
-        path.join(process.cwd(), "src/type-only-k1-consumer.ts"),
-        typeOnlyConsumer,
-        false,
-        true
-      )
+      analyzeSource(path.join(process.cwd(), "src/type-only-k1-consumer.ts"), typeOnlyConsumer, false, true)
     ).toEqual([]);
     const resolverOnlyConsumer =
       'import { resolveModel } from "./embeddings.js";\nexport const model = resolveModel(undefined);\n';
     expect(
-      analyzeSource(
-        path.join(process.cwd(), "src/resolver-only-consumer.ts"),
-        resolverOnlyConsumer,
-        false,
-        true
-      )
+      analyzeSource(path.join(process.cwd(), "src/resolver-only-consumer.ts"), resolverOnlyConsumer, false, true)
     ).toEqual([]);
     const resolverOnlyReexport =
       'export { parseQuantizationMode } from "./tool-registry.js";\n';
     expect(
-      analyzeSource(
-        path.join(process.cwd(), "src/resolver-only-reexport.ts"),
-        resolverOnlyReexport,
-        false,
-        true
-      )
+      analyzeSource(path.join(process.cwd(), "src/resolver-only-reexport.ts"), resolverOnlyReexport, false, true)
     ).toEqual([]);
     const providerInternalDiscovery = `
 export async function discoverEmbedDbConfig(file, vaultRoot) {
@@ -2893,9 +2774,7 @@ async function discoverEmbedDbConfigCached(file, vaultRoot) {
       const implementationNames = ["a.ts", "b.tsx", "c.mts", "d.cts"];
       const declarationNames = ["a.d.ts", "c.d.mts", "d.d.cts"];
       await Promise.all(
-        [...implementationNames, ...declarationNames].map((name) =>
-          fs.writeFile(path.join(extensionTree, name), "")
-        )
+        [...implementationNames, ...declarationNames].map((name) => fs.writeFile(path.join(extensionTree, name), ""))
       );
       const collectedNames = (await collectTs(extensionTree)).map((file) => path.basename(file)).sort();
       expect(collectedNames).toEqual(implementationNames);
@@ -2915,12 +2794,7 @@ async function discoverEmbedDbConfigCached(file, vaultRoot) {
       '        [tokenize] = ["unicode61"];\n' +
         "        const idx = new FtsIndex({ file: indexFile, vaultRoot: vault.root, tokenize });"
     );
-    const pinnedMutationViolations = analyzeSource(
-      pinnedCliPath,
-      destructuringAfterDiscovery,
-      false,
-      true
-    );
+    const pinnedMutationViolations = analyzeSource(pinnedCliPath, destructuringAfterDiscovery, false, true);
     expect(pinnedMutationViolations).toHaveLength(1);
     expect(pinnedMutationViolations[0]?.reason).toMatch(/source hash mismatch/);
 
@@ -2949,9 +2823,7 @@ async function unpinnedAliasSite(file, vaultRoot) {
       true
     );
     expect(reexportInventoryViolations).toHaveLength(1);
-    expect(reexportInventoryViolations[0]?.reason).toMatch(
-      /outside the exact pinned production inventory/
-    );
+    expect(reexportInventoryViolations[0]?.reason).toMatch(/outside the exact pinned production inventory/);
 
     const namespaceAliasSite = `
 import * as dbmod from "../../embed-db.js";
@@ -2969,9 +2841,7 @@ async function namespaceAliasSite(file, vaultRoot) {
       true
     );
     expect(namespaceInventoryViolations).toHaveLength(1);
-    expect(namespaceInventoryViolations[0]?.reason).toMatch(
-      /outside the exact pinned production inventory/
-    );
+    expect(namespaceInventoryViolations[0]?.reason).toMatch(/outside the exact pinned production inventory/);
 
     const dynamicNamespaceSite = `
 async function dynamicNamespaceSite(file, vaultRoot) {
@@ -2987,9 +2857,7 @@ async function dynamicNamespaceSite(file, vaultRoot) {
       true
     );
     expect(dynamicInventoryViolations).toHaveLength(1);
-    expect(dynamicInventoryViolations[0]?.reason).toMatch(
-      /outside the exact pinned production inventory/
-    );
+    expect(dynamicInventoryViolations[0]?.reason).toMatch(/outside the exact pinned production inventory/);
 
     const importEqualsAliasSite = `
 import dbmod = require("../../embed-db.js");
@@ -3007,9 +2875,7 @@ async function importEqualsAliasSite(file, vaultRoot) {
       true
     );
     expect(importEqualsInventoryViolations).toHaveLength(1);
-    expect(importEqualsInventoryViolations[0]?.reason).toMatch(
-      /outside the exact pinned production inventory/
-    );
+    expect(importEqualsInventoryViolations[0]?.reason).toMatch(/outside the exact pinned production inventory/);
 
     const classicRegressed = structuredClone(pkg);
     classicRegressed.devDependencies = {
@@ -3563,10 +3429,7 @@ async function invokedDeclarationReset(indexFile, vaultRoot) {
   reset();
   return new FtsIndex({ file: indexFile, vaultRoot, tokenize });
 }`;
-    const declarationResetViolations = analyzeSource(
-      "src/discovery-declaration-reset.ts",
-      invokedDeclarationReset
-    );
+    const declarationResetViolations = analyzeSource("src/discovery-declaration-reset.ts", invokedDeclarationReset);
     expect(declarationResetViolations).toHaveLength(1);
     expect(declarationResetViolations[0]?.reason).toMatch(/underived: tokenize/);
 
@@ -3604,10 +3467,7 @@ async function invokedCallbackReset(indexFile, vaultRoot) {
   await Promise.resolve().then(() => { tokenize = "unicode61"; });
   return new FtsIndex({ file: indexFile, vaultRoot, tokenize });
 }`;
-    const callbackResetViolations = analyzeSource(
-      "src/discovery-callback-reset.ts",
-      invokedCallbackReset
-    );
+    const callbackResetViolations = analyzeSource("src/discovery-callback-reset.ts", invokedCallbackReset);
     expect(callbackResetViolations).toHaveLength(1);
     expect(callbackResetViolations[0]?.reason).toMatch(/underived: tokenize/);
 
@@ -3620,10 +3480,7 @@ async function invokedObjectMethodReset(indexFile, vaultRoot) {
   helpers.reset();
   return new FtsIndex({ file: indexFile, vaultRoot, tokenize });
 }`;
-    const objectMethodResetViolations = analyzeSource(
-      "src/discovery-object-method-reset.ts",
-      invokedObjectMethodReset
-    );
+    const objectMethodResetViolations = analyzeSource("src/discovery-object-method-reset.ts", invokedObjectMethodReset);
     expect(objectMethodResetViolations).toHaveLength(1);
     expect(objectMethodResetViolations[0]?.reason).toMatch(/underived: tokenize/);
 
@@ -3637,10 +3494,7 @@ async function invokedObjectAliasReset(indexFile, vaultRoot) {
   helpers.reset();
   return new FtsIndex({ file: indexFile, vaultRoot, tokenize });
 }`;
-    const objectAliasResetViolations = analyzeSource(
-      "src/discovery-object-alias-reset.ts",
-      invokedObjectAliasReset
-    );
+    const objectAliasResetViolations = analyzeSource("src/discovery-object-alias-reset.ts", invokedObjectAliasReset);
     expect(objectAliasResetViolations).toHaveLength(1);
     expect(objectAliasResetViolations[0]?.reason).toMatch(/underived: tokenize/);
 
@@ -3655,10 +3509,7 @@ async function capturedGetterReset(indexFile, vaultRoot) {
   void helpers.reset;
   return new FtsIndex({ file: indexFile, vaultRoot, tokenize });
 }`;
-    const getterResetViolations = analyzeSource(
-      "src/discovery-getter-reset.ts",
-      capturedGetterReset
-    );
+    const getterResetViolations = analyzeSource("src/discovery-getter-reset.ts", capturedGetterReset);
     expect(getterResetViolations).toHaveLength(1);
     expect(getterResetViolations[0]?.reason).toMatch(/underived: tokenize/);
 
@@ -3673,10 +3524,7 @@ async function capturedPromiseExecutor(indexFile, vaultRoot) {
   });
   return new FtsIndex({ file: indexFile, vaultRoot, tokenize });
 }`;
-    const promiseExecutorViolations = analyzeSource(
-      "src/discovery-promise-executor.ts",
-      capturedPromiseExecutor
-    );
+    const promiseExecutorViolations = analyzeSource("src/discovery-promise-executor.ts", capturedPromiseExecutor);
     expect(promiseExecutorViolations).toHaveLength(1);
     expect(promiseExecutorViolations[0]?.reason).toMatch(/underived: tokenize/);
 
@@ -3804,10 +3652,7 @@ async function conditionalOpenDiscovery(indexFile, vaultRoot, runtimeFlag) {
   if (runtimeFlag) await index.open(discovered);
   return index;
 }`;
-    const conditionalOpenViolations = analyzeSource(
-      "src/discovery-conditional-open.ts",
-      conditionalOpenDiscovery
-    );
+    const conditionalOpenViolations = analyzeSource("src/discovery-conditional-open.ts", conditionalOpenDiscovery);
     expect(conditionalOpenViolations).toHaveLength(1);
     expect(conditionalOpenViolations[0]?.reason).toMatch(/first awaited open\(\).*same exact/);
 
@@ -3835,10 +3680,7 @@ async function swallowedOpenDiscovery(indexFile, vaultRoot) {
   } catch {}
   return index;
 }`;
-    const swallowedOpenViolations = analyzeSource(
-      "src/discovery-swallowed-open.ts",
-      swallowedOpenDiscovery
-    );
+    const swallowedOpenViolations = analyzeSource("src/discovery-swallowed-open.ts", swallowedOpenDiscovery);
     expect(swallowedOpenViolations).toHaveLength(1);
     expect(swallowedOpenViolations[0]?.reason).toMatch(/first awaited open\(\).*same exact/);
 
@@ -3873,10 +3715,7 @@ async function invokedPreopenClosure(indexFile, vaultRoot) {
   await index.open(discovered);
   return index;
 }`;
-    const preopenClosureViolations = analyzeSource(
-      "src/discovery-invoked-preopen.ts",
-      invokedPreopenClosure
-    );
+    const preopenClosureViolations = analyzeSource("src/discovery-invoked-preopen.ts", invokedPreopenClosure);
     expect(preopenClosureViolations).toHaveLength(1);
     expect(preopenClosureViolations[0]?.reason).toMatch(/first awaited open\(\).*same exact/);
 
@@ -3890,10 +3729,7 @@ async function reassignedOpenDiscovery(indexFile, vaultRoot) {
   await index.open(discovered);
   return index;
 }`;
-    const reassignedOpenViolations = analyzeSource(
-      "src/discovery-reassigned-open.ts",
-      reassignedOpenDiscovery
-    );
+    const reassignedOpenViolations = analyzeSource("src/discovery-reassigned-open.ts", reassignedOpenDiscovery);
     expect(reassignedOpenViolations).toHaveLength(1);
     expect(reassignedOpenViolations[0]?.reason).toMatch(/first awaited open\(\).*same exact/);
 

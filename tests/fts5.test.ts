@@ -899,12 +899,38 @@ describe("FtsIndex — full lifecycle", () => {
     malformedShadowSeed.reindexFile("shadow.md", 1001, "shadow-class-marker");
     malformedShadowSeed.close();
     const malformedShadowRaw = new Database(malformedShadowFile);
-    malformedShadowRaw.exec("ALTER TABLE chunks_data ADD COLUMN foreign_payload BLOB");
-    const shadowMutation = malformedShadowRaw
-      .prepare("UPDATE chunks_data SET foreign_payload = ? WHERE id = (SELECT min(id) FROM chunks_data)")
-      .run(Buffer.from([0xde, 0xad, 0x00, 0xbe, 0xef]));
-    expect(shadowMutation.changes).toBeGreaterThan(0);
-    malformedShadowRaw.close();
+    try {
+      const shadowSchema = malformedShadowRaw
+        .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'chunks_data'")
+        .get<{ sql: unknown }>();
+      if (typeof shadowSchema?.sql !== "string") throw new Error("missing chunks_data test schema");
+      const malformedShadowSql = shadowSchema.sql.replace(/\)\s*;?\s*$/u, ", foreign_payload BLOB)");
+      expect(malformedShadowSql).not.toBe(shadowSchema.sql);
+
+      // SQLite intentionally forbids ALTER TABLE on FTS5 shadow tables. Edit
+      // only this disposable fixture's parseable catalog SQL, then reopen so
+      // the extra column is loaded from disk rather than the stale cache.
+      malformedShadowRaw.exec("PRAGMA writable_schema = ON");
+      try {
+        const schemaMutation = malformedShadowRaw
+          .prepare("UPDATE sqlite_master SET sql = ? WHERE type = 'table' AND name = 'chunks_data' AND sql = ?")
+          .run(malformedShadowSql, shadowSchema.sql);
+        expect(schemaMutation.changes).toBe(1);
+      } finally {
+        malformedShadowRaw.exec("PRAGMA writable_schema = OFF");
+      }
+    } finally {
+      malformedShadowRaw.close();
+    }
+    const malformedShadowReloaded = new Database(malformedShadowFile);
+    try {
+      const shadowMutation = malformedShadowReloaded
+        .prepare("UPDATE chunks_data SET foreign_payload = ? WHERE id = (SELECT min(id) FROM chunks_data)")
+        .run(Buffer.from([0xde, 0xad, 0x00, 0xbe, 0xef]));
+      expect(shadowMutation.changes).toBeGreaterThan(0);
+    } finally {
+      malformedShadowReloaded.close();
+    }
     const beforeMalformedShadow = snapshot(malformedShadowFile, ftsQueries);
     await refusePathFree(
       new FtsIndex({

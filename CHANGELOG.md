@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### nanoid advisory correction
+
+> **TL;DR:** **The source audit remains strict after GitHub revised `GHSA-2v37-7h3g-55p8`: the dev-only PostCSS path now resolves first-patched `nanoid@3.3.18` instead of `3.3.17`.** The existing semver range already admits the fix, so this is a lock-only refresh with no direct dependency, override or audit allowlist.
+>
+> **Method note:** GitHub updated the advisory on 2026-08-13 after the previous nanoid correction had shipped, making this a temporal base-owned audit red rather than a product regression. A disposable read-only GitHub-hosted workflow on exact main ran the scoped lock update and the provenance-pinned release-identity generator. Its guards proved that only the nanoid lock node and `manifest.package-lock` identity changed; the temporary workflow was removed before candidate admission. The frozen graph remains 30 sources, 560 mutations, 536 roots/cases, 24 dependencies, 541 checks and 546 matcher leaves, with every mutation and case byte-identical. Under D-45 no local install, build, lint, test, coverage, smoke, OIA, package/client, benchmark or evaluation workload ran on the maintainer MacBook; executable proof belongs to remote CI on the exact candidate and squash-main SHAs.
+
+- **No waiver or runtime dependency is introduced.** Enquire does not import nanoid, but a compatible patched transitive release exists, so the empty source allowlist remains empty.
+- **The frozen identity is refreshed, not rebaselined.** Only `manifest.package-lock`'s content digest and semantic fingerprint change; `manifest.package-json`, `release.m466`, all mutation identities, all case records and the topology remain unchanged.
+- **Release state is out of scope.** No package version, tag, publication, dist-tag, GitHub Release, MCP Registry or persistent workflow changes.
+
 ## [4.0.0-rc.3] — 2026-08-10
 
 > **TL;DR:** **The rc.3 release candidate consolidates the complete post-rc.2 hardening line: one central hidden/reserved-vault boundary, patched dependency and consumer evidence, exact CI/artifact/npm/GitHub/Registry transactions, and a controlled refresh of the release-mutation identity projection.** Gate B now narrows publication to an owner-created immutable `v*` tag and a tag-push-only workflow: there is no manual-dispatch publication path, and transient recovery reruns the original tag-push run instead of creating a new release invocation. The product surface remains 46 tools, 19 prompts, and 1807 source tests; this candidate does not claim stable promotion, stable MCP Registry synchronization, desktop signing, or broader distribution acceptance.

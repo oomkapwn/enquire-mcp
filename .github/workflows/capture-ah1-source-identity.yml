@@ -1,0 +1,175 @@
+name: Temporary AH-1 source identity capture
+
+on:
+  push:
+    branches:
+      - codex/audit-stale-generation-20260813
+
+permissions:
+  contents: read
+
+concurrency:
+  group: capture-ah1-source-identity-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  capture:
+    if: github.repository == 'oomkapwn/enquire-mcp'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24
+
+      - name: Assert the exact capture boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD^)" = "15bbb6cc6fda8ab02e70b11ef42d972f5883f7ad"
+          test "$(git diff --name-only HEAD^ HEAD)" = ".github/workflows/capture-ah1-source-identity.yml"
+          git merge-base --is-ancestor 302b9e0a90b61cf1082c9827c8ea46b5f40ba80f HEAD^
+          test "$(sha256sum package-lock.json | cut -d ' ' -f 1)" = \
+            "455f04e7b5b77212d6dfe893db06ba89deb5e81428485a1bb4e57b904c5b2b1a"
+          test "$(sha256sum tests/fixtures/release-mutation-identity.v2.json | cut -d ' ' -f 1)" = \
+            "9319138b5eeda143dc78869fd9a510ef298551bd258ddf48926e1c7969aea2b8"
+          node --input-type=module <<'NODE'
+          import { readFileSync } from "node:fs";
+
+          const expected = "9319138b5eeda143dc78869fd9a510ef298551bd258ddf48926e1c7969aea2b8";
+          const files = [
+            "tests/meta-invariant-coverage.test.ts",
+            "tests/release-mutation-identity-audit.ts"
+          ];
+          for (const file of files) {
+            const source = readFileSync(file, "utf8");
+            if (source.split(expected).length - 1 !== 1) {
+              throw new Error(`${file} must contain the exact baseline fixture digest once`);
+            }
+          }
+          NODE
+
+      - name: Generate and guard the bounded identity refresh
+        shell: bash
+        run: |
+          set -euo pipefail
+          capture_dir="$RUNNER_TEMP/ah1-source-identity"
+          mkdir -p "$capture_dir"
+          current_source="$capture_dir/release-integrity.current.ts"
+          cp tests/release-integrity.test.ts "$current_source"
+          current_sha="$(sha256sum "$current_source" | cut -d ' ' -f 1)"
+          test "$current_sha" = "2a15da915814bdfd4baacda33c87d93ce8679d89a93fb459ac97c37d3ba8763e"
+          restore_current() {
+            cp "$current_source" tests/release-integrity.test.ts
+          }
+          trap restore_current EXIT
+          git show 8420e2fca3ed0dac994859a9e9a30b933d5ddf9e:tests/release-integrity.test.ts \
+            > tests/release-integrity.test.ts
+          historical_sha="$(sha256sum tests/release-integrity.test.ts | cut -d ' ' -f 1)"
+          test "$historical_sha" = "3fa0b67411e2fc0f4d7c6bce6075ba91eb25edc19a210b5c2f8dd408def6e18b"
+          node scripts/generate-release-mutation-identity.mjs \
+            > "$capture_dir/release-mutation-identity.v2.json"
+          restore_current
+          trap - EXIT
+          test "$(sha256sum tests/release-integrity.test.ts | cut -d ' ' -f 1)" = "$current_sha"
+          git diff --exit-code -- tests/release-integrity.test.ts
+          node --input-type=module <<'NODE'
+          import { createHash } from "node:crypto";
+          import { readFileSync, writeFileSync } from "node:fs";
+
+          const captureDir = `${process.env.RUNNER_TEMP}/ah1-source-identity`;
+          const beforeText = readFileSync("tests/fixtures/release-mutation-identity.v2.json", "utf8");
+          const afterText = readFileSync(`${captureDir}/release-mutation-identity.v2.json`, "utf8");
+          const before = JSON.parse(beforeText);
+          const after = JSON.parse(afterText);
+          const unique = (rows, id) => {
+            const matches = rows.filter((row) => row.id === id);
+            if (matches.length !== 1) throw new Error(`${id} must occur exactly once`);
+            return matches[0];
+          };
+          const beforeSource = unique(before.sources, "source.server-ts");
+          const afterSource = unique(after.sources, "source.server-ts");
+          const beforeMutation = unique(before.mutations, "release.m469");
+          const afterMutation = unique(after.mutations, "release.m469");
+          const sourceText = readFileSync("src/server.ts", "utf8");
+          const needle = "const embeddingIndexEnabled = opts.embeddingIndex !== false";
+          if (sourceText.split(needle).length - 1 !== 1) {
+            throw new Error("release.m469 source needle must occur exactly once");
+          }
+          const mutantText = sourceText.replace(needle, "true");
+          const sha256 = (text) => createHash("sha256").update(text, "utf8").digest("hex");
+          const sourceSha256 = sha256(sourceText);
+          const mutantSha256 = sha256(mutantText);
+          if (afterSource.contentSha256 !== sourceSha256) {
+            throw new Error("source.server-ts content digest is not bound to src/server.ts");
+          }
+          if (afterMutation.witness.sourceSha256 !== sourceSha256) {
+            throw new Error("release.m469 witness source digest is not bound to src/server.ts");
+          }
+          if (afterMutation.witness.mutantSha256 !== mutantSha256) {
+            throw new Error("release.m469 witness mutant digest is not bound to the exact mutation");
+          }
+          const receipt = {
+            source: {
+              before: {
+                contentSha256: beforeSource.contentSha256,
+                semanticFingerprint: beforeSource.semanticFingerprint
+              },
+              after: {
+                contentSha256: afterSource.contentSha256,
+                semanticFingerprint: afterSource.semanticFingerprint
+              }
+            },
+            mutation: {
+              before: {
+                sourceSha256: beforeMutation.witness.sourceSha256,
+                mutantSha256: beforeMutation.witness.mutantSha256,
+                semanticFingerprint: beforeMutation.semanticFingerprint
+              },
+              after: {
+                sourceSha256: afterMutation.witness.sourceSha256,
+                mutantSha256: afterMutation.witness.mutantSha256,
+                semanticFingerprint: afterMutation.semanticFingerprint
+              }
+            }
+          };
+          const changed = [
+            [receipt.source.before.contentSha256, receipt.source.after.contentSha256],
+            [receipt.source.before.semanticFingerprint, receipt.source.after.semanticFingerprint],
+            [receipt.mutation.before.sourceSha256, receipt.mutation.after.sourceSha256],
+            [receipt.mutation.before.mutantSha256, receipt.mutation.after.mutantSha256],
+            [receipt.mutation.before.semanticFingerprint, receipt.mutation.after.semanticFingerprint]
+          ];
+          if (changed.some(([oldValue, newValue]) => oldValue === newValue)) {
+            throw new Error("every permitted AH-1 identity field must advance");
+          }
+          afterSource.contentSha256 = beforeSource.contentSha256;
+          afterSource.semanticFingerprint = beforeSource.semanticFingerprint;
+          afterMutation.witness.sourceSha256 = beforeMutation.witness.sourceSha256;
+          afterMutation.witness.mutantSha256 = beforeMutation.witness.mutantSha256;
+          afterMutation.semanticFingerprint = beforeMutation.semanticFingerprint;
+          if (JSON.stringify(after) !== JSON.stringify(before)) {
+            throw new Error("fixture changed outside source.server-ts and release.m469 identity");
+          }
+          const fixtureSha256 = sha256(afterText);
+          writeFileSync(
+            `${captureDir}/fixture-receipt.json`,
+            `${JSON.stringify({ ...receipt, fixtureSha256 }, null, 2)}\n`
+          );
+          NODE
+          cat "$capture_dir/fixture-receipt.json"
+
+      - name: Upload bounded capture
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ah1-source-identity
+          path: |
+            ${{ runner.temp }}/ah1-source-identity/release-mutation-identity.v2.json
+            ${{ runner.temp }}/ah1-source-identity/fixture-receipt.json
+          compression-level: 0
+          retention-days: 3
+          if-no-files-found: error

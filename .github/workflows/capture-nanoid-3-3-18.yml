@@ -24,7 +24,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
-          node-version: 22.13.0
+          node-version: 24
           cache: npm
 
       - name: Resolve only nanoid 3.3.18 in the lockfile
@@ -34,8 +34,10 @@ jobs:
           capture_dir="$RUNNER_TEMP/nanoid-3-3-18"
           mkdir -p "$capture_dir"
           cp package-lock.json "$capture_dir/package-lock.before.json"
+          npm --version
           npm update nanoid --package-lock-only --ignore-scripts --no-audit --no-fund
           cp package-lock.json "$capture_dir/package-lock.json"
+          git diff -- package-lock.json
           node --input-type=module <<'NODE'
           import { readFileSync, writeFileSync } from "node:fs";
 

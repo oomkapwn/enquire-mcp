@@ -286,6 +286,95 @@ describe("searchHybrid — BM25 + TF-IDF fusion path", () => {
     );
     expect(result.matches.length).toBeGreaterThan(0);
     expect(result.matches.every((m) => m.path.startsWith("Cooking/"))).toBe(true);
+
+    // AH-1 receipt controls stay in this established BM25-route test so the
+    // causal coverage does not add another test registration.
+    {
+      const v = new Vault(ftsRoot);
+      const relPath = "Auth/Receipt generation.md";
+      const absPath = path.join(ftsRoot, relPath);
+      await fs.writeFile(absPath, "ah_one_persisted_secret before replacement\n");
+      const indexedMtimeMs = (await fs.stat(absPath)).mtimeMs;
+      idx.reindexFile(relPath, indexedMtimeMs, "ah_one_persisted_secret before replacement", [], []);
+
+      // Positive control: the exact generation committed to source_state is
+      // visible through the real hybrid BM25 route.
+      const current = await searchHybrid(
+        v,
+        { query: "ah_one_persisted_secret", limit: 5 },
+        { ftsIndex: idx, embedFile: path.join(ftsRoot, "nonexistent.embed.db") }
+      );
+      expect(
+        current.matches.some((match) => match.path === relPath && match.snippet.includes("persisted_secret"))
+      ).toBe(true);
+
+      // Mutation control: preserve the old FTS bytes while replacing the live
+      // source with another regular-file generation. BM25 must not contribute
+      // or surface its retained snippet before watcher/bulk reconciliation.
+      await fs.writeFile(absPath, "current generation contains no prior marker\n");
+      const changedTime = new Date(indexedMtimeMs + 5000);
+      await fs.utimes(absPath, changedTime, changedTime);
+      expect(idx.search("ah_one_persisted_secret", { limit: 5 }).some((hit) => hit.rel_path === relPath)).toBe(true);
+
+      const stale = await searchHybrid(
+        v,
+        { query: "ah_one_persisted_secret", limit: 5 },
+        { ftsIndex: idx, embedFile: path.join(ftsRoot, "nonexistent.embed.db") }
+      );
+      expect(stale.matches.every((match) => match.path !== relPath)).toBe(true);
+      expect(stale.matches.every((match) => !match.snippet.includes("before replacement"))).toBe(true);
+    }
+
+    // The same registration also owns the late frontmatter-await mutation.
+    {
+      const v = new Vault(ftsRoot);
+      const relPath = "Auth/Late receipt.md";
+      const absPath = path.join(ftsRoot, relPath);
+      const oldContent = "---\nstatus: active\n---\nlate_receipt_secret belongs only to the indexed generation.\n";
+      await fs.writeFile(absPath, oldContent);
+      const indexedMtimeMs = (await fs.stat(absPath)).mtimeMs;
+      idx.reindexFile(relPath, indexedMtimeMs, oldContent, [], []);
+
+      try {
+        const positive = await searchHybrid(
+          v,
+          { query: "late_receipt_secret", limit: 5, filter_frontmatter: { status: "active" } },
+          { ftsIndex: idx, embedFile: path.join(ftsRoot, "nonexistent.embed.db") }
+        );
+        expect(positive.matches.some((match) => match.path === relPath)).toBe(true);
+
+        const originalReadNote = v.readNote.bind(v);
+        let replaced = false;
+        v.readNote = async (...args: Parameters<Vault["readNote"]>) => {
+          if (!replaced && args[0] === v.resolveInside(relPath) && args[1] === undefined) {
+            replaced = true;
+            idx.reindexFile(
+              relPath,
+              indexedMtimeMs,
+              "---\nstatus: active\n---\nnew indexed generation without the secret.\n",
+              [],
+              []
+            );
+          }
+          return originalReadNote(...args);
+        };
+        try {
+          const raced = await searchHybrid(
+            v,
+            { query: "late_receipt_secret", limit: 5, filter_frontmatter: { status: "active" } },
+            { ftsIndex: idx, embedFile: path.join(ftsRoot, "nonexistent.embed.db") }
+          );
+          expect(replaced).toBe(true);
+          expect(raced.matches.every((match) => match.path !== relPath)).toBe(true);
+          expect(raced.matches.every((match) => !match.snippet.includes("late_receipt_secret"))).toBe(true);
+        } finally {
+          v.readNote = originalReadNote;
+        }
+      } finally {
+        idx.dropFile(relPath);
+        await fs.unlink(absPath).catch(() => {});
+      }
+    }
   });
 });
 
@@ -308,8 +397,10 @@ describe("searchHybrid — kind flag (v2.8.0)", () => {
     });
     await fs.mkdir(path.dirname(blendIdx.file), { recursive: true });
     await blendIdx.open();
-    blendIdx.reindexFile("notes.md", Date.now(), "Apollo program notes from 1969.");
-    blendIdx.reindexPdfFile("apollo.pdf", Date.now(), [
+    const noteMtimeMs = (await fs.stat(path.join(blendRoot, "notes.md"))).mtimeMs;
+    const pdfMtimeMs = (await fs.stat(path.join(blendRoot, "apollo.pdf"))).mtimeMs;
+    blendIdx.reindexFile("notes.md", noteMtimeMs, "Apollo program notes from 1969.");
+    blendIdx.reindexPdfFile("apollo.pdf", pdfMtimeMs, [
       { pageNumber: 1, text: "Apollo guidance computer architecture" },
       { pageNumber: 2, text: "Saturn V launch sequence" }
     ]);
@@ -947,6 +1038,71 @@ describe("searchHybridMulti — multi-query fan-out (v3.11.6-rc.7 C-4)", () => {
     expect(result.reranked && "pairs" in result.reranked ? result.reranked.pairs : 0).toBe(
       scored.reduce((n, s) => n + s.length, 0)
     );
+
+    // AH-1 late fan-out receipt revalidation shares this established
+    // reranker registration; the inner scope keeps its fixture independent.
+    {
+      const receiptVault = new Vault(root);
+      const relPath = "Auth/Fanout receipt.md";
+      const absPath = path.join(root, relPath);
+      const siblingRelPath = "Auth/Fanout current sibling.md";
+      const siblingAbsPath = path.join(root, siblingRelPath);
+      const queries = ["fanreceiptzero", "fanreceiptone", "fanreceipttwo", "fanreceiptthree", "fanreceiptfour"];
+      const oldContent = `${queries.join(" ")} fanout_persisted_secret\n`;
+      const siblingContent = `${queries.join(" ")} fanout_current_sibling\n`;
+      await fs.writeFile(absPath, oldContent);
+      await fs.writeFile(siblingAbsPath, siblingContent);
+      const indexedMtimeMs = (await fs.stat(absPath)).mtimeMs;
+      const siblingMtimeMs = (await fs.stat(siblingAbsPath)).mtimeMs;
+      const ftsFile = path.join(root, ".fanout-receipt.fts5.db");
+      const fts = new FtsIndex({ file: ftsFile, vaultRoot: root });
+      await fts.open();
+      fts.reindexFile(relPath, indexedMtimeMs, oldContent, [], []);
+      fts.reindexFile(siblingRelPath, siblingMtimeMs, siblingContent, [], []);
+
+      let releaseBlocked: (() => void) | undefined;
+      const mutationDone = new Promise<void>((resolve) => {
+        releaseBlocked = resolve;
+      });
+      let replaced = false;
+      let queryZeroSawOldGeneration = false;
+      const receiptReranker = {
+        score: async (query: string, passages: readonly string[]) => {
+          if (query === queries[4]) {
+            fts.reindexFile(relPath, indexedMtimeMs, "new indexed generation without prior markers\n", [], []);
+            replaced = true;
+            releaseBlocked?.();
+          } else if (query === queries[0]) {
+            queryZeroSawOldGeneration = passages.some((passage) => passage.includes("fanout_persisted_secret"));
+          } else {
+            await mutationDone;
+          }
+          return passages.map(() => 0.5);
+        }
+      };
+
+      try {
+        const receiptResult = await searchHybridMulti(
+          receiptVault,
+          { queries, limit: 5 },
+          { ftsIndex: fts, embedFile: path.join(root, "nonexistent.embed.db"), rerankerOverride: receiptReranker }
+        );
+        expect(replaced).toBe(true);
+        expect(queryZeroSawOldGeneration).toBe(true);
+        expect(fts.totalChunks()).toBeGreaterThanOrEqual(2);
+        expect(receiptResult.matches.every((match) => match.path !== relPath)).toBe(true);
+        expect(receiptResult.matches.every((match) => !match.snippet.includes("fanout_persisted_secret"))).toBe(true);
+        expect(receiptResult.matches.some((match) => match.path === siblingRelPath)).toBe(true);
+      } finally {
+        releaseBlocked?.();
+        fts.close();
+        await fs.unlink(absPath).catch(() => {});
+        await fs.unlink(siblingAbsPath).catch(() => {});
+        for (const dbArtifact of [ftsFile, `${ftsFile}-wal`, `${ftsFile}-shm`]) {
+          await fs.unlink(dbArtifact).catch(() => {});
+        }
+      }
+    }
   });
 
   it("NEGATIVE control — no reranker configured ⇒ no `reranked` field on the multi response", async () => {

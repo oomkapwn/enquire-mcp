@@ -94,6 +94,267 @@ function checkGuarantee(
   return null;
 }
 
+/** Inventory every persisted-content egress boundary that must carry a live receipt. */
+function persistedEgressGuardViolations(search: string): string[] {
+  const region = (start: string, end: string): string => {
+    const from = search.indexOf(start);
+    const to = search.indexOf(end, from + start.length);
+    return from >= 0 && to > from ? search.slice(from, to) : "";
+  };
+  const checks: Array<{ label: string; body: string; needles: string[] }> = [
+    {
+      label: "standalone embeddings plus current DB hydration",
+      body: region("export async function embeddingsSearch(", "// ─── obsidian_search"),
+      needles: [
+        "let rawHits: EmbedReceiptSearchHit[];",
+        'let hnswResultsToReceiptHits: typeof import("../hnsw.js").hnswResultsToReceiptHits | null = null;',
+        "const hydratedRows = db.getSearchRowsByIds(labels);",
+        "let h = hnswResultsToReceiptHits({ labels, distances }, hydratedRows);",
+        "rawHits = db.searchWithReceipts(qVec, overFetch, { folder: args.folder, minScore });",
+        "const hits = await filterLiveVaultHits(",
+        "(hit) => hit,",
+        "(receipts) => db.currentSourceReceiptMask(receipts)",
+        "embedHitReceipts.set(match, {",
+        "rel_path: h.rel_path,",
+        "kind: h.kind,",
+        "indexed_mtime_ms: h.indexed_mtime_ms,",
+        "indexed_revision: h.indexed_revision"
+      ]
+    },
+    {
+      label: "diagnostic FTS",
+      body: region("export async function searchLiveFts(", "export async function readLiveFtsChunk("),
+      needles: [
+        "const rawMatches = idx.searchWithReceipts(args.query, {",
+        "const admittedMatches = await filterLiveVaultHits(",
+        "(match) => match,",
+        "(receipts) => idx.currentSourceReceiptMask(receipts)",
+        "return admittedMatches.map((match) => ({"
+      ]
+    },
+    {
+      label: "chunk resource",
+      body: region("export async function readLiveFtsChunk(", "/** v3.10 (rc.10)"),
+      needles: [
+        "const chunk = idx.getChunkWithReceipt(relPath, chunkIndex);",
+        "const stat = await vault.stat(relPath);",
+        "stat.mtimeMs !== chunk.indexed_mtime_ms",
+        "!idx.isCurrentSourceReceipt(",
+        "chunk.kind,",
+        "chunk.indexed_mtime_ms,",
+        "chunk.indexed_revision"
+      ]
+    },
+    {
+      label: "hybrid BM25 arm",
+      body: region("// ─── BM25 (FTS5)", "// ─── TF-IDF"),
+      needles: [
+        "const rawFtsHits = ctx.ftsIndex.searchWithReceipts(args.query, { limit: fanOutK, folder: args.folder });",
+        "const ftsHits = await filterLiveVaultHits(",
+        "(hit) => hit,",
+        "currentSourceReceiptMask(receipts)",
+        "indexed_mtime_ms: h.indexed_mtime_ms,",
+        "indexed_revision: h.indexed_revision"
+      ]
+    },
+    {
+      label: "hybrid embeddings receipt propagation",
+      body: region("// ─── ML embeddings (if .embed.db exists)", "// ─── RRF fusion"),
+      needles: [
+        "const receipt = embedHitReceipts.get(m);",
+        'throw new Error("Embedding hit lost its internal source-generation receipt");',
+        "indexed_mtime_ms: receipt.indexed_mtime_ms,",
+        "indexed_revision: receipt.indexed_revision"
+      ]
+    },
+    {
+      label: "hybrid final receipt association and atomic masks",
+      body: region("async function filterCurrentHybridHits(", "/**\n * Hybrid retrieval"),
+      needles: [
+        "ftsIndex: FtsIndex | null,",
+        "embedReceiptReader: EmbedReceiptReader | null",
+        "receipts?.bm25 === undefined ||",
+        "receipts.bm25.rel_path !== hit.path ||",
+        "receipts.bm25.kind !== hit.kind ||",
+        "!Number.isFinite(receipts.bm25.indexed_mtime_ms) ||",
+        "!Number.isSafeInteger(receipts.bm25.indexed_revision)",
+        "hit.per_signal.embeddings &&",
+        "receipts?.embeddings === undefined ||",
+        "receipts.embeddings.rel_path !== hit.path ||",
+        "receipts.embeddings.kind !== hit.kind ||",
+        "!Number.isFinite(receipts.embeddings.indexed_mtime_ms) ||",
+        "!Number.isSafeInteger(receipts.embeddings.indexed_revision)",
+        "live.mtimeMs !== receipt.indexed_mtime_ms",
+        "ftsIndex.currentSourceReceiptMask(ftsEntries.map((e) => e.receipt))",
+        "embedReceiptReader.currentSourceReceiptMask(embedEntries.map((e) => e.receipt))",
+        "if (ftsMask[index] !== true) stale.add(hit);",
+        "if (embedMask[index] !== true) stale.add(hit);",
+        "return liveHits.filter((hit) => !stale.has(hit));"
+      ]
+    },
+    {
+      label: "hybrid read-only embed receipt reader",
+      body: region("async function openHybridEmbedReceiptReader(", "/**\n * Envelope returned by"),
+      needles: [
+        "hybridHitGenerationReceipts.get(hit)?.embeddings !== undefined",
+        'await import("../embed-db.js")',
+        "return await openEmbedReceiptReader(embedFile, vault.root);"
+      ]
+    },
+    {
+      label: "single hybrid terminal generation admission",
+      body: region("export async function searchHybrid(", "export async function searchHybridMulti("),
+      needles: [
+        "indexed_mtime_ms: bm.indexed_mtime_ms,",
+        "indexed_revision: bm.indexed_revision",
+        "indexed_mtime_ms: emb.indexed_mtime_ms,",
+        "indexed_revision: emb.indexed_revision",
+        "hybridHitGenerationReceipts.set(hit, generationReceipts);",
+        "const embedReceiptReader = await openHybridEmbedReceiptReader(vault, ctx.embedFile, matches);",
+        "currentMatches = await filterCurrentHybridHits(vault, matches, ctx.ftsIndex, embedReceiptReader);",
+        "embedReceiptReader?.close();",
+        "if (match.explain) match.explain.final_rank = finalRank;",
+        "matches: currentMatches"
+      ]
+    },
+    {
+      label: "multi hybrid terminal generation admission",
+      body: region("export async function searchHybridMulti(", "/**\n * Build a fixed-width snippet"),
+      needles: [
+        "hybridHitGenerationReceipts.set(cloned, receipts);",
+        "const embedReceiptReader = await openHybridEmbedReceiptReader(vault, ctx.embedFile, matches);",
+        "currentMatches = await filterCurrentHybridHits(vault, matches, ctx.ftsIndex, embedReceiptReader);",
+        "embedReceiptReader?.close();",
+        "matches: currentMatches"
+      ]
+    }
+  ];
+  const violations = checks.flatMap(({ label, body, needles }) => {
+    if (!body) return [`${label}: route region missing`];
+    return needles.filter((needle) => !body.includes(needle)).map((needle) => `${label}: missing ${needle}`);
+  });
+
+  for (const { label, body, needles } of [
+    {
+      label: "standalone embeddings plus current DB hydration",
+      body: region("export async function embeddingsSearch(", "// ─── obsidian_search"),
+      needles: ["hnswResultsToHits({ labels, distances }", "rawHits = db.search("]
+    },
+    {
+      label: "diagnostic FTS",
+      body: region("export async function searchLiveFts(", "export async function readLiveFtsChunk("),
+      needles: ["const rawMatches = idx.search("]
+    },
+    {
+      label: "chunk resource",
+      body: region("export async function readLiveFtsChunk(", "/** v3.10 (rc.10)"),
+      needles: ["const chunk = idx.getChunk("]
+    },
+    {
+      label: "hybrid BM25 arm",
+      body: region("// ─── BM25 (FTS5)", "// ─── TF-IDF"),
+      needles: ["const rawFtsHits = ctx.ftsIndex.search("]
+    }
+  ]) {
+    for (const needle of needles) {
+      if (body.includes(needle)) violations.push(`${label}: forbidden legacy receipt egress via ${needle}`);
+    }
+  }
+
+  const sharedFilter = region("export async function filterLiveVaultHits", "/**\n * Query the persistent FTS index");
+  const sharedStats = sharedFilter.indexOf("const batchVerdicts = await Promise.all(");
+  const sharedMask = sharedFilter.indexOf("const mask = currentReceiptMask(", sharedStats);
+  const sharedMaskUse = sharedFilter.indexOf("mask[index] === true", sharedMask);
+  const sharedReturn = sharedFilter.indexOf("return admitted.filter(", sharedMask);
+  if (!(sharedStats >= 0 && sharedMask > sharedStats && sharedMaskUse > sharedMask && sharedReturn > sharedMask)) {
+    violations.push("shared persisted-hit admission: terminal order broken");
+  } else if (sharedFilter.slice(sharedMask, sharedReturn).includes("await ")) {
+    violations.push("shared persisted-hit admission: await after receipt mask");
+  }
+
+  const finalFilter = region("async function filterCurrentHybridHits(", "/**\n * Hybrid retrieval");
+  const liveStats = finalFilter.indexOf("const admitted = await Promise.all(");
+  const ftsMask = finalFilter.indexOf("ftsIndex.currentSourceReceiptMask(", liveStats);
+  const embedMask = finalFilter.indexOf("embedReceiptReader.currentSourceReceiptMask(", liveStats);
+  const finalReturn = finalFilter.indexOf("return liveHits.filter((hit) => !stale.has(hit));", liveStats);
+  if (
+    !(
+      liveStats >= 0 &&
+      ftsMask > liveStats &&
+      embedMask > liveStats &&
+      finalReturn > ftsMask &&
+      finalReturn > embedMask
+    )
+  ) {
+    violations.push("hybrid final receipt association and atomic masks: terminal order broken");
+  } else if (finalFilter.slice(Math.min(ftsMask, embedMask), finalReturn).includes("await ")) {
+    violations.push("hybrid final receipt association and atomic masks: await after receipt mask");
+  }
+
+  for (const [label, body, publicReturn] of [
+    [
+      "single hybrid terminal generation admission",
+      region("export async function searchHybrid(", "export async function searchHybridMulti("),
+      "return response;"
+    ],
+    [
+      "multi hybrid terminal generation admission",
+      region("export async function searchHybridMulti(", "/**\n * Build a fixed-width snippet"),
+      "return {"
+    ]
+  ] as const) {
+    const readerOpen = body.indexOf("const embedReceiptReader = await openHybridEmbedReceiptReader(");
+    const terminal = body.indexOf(
+      "currentMatches = await filterCurrentHybridHits(vault, matches, ctx.ftsIndex, embedReceiptReader);",
+      readerOpen
+    );
+    const close = body.indexOf("embedReceiptReader?.close();", terminal);
+    const returned = body.indexOf(publicReturn, close);
+    if (!(readerOpen >= 0 && terminal > readerOpen && close > terminal && returned > close)) {
+      violations.push(`${label}: reader/filter/close/return order broken`);
+    } else if (body.slice(close, returned).includes("await ")) {
+      violations.push(`${label}: await after terminal receipt validation`);
+    }
+  }
+  return violations;
+}
+
+/** Public result construction must strip both halves of the internal receipt. */
+function publicReceiptLeakViolations(search: string, registry: string): string[] {
+  const slice = (text: string, start: string, end: string): string => {
+    const from = text.indexOf(start);
+    const to = text.indexOf(end, from + start.length);
+    return from >= 0 && to > from ? text.slice(from, to) : "";
+  };
+  const sections = [
+    {
+      label: "diagnostic FTS helper",
+      body: slice(search, "return admittedMatches.map((match) => ({", "  }));\n}\n\n/**\n * Read one stored FTS chunk")
+    },
+    {
+      label: "diagnostic FTS map",
+      body: slice(registry, "const matches = admittedMatches.map((match) => ({", "      }));")
+    },
+    {
+      label: "standalone embedding match",
+      body: slice(search, "const match: EmbedHit = {", "      };")
+    },
+    {
+      label: "hybrid public hit",
+      body: slice(search, "const hit: SearchHybridHit = {", "    };")
+    },
+    {
+      label: "chunk public payload",
+      body: slice(search, "return {\n    rel_path: relPath,", "  };\n}\n\n/** v3.10 (rc.10)")
+    }
+  ];
+  return sections.flatMap(({ label, body }) => {
+    if (!body) return [`${label}: result-construction region missing`];
+    const leaked = ["indexed_mtime_ms", "indexed_revision"].filter((field) => body.includes(field));
+    return leaked.map((field) => `${label}: leaked ${field}`);
+  });
+}
+
 describe("enforcement-guarantee → code-guard invariant (rc.3, overclaim #15/#16 class)", () => {
   it("every curated SECURITY.md guarantee still maps to a present code guard", () => {
     const security = readFileSync(path.join(repoRoot, "SECURITY.md"), "utf8");
@@ -101,25 +362,64 @@ describe("enforcement-guarantee → code-guard invariant (rc.3, overclaim #15/#1
     const offenders = GUARANTEES.map((g) => checkGuarantee(g, security, src)).filter(Boolean) as string[];
     expect(offenders, offenders.join("\n")).toEqual([]);
     const registry = readFileSync(path.join(repoRoot, "src/tool-registry.ts"), "utf8");
+    const hnsw = readFileSync(path.join(repoRoot, "src/hnsw.ts"), "utf8");
     const search = readFileSync(path.join(repoRoot, "src/tools/search.ts"), "utf8");
     const vault = readFileSync(path.join(repoRoot, "src/vault.ts"), "utf8");
-    expect(registry).toContain("const matches = await searchLiveFts(vault, idx, {");
+    expect(registry).toContain("const admittedMatches = await searchLiveFts(vault, idx, {");
+    expect(registry).toContain("const matches = admittedMatches.map((match) => ({");
+    expect(registry).not.toContain("matches: admittedMatches");
+    const diagnosticMapStart = registry.indexOf("const matches = admittedMatches.map((match) => ({");
+    const diagnosticMapEnd = registry.indexOf("      }));", diagnosticMapStart);
+    expect(diagnosticMapStart).toBeGreaterThanOrEqual(0);
+    expect(diagnosticMapEnd).toBeGreaterThan(diagnosticMapStart);
+    const diagnosticMap = registry.slice(diagnosticMapStart, diagnosticMapEnd);
+    expect(diagnosticMap).not.toContain("...match");
+    expect(diagnosticMap).not.toContain("indexed_mtime_ms");
+    expect(diagnosticMap).not.toContain("indexed_revision");
     expect(registry).toContain("const payload = await readLiveFtsChunk(vault, idx, decoded, chunkIndex);");
     expect(search).toContain("const hits = await filterLiveVaultHits(");
     expect(search).toContain("const ftsHits = await filterLiveVaultHits(");
-    expect(search).toContain("fused = await filterLiveVaultHits(");
+    expect(search).toContain("const hydratedRows = db.getSearchRowsByIds(labels);");
+    expect(persistedEgressGuardViolations(search)).toEqual([]);
+    expect(publicReceiptLeakViolations(search, registry)).toEqual([]);
+    expect(hnsw).toContain('rowByLabel: ReadonlyMap<number, Omit<EmbedReceiptSearchHit, "score">>');
+    expect(hnsw).toContain("indexed_mtime_ms: row.indexed_mtime_ms,");
+    expect(hnsw).toContain("indexed_revision: row.indexed_revision");
+    const embeddingsCore = search.indexOf("export async function embeddingsSearch(");
+    const hnswHydration = search.indexOf("const hydratedRows = db.getSearchRowsByIds(labels);", embeddingsCore);
+    const hnswConversion = search.indexOf(
+      "let h = hnswResultsToReceiptHits({ labels, distances }, hydratedRows);",
+      hnswHydration
+    );
+    const embedTerminalMask = search.indexOf("(receipts) => db.currentSourceReceiptMask(receipts)", hnswConversion);
+    expect(embeddingsCore).toBeGreaterThanOrEqual(0);
+    expect(hnswHydration).toBeGreaterThan(embeddingsCore);
+    expect(hnswConversion).toBeGreaterThan(hnswHydration);
+    expect(embedTerminalMask).toBeGreaterThan(hnswConversion);
     const ftsCore = search.indexOf("export async function searchLiveFts(");
-    const ftsQuery = search.indexOf("const rawMatches = idx.search(", ftsCore);
-    const ftsAdmission = search.indexOf("return filterLiveVaultHits(", ftsQuery);
+    const ftsQuery = search.indexOf("const rawMatches = idx.searchWithReceipts(", ftsCore);
+    const ftsAdmission = search.indexOf("const admittedMatches = await filterLiveVaultHits(", ftsQuery);
+    const ftsReceipt = search.indexOf("(match) => match,", ftsAdmission);
+    const ftsTerminalMask = search.indexOf("(receipts) => idx.currentSourceReceiptMask(receipts)", ftsReceipt);
+    const ftsPublicMap = search.indexOf("return admittedMatches.map((match) => ({", ftsTerminalMask);
     expect(ftsCore).toBeGreaterThanOrEqual(0);
     expect(ftsQuery).toBeGreaterThan(ftsCore);
     expect(ftsAdmission).toBeGreaterThan(ftsQuery);
+    expect(ftsReceipt).toBeGreaterThan(ftsAdmission);
+    expect(ftsTerminalMask).toBeGreaterThan(ftsReceipt);
+    expect(ftsPublicMap).toBeGreaterThan(ftsTerminalMask);
     const chunkCore = search.indexOf("export async function readLiveFtsChunk(");
-    const chunkAdmission = search.indexOf("const stat = await vault.stat(relPath);", chunkCore);
-    const chunkRead = search.indexOf("const chunk = idx.getChunk(relPath, chunkIndex);", chunkAdmission);
+    const chunkRead = search.indexOf("const chunk = idx.getChunkWithReceipt(relPath, chunkIndex);", chunkCore);
+    const chunkAdmission = search.indexOf("const stat = await vault.stat(relPath);", chunkRead);
+    const chunkReceipt = search.indexOf("stat.mtimeMs !== chunk.indexed_mtime_ms", chunkAdmission);
+    const chunkRevision = search.indexOf("!idx.isCurrentSourceReceipt(", chunkReceipt);
+    const chunkReturn = search.indexOf("return {", chunkRevision);
     expect(chunkCore).toBeGreaterThanOrEqual(0);
-    expect(chunkAdmission).toBeGreaterThan(chunkCore);
-    expect(chunkRead).toBeGreaterThan(chunkAdmission);
+    expect(chunkRead).toBeGreaterThan(chunkCore);
+    expect(chunkAdmission).toBeGreaterThan(chunkRead);
+    expect(chunkReceipt).toBeGreaterThan(chunkAdmission);
+    expect(chunkRevision).toBeGreaterThan(chunkReceipt);
+    expect(chunkReturn).toBeGreaterThan(chunkRevision);
     expect(vault).toContain('assertMutationPathPublic(abs, "write", "destination")');
     expect(vault).toContain('assertMutationPathPublic(fromAbs, "rename", "source")');
     expect(vault).toContain('assertMutationPathPublic(toAbs, "rename", "destination")');
@@ -163,13 +463,171 @@ describe("enforcement-guarantee → code-guard invariant (rc.3, overclaim #15/#1
 
   // NEGATIVE control: a guarantee whose guard symbol is absent from src MUST be
   // flagged — otherwise the invariant is vacuous and an unenforced claim slips.
-  it("NEGATIVE control — flags a guarantee whose code guard is missing from src", () => {
+  it("NEGATIVE controls — flag missing guarantee and persisted-route guards", () => {
     const err = checkGuarantee(
       { label: "fake", marker: "resolve outside are rejected", symbol: "__no_such_guard_symbol__" },
       readFileSync(path.join(repoRoot, "SECURITY.md"), "utf8"),
       srcBlob()
     );
     expect(err).toMatch(/MISSING from src/);
+
+    const search = readFileSync(path.join(repoRoot, "src/tools/search.ts"), "utf8");
+    const registry = readFileSync(path.join(repoRoot, "src/tool-registry.ts"), "utf8");
+    const ftsReceipt = "(match) => match,";
+    const ftsMask = "(receipts) => idx.currentSourceReceiptMask(receipts)";
+    expect(search).toContain(ftsReceipt);
+    expect(search).toContain(ftsMask);
+    expect(persistedEgressGuardViolations(search.replace(ftsReceipt, "(match) => undefined,"))).toContain(
+      `diagnostic FTS: missing ${ftsReceipt}`
+    );
+    expect(persistedEgressGuardViolations(search.replace(ftsMask, "() => []"))).toContain(
+      `diagnostic FTS: missing ${ftsMask}`
+    );
+
+    const authoritativeHydration = "let h = hnswResultsToReceiptHits({ labels, distances }, hydratedRows);";
+    expect(search).toContain(authoritativeHydration);
+    const legacyHnswEgress = search.replace(
+      authoritativeHydration,
+      "let h = hnswResultsToHits({ labels, distances }, usableHnsw.rowByLabel);"
+    );
+    expect(persistedEgressGuardViolations(legacyHnswEgress)).toContain(
+      `standalone embeddings plus current DB hydration: missing ${authoritativeHydration}`
+    );
+    expect(persistedEgressGuardViolations(legacyHnswEgress)).toContain(
+      "standalone embeddings plus current DB hydration: forbidden legacy receipt egress via hnswResultsToHits({ labels, distances }"
+    );
+
+    for (const [label, receiptCall, legacyCall, forbiddenCall] of [
+      [
+        "standalone embeddings plus current DB hydration",
+        "rawHits = db.searchWithReceipts(qVec, overFetch, { folder: args.folder, minScore });",
+        "rawHits = db.search(qVec, overFetch, { folder: args.folder, minScore });",
+        "rawHits = db.search("
+      ],
+      [
+        "diagnostic FTS",
+        "const rawMatches = idx.searchWithReceipts(args.query, {",
+        "const rawMatches = idx.search(args.query, {",
+        "const rawMatches = idx.search("
+      ],
+      [
+        "chunk resource",
+        "const chunk = idx.getChunkWithReceipt(relPath, chunkIndex);",
+        "const chunk = idx.getChunk(relPath, chunkIndex);",
+        "const chunk = idx.getChunk("
+      ],
+      [
+        "hybrid BM25 arm",
+        "const rawFtsHits = ctx.ftsIndex.searchWithReceipts(args.query, { limit: fanOutK, folder: args.folder });",
+        "const rawFtsHits = ctx.ftsIndex.search(args.query, { limit: fanOutK, folder: args.folder });",
+        "const rawFtsHits = ctx.ftsIndex.search("
+      ]
+    ] as const) {
+      expect(search).toContain(receiptCall);
+      const legacyRoute = search.replace(receiptCall, legacyCall);
+      expect(persistedEgressGuardViolations(legacyRoute)).toContain(`${label}: missing ${receiptCall}`);
+      expect(persistedEgressGuardViolations(legacyRoute)).toContain(
+        `${label}: forbidden legacy receipt egress via ${forbiddenCall}`
+      );
+    }
+
+    const setRevision = "indexed_revision: h.indexed_revision";
+    expect(search).toContain(setRevision);
+    expect(persistedEgressGuardViolations(search.replace(setRevision, ""))).toContain(
+      `standalone embeddings plus current DB hydration: missing ${setRevision}`
+    );
+    const setReceipt = "embedHitReceipts.set(match, {";
+    expect(search).toContain(setReceipt);
+    expect(persistedEgressGuardViolations(search.replace(setReceipt, "void ({"))).toContain(
+      `standalone embeddings plus current DB hydration: missing ${setReceipt}`
+    );
+    const getReceipt = "const receipt = embedHitReceipts.get(m);";
+    expect(search).toContain(getReceipt);
+    expect(persistedEgressGuardViolations(search.replaceAll(getReceipt, "const receipt = undefined;"))).toContain(
+      `hybrid embeddings receipt propagation: missing ${getReceipt}`
+    );
+
+    const finalEmbedMask = "embedReceiptReader.currentSourceReceiptMask(embedEntries.map((e) => e.receipt))";
+    expect(search).toContain(finalEmbedMask);
+    expect(persistedEgressGuardViolations(search.replace(finalEmbedMask, "[]"))).toContain(
+      `hybrid final receipt association and atomic masks: missing ${finalEmbedMask}`
+    );
+
+    const sharedMaskUse = "mask[index] === true";
+    expect(search).toContain(sharedMaskUse);
+    expect(persistedEgressGuardViolations(search.replace(sharedMaskUse, "true"))).toContain(
+      "shared persisted-hit admission: terminal order broken"
+    );
+
+    const ftsMaskUse = "if (ftsMask[index] !== true) stale.add(hit);";
+    expect(search).toContain(ftsMaskUse);
+    expect(persistedEgressGuardViolations(search.replace(ftsMaskUse, "void ftsMask[index];"))).toContain(
+      `hybrid final receipt association and atomic masks: missing ${ftsMaskUse}`
+    );
+    const embedMaskUse = "if (embedMask[index] !== true) stale.add(hit);";
+    expect(search).toContain(embedMaskUse);
+    expect(persistedEgressGuardViolations(search.replace(embedMaskUse, "void embedMask[index];"))).toContain(
+      `hybrid final receipt association and atomic masks: missing ${embedMaskUse}`
+    );
+
+    const readerOpen = "return await openEmbedReceiptReader(embedFile, vault.root);";
+    expect(search).toContain(readerOpen);
+    expect(persistedEgressGuardViolations(search.replace(readerOpen, "return null;"))).toContain(
+      `hybrid read-only embed receipt reader: missing ${readerOpen}`
+    );
+
+    const chunkValidator = "!idx.isCurrentSourceReceipt(";
+    expect(search).toContain(chunkValidator);
+    expect(persistedEgressGuardViolations(search.replace(chunkValidator, "!true || ("))).toContain(
+      `chunk resource: missing ${chunkValidator}`
+    );
+
+    const copyReceipts = "if (receipts) hybridHitGenerationReceipts.set(cloned, receipts);";
+    expect(search).toContain(copyReceipts);
+    expect(persistedEgressGuardViolations(search.replace(copyReceipts, "if (receipts) void receipts;"))).toContain(
+      `multi hybrid terminal generation admission: missing hybridHitGenerationReceipts.set(cloned, receipts);`
+    );
+
+    const multiStart = search.indexOf("export async function searchHybridMulti(");
+    const terminalGuard =
+      "currentMatches = await filterCurrentHybridHits(vault, matches, ctx.ftsIndex, embedReceiptReader);";
+    const terminal = search.indexOf(terminalGuard, multiStart);
+    expect(multiStart).toBeGreaterThanOrEqual(0);
+    expect(terminal).toBeGreaterThan(multiStart);
+    const withoutMultiTerminal = `${search.slice(0, terminal)}currentMatches = matches;${search.slice(
+      terminal + terminalGuard.length
+    )}`;
+    expect(persistedEgressGuardViolations(withoutMultiTerminal)).toContain(
+      `multi hybrid terminal generation admission: missing ${terminalGuard}`
+    );
+
+    const diagnosticMapStart = registry.indexOf("const matches = admittedMatches.map((match) => ({");
+    const diagnosticMapEnd = registry.indexOf("      }));", diagnosticMapStart);
+    expect(diagnosticMapStart).toBeGreaterThanOrEqual(0);
+    expect(diagnosticMapEnd).toBeGreaterThan(diagnosticMapStart);
+    const diagnosticMap = registry.slice(diagnosticMapStart, diagnosticMapEnd);
+    expect(diagnosticMap).not.toContain("indexed_mtime_ms");
+    expect(diagnosticMap).not.toContain("indexed_revision");
+    const leakedRegistry = registry.replace(
+      "score: match.score,",
+      "score: match.score,\n        indexed_mtime_ms: match.indexed_mtime_ms,\n        indexed_revision: match.indexed_revision,"
+    );
+    expect(publicReceiptLeakViolations(search, leakedRegistry)).toEqual(
+      expect.arrayContaining([
+        "diagnostic FTS map: leaked indexed_mtime_ms",
+        "diagnostic FTS map: leaked indexed_revision"
+      ])
+    );
+    const leakedDiagnosticHelper = search.replace(
+      "    score: match.score,\n    kind: match.kind",
+      "    score: match.score,\n    indexed_mtime_ms: match.indexed_mtime_ms,\n    indexed_revision: match.indexed_revision,\n    kind: match.kind"
+    );
+    expect(publicReceiptLeakViolations(leakedDiagnosticHelper, registry)).toEqual(
+      expect.arrayContaining([
+        "diagnostic FTS helper: leaked indexed_mtime_ms",
+        "diagnostic FTS helper: leaked indexed_revision"
+      ])
+    );
   });
 
   // NEGATIVE control: a guarantee whose SECURITY.md marker is gone MUST be

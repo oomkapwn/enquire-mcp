@@ -8,7 +8,13 @@ import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { decodeInt8Vector, EmbedDb, encodeInt8Vector, peekEmbedDbMeta } from "../src/embed-db.js";
+import {
+  decodeInt8Vector,
+  EmbedDb,
+  encodeInt8Vector,
+  openEmbedReceiptReader,
+  peekEmbedDbMeta
+} from "../src/embed-db.js";
 
 let dir: string;
 
@@ -386,7 +392,377 @@ describe("EmbedDb", () => {
     const after = new Map(db.getSourceStates().map((s) => [s.rel_path, s.mtime_ms]));
     expect(after.get("a.md")).toBe(3000);
     db.close();
+
+    await assertQuarantineRetrievalLifecycle();
+    await assertDeleteAndOrphanHydration();
+    await assertQuarantinePersistenceAndKindScope();
+    await assertLargeHydrationBatching();
+    await assertRevisionMigrationAndReadonlyReader();
   });
+
+  async function assertQuarantineRetrievalLifecycle(): Promise<void> {
+    const file = path.join(dir, "quarantine.embed.db");
+    const db = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
+    await db.open();
+    const stale = db.upsertNote("stale.md", 1000, [
+      { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "stale", vector: l2([1, 0, 0, 0]) }
+    ]);
+    db.upsertNote("healthy.md", 1500, [
+      { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "healthy", vector: l2([0, 1, 0, 0]) }
+    ]);
+    const legacyHits = db.search(l2([1, 0, 0, 0]), 10);
+    const receiptHits = db.searchWithReceipts(l2([1, 0, 0, 0]), 10);
+    const legacyHit = legacyHits[0];
+    const receiptHit = receiptHits[0];
+    if (!legacyHit || !receiptHit) throw new Error("expected compatibility search hits");
+    expect(legacyHits).toEqual(
+      receiptHits.map((hit) => ({
+        rel_path: hit.rel_path,
+        chunk_index: hit.chunk_index,
+        line_start: hit.line_start,
+        line_end: hit.line_end,
+        text_preview: hit.text_preview,
+        score: hit.score,
+        kind: hit.kind
+      }))
+    );
+    expect(Object.keys(legacyHit).sort()).toEqual(
+      ["chunk_index", "kind", "line_end", "line_start", "rel_path", "score", "text_preview"].sort()
+    );
+    expect(legacyHit).not.toHaveProperty("indexed_mtime_ms");
+    expect(legacyHit).not.toHaveProperty("indexed_revision");
+    expect(Object.keys(receiptHit).sort()).toEqual(
+      [
+        "chunk_index",
+        "indexed_mtime_ms",
+        "indexed_revision",
+        "kind",
+        "line_end",
+        "line_start",
+        "rel_path",
+        "score",
+        "text_preview"
+      ].sort()
+    );
+    expect(receiptHit).toEqual(
+      expect.objectContaining({ indexed_mtime_ms: expect.any(Number), indexed_revision: expect.any(Number) })
+    );
+    const legacyVectorRows = db.getAllVectors();
+    const legacyVectorRow = legacyVectorRows[0];
+    if (!legacyVectorRow) throw new Error("expected compatibility vector row");
+    expect(Object.keys(legacyVectorRow).sort()).toEqual(
+      ["chunk_index", "kind", "label", "line_end", "line_start", "rel_path", "text_preview", "vector"].sort()
+    );
+    expect(legacyVectorRow).not.toHaveProperty("indexed_mtime_ms");
+    expect(legacyVectorRow).not.toHaveProperty("indexed_revision");
+    const initialHits = new Map(receiptHits.map((hit) => [hit.rel_path, hit]));
+    const staleReceipt = initialHits.get("stale.md");
+    const healthyReceipt = initialHits.get("healthy.md");
+    if (!staleReceipt || !healthyReceipt) throw new Error("expected initial receipt-bound hits");
+    expect(
+      db.isCurrentSourceReceipt(
+        staleReceipt.rel_path,
+        staleReceipt.kind,
+        staleReceipt.indexed_mtime_ms,
+        staleReceipt.indexed_revision
+      )
+    ).toBe(true);
+    expect(
+      db.isCurrentSourceReceipt(
+        healthyReceipt.rel_path,
+        healthyReceipt.kind,
+        healthyReceipt.indexed_mtime_ms,
+        healthyReceipt.indexed_revision
+      )
+    ).toBe(true);
+
+    const sameMtime = db.upsertNote("stale.md", 1000, [
+      { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "same-mtime fresh", vector: l2([1, 0, 0, 0]) }
+    ]);
+    const sameMtimeHit = db.getSearchRowsByIds(sameMtime.newIds).get(sameMtime.newIds[0] ?? -1);
+    if (!sameMtimeHit) throw new Error("expected same-mtime replacement hit");
+    expect(sameMtimeHit.indexed_revision).toBeGreaterThan(staleReceipt.indexed_revision);
+    expect(
+      db.isCurrentSourceReceipt(
+        staleReceipt.rel_path,
+        staleReceipt.kind,
+        staleReceipt.indexed_mtime_ms,
+        staleReceipt.indexed_revision
+      )
+    ).toBe(false);
+    expect(
+      db.isCurrentSourceReceipt(
+        sameMtimeHit.rel_path,
+        sameMtimeHit.kind,
+        sameMtimeHit.indexed_mtime_ms,
+        sameMtimeHit.indexed_revision
+      )
+    ).toBe(true);
+    expect(
+      db.isCurrentSourceReceipt(
+        healthyReceipt.rel_path,
+        healthyReceipt.kind,
+        healthyReceipt.indexed_mtime_ms,
+        healthyReceipt.indexed_revision
+      )
+    ).toBe(true);
+    const signatureBefore = db.computeSignature();
+    expect(signatureBefore).not.toContain(";quarantine=");
+
+    db.quarantineSource("stale.md", "md");
+
+    expect(db.getQuarantinedPaths()).toEqual(["stale.md"]);
+    expect(db.getQuarantinedPaths("pdf")).toEqual([]);
+    expect(db.search(l2([1, 0, 0, 0]), 10).map((hit) => hit.rel_path)).toEqual(["healthy.md"]);
+    expect(db.getAllVectors().map((row) => row.rel_path)).toEqual(["healthy.md"]);
+    expect(db.getSearchRowsByIds(sameMtime.newIds).size).toBe(0);
+    expect(
+      db.isCurrentSourceReceipt(
+        sameMtimeHit.rel_path,
+        sameMtimeHit.kind,
+        sameMtimeHit.indexed_mtime_ms,
+        sameMtimeHit.indexed_revision
+      )
+    ).toBe(false);
+    expect(db.getSearchRowsByIds(stale.newIds).size).toBe(0);
+    expect(db.computeSignature()).not.toBe(signatureBefore);
+    expect(db.computeSignature()).toContain(";quarantine=");
+
+    const refreshed = db.upsertNote("stale.md", 2000, [
+      { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "fresh", vector: l2([1, 0, 0, 0]) }
+    ]);
+    const hit = db.searchWithReceipts(l2([1, 0, 0, 0]), 1)[0];
+    if (!hit) throw new Error("expected refreshed receipt-bearing search hit");
+    expect(hit).toEqual(
+      expect.objectContaining({ rel_path: "stale.md", indexed_mtime_ms: 2000, indexed_revision: expect.any(Number) })
+    );
+    const refreshedLegacyVectorRow = db.getAllVectors().find((row) => row.rel_path === "stale.md");
+    if (!refreshedLegacyVectorRow) throw new Error("expected refreshed legacy vector row");
+    expect(refreshedLegacyVectorRow).toEqual(expect.objectContaining({ rel_path: "stale.md" }));
+    expect(refreshedLegacyVectorRow).not.toHaveProperty("indexed_mtime_ms");
+    expect(refreshedLegacyVectorRow).not.toHaveProperty("indexed_revision");
+    const hydrated = db.getSearchRowsByIds(refreshed.newIds).get(refreshed.newIds[0] ?? -1);
+    if (!hydrated) throw new Error("expected receipt-bearing hydrated row");
+    expect(hydrated).toEqual(
+      expect.objectContaining({
+        rel_path: "stale.md",
+        indexed_mtime_ms: 2000,
+        indexed_revision: hit.indexed_revision
+      })
+    );
+    expect(Object.keys(hydrated).sort()).toEqual(
+      [
+        "chunk_index",
+        "indexed_mtime_ms",
+        "indexed_revision",
+        "kind",
+        "line_end",
+        "line_start",
+        "rel_path",
+        "text_preview"
+      ].sort()
+    );
+    expect(hydrated).not.toHaveProperty("score");
+    expect(db.getQuarantinedPaths()).toEqual([]);
+    expect(db.computeSignature()).not.toContain(";quarantine=");
+    db.close();
+  }
+
+  async function assertDeleteAndOrphanHydration(): Promise<void> {
+    const file = path.join(dir, "current-row.embed.db");
+    const db = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
+    await db.open();
+    const inserted = db.upsertNote("orphan.md", 1000, [
+      { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "orphan", vector: l2([1, 0, 0, 0]) }
+    ]);
+    const abaInsert = db.upsertNote("aba.md", 1000, [
+      { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "before delete", vector: l2([0, 1, 0, 0]) }
+    ]);
+    const abaBefore = db.getSearchRowsByIds(abaInsert.newIds).get(abaInsert.newIds[0] ?? -1);
+    if (!abaBefore) throw new Error("expected pre-delete ABA hit");
+    db.deleteNote("aba.md");
+    expect(
+      db.isCurrentSourceReceipt(
+        abaBefore.rel_path,
+        abaBefore.kind,
+        abaBefore.indexed_mtime_ms,
+        abaBefore.indexed_revision
+      )
+    ).toBe(false);
+    const abaReinsert = db.upsertNote("aba.md", 1000, [
+      { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "after re-add", vector: l2([0, 1, 0, 0]) }
+    ]);
+    const abaAfter = db.getSearchRowsByIds(abaReinsert.newIds).get(abaReinsert.newIds[0] ?? -1);
+    if (!abaAfter) throw new Error("expected re-added ABA hit");
+    expect(abaAfter.indexed_revision).toBeGreaterThan(abaBefore.indexed_revision);
+    expect(
+      db.isCurrentSourceReceipt(abaAfter.rel_path, abaAfter.kind, abaAfter.indexed_mtime_ms, abaAfter.indexed_revision)
+    ).toBe(true);
+    db.deleteNote("aba.md");
+    db.quarantineSource("removed.md", "md");
+    db.deleteNote("removed.md");
+    expect(db.getQuarantinedPaths()).toEqual([]);
+    db.close();
+
+    const Database = (await import("better-sqlite3")).default;
+    const raw = new Database(file);
+    raw.prepare("DELETE FROM source_state WHERE rel_path = ?").run("orphan.md");
+    raw.close();
+
+    const reopened = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
+    await reopened.open();
+    expect(reopened.search(l2([1, 0, 0, 0]), 10)).toEqual([]);
+    expect(reopened.getAllVectors()).toEqual([]);
+    expect(reopened.getSearchRowsByIds(inserted.newIds).size).toBe(0);
+    reopened.quarantineSource("orphan.md", "md");
+    reopened.deleteNote("orphan.md");
+    expect(reopened.getQuarantinedPaths()).toEqual([]);
+    reopened.close();
+  }
+
+  async function assertQuarantinePersistenceAndKindScope(): Promise<void> {
+    const file = path.join(dir, "quarantine-persistence.embed.db");
+    const db = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
+    await db.open();
+    db.quarantineSource("note.md", "md");
+    db.quarantineSource("paper.pdf", "pdf");
+    db.close();
+
+    const reopened = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
+    await reopened.open();
+    expect(reopened.getQuarantinedPaths("md")).toEqual(["note.md"]);
+    expect(reopened.getQuarantinedPaths("pdf")).toEqual(["paper.pdf"]);
+    expect(reopened.auditKind("md").mismatched_files).toBe(1);
+    reopened.close();
+  }
+
+  async function assertLargeHydrationBatching(): Promise<void> {
+    const db = new EmbedDb({
+      file: path.join(dir, "hydrate-batches.embed.db"),
+      vaultRoot: "/v",
+      modelAlias: "multilingual",
+      dim: 4
+    });
+    await db.open();
+    const inserted = db.upsertNote("one.md", 1234, [
+      { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "one", vector: l2([1, 0, 0, 0]) }
+    ]);
+    const label = inserted.newIds[0];
+    if (label === undefined) throw new Error("expected inserted label");
+
+    // Put the only current row strictly after two complete 500-id batches.
+    // Repeating both an absent id and the live id also proves de-duplication
+    // without letting a first-batch-only mutant accidentally pass.
+    const ids = Array.from({ length: 1_005 }, (_, index) => label + 10_000 + index);
+    const firstAbsent = ids[0];
+    if (firstAbsent === undefined) throw new Error("expected absent hydration label");
+    ids.push(firstAbsent, label, label);
+    const hydrated = db.getSearchRowsByIds(ids);
+
+    expect(hydrated.size).toBe(1);
+    expect(hydrated.get(label)).toEqual(
+      expect.objectContaining({ rel_path: "one.md", indexed_mtime_ms: 1234, indexed_revision: expect.any(Number) })
+    );
+    db.close();
+  }
+
+  async function assertRevisionMigrationAndReadonlyReader(): Promise<void> {
+    const file = path.join(dir, "receipt-reader.embed.db");
+    const db = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
+    await db.open();
+    try {
+      db.upsertNote("legacy.md", 1000, [
+        { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "legacy", vector: l2([1, 0, 0, 0]) }
+      ]);
+      db.upsertNote("sibling.md", 1000, [
+        { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "sibling", vector: l2([0, 1, 0, 0]) }
+      ]);
+    } finally {
+      db.close();
+    }
+
+    const Database = (await import("better-sqlite3")).default;
+    const legacy = new Database(file);
+    legacy.exec(`
+      DROP TRIGGER IF EXISTS embed_source_state_revision_insert;
+      DROP TRIGGER IF EXISTS embed_source_state_revision_update;
+      DROP TRIGGER IF EXISTS embed_source_state_revision_delete;
+      DROP TRIGGER IF EXISTS embed_source_quarantine_revision_insert;
+      DROP TRIGGER IF EXISTS embed_source_quarantine_revision_update;
+      DROP TRIGGER IF EXISTS embed_source_quarantine_revision_delete;
+      DROP TABLE source_revision;
+    `);
+    legacy.close();
+
+    await expect(openEmbedReceiptReader(file, "/v")).rejects.toThrow(/compatible index/);
+
+    const migrated = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
+    await migrated.open();
+    let oldLegacy: ReturnType<EmbedDb["searchWithReceipts"]>[number] | undefined;
+    let sibling: ReturnType<EmbedDb["searchWithReceipts"]>[number] | undefined;
+    try {
+      const migratedHits = new Map(migrated.searchWithReceipts(l2([1, 0, 0, 0]), 10).map((hit) => [hit.rel_path, hit]));
+      oldLegacy = migratedHits.get("legacy.md");
+      sibling = migratedHits.get("sibling.md");
+      if (!oldLegacy || !sibling) throw new Error("expected backfilled legacy receipts");
+      expect(oldLegacy.indexed_revision).toBe(1);
+      expect(migrated.currentSourceReceiptMask([oldLegacy, sibling])).toEqual([true, true]);
+
+      const reader = await openEmbedReceiptReader(file, "/v");
+      try {
+        expect(reader.currentSourceReceiptMask([oldLegacy, sibling])).toEqual([true, true]);
+        migrated.upsertNote("legacy.md", 1000, [
+          {
+            chunkIndex: 0,
+            lineStart: 1,
+            lineEnd: 1,
+            textPreview: "same-mtime replacement",
+            vector: l2([1, 0, 0, 0])
+          }
+        ]);
+        const newLegacy = migrated.searchWithReceipts(l2([1, 0, 0, 0]), 10).find((hit) => hit.rel_path === "legacy.md");
+        if (!newLegacy) throw new Error("expected replacement receipt");
+        expect(reader.currentSourceReceiptMask([oldLegacy, sibling, newLegacy])).toEqual([false, true, true]);
+        expect(newLegacy.indexed_revision).toBeGreaterThan(oldLegacy.indexed_revision);
+        expect(reader.isCurrentSourceReceipt("legacy.md", "md", Number.NaN, newLegacy.indexed_revision)).toBe(false);
+        expect(reader.isCurrentSourceReceipt("legacy.md", "md", 1000, 0)).toBe(false);
+        await expect(openEmbedReceiptReader(file, "/foreign-vault")).rejects.toThrow(/expected vault/);
+        reader.close();
+        expect(reader.currentSourceReceiptMask([newLegacy])).toEqual([false]);
+      } finally {
+        reader.close();
+      }
+    } finally {
+      migrated.close();
+    }
+
+    const tampered = new Database(file);
+    tampered.exec(`
+      DROP TRIGGER embed_source_state_revision_insert;
+      CREATE TRIGGER embed_source_state_revision_insert
+      AFTER INSERT ON source_state
+      BEGIN
+        SELECT 1;
+      END;
+    `);
+    tampered.close();
+    await expect(openEmbedReceiptReader(file, "/v")).rejects.toThrow(/compatible index/);
+
+    const repaired = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
+    await repaired.open();
+    try {
+      const repairedReader = await openEmbedReceiptReader(file, "/v");
+      try {
+        const current = repaired.searchWithReceipts(l2([1, 0, 0, 0]), 10).find((hit) => hit.rel_path === "legacy.md");
+        if (!oldLegacy || !sibling || !current) throw new Error("expected receipt after canonical trigger repair");
+        expect(repairedReader.currentSourceReceiptMask([oldLegacy, sibling, current])).toEqual([false, true, true]);
+      } finally {
+        repairedReader.close();
+      }
+    } finally {
+      repaired.close();
+    }
+  }
 
   // v2.8.0 — PDF chunks indexed via the kind column.
   it("upserts with kind='pdf' and search returns kind='pdf'", async () => {

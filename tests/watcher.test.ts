@@ -723,7 +723,7 @@ describe("VaultWatcher with FTS5 index (v3.6 — reindex branches)", () => {
   // S-8d — embedding is preparation for a cross-index generation, not a
   // post-FTS best-effort tail. If preparation rejects, the event stays
   // fail-soft (log + return) but neither FTS5 nor EmbedDb may publish it.
-  it("attachEmbed: embed preparation failure is logged and no configured sink publishes it — NEGATIVE control", async () => {
+  it("attachEmbed failures quarantine exact generations, heal on restart, and preserve alias convergence", async () => {
     const { EmbedDb } = await import("../src/embed-db.js");
     const v = new Vault(root);
     await v.ensureExists();
@@ -776,9 +776,9 @@ describe("VaultWatcher with FTS5 index (v3.6 — reindex branches)", () => {
       await handle(filePath, "add");
 
       expect(embedCalls).toBe(1);
-      expect(captured.some((s) => s.includes("embed-db sync failed") && s.includes("synthetic embed failure"))).toBe(
-        true
-      );
+      expect(
+        captured.some((s) => s.includes("markdown preparation failed") && s.includes("synthetic embed failure"))
+      ).toBe(true);
       expect(fts.totalFiles()).toBe(0);
       expect(embedDb.totalChunks()).toBe(0);
       expect(w.searchHealth.semanticUsable).toBe(true);
@@ -814,7 +814,362 @@ describe("VaultWatcher with FTS5 index (v3.6 — reindex branches)", () => {
       embedDb.close();
       fts.close();
     }
+
+    await assertEqualMtimePreparationQuarantine();
+    await assertRestartQuarantineHealing();
+    await assertHardlinkPreparationFailureContinues();
+    await assertHardlinkCommitFailureContinues();
+    await assertHardlinkControlConverges();
   });
+
+  async function assertEqualMtimePreparationQuarantine(): Promise<void> {
+    const { EmbedDb } = await import("../src/embed-db.js");
+    const scenarioRoot = path.join(root, "equal-mtime-preparation");
+    await fs.mkdir(scenarioRoot, { recursive: true });
+    const v = new Vault(scenarioRoot);
+    await v.ensureExists();
+    const relPath = "equal-mtime-failure.md";
+    const absPath = v.resolveInside(relPath);
+    await fs.writeFile(absPath, "old_watcher_secret\n");
+    const pinnedTime = new Date(Math.floor(Date.now() / 1000) * 1000);
+    await fs.utimes(absPath, pinnedTime, pinnedTime);
+    const indexedMtimeMs = (await fs.stat(absPath)).mtimeMs;
+
+    const fts = new FtsIndex({
+      file: path.join(scenarioRoot, ".cache", "equal-mtime.fts5.db"),
+      vaultRoot: scenarioRoot
+    });
+    await fts.open();
+    fts.reindexFile(relPath, indexedMtimeMs, "old_watcher_secret", [], []);
+    const embedDb = new EmbedDb({
+      file: path.join(scenarioRoot, ".cache", "equal-mtime.embed.db"),
+      vaultRoot: scenarioRoot,
+      modelAlias: "throwing-mock",
+      dim: 4,
+      quantization: "f32"
+    });
+    await embedDb.open();
+    const vector = new Float32Array([1, 0, 0, 0]);
+    embedDb.upsertNote(relPath, indexedMtimeMs, [
+      { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "old_watcher_secret", vector }
+    ]);
+    const neverReachedEmbedder = {
+      model: { alias: "throwing-mock", hfId: "mock", dim: 4, multilingual: false, maxTokens: 128 },
+      async embed(_texts: readonly string[]): Promise<Float32Array[]> {
+        throw new Error("embedder must not run after the injected source-read failure");
+      }
+    };
+    const w = new VaultWatcher({ vault: v, ftsIndex: fts, silent: true });
+    w.attachEmbed(embedDb, neverReachedEmbedder, 0);
+
+    try {
+      // Positive control: both retained stores return the matching committed
+      // generation before the watcher observes a failed replacement.
+      expect(fts.search("old_watcher_secret", { limit: 5 })).toHaveLength(1);
+      expect(embedDb.search(vector, 5)).toHaveLength(1);
+
+      await fs.writeFile(absPath, "new generation with the same mtime\n");
+      await fs.utimes(absPath, new Date(indexedMtimeMs), new Date(indexedMtimeMs));
+      expect((await fs.stat(absPath)).mtimeMs).toBe(indexedMtimeMs);
+      const originalReadNote = v.readNote;
+      v.readNote = async () => {
+        throw new Error("synthetic equal-mtime source-read failure");
+      };
+      try {
+        await (
+          w as unknown as {
+            handle(absPath: string, kind: "add" | "change" | "unlink"): Promise<void>;
+          }
+        ).handle(absPath, "change");
+      } finally {
+        v.readNote = originalReadNote;
+      }
+
+      // Mutation control: physical old rows remain, but durable source-scoped
+      // markers withhold both egresses and force retry despite equal mtime.
+      expect(fts.totalChunks()).toBeGreaterThan(0);
+      expect(embedDb.totalChunks()).toBeGreaterThan(0);
+      expect(fts.search("old_watcher_secret", { limit: 5 })).toEqual([]);
+      expect(embedDb.search(vector, 5)).toEqual([]);
+      expect(embedDb.getQuarantinedPaths("md")).toEqual([relPath]);
+      expect(fts.diff([{ relPath, mtimeMs: indexedMtimeMs }], "md").updated).toContain(relPath);
+    } finally {
+      await w.close();
+      embedDb.close();
+      fts.close();
+    }
+  }
+
+  async function assertRestartQuarantineHealing(): Promise<void> {
+    const { EmbedDb } = await import("../src/embed-db.js");
+    const scenarioRoot = path.join(root, "restart-quarantine-healing");
+    await fs.mkdir(scenarioRoot, { recursive: true });
+    const v = new Vault(scenarioRoot);
+    await v.ensureExists();
+    const relPath = "restart-quarantine.md";
+    const absPath = v.resolveInside(relPath);
+    const content = "restart_quarantine_marker must become visible after a healthy activation retry\n";
+    await fs.writeFile(absPath, content);
+    const indexedMtimeMs = (await fs.stat(absPath)).mtimeMs;
+    const ftsFile = path.join(scenarioRoot, ".cache", "restart-quarantine.fts5.db");
+    const embedDbFile = path.join(scenarioRoot, ".cache", "restart-quarantine.embed.db");
+    const seedFts = new FtsIndex({ file: ftsFile, vaultRoot: scenarioRoot });
+    const seedEmbedDb = new EmbedDb({
+      file: embedDbFile,
+      vaultRoot: scenarioRoot,
+      modelAlias: "restart-mock",
+      dim: 4,
+      quantization: "f32"
+    });
+    const vector = new Float32Array([1, 0, 0, 0]);
+    await seedFts.open();
+    try {
+      await seedEmbedDb.open();
+      try {
+        seedFts.reindexFile(relPath, indexedMtimeMs, content, [], []);
+        seedEmbedDb.upsertNote(relPath, indexedMtimeMs, [
+          { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: content, vector }
+        ]);
+        seedFts.quarantineFile(relPath, "md");
+        seedEmbedDb.quarantineSource(relPath, "md");
+        seedFts.quarantineFile("missing-first-add.md", "md");
+        seedEmbedDb.quarantineSource("missing-first-add.md", "md");
+      } finally {
+        seedEmbedDb.close();
+      }
+    } finally {
+      seedFts.close();
+    }
+
+    // Exercise the actual restart boundary: activation receives fresh handles
+    // opened from the exact durable stores written by the failed generation.
+    const fts = new FtsIndex({ file: ftsFile, vaultRoot: scenarioRoot });
+    const embedDb = new EmbedDb({
+      file: embedDbFile,
+      vaultRoot: scenarioRoot,
+      modelAlias: "restart-mock",
+      dim: 4,
+      quantization: "f32"
+    });
+    await fts.open();
+    await embedDb.open();
+    const embedder = {
+      model: { alias: "restart-mock", hfId: "mock", dim: 4, multilingual: false, maxTokens: 128 },
+      async embed(texts: readonly string[]): Promise<Float32Array[]> {
+        return texts.map(() => vector);
+      }
+    };
+    const w = new VaultWatcher({ vault: v, ftsIndex: fts, silent: true, deferActivation: true });
+    w.attachEmbed(embedDb, embedder, 0);
+
+    try {
+      expect(fts.search("restart_quarantine_marker", { limit: 5 })).toEqual([]);
+      expect(embedDb.search(vector, 5)).toEqual([]);
+
+      await w.captureAttachedSinkDrift();
+      const activation = w as unknown as {
+        activationPaths: ReadonlySet<string>;
+        activationStoredIdentities: ReadonlyMap<string, "md" | "pdf">;
+      };
+      expect(activation.activationPaths).toContain(absPath);
+      expect(activation.activationStoredIdentities.get("missing-first-add.md")).toBe("md");
+      await w.activate();
+
+      expect(fts.search("restart_quarantine_marker", { limit: 5 }).map((hit) => hit.rel_path)).toEqual([relPath]);
+      expect(embedDb.search(vector, 5).map((hit) => hit.rel_path)).toEqual([relPath]);
+      expect(embedDb.getQuarantinedPaths("md")).toEqual([]);
+      expect(fts.auditKind("md").mismatched_files).toBe(0);
+    } finally {
+      await w.close();
+      embedDb.close();
+      fts.close();
+    }
+  }
+
+  async function assertHardlinkPreparationFailureContinues(): Promise<void> {
+    const scenarioRoot = path.join(root, "hardlink-preparation-failure");
+    await fs.mkdir(scenarioRoot, { recursive: true });
+    const v = new Vault(scenarioRoot);
+    await v.ensureExists();
+    const aRel = "A-hardlink.md";
+    const bRel = "B-hardlink.md";
+    const aPath = v.resolveInside(aRel);
+    const bPath = v.resolveInside(bRel);
+    await fs.writeFile(aPath, "alias_old_secret\n");
+    try {
+      await fs.link(aPath, bPath);
+    } catch (error) {
+      throw new Error(`hardlink preparation-failure precondition failed: ${String(error)}`);
+    }
+    const pinnedTime = new Date(Math.floor(Date.now() / 1000) * 1000);
+    await fs.utimes(aPath, pinnedTime, pinnedTime);
+    const pinnedMtimeMs = pinnedTime.getTime();
+    expect((await fs.stat(aPath)).mtimeMs).toBe(pinnedMtimeMs);
+    expect((await fs.stat(bPath)).mtimeMs).toBe(pinnedMtimeMs);
+    const fts = new FtsIndex({
+      file: path.join(scenarioRoot, ".cache", "hardlink-failure.fts5.db"),
+      vaultRoot: scenarioRoot
+    });
+    await fts.open();
+    fts.reindexFile(aRel, pinnedMtimeMs, "alias_old_secret", [], []);
+    fts.reindexFile(bRel, pinnedMtimeMs, "alias_old_secret", [], []);
+    const w = new VaultWatcher({ vault: v, ftsIndex: fts, silent: true });
+
+    try {
+      await fs.writeFile(aPath, "alias_new_marker shared by both hardlinks\n");
+      await fs.utimes(aPath, pinnedTime, pinnedTime);
+      expect((await fs.stat(aPath)).mtimeMs).toBe(pinnedMtimeMs);
+      expect((await fs.stat(bPath)).mtimeMs).toBe(pinnedMtimeMs);
+      const originalReadNote = v.readNote.bind(v);
+      v.readNote = async (...args: Parameters<Vault["readNote"]>) => {
+        if (args[0] === aPath) throw new Error("synthetic alias preparation failure");
+        return originalReadNote(...args);
+      };
+      try {
+        await (w as unknown as { handle(absPath: string, kind: "add" | "change" | "unlink"): Promise<void> }).handle(
+          aPath,
+          "change"
+        );
+      } finally {
+        v.readNote = originalReadNote;
+      }
+
+      expect(fts.search("alias_old_secret", { limit: 10 })).toEqual([]);
+      expect(fts.search("alias_new_marker", { limit: 10 }).map((hit) => hit.rel_path)).toEqual([bRel]);
+      expect(fts.diff([{ relPath: aRel, mtimeMs: pinnedMtimeMs }], "md").updated).toContain(aRel);
+      expect(fts.diff([{ relPath: bRel, mtimeMs: pinnedMtimeMs }], "md").unchanged).toContain(bRel);
+    } finally {
+      await w.close();
+      fts.close();
+    }
+  }
+
+  async function assertHardlinkCommitFailureContinues(): Promise<void> {
+    const scenarioRoot = path.join(root, "hardlink-commit-failure");
+    await fs.mkdir(scenarioRoot, { recursive: true });
+    const v = new Vault(scenarioRoot);
+    await v.ensureExists();
+    const aRel = "A-hardlink-commit.md";
+    const bRel = "B-hardlink-commit.md";
+    const aPath = v.resolveInside(aRel);
+    const bPath = v.resolveInside(bRel);
+    await fs.writeFile(aPath, "alias_commit_old\n");
+    try {
+      await fs.link(aPath, bPath);
+    } catch (error) {
+      throw new Error(`hardlink commit-failure precondition failed: ${String(error)}`);
+    }
+    const pinnedTime = new Date(Math.floor(Date.now() / 1000) * 1000);
+    await fs.utimes(aPath, pinnedTime, pinnedTime);
+    const pinnedMtimeMs = pinnedTime.getTime();
+    expect((await fs.stat(aPath)).mtimeMs).toBe(pinnedMtimeMs);
+    expect((await fs.stat(bPath)).mtimeMs).toBe(pinnedMtimeMs);
+    const fts = new FtsIndex({
+      file: path.join(scenarioRoot, ".cache", "hardlink-commit-failure.fts5.db"),
+      vaultRoot: scenarioRoot
+    });
+    await fts.open();
+    fts.reindexFile(aRel, pinnedMtimeMs, "alias_commit_old", [], []);
+    fts.reindexFile(bRel, pinnedMtimeMs, "alias_commit_old", [], []);
+    const w = new VaultWatcher({ vault: v, ftsIndex: fts, silent: true });
+    const originalReadNote = v.readNote.bind(v);
+    const stagedReads = new Set<string>();
+    v.readNote = async (...args: Parameters<Vault["readNote"]>) => {
+      if (args[0] === aPath || args[0] === bPath) stagedReads.add(args[0]);
+      return originalReadNote(...args);
+    };
+    const originalReindexFile = fts.reindexFile.bind(fts);
+    let commitFailureInjected = false;
+    let bothAliasesStagedAtFailure = false;
+    let failedRelPath: string | undefined;
+    fts.reindexFile = ((...args: Parameters<FtsIndex["reindexFile"]>) => {
+      if (!commitFailureInjected && (args[0] === aRel || args[0] === bRel)) {
+        commitFailureInjected = true;
+        failedRelPath = args[0];
+        bothAliasesStagedAtFailure = stagedReads.has(aPath) && stagedReads.has(bPath);
+        throw new Error("synthetic source-scoped alias commit failure");
+      }
+      return originalReindexFile(...args);
+    }) as FtsIndex["reindexFile"];
+
+    try {
+      await fs.writeFile(aPath, "alias_commit_new shared by both hardlinks\n");
+      await fs.utimes(aPath, pinnedTime, pinnedTime);
+      expect((await fs.stat(aPath)).mtimeMs).toBe(pinnedMtimeMs);
+      expect((await fs.stat(bPath)).mtimeMs).toBe(pinnedMtimeMs);
+      await (w as unknown as { handle(absPath: string, kind: "add" | "change" | "unlink"): Promise<void> }).handle(
+        aPath,
+        "change"
+      );
+
+      expect(commitFailureInjected).toBe(true);
+      expect(bothAliasesStagedAtFailure).toBe(true);
+      if (failedRelPath === undefined) throw new Error("expected a source-scoped alias commit failure");
+      const convergedRelPath = failedRelPath === aRel ? bRel : aRel;
+      expect(fts.totalChunks()).toBe(2);
+      expect(fts.search("alias_commit_old", { limit: 10 })).toEqual([]);
+      expect(fts.search("alias_commit_new", { limit: 10 }).map((hit) => hit.rel_path)).toEqual([convergedRelPath]);
+      expect(fts.diff([{ relPath: failedRelPath, mtimeMs: pinnedMtimeMs }], "md").updated).toContain(failedRelPath);
+      expect(fts.diff([{ relPath: convergedRelPath, mtimeMs: pinnedMtimeMs }], "md").unchanged).toContain(
+        convergedRelPath
+      );
+    } finally {
+      fts.reindexFile = originalReindexFile;
+      v.readNote = originalReadNote;
+      await w.close();
+      fts.close();
+    }
+  }
+
+  async function assertHardlinkControlConverges(): Promise<void> {
+    const scenarioRoot = path.join(root, "hardlink-success-control");
+    await fs.mkdir(scenarioRoot, { recursive: true });
+    const v = new Vault(scenarioRoot);
+    await v.ensureExists();
+    const aRel = "A-hardlink-control.md";
+    const bRel = "B-hardlink-control.md";
+    const aPath = v.resolveInside(aRel);
+    const bPath = v.resolveInside(bRel);
+    await fs.writeFile(aPath, "alias_control_old\n");
+    try {
+      await fs.link(aPath, bPath);
+    } catch (error) {
+      throw new Error(`hardlink success-control precondition failed: ${String(error)}`);
+    }
+    const pinnedTime = new Date(Math.floor(Date.now() / 1000) * 1000);
+    await fs.utimes(aPath, pinnedTime, pinnedTime);
+    const pinnedMtimeMs = pinnedTime.getTime();
+    expect((await fs.stat(aPath)).mtimeMs).toBe(pinnedMtimeMs);
+    expect((await fs.stat(bPath)).mtimeMs).toBe(pinnedMtimeMs);
+    const fts = new FtsIndex({
+      file: path.join(scenarioRoot, ".cache", "hardlink-control.fts5.db"),
+      vaultRoot: scenarioRoot
+    });
+    await fts.open();
+    fts.reindexFile(aRel, pinnedMtimeMs, "alias_control_old", [], []);
+    fts.reindexFile(bRel, pinnedMtimeMs, "alias_control_old", [], []);
+    const w = new VaultWatcher({ vault: v, ftsIndex: fts, silent: true });
+    try {
+      await fs.writeFile(aPath, "alias_control_new shared by both hardlinks\n");
+      await fs.utimes(aPath, pinnedTime, pinnedTime);
+      expect((await fs.stat(aPath)).mtimeMs).toBe(pinnedMtimeMs);
+      expect((await fs.stat(bPath)).mtimeMs).toBe(pinnedMtimeMs);
+      await (w as unknown as { handle(absPath: string, kind: "add" | "change" | "unlink"): Promise<void> }).handle(
+        aPath,
+        "change"
+      );
+      expect(fts.search("alias_control_old", { limit: 10 })).toEqual([]);
+      expect(
+        fts
+          .search("alias_control_new", { limit: 10 })
+          .map((hit) => hit.rel_path)
+          .sort()
+      ).toEqual([aRel, bRel]);
+    } finally {
+      await w.close();
+      fts.close();
+    }
+  }
 
   it("includePdfs=false: PDF events are silently ignored (P1-5 default safety)", async () => {
     const v = new Vault(root);
@@ -842,7 +1197,42 @@ describe("VaultWatcher with FTS5 index (v3.6 — reindex branches)", () => {
     } finally {
       fts.close();
     }
+    await assertImageOnlyPdfMarkerClears();
   });
+
+  async function assertImageOnlyPdfMarkerClears(): Promise<void> {
+    const scenarioRoot = path.join(root, "image-only-sync");
+    await fs.mkdir(scenarioRoot, { recursive: true });
+    const v = new Vault(scenarioRoot);
+    await v.ensureExists();
+    const relPath = "image-only-retry.pdf";
+    await fs.writeFile(v.resolveInside(relPath), makePdf({ pages: [""] }));
+    const fts = new FtsIndex({
+      file: path.join(scenarioRoot, ".cache", "image-only-retry.fts5.db"),
+      vaultRoot: scenarioRoot
+    });
+    await fts.open();
+    try {
+      // Failed first ADD: there are no rows/source_state to delete, only the
+      // durable marker that withholds and forces the next sync attempt.
+      fts.quarantineFile(relPath, "pdf");
+      expect(fts.auditKind("pdf").mismatched_files).toBe(1);
+
+      // Server bootstrap is intentionally registration boilerplate and cannot
+      // be a static test dependency. Load only the real PDF sync integration
+      // at the causal boundary, matching the existing server integration tests.
+      const { syncPdfFtsIndex } = await import("../src/server.js");
+      const report = await syncPdfFtsIndex(v, fts);
+
+      expect(report).toMatchObject({ added: 1, updated: 0, total_chunks: 0 });
+      expect(fts.auditKind("pdf").mismatched_files).toBe(0);
+      expect(
+        fts.diff([{ relPath, mtimeMs: (await fs.stat(v.resolveInside(relPath))).mtimeMs }], "pdf").added
+      ).toContain(relPath);
+    } finally {
+      fts.close();
+    }
+  }
 
   // v3.9.0-rc.1 — setOcrPdfs validation: requires includePdfs.
   // Without --include-pdfs the watcher filters out PDF events before the

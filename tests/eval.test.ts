@@ -241,10 +241,26 @@ describe("runEval (v2.12.0)", () => {
     await fs.writeFile(path.join(root, "trees.md"), "Photosynthesis biochemistry and forest ecology.\n");
     idx = new FtsIndex({ file: dbFile, vaultRoot: root, tokenize: "unicode61" });
     await idx.open();
-    idx.reindexFile("apollo.md", Date.now(), "Apollo program guidance computer engineering team.");
-    idx.reindexFile("saturn.md", Date.now(), "Saturn V rocket launch architecture for Apollo program.");
-    idx.reindexFile("pasta.md", Date.now(), "Carbonara recipe with pancetta and pecorino.");
-    idx.reindexFile("trees.md", Date.now(), "Photosynthesis biochemistry and forest ecology.");
+    idx.reindexFile(
+      "apollo.md",
+      (await fs.stat(path.join(root, "apollo.md"))).mtimeMs,
+      "Apollo program guidance computer engineering team."
+    );
+    idx.reindexFile(
+      "saturn.md",
+      (await fs.stat(path.join(root, "saturn.md"))).mtimeMs,
+      "Saturn V rocket launch architecture for Apollo program."
+    );
+    idx.reindexFile(
+      "pasta.md",
+      (await fs.stat(path.join(root, "pasta.md"))).mtimeMs,
+      "Carbonara recipe with pancetta and pecorino."
+    );
+    idx.reindexFile(
+      "trees.md",
+      (await fs.stat(path.join(root, "trees.md"))).mtimeMs,
+      "Photosynthesis biochemistry and forest ecology."
+    );
   });
 
   afterAll(async () => {

@@ -293,7 +293,278 @@ describe("FtsIndex — full lifecycle", () => {
     } finally {
       idx.close();
     }
+
+    await assertDurableQuarantineLifecycle();
   });
+
+  async function assertDurableQuarantineLifecycle(): Promise<void> {
+    if (!canRunFts5) return;
+    const quarantineDbFile = path.join(dbDir, "quarantine-lifecycle.db");
+    const first = new FtsIndex({ file: quarantineDbFile, vaultRoot: "/tmp/vault" });
+    await first.open();
+    first.reindexFile("stale.md", 1000, "old-generation-marker");
+    first.reindexFile("control.md", 1000, "unchanged-control-marker");
+    const legacyHit = first.search("old-generation-marker")[0];
+    const legacyChunk = first.getChunk("stale.md", 0);
+    const firstHit = first.searchWithReceipts("old-generation-marker")[0];
+    const firstChunk = first.getChunkWithReceipt("stale.md", 0);
+    expect(Object.keys(legacyHit ?? {}).sort()).toEqual([
+      "chunk_index",
+      "kind",
+      "line_end",
+      "line_start",
+      "rel_path",
+      "score",
+      "snippet"
+    ]);
+    expect(Object.keys(legacyChunk ?? {}).sort()).toEqual(["content", "line_end", "line_start"]);
+    expect(legacyHit).not.toHaveProperty("indexed_mtime_ms");
+    expect(legacyHit).not.toHaveProperty("indexed_revision");
+    expect(legacyChunk).not.toHaveProperty("indexed_mtime_ms");
+    expect(legacyChunk).not.toHaveProperty("indexed_revision");
+    expect(firstHit?.indexed_mtime_ms).toBe(1000);
+    expect(firstHit?.indexed_revision).toBe(1);
+    expect(firstChunk?.indexed_mtime_ms).toBe(1000);
+    expect(firstChunk?.indexed_revision).toBe(firstHit?.indexed_revision);
+    expect(firstChunk).toMatchObject({ rel_path: "stale.md", kind: "md" });
+    expect(
+      firstHit &&
+        first.isCurrentSourceReceipt(
+          firstHit.rel_path,
+          firstHit.kind,
+          firstHit.indexed_mtime_ms,
+          firstHit.indexed_revision
+        )
+    ).toBe(true);
+    first.close();
+
+    // Migration control: both tables/triggers are additive. A same-schema
+    // database made before this fix has neither; reopening must backfill a
+    // safe revision without rebuilding or discarding the existing FTS rows.
+    const { default: Database } = await import("better-sqlite3");
+    const legacy = new Database(quarantineDbFile);
+    legacy.exec(`
+      DROP TRIGGER IF EXISTS source_state_revision_insert;
+      DROP TRIGGER IF EXISTS source_state_revision_update;
+      DROP TRIGGER IF EXISTS source_state_revision_delete;
+      DROP TRIGGER IF EXISTS source_quarantine_revision_insert;
+      DROP TRIGGER IF EXISTS source_quarantine_revision_update;
+      DROP TRIGGER IF EXISTS source_quarantine_revision_delete;
+      DROP TABLE source_revision;
+      DROP TABLE source_quarantine;
+    `);
+    // Same-name collision control: bootstrap must replace, not silently keep,
+    // a preexisting no-op trigger definition.
+    legacy.exec(`
+      CREATE TRIGGER source_state_revision_insert
+      AFTER INSERT ON source_state
+      BEGIN
+        SELECT 1;
+      END;
+    `);
+    legacy.close();
+
+    const quarantined = new FtsIndex({ file: quarantineDbFile, vaultRoot: "/tmp/vault" });
+    await quarantined.open();
+    const migrated = quarantined.searchWithReceipts("old-generation-marker")[0];
+    const migratedChunk = quarantined.getChunkWithReceipt("stale.md", 0);
+    expect(migrated?.indexed_revision).toBe(1);
+    expect(migratedChunk?.indexed_revision).toBe(migrated?.indexed_revision);
+    expect(quarantined.currentSourceReceiptMask([])).toEqual([]);
+    expect(
+      migrated &&
+        quarantined.isCurrentSourceReceipt(
+          migrated.rel_path,
+          migrated.kind,
+          migrated.indexed_mtime_ms,
+          migrated.indexed_revision
+        )
+    ).toBe(true);
+    const control = quarantined.searchWithReceipts("unchanged-control-marker")[0];
+    expect(control).toBeDefined();
+    expect(migrated && control && quarantined.currentSourceReceiptMask([migrated, control])).toEqual([true, true]);
+    const triggerProbe = new Database(quarantineDbFile);
+    try {
+      const triggerSql = triggerProbe
+        .prepare("SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = 'source_state_revision_insert'")
+        .get() as { sql?: string } | undefined;
+      expect(triggerSql?.sql).toContain("source_revision.revision + 1");
+    } finally {
+      triggerProbe.close();
+    }
+    expect(
+      control &&
+        quarantined.isCurrentSourceReceipt(
+          control.rel_path,
+          control.kind,
+          control.indexed_mtime_ms,
+          control.indexed_revision
+        )
+    ).toBe(true);
+
+    // Same-mtime replacement is a distinct generation: mtime alone is equal,
+    // while the trigger-bumped revision makes the captured receipt obsolete.
+    const manifestBeforeSameMtime = quarantined.fingerprintKind("md");
+    quarantined.reindexFile("stale.md", 1000, "same-mtime-generation-marker");
+    const sameMtime = quarantined.searchWithReceipts("same-mtime-generation-marker")[0];
+    expect(sameMtime?.indexed_mtime_ms).toBe(migrated?.indexed_mtime_ms);
+    expect(sameMtime?.indexed_revision).toBeGreaterThan(migrated?.indexed_revision ?? 0);
+    expect(
+      migrated &&
+        quarantined.isCurrentSourceReceipt(
+          migrated.rel_path,
+          migrated.kind,
+          migrated.indexed_mtime_ms,
+          migrated.indexed_revision
+        )
+    ).toBe(false);
+    expect(
+      sameMtime &&
+        quarantined.isCurrentSourceReceipt(
+          sameMtime.rel_path,
+          sameMtime.kind,
+          sameMtime.indexed_mtime_ms,
+          sameMtime.indexed_revision
+        )
+    ).toBe(true);
+    expect(quarantined.fingerprintKind("md")).not.toBe(manifestBeforeSameMtime);
+    expect(
+      sameMtime &&
+        quarantined.isCurrentSourceReceipt(sameMtime.rel_path, sameMtime.kind, Number.NaN, sameMtime.indexed_revision)
+    ).toBe(false);
+    expect(
+      sameMtime &&
+        quarantined.isCurrentSourceReceipt(
+          sameMtime.rel_path,
+          "bogus" as never,
+          sameMtime.indexed_mtime_ms,
+          sameMtime.indexed_revision
+        )
+    ).toBe(false);
+    expect(
+      sameMtime &&
+        quarantined.isCurrentSourceReceipt(
+          sameMtime.rel_path,
+          sameMtime.kind,
+          sameMtime.indexed_mtime_ms,
+          sameMtime.indexed_revision + 0.5
+        )
+    ).toBe(false);
+    expect(
+      migrated && sameMtime && control && quarantined.currentSourceReceiptMask([migrated, sameMtime, control])
+    ).toEqual([false, true, true]);
+    expect(
+      migratedChunk &&
+        quarantined.isCurrentSourceReceipt(
+          "stale.md",
+          "md",
+          migratedChunk.indexed_mtime_ms,
+          migratedChunk.indexed_revision
+        )
+    ).toBe(false);
+    expect(
+      () => sameMtime && quarantined.currentSourceReceiptMask(Array.from({ length: 513 }, () => sameMtime))
+    ).toThrow(/exceeds 512/);
+    expect(
+      sameMtime &&
+        quarantined.currentSourceReceiptMask([
+          { ...sameMtime, indexed_revision: sameMtime.indexed_revision + 0.5 },
+          { ...sameMtime, indexed_mtime_ms: Number.POSITIVE_INFINITY }
+        ])
+    ).toEqual([false, false]);
+    quarantined.quarantineFile("stale.md", "md");
+
+    // Positive control: retained physical bytes are immediately unreachable
+    // through both FTS egress routes and strict evidence rejects the marker.
+    expect(quarantined.totalFiles()).toBe(2);
+    expect(quarantined.totalChunks()).toBe(2);
+    expect(quarantined.search("same-mtime-generation-marker")).toEqual([]);
+    expect(quarantined.getChunk("stale.md", 0)).toBeNull();
+    expect(
+      sameMtime &&
+        quarantined.isCurrentSourceReceipt(
+          sameMtime.rel_path,
+          sameMtime.kind,
+          sameMtime.indexed_mtime_ms,
+          sameMtime.indexed_revision
+        )
+    ).toBe(false);
+    expect(quarantined.auditKind("md").mismatched_files).toBe(1);
+    expect(
+      quarantined.diff(
+        [
+          { relPath: "stale.md", mtimeMs: 1000 },
+          { relPath: "control.md", mtimeMs: 1000 }
+        ],
+        "md"
+      )
+    ).toEqual({ added: [], updated: ["stale.md"], deleted: [], unchanged: ["control.md"] });
+
+    // Negative control: unrelated, receipt-backed rows remain available.
+    const visibleControl = quarantined.searchWithReceipts("unchanged-control-marker");
+    expect(visibleControl).toHaveLength(1);
+    expect(visibleControl[0]?.indexed_mtime_ms).toBe(1000);
+    expect(visibleControl[0]?.indexed_revision).toBe(control?.indexed_revision);
+    quarantined.close();
+
+    // The exclusion survives a restart; a successful replacement publishes
+    // the new generation and atomically clears the quarantine marker.
+    const reopened = new FtsIndex({ file: quarantineDbFile, vaultRoot: "/tmp/vault" });
+    await reopened.open();
+    try {
+      expect(reopened.search("same-mtime-generation-marker")).toEqual([]);
+      expect(reopened.getChunk("stale.md", 0)).toBeNull();
+      reopened.reindexFile("stale.md", 2000, "fresh-generation-marker");
+      expect(reopened.search("same-mtime-generation-marker")).toEqual([]);
+      const fresh = reopened.searchWithReceipts("fresh-generation-marker")[0];
+      const freshChunk = reopened.getChunkWithReceipt("stale.md", 0);
+      expect(fresh?.indexed_mtime_ms).toBe(2000);
+      expect(freshChunk?.indexed_mtime_ms).toBe(2000);
+      expect(freshChunk?.indexed_revision).toBe(fresh?.indexed_revision);
+      expect(
+        fresh &&
+          reopened.isCurrentSourceReceipt(fresh.rel_path, fresh.kind, fresh.indexed_mtime_ms, fresh.indexed_revision)
+      ).toBe(true);
+      expect(reopened.auditKind("md").mismatched_files).toBe(0);
+
+      // dropFile is the other successful terminal transition and clears even
+      // a marker whose retained source row/chunks are being removed. The
+      // ledger tombstone then forces a higher revision on same-mtime re-add,
+      // closing delete/re-add ABA without disturbing the sibling receipt.
+      reopened.quarantineFile("stale.md", "md");
+      expect(reopened.auditKind("md").mismatched_files).toBe(1);
+      reopened.dropFile("stale.md");
+      expect(reopened.auditKind("md").mismatched_files).toBe(0);
+      expect(reopened.search("fresh-generation-marker")).toEqual([]);
+      expect(
+        fresh &&
+          reopened.isCurrentSourceReceipt(fresh.rel_path, fresh.kind, fresh.indexed_mtime_ms, fresh.indexed_revision)
+      ).toBe(false);
+      reopened.reindexFile("stale.md", 2000, "aba-generation-marker");
+      const readded = reopened.searchWithReceipts("aba-generation-marker")[0];
+      expect(readded?.indexed_revision).toBeGreaterThan(fresh?.indexed_revision ?? 0);
+      expect(
+        readded &&
+          reopened.isCurrentSourceReceipt(
+            readded.rel_path,
+            readded.kind,
+            readded.indexed_mtime_ms,
+            readded.indexed_revision
+          )
+      ).toBe(true);
+      expect(
+        control &&
+          reopened.isCurrentSourceReceipt(
+            control.rel_path,
+            control.kind,
+            control.indexed_mtime_ms,
+            control.indexed_revision
+          )
+      ).toBe(true);
+    } finally {
+      reopened.close();
+    }
+  }
 
   it("dropFile removes both chunks and source_state row", async () => {
     if (!canRunFts5) return;
@@ -534,7 +805,53 @@ describe("FtsIndex — full lifecycle", () => {
     } finally {
       idx.close();
     }
+
+    await assertFailSoftQuarantineRetry();
   });
+
+  async function assertFailSoftQuarantineRetry(): Promise<void> {
+    if (!canRunFts5) return;
+    const vaultRoot = path.join(dbDir, "sync-failure-vault");
+    const syncFailureDbFile = path.join(dbDir, "sync-failure.db");
+    await fs.mkdir(vaultRoot);
+    const stalePath = path.join(vaultRoot, "stale.md");
+    await fs.writeFile(stalePath, "old-sync-marker");
+    await fs.writeFile(path.join(vaultRoot, "control.md"), "available-control-marker");
+    const vault = new Vault(vaultRoot);
+    const idx = new FtsIndex({ file: syncFailureDbFile, vaultRoot });
+    await idx.open();
+    try {
+      await syncFtsIndex(vault, idx, { mode: "strict" });
+      expect(idx.search("old-sync-marker")).toHaveLength(1);
+      expect(idx.search("available-control-marker")).toHaveLength(1);
+
+      await fs.writeFile(stalePath, "fresh-sync-marker");
+      const future = new Date(Date.now() + 60_000);
+      await fs.utimes(stalePath, future, future);
+      const readFailure = vi.spyOn(vault, "readNote").mockRejectedValueOnce(new Error("injected read failure"));
+      const failed = await syncFtsIndex(vault, idx);
+      expect(failed).toMatchObject({ mode: "fail-soft", updated: 0, failed: 1, complete: false });
+
+      // Positive control: the failing source's retained old generation cannot
+      // escape. Negative control: the unchanged sibling remains available.
+      expect(idx.totalFiles()).toBe(2);
+      expect(idx.search("old-sync-marker")).toEqual([]);
+      expect(idx.getChunk("stale.md", 0)).toBeNull();
+      expect(idx.search("available-control-marker")).toHaveLength(1);
+
+      readFailure.mockRestore();
+      const healed = await syncFtsIndex(vault, idx);
+      expect(healed).toMatchObject({ mode: "fail-soft", updated: 1, failed: 0 });
+      const liveMtime = (await vault.listMarkdown()).find((entry) => entry.relPath === "stale.md")?.mtimeMs;
+      expect(liveMtime).toBeDefined();
+      expect(idx.search("old-sync-marker")).toEqual([]);
+      expect(idx.searchWithReceipts("fresh-sync-marker")[0]?.indexed_mtime_ms).toBe(liveMtime);
+      expect(idx.getChunkWithReceipt("stale.md", 0)?.indexed_mtime_ms).toBe(liveMtime);
+      expect(idx.auditKind("md").mismatched_files).toBe(0);
+    } finally {
+      idx.close();
+    }
+  }
 });
 
 // v2.8.0 — PDF chunks indexed alongside markdown via the kind column.
@@ -558,6 +875,17 @@ describe("FtsIndex — PDF chunks (v2.8.0)", () => {
       expect(kinds).toContain("pdf");
       // Both kinds returned — blended retrieval works.
       expect(hits.length).toBeGreaterThanOrEqual(2);
+      expect(idx.searchWithReceipts("Alpha").find((hit) => hit.kind === "pdf")?.indexed_mtime_ms).toBe(2000);
+
+      // Kind-scoped quarantine hides only the failed PDF generation. The
+      // markdown control remains visible, and a successful PDF reindex clears
+      // the marker in the same transaction as its replacement receipt.
+      idx.quarantineFile("paper.pdf", "pdf");
+      expect(idx.search("Alpha").map((hit) => hit.kind)).toEqual(["md"]);
+      expect(idx.getChunk("paper.pdf", 0)).toBeNull();
+      expect(idx.diff([{ relPath: "paper.pdf", mtimeMs: 2000 }], "pdf").updated).toEqual(["paper.pdf"]);
+      idx.reindexPdfFile("paper.pdf", 3000, [{ pageNumber: 1, text: "Alpha replacement page" }]);
+      expect(idx.searchWithReceipts("Alpha").find((hit) => hit.kind === "pdf")?.indexed_mtime_ms).toBe(3000);
     } finally {
       idx.close();
     }
@@ -646,6 +974,21 @@ describe("FtsIndex — PDF chunks (v2.8.0)", () => {
       expectMismatches(0, 0);
     };
     try {
+      // The additive revision ledger is part of physical completeness. A
+      // missing exact (path, kind) row fails only that source's kind; the next
+      // legitimate replacement recreates it through the source_state trigger.
+      raw.prepare("DELETE FROM source_revision WHERE rel_path = 'a.md' AND kind = 'md'").run();
+      expectMismatches(1, 0);
+      repairMarkdown();
+      const manifestBeforeInvalidRevision = audited.fingerprintKind("md");
+      raw.pragma("ignore_check_constraints = ON");
+      raw.prepare("UPDATE source_revision SET revision = 0 WHERE rel_path = 'a.md' AND kind = 'md'").run();
+      raw.pragma("ignore_check_constraints = OFF");
+      expectMismatches(1, 0);
+      expect(audited.search("alpha")).toEqual([]);
+      expect(audited.fingerprintKind("md")).not.toBe(manifestBeforeInvalidRevision);
+      repairMarkdown();
+
       // Invalid source declarations: zero/negative and non-integer counts.
       raw.prepare("UPDATE source_state SET n_chunks = 0 WHERE rel_path = 'a.md'").run();
       expectMismatches(1, 0);
@@ -797,7 +1140,13 @@ describe("FtsIndex — PDF chunks (v2.8.0)", () => {
       await expect(syncFtsIndex(new Vault(vaultRoot), syncIndex, { mode: "strict" })).rejects.toThrow(
         /produced zero FTS chunks/
       );
-      expect(syncIndex.search("indexable")).toHaveLength(1);
+      // The last known-good physical row is retained for recovery, but the
+      // failed refresh quarantines it from every public FTS read immediately.
+      expect(syncIndex.totalFiles()).toBe(1);
+      expect(syncIndex.totalChunks()).toBe(1);
+      expect(syncIndex.search("indexable")).toEqual([]);
+      expect(syncIndex.getChunk("good.md", 0)).toBeNull();
+      expect(syncIndex.auditKind("md").mismatched_files).toBe(1);
 
       const failSoftAuditSpy = vi.spyOn(syncIndex, "auditKind");
       const failSoftManifestSpy = vi.spyOn(syncIndex, "fingerprintKind");

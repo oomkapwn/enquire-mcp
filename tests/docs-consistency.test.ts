@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import ts from "typescript";
 import { describe, expect, it } from "vitest";
 import { DEFAULT_RERANKER_ALIAS, EMBEDDING_MODELS } from "../src/embeddings.js";
 import { tierServeFlags } from "../src/mcp-config.js";
@@ -1513,8 +1514,14 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
     const firstHeading = changelog.indexOf("\n## [");
     const nextHeading = changelog.indexOf("\n## [", firstHeading + 1);
     const latest = firstHeading < 0 ? "" : changelog.slice(firstHeading, nextHeading < 0 ? undefined : nextHeading);
-    const releaseArrowClaims = [...latest.matchAll(/→\s*(\d+)\s+source tests/g)].map((match) => match[1]);
-    const releaseHeadingClaims = [...latest.matchAll(/### Tests \((\d+)\)/g)].map((match) => match[1]);
+    const unreleasedHeading = changelog.indexOf("\n## Unreleased");
+    const unreleased =
+      unreleasedHeading >= 0 && (firstHeading < 0 || unreleasedHeading < firstHeading)
+        ? changelog.slice(unreleasedHeading, firstHeading < 0 ? undefined : firstHeading)
+        : "";
+    const currentChangelog = `${unreleased}\n${latest}`;
+    const releaseArrowClaims = [...currentChangelog.matchAll(/→\s*(\d+)\s+source tests/g)].map((match) => match[1]);
+    const releaseHeadingClaims = [...currentChangelog.matchAll(/### Tests \((\d+)\)/g)].map((match) => match[1]);
     const releaseClaims = [
       ...(releaseArrowClaims.length > 0 ? releaseArrowClaims : [undefined]),
       ...(releaseHeadingClaims.length > 0 ? releaseHeadingClaims : [undefined])
@@ -1576,6 +1583,15 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
     );
     expect(conflictingTotals).toContain(`latest CHANGELOG claims ${conflicting}; actual is ${actual}`);
     expect(conflictingTotals).toContain(`CLAUDE current markers claims ${conflicting}; actual is ${actual}`);
+    const unreleasedTotals = currentReleaseTestCountProblems(
+      `# Changelog\n\n## Unreleased\n**${actual} → ${conflicting} source tests.**\n\n` +
+        `## [0.0.0]\n**1 → ${actual} source tests.**`,
+      `**Current state:** **46 tools · 19 prompts · ${actual} tests · 11 languages.**\n` +
+        `- **v0.0.0 candidate:** **1 → ${actual} source tests.**`,
+      "0.0.0",
+      actual
+    );
+    expect(unreleasedTotals).toContain(`latest CHANGELOG claims ${conflicting}; actual is ${actual}`);
   });
 
   it("package.json description test count matches actual", async () => {
@@ -1774,7 +1790,381 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
         `STABILITY.md promises src/${mod}.ts as stable but package.json#exports is missing "${key}"`
       ).toBeDefined();
     }
-  });
+
+    // AH-1 public-doc class guard — every code subpath exported by the npm
+    // package must be a TypeDoc entry point. `src/tools/index.ts` is the sole
+    // docs-only barrel because individual MCP tool helpers are intentionally
+    // documented without becoming package subpaths.
+    const expectedTypeDocEntries = new Set<string>(["src/tools/index.ts"]);
+    for (const value of Object.values(exports)) {
+      if (typeof value !== "object" || value === null) continue;
+      const types = (value as { types?: unknown }).types;
+      if (typeof types !== "string" || !types.startsWith("./dist/") || !types.endsWith(".d.ts")) continue;
+      expectedTypeDocEntries.add(`src/${types.slice("./dist/".length, -".d.ts".length)}.ts`);
+    }
+    const typeDocEntries = (source: string): Set<string> => {
+      const parsed = ts.parseConfigFileTextToJson("typedoc.json", source);
+      if (parsed.error) return new Set();
+      const config = parsed.config as { entryPoints?: unknown };
+      return new Set(
+        Array.isArray(config.entryPoints)
+          ? config.entryPoints.filter((entry): entry is string => typeof entry === "string")
+          : []
+      );
+    };
+    const typeDocEntryPointProblems = (source: string): string[] => {
+      const actual = typeDocEntries(source);
+      const problems: string[] = [];
+      for (const expected of expectedTypeDocEntries) {
+        if (!actual.has(expected)) problems.push(`TypeDoc is missing public entry point ${expected}`);
+      }
+      for (const entry of actual) {
+        if (!expectedTypeDocEntries.has(entry)) problems.push(`TypeDoc exposes non-public entry point ${entry}`);
+      }
+      return problems;
+    };
+    const typeDocConfig = await read("typedoc.json");
+    expect(typeDocEntryPointProblems(typeDocConfig)).toEqual([]);
+    const typeDocVariant = (entryPoints: readonly string[], extra: Readonly<Record<string, unknown>> = {}): string =>
+      JSON.stringify({ ...extra, entryPoints });
+    const withoutEmbedDb = [...typeDocEntries(typeDocConfig)].filter((entry) => entry !== "src/embed-db.ts");
+    const missingPublicEntry = typeDocVariant(withoutEmbedDb);
+    expect(typeDocEntryPointProblems(missingPublicEntry)).toContain(
+      "TypeDoc is missing public entry point src/embed-db.ts"
+    );
+    expect(typeDocEntryPointProblems(`// "src/embed-db.ts"\n${missingPublicEntry}`)).toContain(
+      "TypeDoc is missing public entry point src/embed-db.ts"
+    );
+    const decoyPublicEntry = typeDocVariant(withoutEmbedDb, { decoy: ["src/embed-db.ts"] });
+    expect(typeDocEntryPointProblems(decoyPublicEntry)).toContain(
+      "TypeDoc is missing public entry point src/embed-db.ts"
+    );
+    const internalEntry = typeDocVariant([...typeDocEntries(typeDocConfig), "src/internal.ts"]);
+    expect(typeDocEntryPointProblems(internalEntry)).toContain(
+      "TypeDoc exposes non-public entry point src/internal.ts"
+    );
+
+    // AH-1 — compile the persisted-index compatibility split through the
+    // package's real NodeNext self-reference, not a source-file deep import.
+    // CI always builds before tests. A direct local `npm test` may legitimately
+    // run without dist/, so only CI treats a missing declaration as a failure;
+    // the local path returns without claiming compile-consumer evidence.
+    const publicDeclarations = [
+      ["@oomkapwn/enquire-mcp/fts5", path.join(repoRoot, "dist", "fts5.d.ts")],
+      ["@oomkapwn/enquire-mcp/embed-db", path.join(repoRoot, "dist", "embed-db.d.ts")],
+      ["@oomkapwn/enquire-mcp/hnsw", path.join(repoRoot, "dist", "hnsw.d.ts")]
+    ] as const;
+    const missingDeclarations: string[] = [];
+    for (const [, declarationPath] of publicDeclarations) {
+      try {
+        await fs.access(declarationPath);
+      } catch {
+        missingDeclarations.push(path.relative(repoRoot, declarationPath));
+      }
+    }
+    if (missingDeclarations.length > 0) {
+      if (process.env.CI) {
+        throw new Error(`public consumer declarations missing after CI build: ${missingDeclarations.join(", ")}`);
+      }
+      return;
+    }
+
+    type PublicConsumerVariant =
+      | "positive"
+      | "legacy-fts-receipt-leak"
+      | "optional-revision"
+      | "hnsw-helper-swap"
+      | "missing-subpath";
+
+    const virtualConsumerPath = path.join(repoRoot, "tests", "fixtures", "persisted-index-public-consumer.mts");
+    const canonicalPath = (filePath: string): string => {
+      const resolved = path.resolve(filePath);
+      return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+    };
+    const canonicalVirtualPath = canonicalPath(virtualConsumerPath);
+    const compilerOptions: ts.CompilerOptions = {
+      target: ts.ScriptTarget.ES2022,
+      module: ts.ModuleKind.NodeNext,
+      moduleResolution: ts.ModuleResolutionKind.NodeNext,
+      strict: true,
+      noEmit: true,
+      skipLibCheck: false,
+      types: ["node"]
+    };
+
+    const publicConsumerSource = (variant: PublicConsumerVariant): string => {
+      const ftsSpecifier =
+        variant === "missing-subpath" ? "@oomkapwn/enquire-mcp/fts5-missing" : "@oomkapwn/enquire-mcp/fts5";
+      const legacyFtsReturn = variant === "legacy-fts-receipt-leak" ? "FtsReceiptSearchHit[]" : "FtsSearchHit[]";
+      const revisionType = variant === "optional-revision" ? "number | undefined" : "number";
+      const legacyHnswReturn = variant === "hnsw-helper-swap" ? "EmbedReceiptSearchHit[]" : "EmbedSearchHit[]";
+
+      return `
+import type {
+  EmbedChunkKind,
+  EmbedDb,
+  EmbedReceiptSearchHit,
+  EmbedSearchHit
+} from "@oomkapwn/enquire-mcp/embed-db";
+import type {
+  ChunkKind,
+  FtsIndex,
+  FtsReceiptChunk,
+  FtsReceiptSearchHit,
+  FtsSearchHit
+} from "${ftsSpecifier}";
+
+type HnswModule = typeof import("@oomkapwn/enquire-mcp/hnsw");
+type Equal<Left, Right> =
+  (<Value>() => Value extends Left ? 1 : 2) extends
+  (<Value>() => Value extends Right ? 1 : 2)
+    ? (<Value>() => Value extends Right ? 1 : 2) extends
+        (<Value>() => Value extends Left ? 1 : 2)
+      ? true
+      : false
+    : false;
+type Assert<Condition extends true> = Condition;
+type FtsSearchOptions = {
+  limit?: number;
+  folder?: string;
+  tag?: string;
+  sinceMtimeMs?: number;
+};
+type EmbedSearchOptions = { folder?: string; minScore?: number };
+type LegacyEmbedVectorRow = {
+  label: number;
+  vector: Float32Array;
+  rel_path: string;
+  chunk_index: number;
+  line_start: number;
+  line_end: number;
+  text_preview: string;
+  kind: EmbedChunkKind;
+};
+type LegacyHnswRow = {
+  rel_path: string;
+  chunk_index: number;
+  line_start: number;
+  line_end: number;
+  text_preview: string;
+  kind: EmbedChunkKind;
+};
+
+export type PersistedIndexPublicConsumerContract = [
+  Assert<Equal<ChunkKind, "md" | "pdf">>,
+  Assert<
+    Equal<
+      keyof FtsSearchHit,
+      "rel_path" | "chunk_index" | "line_start" | "line_end" | "snippet" | "score" | "kind"
+    >
+  >,
+  Assert<
+    Equal<
+      FtsIndex["search"],
+      (rawQuery: string, opts?: FtsSearchOptions) => ${legacyFtsReturn}
+    >
+  >,
+  Assert<
+    Equal<
+      FtsIndex["getChunk"],
+      (
+        relPath: string,
+        chunkIndex: number
+      ) => { content: string; line_start: number; line_end: number } | null
+    >
+  >,
+  Assert<
+    Equal<
+      FtsIndex["searchWithReceipts"],
+      (rawQuery: string, opts?: FtsSearchOptions) => FtsReceiptSearchHit[]
+    >
+  >,
+  Assert<
+    Equal<
+      FtsIndex["getChunkWithReceipt"],
+      (relPath: string, chunkIndex: number) => FtsReceiptChunk | null
+    >
+  >,
+  Assert<Equal<FtsReceiptSearchHit["indexed_mtime_ms"], number>>,
+  Assert<Equal<FtsReceiptSearchHit["indexed_revision"], ${revisionType}>>,
+  Assert<
+    Equal<
+      keyof FtsReceiptSearchHit,
+      keyof FtsSearchHit | "indexed_mtime_ms" | "indexed_revision"
+    >
+  >,
+  Assert<
+    Equal<
+      keyof FtsReceiptChunk,
+      | "rel_path"
+      | "kind"
+      | "indexed_mtime_ms"
+      | "indexed_revision"
+      | "content"
+      | "line_start"
+      | "line_end"
+    >
+  >,
+  Assert<Equal<EmbedChunkKind, "md" | "pdf">>,
+  Assert<
+    Equal<
+      keyof EmbedSearchHit,
+      | "rel_path"
+      | "chunk_index"
+      | "line_start"
+      | "line_end"
+      | "text_preview"
+      | "score"
+      | "kind"
+    >
+  >,
+  Assert<
+    Equal<
+      EmbedDb["search"],
+      (
+        queryVec: Float32Array,
+        k: number,
+        opts?: EmbedSearchOptions
+      ) => EmbedSearchHit[]
+    >
+  >,
+  Assert<
+    Equal<
+      EmbedDb["searchWithReceipts"],
+      (
+        queryVec: Float32Array,
+        k: number,
+        opts?: EmbedSearchOptions
+      ) => EmbedReceiptSearchHit[]
+    >
+  >,
+  Assert<Equal<EmbedDb["getAllVectors"], () => LegacyEmbedVectorRow[]>>,
+  Assert<
+    Equal<
+      EmbedDb["getSearchRowsByIds"],
+      (ids: number[]) => Map<number, Omit<EmbedReceiptSearchHit, "score">>
+    >
+  >,
+  Assert<Equal<EmbedReceiptSearchHit["indexed_mtime_ms"], number>>,
+  Assert<Equal<EmbedReceiptSearchHit["indexed_revision"], number>>,
+  Assert<
+    Equal<
+      keyof EmbedReceiptSearchHit,
+      keyof EmbedSearchHit | "indexed_mtime_ms" | "indexed_revision"
+    >
+  >,
+  Assert<
+    Equal<
+      HnswModule["hnswResultsToHits"],
+      (
+        result: { labels: number[]; distances: number[] },
+        rowByLabel: ReadonlyMap<number, LegacyHnswRow>
+      ) => ${legacyHnswReturn}
+    >
+  >,
+  Assert<
+    Equal<
+      HnswModule["hnswResultsToReceiptHits"],
+      (
+        result: { labels: number[]; distances: number[] },
+        rowByLabel: ReadonlyMap<number, Omit<EmbedReceiptSearchHit, "score">>
+      ) => EmbedReceiptSearchHit[]
+    >
+  >
+];
+`;
+    };
+
+    const createConsumerHost = (source: string): ts.CompilerHost => {
+      const host = ts.createCompilerHost(compilerOptions, true);
+      const baseFileExists = host.fileExists.bind(host);
+      const baseReadFile = host.readFile.bind(host);
+      const baseGetSourceFile = host.getSourceFile.bind(host);
+      const baseRealpath = host.realpath?.bind(host);
+      host.getCurrentDirectory = () => repoRoot;
+      host.fileExists = (fileName) => canonicalPath(fileName) === canonicalVirtualPath || baseFileExists(fileName);
+      host.readFile = (fileName) =>
+        canonicalPath(fileName) === canonicalVirtualPath ? source : baseReadFile(fileName);
+      host.getSourceFile = (fileName, languageVersion, onError, shouldCreateNewSourceFile) =>
+        canonicalPath(fileName) === canonicalVirtualPath
+          ? ts.createSourceFile(fileName, source, languageVersion, true, ts.ScriptKind.TS)
+          : baseGetSourceFile(fileName, languageVersion, onError, shouldCreateNewSourceFile);
+      if (baseRealpath) {
+        host.realpath = (fileName) =>
+          canonicalPath(fileName) === canonicalVirtualPath ? virtualConsumerPath : baseRealpath(fileName);
+      }
+      return host;
+    };
+
+    const positiveHost = createConsumerHost(publicConsumerSource("positive"));
+    for (const [specifier, declarationPath] of publicDeclarations) {
+      const resolvedModule = ts.resolveModuleName(
+        specifier,
+        virtualConsumerPath,
+        compilerOptions,
+        positiveHost
+      ).resolvedModule;
+      expect(resolvedModule, `${specifier} must resolve through package.json#exports`).toBeDefined();
+      expect(
+        canonicalPath(resolvedModule?.resolvedFileName ?? ""),
+        `${specifier} must resolve to its public declaration, not src/ or another package copy`
+      ).toBe(canonicalPath(declarationPath));
+    }
+    expect(
+      ts.resolveModuleName("@oomkapwn/enquire-mcp/fts5-missing", virtualConsumerPath, compilerOptions, positiveHost)
+        .resolvedModule,
+      "an unexported self-package subpath must remain unresolved"
+    ).toBeUndefined();
+
+    const compileConsumer = (variant: PublicConsumerVariant): readonly ts.Diagnostic[] => {
+      const source = publicConsumerSource(variant);
+      const program = ts.createProgram({
+        rootNames: [virtualConsumerPath],
+        options: compilerOptions,
+        host: createConsumerHost(source)
+      });
+      return ts.getPreEmitDiagnostics(program);
+    };
+    const formatDiagnostics = (diagnostics: readonly ts.Diagnostic[]): string =>
+      diagnostics
+        .map((diagnostic) => {
+          const message = ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n");
+          if (!diagnostic.file || diagnostic.start === undefined) return `TS${diagnostic.code}: ${message}`;
+          const position = diagnostic.file.getLineAndCharacterOfPosition(diagnostic.start);
+          return (
+            `${path.relative(repoRoot, diagnostic.file.fileName)}:${position.line + 1}:` +
+            `${position.character + 1} TS${diagnostic.code}: ${message}`
+          );
+        })
+        .join("\n");
+
+    const positiveDiagnostics = compileConsumer("positive");
+    expect(
+      positiveDiagnostics.map((diagnostic) => diagnostic.code),
+      `public declaration consumer must compile cleanly:\n${formatDiagnostics(positiveDiagnostics)}`
+    ).toEqual([]);
+
+    const causalVariants = [
+      ["legacy-fts-receipt-leak", 2344],
+      ["optional-revision", 2344],
+      ["hnsw-helper-swap", 2344],
+      ["missing-subpath", 2307]
+    ] as const satisfies ReadonlyArray<readonly [Exclude<PublicConsumerVariant, "positive">, number]>;
+    for (const [variant, expectedCode] of causalVariants) {
+      const diagnostics = compileConsumer(variant);
+      const consumerCodes = diagnostics
+        .filter(
+          (diagnostic) =>
+            diagnostic.file !== undefined && canonicalPath(diagnostic.file.fileName) === canonicalVirtualPath
+        )
+        .map((diagnostic) => diagnostic.code);
+      expect(
+        consumerCodes,
+        `${variant} must causally fail in the virtual consumer with TS${expectedCode}:\n` +
+          formatDiagnostics(diagnostics)
+      ).toContain(expectedCode);
+    }
+  }, 60_000);
 
   // v3.12.0-rc.5 keeps the evidence-bound factual guard from rc.4 while
   // separating the conversion surface from the evidence archive. The broad

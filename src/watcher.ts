@@ -378,6 +378,42 @@ export class VaultWatcher {
   private closePromise: Promise<void> | null = null;
   private closing = false;
   private closed = false;
+
+  /**
+   * Attempt to hide retained persisted bytes for one source after a watcher
+   * refresh failure. Each successfully written marker is source-scoped and
+   * durable; a later successful reindex/upsert/drop clears it transactionally.
+   * Marker-write failures are logged independently so one broken store does
+   * not prevent the other from recording its quarantine. A broader fail-stop
+   * policy for that storage-failure residual requires explicit authorization.
+   *
+   * @param relPath - Vault-relative source whose attempted refresh failed.
+   * @param kind - Content-source kind shared by both stores.
+   */
+  private quarantineFailedGeneration(relPath: string, kind: "md" | "pdf"): void {
+    try {
+      this.ftsIndex?.quarantineFile(relPath, kind);
+    } catch (error) {
+      if (!this.silent) {
+        process.stderr.write(
+          `enquire: watcher could not persist FTS quarantine for ${relPath} — ${
+            error instanceof Error ? error.message : String(error)
+          }\n`
+        );
+      }
+    }
+    try {
+      this.embedDb?.quarantineSource(relPath, kind);
+    } catch (error) {
+      if (!this.silent) {
+        process.stderr.write(
+          `enquire: watcher could not persist EmbedDb quarantine for ${relPath} — ${
+            error instanceof Error ? error.message : String(error)
+          }\n`
+        );
+      }
+    }
+  }
   // v3.9.0-rc.11 (audit H1) — per-file serialization. chokidar dispatches file
   // events concurrently; without this, two rapid saves to the SAME file
   // interleave their embed-db upsert + HNSW applyDiff + shared-`rowsByLabel`
@@ -523,15 +559,25 @@ export class VaultWatcher {
       entries: ReadonlyArray<{ relPath: string; absPath: string; mtimeMs: number }>
     ): Promise<void> => {
       const known = new Map(embedDb.getSourceStates(kind).map((state) => [state.rel_path, state.mtime_ms]));
+      const quarantined = new Set(embedDb.getQuarantinedPaths(kind));
       const live = new Set<string>();
       for (const entry of entries) {
         live.add(entry.relPath);
-        if (known.get(entry.relPath) !== entry.mtimeMs) {
+        // A durable failed-generation marker is itself drift, even when the
+        // replacement deliberately preserves mtime. Startup must replay that
+        // source so a healthy generation atomically clears the marker.
+        if (quarantined.has(entry.relPath) || known.get(entry.relPath) !== entry.mtimeMs) {
           this.captureActivationPath(entry.absPath);
         }
       }
       for (const relPath of known.keys()) {
         if (!live.has(relPath)) this.captureActivationStoredIdentity(relPath, kind);
+      }
+      // A failed first ADD has a quarantine marker but no source_state. If the
+      // path vanished before restart, activation still has to clear that exact
+      // durable identity instead of carrying the marker forever.
+      for (const relPath of quarantined) {
+        if (!live.has(relPath) && !known.has(relPath)) this.captureActivationStoredIdentity(relPath, kind);
       }
     };
 
@@ -554,9 +600,9 @@ export class VaultWatcher {
    * share a lifecycle — server.ts opens both during HNSW init).
    *
    * @param hnsw - the in-memory HNSW index built by server.ts.
-   * @param rowsByLabel - the mutable label→row map shared with
-   *   `searchHybrid` (the live update writes into it so subsequent
-   *   searches see the new chunks).
+   * @param rowsByLabel - the mutable label→row metadata used for live
+   *   sidecar maintenance and persistence. Search output does not trust this
+   *   preview map: native labels are rehydrated from the current EmbedDb.
    * @param persistFile - v3.9.0-rc.6: optional sidecar base path
    *   (`<embed-db-without-suffix>.hnsw`). When provided AND HNSW live
    *   updates occurred, the watcher re-persists the index at close time
@@ -684,8 +730,9 @@ export class VaultWatcher {
       // re-persists it. Set only after applyDiff succeeds (a thrown diff
       // leaves the on-disk sidecar as the last-known-good state).
       this.hnswDirty = true;
-      // Update the rowsByLabel map: drop old, add new. The map is shared
-      // with searchHybrid via reference; mutations are visible immediately.
+      // Update the rowsByLabel map used to persist the live native graph.
+      // Search rehydrates native labels from EmbedDb, so this receipt-free
+      // sidecar metadata is never persisted-content egress authority.
       for (const oldId of oldIds) this.hnswRowsByLabel.delete(oldId);
       for (const r of newRows) {
         this.hnswRowsByLabel.set(r.id, {
@@ -853,6 +900,7 @@ export class VaultWatcher {
         }
       }
     } catch (err) {
+      this.quarantineFailedGeneration(relPath, kind);
       this.searchHealth.semanticUsable = false;
       if (!this.silent) {
         process.stderr.write(
@@ -1531,18 +1579,19 @@ export class VaultWatcher {
    * @param absPath - Canonical note path.
    * @param relPath - Public vault-relative note path.
    * @param generation - Captured filesystem generation.
-   * @returns Staged work, or undefined when embedding preparation failed.
+   * @returns Staged work, or undefined when reading, parsing, or optional
+   *   embedding preparation failed and the source was quarantined.
    */
   private async stageMarkdownGeneration(
     absPath: string,
     relPath: string,
     generation: FileGeneration
   ): Promise<StagedMarkdownGeneration | undefined> {
-    this.vault.invalidateOne(absPath);
-    const note = await this.vault.readNote(absPath, generation.mtimeMs);
-    let embedResult: StagedEmbedResult | null | undefined;
-    if (this.embedDb && this.embedder) {
-      try {
+    try {
+      this.vault.invalidateOne(absPath);
+      const note = await this.vault.readNote(absPath, generation.mtimeMs);
+      let embedResult: StagedEmbedResult | null | undefined;
+      if (this.embedDb && this.embedder) {
         const { embedSingleNote } = await import("./embed-pipeline.js");
         embedResult = await embedSingleNote(
           this.vault,
@@ -1550,20 +1599,23 @@ export class VaultWatcher {
           { relPath, absPath, mtimeMs: generation.mtimeMs },
           { lateChunkContext: this.lateChunkContext, preReadNote: note }
         );
-      } catch (err) {
-        // Keep the previous lexical + semantic generation together when
-        // embedding preparation fails. The watcher remains fail-soft: it logs
-        // and waits for the next event/bulk reconciliation instead of throwing.
-        if (!this.silent) {
-          process.stderr.write(
-            `enquire: watcher embed-db sync failed for ${relPath} — ${err instanceof Error ? err.message : String(err)}\n`
-          );
-        }
-        if (this.activationState === "activating") throw err;
-        return undefined;
       }
+      return { note, embedResult };
+    } catch (err) {
+      this.quarantineFailedGeneration(relPath, "md");
+      // Keep the previous lexical + semantic generation together when any
+      // read/parse/embed preparation step fails. The watcher remains fail-soft:
+      // it logs and waits for the next event/bulk reconciliation.
+      if (!this.silent) {
+        process.stderr.write(
+          `enquire: watcher markdown preparation failed for ${relPath} — ${
+            err instanceof Error ? err.message : String(err)
+          }\n`
+        );
+      }
+      if (this.activationState === "activating") throw err;
+      return undefined;
     }
-    return { note, embedResult };
   }
 
   /**
@@ -1574,22 +1626,24 @@ export class VaultWatcher {
    * @param absPath - Canonical PDF path.
    * @param relPath - Public vault-relative PDF path.
    * @param generation - Captured filesystem generation.
-   * @returns Staged work, or undefined when embedding preparation failed.
+   * @returns Staged work, or undefined when binary reading, PDF extraction,
+   *   OCR, or optional embedding preparation failed and the source was
+   *   quarantined.
    */
   private async stagePdfGeneration(
     absPath: string,
     relPath: string,
     generation: FileGeneration
   ): Promise<StagedPdfGeneration | undefined> {
-    const buf = await this.vault.readBinaryFile(absPath);
-    const { extractPdfText } = await import("./pdf.js");
-    const extracted = await extractPdfText(buf);
-    const pages = extracted.pages.map((page) => ({ pageNumber: page.pageNumber, text: page.text }));
-    let embedResult: StagedEmbedResult | null | undefined;
-    let embedSource: "OCR" | "pdfjs" | null = null;
+    try {
+      const buf = await this.vault.readBinaryFile(absPath);
+      const { extractPdfText } = await import("./pdf.js");
+      const extracted = await extractPdfText(buf);
+      const pages = extracted.pages.map((page) => ({ pageNumber: page.pageNumber, text: page.text }));
+      let embedResult: StagedEmbedResult | null | undefined;
+      let embedSource: "OCR" | "pdfjs" | null = null;
 
-    if (this.embedDb && this.embedder) {
-      try {
+      if (this.embedDb && this.embedder) {
         let pagesForEmbed: ReadonlyArray<{ pageNumber: number; text: string }> = extracted.hasText ? pages : [];
         if (this.ocrPdfs && !extracted.hasText) {
           try {
@@ -1628,20 +1682,20 @@ export class VaultWatcher {
           );
           embedSource = extracted.hasText ? "pdfjs" : "OCR";
         }
-      } catch (err) {
-        if (!this.silent) {
-          process.stderr.write(
-            `enquire: watcher embed-db PDF sync failed for ${relPath} — ${
-              err instanceof Error ? err.message : String(err)
-            }\n`
-          );
-        }
-        if (this.activationState === "activating") throw err;
-        return undefined;
       }
+      return { pages, embedResult, embedSource };
+    } catch (err) {
+      this.quarantineFailedGeneration(relPath, "pdf");
+      if (!this.silent) {
+        process.stderr.write(
+          `enquire: watcher PDF preparation failed for ${relPath} — ${
+            err instanceof Error ? err.message : String(err)
+          }\n`
+        );
+      }
+      if (this.activationState === "activating") throw err;
+      return undefined;
     }
-
-    return { pages, embedResult, embedSource };
   }
 
   /**
@@ -1698,6 +1752,7 @@ export class VaultWatcher {
       }
       return embedNote;
     } catch (err) {
+      this.quarantineFailedGeneration(relPath, "md");
       this.searchHealth.semanticUsable = false;
       if (this.hnsw) this.hnswPersistUnsafe = true;
       if (!this.silent) {
@@ -1762,6 +1817,7 @@ export class VaultWatcher {
       }
       return embedNote;
     } catch (err) {
+      this.quarantineFailedGeneration(relPath, "pdf");
       this.searchHealth.semanticUsable = false;
       if (this.hnsw) this.hnswPersistUnsafe = true;
       if (!this.silent) {
@@ -1787,7 +1843,19 @@ export class VaultWatcher {
    * @param isPdf - Whether HNSW metadata uses the PDF kind.
    */
   private commitUnlinkPath(relPath: string, isPdf: boolean): void {
-    this.ftsIndex?.dropFile(relPath);
+    try {
+      this.ftsIndex?.dropFile(relPath);
+    } catch (error) {
+      this.quarantineFailedGeneration(relPath, isPdf ? "pdf" : "md");
+      if (!this.silent) {
+        process.stderr.write(
+          `enquire: watcher FTS delete failed for ${relPath} — ${
+            error instanceof Error ? error.message : String(error)
+          } (source quarantined)\n`
+        );
+      }
+      if (this.activationState === "activating") throw error;
+    }
     let unlinkHnswNote = "";
     let embedDeleteSucceeded = this.embedDb === null;
     if (this.embedDb) {
@@ -1799,6 +1867,7 @@ export class VaultWatcher {
           if (result) unlinkHnswNote = ` + hnsw -${result.removed}`;
         }
       } catch (err) {
+        this.quarantineFailedGeneration(relPath, isPdf ? "pdf" : "md");
         this.searchHealth.semanticUsable = false;
         if (!this.silent) {
           process.stderr.write(
@@ -1923,7 +1992,11 @@ export class VaultWatcher {
     const stagedPaths: StagedAliasPath[] = [];
     for (const live of liveByCanonicalPath.values()) {
       const staged = await this.stageAliasPath(live);
-      if (!staged) return "done";
+      // stageMarkdownGeneration/stagePdfGeneration already quarantine the
+      // exact failed path. Keep preparing the remaining independently-admitted
+      // aliases so one unreadable hardlink spelling cannot strand later
+      // equal-mtime spellings with live retained bytes.
+      if (!staged) continue;
       stagedPaths.push(staged);
     }
 
@@ -1958,7 +2031,11 @@ export class VaultWatcher {
     }
     for (const prepared of stagedPaths) {
       const eventKind = prepared.live.absPath === originAbsPath && kind !== "unlink" ? kind : ("change" as const);
-      if (!this.commitAliasPath(prepared, eventKind)) return "done";
+      // A live commit failure source-quarantines this exact alias in the
+      // commit catch. Continue the already-staged/revalidated group so every
+      // remaining hardlink alias independently converges or quarantines; an
+      // early return would leave later equal-mtime aliases serving old bytes.
+      if (!this.commitAliasPath(prepared, eventKind)) continue;
       if (prepared.live.physicalIdentity) {
         this.rememberPhysicalAlias(prepared.live.absPath, prepared.live.physicalIdentity);
       } else {
@@ -2174,9 +2251,11 @@ export class VaultWatcher {
 
       throw new Error("physical alias membership or source generation changed during both reconciliation attempts");
     } catch (err) {
+      const failedRelPath = this.vault.toRel(eventPath);
+      this.quarantineFailedGeneration(failedRelPath, failedRelPath.toLowerCase().endsWith(".pdf") ? "pdf" : "md");
       if (!this.silent) {
         process.stderr.write(
-          `enquire: watcher physical-alias reconciliation failed for ${this.vault.toRel(eventPath)} (${kind}) — ${
+          `enquire: watcher physical-alias reconciliation failed for ${failedRelPath} (${kind}) — ${
             err instanceof Error ? err.message : String(err)
           }\n`
         );
@@ -2254,6 +2333,7 @@ export class VaultWatcher {
 
         if (!(await this.fileGenerationIsCurrent(absPath, generation))) {
           if (attempt + 1 < FILE_GENERATION_ATTEMPTS) continue;
+          this.quarantineFailedGeneration(relPath, isPdf ? "pdf" : "md");
           const error = new Error(
             `source changed during both preparation attempts; keeping the previous indexed generation`
           );
@@ -2278,6 +2358,7 @@ export class VaultWatcher {
         return;
       }
     } catch (err) {
+      this.quarantineFailedGeneration(relPath, isPdf ? "pdf" : "md");
       if (!this.silent) {
         process.stderr.write(
           `enquire: watcher skip ${relPath} (${kind}) — ${err instanceof Error ? err.message : String(err)}\n`

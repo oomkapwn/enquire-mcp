@@ -93,19 +93,26 @@ function seedPriorRow(db: EmbedDb, relPath: string, mtimeMs = 1, kind: "md" | "p
   );
 }
 
-function expectPriorRowPreserved(db: EmbedDb, relPath: string, kind: "md" | "pdf" = "md"): void {
+function expectPriorRowPreserved(db: EmbedDb, relPath: string, kind: "md" | "pdf" = "md", quarantined = false): void {
   expect(db.getSourceStates(kind).find((state) => state.rel_path === relPath)).toEqual({
     rel_path: relPath,
     mtime_ms: 1
   });
-  expect(db.search(new Float32Array([1, 0, 0, 0]), 5).find((hit) => hit.rel_path === relPath)).toEqual(
-    expect.objectContaining({
-      rel_path: relPath,
-      chunk_index: 0,
-      text_preview: "prior canonical row",
-      kind
-    })
-  );
+  const hit = db.search(new Float32Array([1, 0, 0, 0]), 5).find((row) => row.rel_path === relPath);
+  if (quarantined) {
+    expect(hit).toBeUndefined();
+    expect(db.getQuarantinedPaths(kind)).toContain(relPath);
+  } else {
+    expect(hit).toEqual(
+      expect.objectContaining({
+        rel_path: relPath,
+        chunk_index: 0,
+        text_preview: "prior canonical row",
+        kind
+      })
+    );
+    expect(db.getQuarantinedPaths(kind)).not.toContain(relPath);
+  }
 }
 
 describe("bulk embedding synchronization evidence", () => {
@@ -210,6 +217,7 @@ describe("bulk embedding synchronization evidence", () => {
         rel_path: "z-sibling.md"
       })
     ]);
+    expect(db.getQuarantinedPaths("md")).toEqual(["a-failing.md"]);
   });
 
   it("strict injected failure rejects without a report and preserves the bad note's prior rows and state", async () => {
@@ -232,7 +240,7 @@ describe("bulk embedding synchronization evidence", () => {
     expect(caught.report).toBeNull();
     expect(caught.message).toContain("a-failing.md");
     expect(caught.cause).toBeInstanceOf(Error);
-    expectPriorRowPreserved(db, "a-failing.md");
+    expectPriorRowPreserved(db, "a-failing.md", "md", true);
     expect(db.getSourceStates("md").some((state) => state.rel_path === "z-unreached.md")).toBe(false);
   });
 
@@ -244,8 +252,37 @@ describe("bulk embedding synchronization evidence", () => {
     const sync = syncEmbedDb(new Vault(root), db, deterministicEmbedder(), { mode: "strict" });
     await expect(sync).rejects.toThrow("note has no embeddable chunks");
 
-    expectPriorRowPreserved(db, "metadata-only.md");
+    expectPriorRowPreserved(db, "metadata-only.md", "md", true);
+
+    await assertSameMtimeMarkdownQuarantineRetry();
   });
+
+  async function assertSameMtimeMarkdownQuarantineRetry(): Promise<void> {
+    const scenarioRoot = path.join(root, "same-mtime-quarantine-retry");
+    await fs.mkdir(scenarioRoot, { recursive: true });
+    const absPath = path.join(scenarioRoot, "retry.md");
+    await fs.writeFile(absPath, "Healthy content must be embedded on the forced retry.\n");
+    const stat = await fs.stat(absPath);
+    const db = new EmbedDb({
+      file: path.join(scenarioRoot, ".cache", "test.embed.db"),
+      vaultRoot: scenarioRoot,
+      modelAlias: MODEL.alias,
+      dim: DIM
+    });
+    await db.open();
+    openDbs.push(db);
+    seedPriorRow(db, "retry.md", stat.mtimeMs);
+    db.quarantineSource("retry.md", "md");
+    const embedder = deterministicEmbedder();
+    const embedSpy = vi.spyOn(embedder, "embed");
+
+    const report = await syncEmbedDb(new Vault(scenarioRoot), db, embedder);
+
+    expect(embedSpy).toHaveBeenCalled();
+    expect(report).toMatchObject({ updated: 1, unchanged: 0, failed: 0 });
+    expect(db.getQuarantinedPaths("md")).toEqual([]);
+    expect(db.search(new Float32Array([1, 0, 0, 0]), 5).some((hit) => hit.rel_path === "retry.md")).toBe(true);
+  }
 
   it("strict PDF sync uses the same complete evidence contract for a text PDF", async () => {
     await fs.writeFile(path.join(root, "paper.pdf"), makePdf({ pages: ["Evidence-grade PDF body"] }));
@@ -289,7 +326,7 @@ describe("bulk embedding synchronization evidence", () => {
     await expect(
       syncPdfEmbedDb(new Vault(root), db, deterministicEmbedder("FAIL_NEEDLE"), { mode: "strict" })
     ).rejects.toThrow("strict PDF embed sync rejected 0-empty.pdf");
-    expectPriorRowPreserved(db, "0-empty.pdf", "pdf");
+    expectPriorRowPreserved(db, "0-empty.pdf", "pdf", true);
 
     const failSoft = await syncPdfEmbedDb(new Vault(root), db, deterministicEmbedder("FAIL_NEEDLE"));
     expect(failSoft).toMatchObject({
@@ -304,15 +341,40 @@ describe("bulk embedding synchronization evidence", () => {
       complete: false
     });
     expect(db.getSourceStates("pdf").some((state) => state.rel_path === "0-empty.pdf")).toBe(false);
-    expectPriorRowPreserved(db, "a-failing.pdf", "pdf");
+    expectPriorRowPreserved(db, "a-failing.pdf", "pdf", true);
     expect(db.getSourceStates("pdf").some((state) => state.rel_path === "z-sibling.pdf")).toBe(true);
 
     await fs.unlink(path.join(root, "0-empty.pdf"));
     await expect(
       syncPdfEmbedDb(new Vault(root), db, deterministicEmbedder("FAIL_NEEDLE"), { mode: "strict" })
     ).rejects.toThrow("strict PDF embed sync rejected a-failing.pdf");
-    expectPriorRowPreserved(db, "a-failing.pdf", "pdf");
+    expectPriorRowPreserved(db, "a-failing.pdf", "pdf", true);
+
+    await assertMarkerOnlyEmptyPdfHealing();
   });
+
+  async function assertMarkerOnlyEmptyPdfHealing(): Promise<void> {
+    const scenarioRoot = path.join(root, "marker-only-pdf-retry");
+    await fs.mkdir(scenarioRoot, { recursive: true });
+    await fs.writeFile(path.join(scenarioRoot, "marker-only.pdf"), makePdf({ pages: [""] }));
+    const db = new EmbedDb({
+      file: path.join(scenarioRoot, ".cache", "test.embed.db"),
+      vaultRoot: scenarioRoot,
+      modelAlias: MODEL.alias,
+      dim: DIM
+    });
+    await db.open();
+    openDbs.push(db);
+    db.quarantineSource("marker-only.pdf", "pdf");
+    expect(db.getSourceStates("pdf")).toEqual([]);
+    expect(db.getQuarantinedPaths("pdf")).toEqual(["marker-only.pdf"]);
+
+    const report = await syncPdfEmbedDb(new Vault(scenarioRoot), db, deterministicEmbedder());
+
+    expect(report).toMatchObject({ added: 0, updated: 0, empty: 1, failed: 0, mismatched_files: 0 });
+    expect(db.getSourceStates("pdf")).toEqual([]);
+    expect(db.getQuarantinedPaths("pdf")).toEqual([]);
+  }
 
   it("(negative control) strict mode rejects a forged final physical audit with its evidence attached", async () => {
     await writeNote("note.md", "A valid note whose final audit will be replaced.\n");

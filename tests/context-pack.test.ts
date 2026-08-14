@@ -104,19 +104,25 @@ describe("contextPack (v3.8.0-rc.8 T-1)", () => {
     // binary payload can decode to text without throwing and leak garbage into
     // the bundle. The kind branch must surface the path for read_pdf instead.
     await fs.writeFile(path.join(root, "evidence.pdf"), "PDF_BINARY_SENTINEL evidence");
-    const pdfIndex = {
-      search: () => [
-        {
-          rel_path: "evidence.pdf",
-          chunk_index: 0,
-          line_start: 1,
-          line_end: 1,
-          snippet: "evidence",
-          score: 10,
-          kind: "pdf" as const
-        }
-      ]
+    const pdfMtimeMs = (await fs.stat(path.join(root, "evidence.pdf"))).mtimeMs;
+    const pdfLegacyHit = {
+      rel_path: "evidence.pdf",
+      chunk_index: 0,
+      line_start: 1,
+      line_end: 1,
+      snippet: "evidence",
+      score: 10,
+      kind: "pdf" as const
     };
+    const pdfIndex = {
+      search: () => [pdfLegacyHit],
+      searchWithReceipts: () => [{ ...pdfLegacyHit, indexed_mtime_ms: pdfMtimeMs, indexed_revision: 1 }],
+      currentSourceReceiptMask: (receipts: readonly unknown[]) => receipts.map(() => true)
+    };
+    expect(pdfIndex.search()[0]).not.toHaveProperty("indexed_mtime_ms");
+    expect(pdfIndex.searchWithReceipts()[0]).toEqual(
+      expect.objectContaining({ indexed_mtime_ms: pdfMtimeMs, indexed_revision: 1 })
+    );
     const pdfResult = await contextPack(
       v,
       // The header alone exhausts this budget. PDF follow-up metadata must

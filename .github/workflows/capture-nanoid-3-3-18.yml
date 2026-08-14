@@ -123,6 +123,10 @@ jobs:
             `${JSON.stringify({ ...receipt, fixtureSha256: sha256(afterText) }, null, 2)}\n`
           );
           NODE
+          cat "$capture_dir/lock-receipt.json"
+          cat "$capture_dir/fixture-receipt.json"
+          echo "::error::Diagnostic receipt replay stops after all guards"
+          exit 42
 
       - name: Upload bounded capture
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7

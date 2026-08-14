@@ -2566,17 +2566,17 @@ describe("K-1 class invariant (v3.6.3 methodological guard; recursive scan since
     );
 
     const searchRefusalNestedBlockSwallowed = replaceExactly(
-      searchSource,
-      "  const discovered = await discoverEmbedDbConfigCached(embedFile, vault.root);\n" +
-        '  if (discovered.kind === "refused") {\n' +
+      replaceExactly(
+        searchSource,
+        "  const discovered = await discoverEmbedDbConfigCached(embedFile, vault.root);\n",
+        "  try {\n    {\n      const discovered = await discoverEmbedDbConfigCached(embedFile, vault.root);\n"
+      ),
+      '  if (discovered.kind === "refused") {\n' +
         '    throw new Error("Embedding index configuration could not be verified");\n' +
         "  }\n",
-      "  try {\n" +
-        "    {\n" +
-        "      const discovered = await discoverEmbedDbConfigCached(embedFile, vault.root);\n" +
-        '      if (discovered.kind === "refused") {\n' +
-        '        throw new Error("Embedding index configuration could not be verified");\n' +
-        "      }\n" +
+      '  if (discovered.kind === "refused") {\n' +
+        '    throw new Error("Embedding index configuration could not be verified");\n' +
+        "  }\n" +
         "    }\n" +
         "  } catch {}\n"
     );

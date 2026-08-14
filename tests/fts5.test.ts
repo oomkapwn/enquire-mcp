@@ -929,10 +929,15 @@ describe("FtsIndex — full lifecycle", () => {
     }
     const malformedShadowReloaded = new Database(malformedShadowFile);
     try {
-      const shadowMutation = malformedShadowReloaded
-        .prepare("UPDATE chunks_data SET foreign_payload = ? WHERE id = (SELECT min(id) FROM chunks_data)")
-        .run(Buffer.from([0xde, 0xad, 0x00, 0xbe, 0xef]));
-      expect(shadowMutation.changes).toBeGreaterThan(0);
+      malformedShadowReloaded.unsafeMode(true);
+      try {
+        const shadowMutation = malformedShadowReloaded
+          .prepare("UPDATE chunks_data SET foreign_payload = ? WHERE id = (SELECT min(id) FROM chunks_data)")
+          .run(Buffer.from([0xde, 0xad, 0x00, 0xbe, 0xef]));
+        expect(shadowMutation.changes).toBeGreaterThan(0);
+      } finally {
+        malformedShadowReloaded.unsafeMode(false);
+      }
     } finally {
       malformedShadowReloaded.close();
     }

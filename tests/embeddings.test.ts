@@ -59,12 +59,10 @@ describe("resolveModel", () => {
     }).toThrow(TypeError);
     expect(current.quantization).toBe("int8");
     expect(
-      resolveStoredEmbeddingConfiguration({ schema_version: "1", model_alias: "bge", dim: "384" })
-        .quantization
+      resolveStoredEmbeddingConfiguration({ schema_version: "1", model_alias: "bge", dim: "384" }).quantization
     ).toBe("f32");
     expect(
-      resolveStoredEmbeddingConfiguration({ schema_version: "2", model_alias: "multilingual", dim: "384" })
-        .quantization
+      resolveStoredEmbeddingConfiguration({ schema_version: "2", model_alias: "multilingual", dim: "384" }).quantization
     ).toBe("f32");
 
     for (const untrusted of [

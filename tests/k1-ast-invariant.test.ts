@@ -108,7 +108,7 @@ const PRODUCTION_FILE_PINS: Readonly<Record<string, ProductionFilePin>> = {
       "./tool-registry.js|parseQuantizationMode|parseQuantizationMode"
     ],
     k1Opens: 6,
-    sha256: "175cf6625f0d497ab38a9a0a5f2ffcc06a152ba938fe7d9d6c9694072c48c291"
+    sha256: "f9bce96c418b15384dd305a23aaaf71f08434c8ffb07176d0d40d0073f305377"
   },
   "src/server.ts": {
     constructors: { EmbedDb: 2, FtsIndex: 1 },
@@ -127,7 +127,7 @@ const PRODUCTION_FILE_PINS: Readonly<Record<string, ProductionFilePin>> = {
       "./fts5.js|discoverFtsIndexConfig|discoverFtsIndexConfig"
     ],
     k1Opens: 3,
-    sha256: "7e618f1724d631fda39c2403f57c414077d8b23174ba88e4b327582ce109d59d"
+    sha256: "16a64c309e9e84b5e0b7eb9d282b1a8d2d5f89f6b57ebd11fa77f4ff3baaf413"
   },
   "src/tools/search.ts": {
     constructors: { EmbedDb: 1, FtsIndex: 0 },
@@ -143,7 +143,7 @@ const PRODUCTION_FILE_PINS: Readonly<Record<string, ProductionFilePin>> = {
       "../embeddings.js|resolveStoredEmbeddingConfiguration|resolveStoredEmbeddingConfiguration"
     ],
     k1Opens: 1,
-    sha256: "7034d1bcfba5f308aaeecbe8f06d4d9a6817784881bdf89164fb805559346e27"
+    sha256: "afd6c10c6404ac4b55f9025c4776b7756d9e75da60ad1fbee88b631b35259a2c"
   }
 };
 
@@ -741,7 +741,7 @@ function hasUnpinnedK1Surface(sourceFile: ts.SourceFile): boolean {
       for (const element of clause.elements) {
         if (element.isTypeOnly) continue;
         const exportedOriginal = element.propertyName?.text ?? element.name.text;
-        if (RELEVANT_IMPORT_NAMES.has(exportedOriginal)) return true;
+        if (operationalImports.has(exportedOriginal)) return true;
       }
     }
   }
@@ -778,15 +778,6 @@ function hasUnpinnedK1Surface(sourceFile: ts.SourceFile): boolean {
         firstArgument &&
         ts.isIdentifier(firstArgument)
       ) {
-        found = true;
-        return;
-      }
-      const name = ts.isIdentifier(node.expression)
-        ? node.expression.text
-        : ts.isPropertyAccessExpression(node.expression)
-          ? node.expression.name.text
-          : undefined;
-      if (name?.startsWith("discoverEmbedDbConfig") || name === "discoverFtsIndexConfig") {
         found = true;
         return;
       }
@@ -2912,6 +2903,31 @@ describe("K-1 AST invariant (v3.7.0 M-2 — strengthens v3.6.4 grep-based guard)
       analyzeSource(
         path.join(process.cwd(), "src/resolver-only-consumer.ts"),
         resolverOnlyConsumer,
+        false,
+        true
+      )
+    ).toEqual([]);
+    const resolverOnlyReexport =
+      'export { parseQuantizationMode } from "./tool-registry.js";\n';
+    expect(
+      analyzeSource(
+        path.join(process.cwd(), "src/resolver-only-reexport.ts"),
+        resolverOnlyReexport,
+        false,
+        true
+      )
+    ).toEqual([]);
+    const providerInternalDiscovery = `
+export async function discoverEmbedDbConfig(file, vaultRoot) {
+  return discoverEmbedDbConfigCached(file, vaultRoot);
+}
+async function discoverEmbedDbConfigCached(file, vaultRoot) {
+  return discoverEmbedDbConfig(file, vaultRoot);
+}`;
+    expect(
+      analyzeSource(
+        path.join(process.cwd(), "src/embed-db-provider-internal.ts"),
+        providerInternalDiscovery,
         false,
         true
       )

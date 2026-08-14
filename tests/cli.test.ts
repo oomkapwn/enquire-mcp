@@ -746,8 +746,7 @@ describe("CLI subcommands E2E (against built dist/)", () => {
   });
 
   const preserveTrigramTestName =
-    "`enquire-mcp index --tokenize trigram` then re-run WITHOUT --tokenize " +
-    "PRESERVES trigram (v3.6.4 K-1 fix)";
+    "`enquire-mcp index --tokenize trigram` then re-run WITHOUT --tokenize " + "PRESERVES trigram (v3.6.4 K-1 fix)";
   it(preserveTrigramTestName, async (ctx) => {
     if (!distExists()) return ctx.skip();
     if (!canRunFts5) return ctx.skip();
@@ -764,11 +763,10 @@ describe("CLI subcommands E2E (against built dist/)", () => {
     await expect(fs.stat(rejectedCustom)).rejects.toThrow();
 
     const rejectedDefault = defaultIndexFile(await fs.realpath(vault));
-    const invalidDefault = spawnSync(
-      process.execPath,
-      [distEntry, "index", "--vault", vault, "--tokenize", "porter"],
-      { encoding: "utf8", timeout: 20000 }
-    );
+    const invalidDefault = spawnSync(process.execPath, [distEntry, "index", "--vault", vault, "--tokenize", "porter"], {
+      encoding: "utf8",
+      timeout: 20000
+    });
     expect(invalidDefault.status).not.toBe(0);
     expect(`${invalidDefault.stdout ?? ""}${invalidDefault.stderr ?? ""}`).toMatch(
       /--tokenize.*unicode61.*trigram.*porter/is
@@ -990,9 +988,7 @@ describe("CLI subcommands E2E (against built dist/)", () => {
       try {
         return {
           schema: inspect
-            .prepare(
-              "SELECT type, name, sql FROM sqlite_master WHERE name NOT GLOB 'sqlite_*' ORDER BY type, name"
-            )
+            .prepare("SELECT type, name, sql FROM sqlite_master WHERE name NOT GLOB 'sqlite_*' ORDER BY type, name")
             .all(),
           meta: inspect.prepare("SELECT key, value FROM meta ORDER BY key").all(),
           rows: inspect
@@ -1006,11 +1002,10 @@ describe("CLI subcommands E2E (against built dist/)", () => {
     const setupLogicalBefore = setupLogicalSnapshot();
     const combinedSetupGuard = await armWatcherActivationGuard(embedFile);
     try {
-      const combinedSetup = spawnSync(
-        process.execPath,
-        [distEntry, "setup", "--vault", vault, "--skip-embeddings"],
-        { encoding: "utf8", timeout: 10_000 }
-      );
+      const combinedSetup = spawnSync(process.execPath, [distEntry, "setup", "--vault", vault, "--skip-embeddings"], {
+        encoding: "utf8",
+        timeout: 10_000
+      });
       const combinedRefusal = `${combinedSetup.stdout ?? ""}${combinedSetup.stderr ?? ""}`;
       expect(combinedSetup.status).not.toBe(0);
       expect(combinedRefusal).toMatch(/Embedding index ownership could not be verified/i);
@@ -1070,11 +1065,10 @@ describe("CLI subcommands E2E (against built dist/)", () => {
       }
     };
     const ftsLogicalBeforeRefusal = ftsLogicalSnapshot();
-    const unverifiedSetup = spawnSync(
-      process.execPath,
-      [distEntry, "setup", "--vault", vault, "--skip-embeddings"],
-      { encoding: "utf8", timeout: 10_000 }
-    );
+    const unverifiedSetup = spawnSync(process.execPath, [distEntry, "setup", "--vault", vault, "--skip-embeddings"], {
+      encoding: "utf8",
+      timeout: 10_000
+    });
     const unverifiedFtsRefusal = `${unverifiedSetup.stdout ?? ""}${unverifiedSetup.stderr ?? ""}`;
     expect(unverifiedSetup.status).not.toBe(0);
     expect(unverifiedFtsRefusal).toMatch(/FTS index configuration could not be verified/i);
@@ -1316,9 +1310,7 @@ describe("CLI subcommands E2E (against built dist/)", () => {
       await releaseWatcherActivationGuard(wrongClassGuard);
     }
     await Promise.all(
-      [customEmbedFile, `${customEmbedFile}-wal`, `${customEmbedFile}-shm`].map((file) =>
-        fs.rm(file, { force: true })
-      )
+      [customEmbedFile, `${customEmbedFile}-wal`, `${customEmbedFile}-shm`].map((file) => fs.rm(file, { force: true }))
     );
 
     // NEGATIVE control: prove the same child-process tripwire would record

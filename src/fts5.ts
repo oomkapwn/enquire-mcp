@@ -510,24 +510,10 @@ const FTS_CHUNK_COLUMNS_BY_SCHEMA = new Map<number, readonly string[]>([
   [1, ["content", "rel_path", "chunk_index", "line_start", "line_end"]],
   [2, ["content", "rel_path", "chunk_index", "line_start", "line_end", "tags"]],
   [3, ["content", "rel_path", "chunk_index", "line_start", "line_end", "tags", "raw_content"]],
-  [
-    4,
-    ["content", "rel_path", "chunk_index", "line_start", "line_end", "tags", "raw_content", "kind"]
-  ],
+  [4, ["content", "rel_path", "chunk_index", "line_start", "line_end", "tags", "raw_content", "kind"]],
   [
     5,
-    [
-      "content",
-      "title",
-      "aliases",
-      "rel_path",
-      "chunk_index",
-      "line_start",
-      "line_end",
-      "tags",
-      "raw_content",
-      "kind"
-    ]
+    ["content", "title", "aliases", "rel_path", "chunk_index", "line_start", "line_end", "tags", "raw_content", "kind"]
   ],
   [
     6,
@@ -747,12 +733,14 @@ function ftsShadowAdmissionTables(contentColumnCount: number): ReadonlyArray<{
   name: string;
   sql: string;
 }> {
-  const column = (
-    name: string,
-    type: string,
-    notnull: number,
-    pk: number
-  ): ExpectedSqliteXColumn => ({ name, type, notnull, dflt_value: null, pk, hidden: 0 });
+  const column = (name: string, type: string, notnull: number, pk: number): ExpectedSqliteXColumn => ({
+    name,
+    type,
+    notnull,
+    dflt_value: null,
+    pk,
+    hidden: 0
+  });
   const contentColumns = Array.from({ length: contentColumnCount }, (_, index) => `c${index}`);
   return [
     {
@@ -767,13 +755,8 @@ function ftsShadowAdmissionTables(contentColumnCount: number): ReadonlyArray<{
     },
     {
       name: "chunks_content",
-      sql: `CREATE TABLE chunks_content(id INTEGER PRIMARY KEY${contentColumns
-        .map((name) => `, ${name}`)
-        .join("")})`,
-      columns: [
-        column("id", "INTEGER", 0, 1),
-        ...contentColumns.map((name) => column(name, "", 0, 0))
-      ]
+      sql: `CREATE TABLE chunks_content(id INTEGER PRIMARY KEY${contentColumns.map((name) => `, ${name}`).join("")})`,
+      columns: [column("id", "INTEGER", 0, 1), ...contentColumns.map((name) => column(name, "", 0, 0))]
     },
     {
       name: "chunks_docsize",
@@ -801,7 +784,7 @@ function readExactFtsShadowTable(
       `SELECT cid,
               substr(name, 1, ?) AS name,
               substr(type, 1, ?) AS type,
-              notnull,
+              "notnull",
               CASE WHEN dflt_value IS NULL THEN NULL ELSE substr(CAST(dflt_value AS TEXT), 1, ?) END AS dflt_value,
               pk,
               hidden
@@ -848,7 +831,7 @@ function hasExactFtsAdmissionTable(
   if (normalizeFtsAdmissionSql(actualSql) !== normalizeFtsAdmissionSql(expectedSql)) return false;
   const columns = db
     .prepare(
-      "SELECT cid, name, type, notnull, dflt_value, pk FROM pragma_table_info(?) ORDER BY cid LIMIT ?"
+      "SELECT cid, name, type, \"notnull\", dflt_value, pk FROM pragma_table_info(?) ORDER BY cid LIMIT ?"
     )
     .all<SqliteColumnInfo>(table, expectedColumns.length + 1);
   return (
@@ -1220,11 +1203,7 @@ export class FtsIndex {
           name: string;
           sql: string | null;
           type: string;
-        }>(
-          MAX_FTS_ADMISSION_NAME_CHARS + 1,
-          MAX_FTS_ADMISSION_SQL_CHARS + 1,
-          MAX_FTS_ADMISSION_OBJECTS + 1
-        );
+        }>(MAX_FTS_ADMISSION_NAME_CHARS + 1, MAX_FTS_ADMISSION_SQL_CHARS + 1, MAX_FTS_ADMISSION_OBJECTS + 1);
     } catch {
       throw new Error("Refusing to open a populated SQLite database without valid FTS ownership metadata");
     }
@@ -1266,15 +1245,13 @@ export class FtsIndex {
     try {
       metaColumns = db
         .prepare(
-          "SELECT cid, name, type, notnull, dflt_value, pk FROM pragma_table_info('meta') ORDER BY cid LIMIT 3"
+          "SELECT cid, name, type, \"notnull\", dflt_value, pk FROM pragma_table_info('meta') ORDER BY cid LIMIT 3"
         )
         .all<SqliteColumnInfo>();
-      rows = db
-        .prepare("SELECT substr(key, 1, ?) AS key, substr(value, 1, ?) AS value FROM meta LIMIT 4")
-        .all<{
-          key: unknown;
-          value: unknown;
-        }>(MAX_FTS_ADMISSION_NAME_CHARS + 1, MAX_FTS_META_VALUE_CHARS + 1);
+      rows = db.prepare("SELECT substr(key, 1, ?) AS key, substr(value, 1, ?) AS value FROM meta LIMIT 4").all<{
+        key: unknown;
+        value: unknown;
+      }>(MAX_FTS_ADMISSION_NAME_CHARS + 1, MAX_FTS_META_VALUE_CHARS + 1);
     } catch {
       throw new Error("Refusing to open a populated SQLite database without valid FTS ownership metadata");
     }
@@ -1355,8 +1332,7 @@ export class FtsIndex {
     const declaredColumns = expectedChunkColumns
       .map((name) => `${name}${unindexedColumns.has(name) ? " UNINDEXED" : ""}`)
       .join(",\n  ");
-    const declaredTokenizer =
-      exactStoredTokenize === "trigram" ? "trigram" : "unicode61 remove_diacritics 2";
+    const declaredTokenizer = exactStoredTokenize === "trigram" ? "trigram" : "unicode61 remove_diacritics 2";
     const expectedChunksSql = `CREATE VIRTUAL TABLE IF NOT EXISTS chunks USING fts5(
   ${declaredColumns},
   tokenize='${declaredTokenizer}'
@@ -1369,13 +1345,7 @@ export class FtsIndex {
       shadowColumns = ftsShadowAdmissionTables(expectedChunkColumns.length).map((shadow) => {
         const actualSql = objects.get(shadow.name)?.sql;
         if (typeof actualSql !== "string") throw new Error("missing FTS shadow table");
-        const columns = readExactFtsShadowTable(
-          db,
-          actualSql,
-          shadow.sql,
-          shadow.name,
-          shadow.columns
-        );
+        const columns = readExactFtsShadowTable(db, actualSql, shadow.sql, shadow.name, shadow.columns);
         if (columns === null) throw new Error("invalid FTS shadow table");
         return { name: shadow.name, columns };
       });
@@ -1387,12 +1357,12 @@ export class FtsIndex {
     try {
       chunkColumns = db
         .prepare(
-          "SELECT cid, name, type, notnull, dflt_value, pk FROM pragma_table_info('chunks') ORDER BY cid LIMIT 12"
+          "SELECT cid, name, type, \"notnull\", dflt_value, pk FROM pragma_table_info('chunks') ORDER BY cid LIMIT 12"
         )
         .all<SqliteColumnInfo>();
       sourceStateColumns = db
         .prepare(
-          "SELECT cid, name, type, notnull, dflt_value, pk " +
+          "SELECT cid, name, type, \"notnull\", dflt_value, pk " +
             "FROM pragma_table_info('source_state') ORDER BY cid LIMIT 6"
         )
         .all<SqliteColumnInfo>();
@@ -2756,10 +2726,7 @@ export function planCachePrune(entries: readonly string[], keepHash: string): st
  * await index.open(discovery);
  * ```
  */
-export async function discoverFtsIndexConfig(
-  file: string,
-  expectedVaultRoot: string
-): Promise<FtsIndexDiscovery> {
+export async function discoverFtsIndexConfig(file: string, expectedVaultRoot: string): Promise<FtsIndexDiscovery> {
   try {
     const indexStat = await fs.lstat(file);
     if (!indexStat.isFile()) return { kind: "refused" };
@@ -2783,9 +2750,7 @@ export async function discoverFtsIndexConfig(
       vaultRoot: expectedVaultRoot
     });
     const admission = inspector.inspectReadonlyHandle(db);
-    discovery = admission.kind === "empty"
-      ? { kind: "empty" }
-      : { kind: "owned", meta: admission.meta };
+    discovery = admission.kind === "empty" ? { kind: "empty" } : { kind: "owned", meta: admission.meta };
   } catch {
     discovery = { kind: "refused" };
   } finally {
@@ -2822,7 +2787,10 @@ export async function discoverFtsIndexConfig(
  * console.log(meta?.schema_version); // diagnostic only
  * ```
  */
-export async function peekFtsMetaSafe(file: string, expectedVaultRoot?: string): Promise<{
+export async function peekFtsMetaSafe(
+  file: string,
+  expectedVaultRoot?: string
+): Promise<{
   schema_version?: string;
   vault_root?: string;
   tokenize_mode?: TokenizeMode;
@@ -2846,10 +2814,7 @@ export async function peekFtsMetaSafe(file: string, expectedVaultRoot?: string):
     if (!tableCheck) return null;
     const rows = db
       .prepare("SELECT substr(key, 1, ?) AS key, substr(value, 1, ?) AS value FROM meta LIMIT 4")
-      .all<{ key: unknown; value: unknown }>(
-        MAX_FTS_ADMISSION_NAME_CHARS + 1,
-        MAX_FTS_META_VALUE_CHARS + 1
-      );
+      .all<{ key: unknown; value: unknown }>(MAX_FTS_ADMISSION_NAME_CHARS + 1, MAX_FTS_META_VALUE_CHARS + 1);
     if (rows.length !== 3) return null;
     const meta: { schema_version?: string; vault_root?: string; tokenize_mode?: TokenizeMode } = {};
     for (const row of rows) {
@@ -2870,11 +2835,7 @@ export async function peekFtsMetaSafe(file: string, expectedVaultRoot?: string):
         meta.tokenize_mode = row.value;
       } else return null;
     }
-    if (
-      meta.schema_version === undefined ||
-      meta.vault_root === undefined ||
-      meta.tokenize_mode === undefined
-    ) {
+    if (meta.schema_version === undefined || meta.vault_root === undefined || meta.tokenize_mode === undefined) {
       return null;
     }
     if (expectedVaultRoot !== undefined && meta.vault_root !== expectedVaultRoot) return null;

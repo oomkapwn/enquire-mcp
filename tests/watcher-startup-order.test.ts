@@ -180,10 +180,7 @@ function isActivationRecoveryRethrow(statement: ts.ThrowStatement, caughtName: s
 }
 
 /** Require one EmbedDb cleanup call before every direct escape from a catch. */
-function catchClosesWatcherEmbedBeforeEscape(
-  catchClause: ts.CatchClause,
-  closeCalls: WatcherCall[]
-): boolean {
+function catchClosesWatcherEmbedBeforeEscape(catchClause: ts.CatchClause, closeCalls: WatcherCall[]): boolean {
   const matchingCloses = closeCalls.filter(({ call }) => isWithin(call, catchClause.block));
   const escapes: ts.Statement[] = [];
   const visit = (node: ts.Node): void => {
@@ -193,7 +190,7 @@ function catchClosesWatcherEmbedBeforeEscape(
   };
   visit(catchClause.block);
   const close = matchingCloses[0];
-  return matchingCloses.length === 1 && close !== undefined && escapes.every((escape) => close.position < escape.pos);
+  return matchingCloses.length === 1 && close !== undefined && escapes.every((exit) => close.position < exit.pos);
 }
 
 /**
@@ -341,9 +338,7 @@ function watcherStartupOrderViolations(source: string): string[] {
     }
   }
   if (watcherEmbedFailureCloses.length !== 2) {
-    violations.push(
-      `expected exactly two watcher EmbedDb failure cleanups, found ${watcherEmbedFailureCloses.length}`
-    );
+    violations.push(`expected exactly two watcher EmbedDb failure cleanups, found ${watcherEmbedFailureCloses.length}`);
   }
   if (
     !watcherStartupTry?.catchClause ||
@@ -1020,9 +1015,7 @@ describe("watcher startup activation ordering (v3.12.0-rc.25 S-8c)", () => {
     );
 
     const unawaitedOpen = GOOD_STARTUP.replace("await watcherEmbedDb.open()", "watcherEmbedDb.open()");
-    expect(watcherStartupOrderViolations(unawaitedOpen)).toContain(
-      "watcher EmbedDb open must be directly awaited"
-    );
+    expect(watcherStartupOrderViolations(unawaitedOpen)).toContain("watcher EmbedDb open must be directly awaited");
 
     const lateArmAttempt = GOOD_STARTUP.replace(
       "        guardArmAttempted = true;\n        watcherActivationGuard = await armWatcherActivationGuard(embedFile);",
@@ -1076,8 +1069,8 @@ describe("watcher startup activation ordering (v3.12.0-rc.25 S-8c)", () => {
       "      if (watcherActivationGuard) {\n        await releaseWatcherActivationGuard(watcherActivationGuard);\n        watcherActivationGuard = null;\n      }\n",
       ""
     ).replace(
-      "    } catch (error) {\n      await watcher.close();",
-      "    } catch (error) {\n      if (watcherActivationGuard) {\n        await releaseWatcherActivationGuard(watcherActivationGuard);\n        watcherActivationGuard = null;\n      }\n      await watcher.close();"
+      '    } catch (error) {\n      closeWatcherEmbedDbAfterFailure(watcherEmbedDb, "watcher activation");\n      watcherEmbedDb = null;\n      await watcher.close();',
+      '    } catch (error) {\n      closeWatcherEmbedDbAfterFailure(watcherEmbedDb, "watcher activation");\n      watcherEmbedDb = null;\n      if (watcherActivationGuard) {\n        await releaseWatcherActivationGuard(watcherActivationGuard);\n        watcherActivationGuard = null;\n      }\n      await watcher.close();'
     );
     expect(watcherStartupOrderViolations(releaseInFailureCatch)).toContain(
       "activation guard release must stay on watcher.activate() successful try path"

@@ -541,10 +541,7 @@ interface RefusalDiscoveryBinding {
 }
 
 /** Locate the one direct variable binding initialized by the reviewed discovery call. */
-function refusalDiscoveryBinding(
-  sourceFile: ts.SourceFile,
-  discovery: string
-): RefusalDiscoveryBinding | null {
+function refusalDiscoveryBinding(sourceFile: ts.SourceFile, discovery: string): RefusalDiscoveryBinding | null {
   const matches: RefusalDiscoveryBinding[] = [];
   const visit = (node: ts.Node): void => {
     if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer) {
@@ -559,11 +556,7 @@ function refusalDiscoveryBinding(
       inspectInitializer(node.initializer);
       const declarationList = node.parent;
       const statement = declarationList.parent;
-      if (
-        containsDiscovery &&
-        ts.isVariableStatement(statement) &&
-        ts.isBlock(statement.parent)
-      ) {
+      if (containsDiscovery && ts.isVariableStatement(statement) && ts.isBlock(statement.parent)) {
         matches.push({ block: statement.parent, name: node.name.text, statement });
       }
     }
@@ -633,10 +626,7 @@ function boundRefusalBranch(
 ): BoundRefusalBranch | null {
   const sourceFile = ts.createSourceFile("refusal-section.ts", section, ts.ScriptTarget.Latest, true);
   const discoveryBinding = refusalDiscoveryBinding(sourceFile, discovery);
-  if (
-    !discoveryBinding ||
-    !isDirectReachableCallerBlock(discoveryBinding.block, reviewedTryAncestors)
-  ) {
+  if (!discoveryBinding || !isDirectReachableCallerBlock(discoveryBinding.block, reviewedTryAncestors)) {
     return null;
   }
   let found: BoundRefusalBranch | null = null;
@@ -1005,11 +995,7 @@ function isStaticallyReachableWithin(node: ts.Node, root: ts.Node): boolean {
 }
 
 /** Every conditional branch that creates the instance must also contain its open. */
-function constructionControlPathContainsOpen(
-  construction: ts.Node,
-  open: ts.Node,
-  root: ts.Node
-): boolean {
+function constructionControlPathContainsOpen(construction: ts.Node, open: ts.Node, root: ts.Node): boolean {
   let current = construction;
   while (current !== root && current.parent) {
     const parent = current.parent;
@@ -1066,9 +1052,7 @@ function exactConditionalControlPath(left: ts.Node, right: ts.Node, root: ts.Nod
     leftPath !== null &&
     rightPath !== null &&
     leftPath.length === rightPath.length &&
-    leftPath.every(
-      (step, index) => step.owner === rightPath[index]?.owner && step.branch === rightPath[index]?.branch
-    )
+    leftPath.every((step, index) => step.owner === rightPath[index]?.owner && step.branch === rightPath[index]?.branch)
   );
 }
 
@@ -1246,11 +1230,7 @@ function configurationDiscoveryOpenBindingProblems(
     const boundConstructions: BoundConstructor[] = [];
     const instanceOpenCalls: ts.CallExpression[] = [];
     visitExecutionBody(discovery.block, (node) => {
-      if (
-        ts.isNewExpression(node) &&
-        ts.isIdentifier(node.expression) &&
-        node.expression.text === spec.className
-      ) {
+      if (ts.isNewExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === spec.className) {
         classConstructions.push(node);
         const bound = boundConstructor(node, spec);
         if (bound) boundConstructions.push(bound);
@@ -1310,15 +1290,7 @@ function configurationDiscoveryOpenBindingProblems(
     if (!reviewedOpenFailurePolicy(openCall, sourceFile, discovery.block, spec)) {
       problems.push(`${spec.label}: reviewed open failure policy changed`);
     }
-    if (
-      bindingMutationBetween(
-        discovery.block,
-        sourceFile,
-        spec.discoveryBinding,
-        discovery.statement.end,
-        openAt
-      )
-    ) {
+    if (bindingMutationBetween(discovery.block, sourceFile, spec.discoveryBinding, discovery.statement.end, openAt)) {
       problems.push(`${spec.label}: discovery binding is reassigned before open`);
     }
 
@@ -1338,13 +1310,7 @@ function configurationDiscoveryOpenBindingProblems(
     };
     ts.forEachChild(discovery.block, visitInstanceUse);
     if (
-      hoistedInstanceCaptureInvokedBeforeOpen(
-        sourceFile,
-        discovery.block,
-        sourceFile,
-        spec.instanceBinding,
-        openAt
-      )
+      hoistedInstanceCaptureInvokedBeforeOpen(sourceFile, discovery.block, sourceFile, spec.instanceBinding, openAt)
     ) {
       instanceUsedBeforeOpen = true;
     }
@@ -1359,18 +1325,25 @@ function configurationDiscoveryOpenBindingProblems(
 }
 
 function realSafeMarkerCount(source: string): number {
-  const scanner = ts.createScanner(ts.ScriptTarget.Latest, false, ts.LanguageVariant.Standard, source);
-  let count = 0;
-  while (scanner.scan() !== ts.SyntaxKind.EndOfFileToken) {
-    const token = scanner.getToken();
-    if (
-      (token === ts.SyntaxKind.SingleLineCommentTrivia || token === ts.SyntaxKind.MultiLineCommentTrivia) &&
-      scanner.getTokenText().includes(SAFE_MARKER)
-    ) {
-      count++;
+  const sourceFile = ts.createSourceFile("safe-by-design-census.ts", source, ts.ScriptTarget.Latest, true);
+  const ranges = new Map<string, ts.CommentRange>();
+  const collect = (comments: readonly ts.CommentRange[] | undefined): void => {
+    for (const comment of comments ?? []) {
+      ranges.set(`${comment.pos}:${comment.end}`, comment);
     }
-  }
-  return count;
+  };
+  const visit = (node: ts.Node): void => {
+    collect(ts.getLeadingCommentRanges(source, node.getFullStart()));
+    collect(ts.getTrailingCommentRanges(source, node.getEnd()));
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  return [...ranges.values()].filter(
+    (comment) =>
+      (comment.kind === ts.SyntaxKind.SingleLineCommentTrivia ||
+        comment.kind === ts.SyntaxKind.MultiLineCommentTrivia) &&
+      source.slice(comment.pos, comment.end).includes(SAFE_MARKER)
+  ).length;
 }
 
 /** Keep the two clear-only exemptions closed over a real `.open()` call. */
@@ -1605,17 +1578,10 @@ function exactClassMethod(
   return methods.length === 1 ? (methods[0] ?? null) : null;
 }
 
-function statementsWithExactText(
-  root: ts.Node,
-  sourceFile: ts.SourceFile,
-  expected: string
-): ts.Statement[] {
+function statementsWithExactText(root: ts.Node, sourceFile: ts.SourceFile, expected: string): ts.Statement[] {
   const matches: ts.Statement[] = [];
   const visit = (node: ts.Node): void => {
-    if (
-      (ts.isExpressionStatement(node) || ts.isVariableStatement(node)) &&
-      node.getText(sourceFile) === expected
-    ) {
+    if ((ts.isExpressionStatement(node) || ts.isVariableStatement(node)) && node.getText(sourceFile) === expected) {
       matches.push(node);
     }
     ts.forEachChild(node, visit);
@@ -1634,10 +1600,7 @@ function callCountBetween(root: ts.Node, sourceFile: ts.SourceFile, start: numbe
   return count;
 }
 
-function exactTransactionCallback(
-  method: ts.MethodDeclaration,
-  sourceFile: ts.SourceFile
-): ts.Block | null {
+function exactTransactionCallback(method: ts.MethodDeclaration, sourceFile: ts.SourceFile): ts.Block | null {
   if (!method.body) return null;
   const candidates: ts.Block[] = [];
   for (const statement of method.body.statements) {
@@ -1708,13 +1671,8 @@ function isExactContinuityGuard(
 function admissionOrderProblems(source: string, spec: AdmissionOrderSpec): string[] {
   const problems: string[] = [];
   const open = sectionBetween(source, `${spec.label} open`, spec.openStart, spec.openEnd).text;
-  const bootstrap = sectionBetween(
-    source,
-    `${spec.label} bootstrap`,
-    spec.bootstrapStart,
-    spec.bootstrapEnd
-  ).text;
-  const artifactChmod = "[this.file, `${this.file}-wal`, `${this.file}-shm`].map((p) => fs.chmod";
+  const bootstrap = sectionBetween(source, `${spec.label} bootstrap`, spec.bootstrapStart, spec.bootstrapEnd).text;
+  const artifactChmod = `[this.file, \`\${this.file}-wal\`, \`\${this.file}-shm\`].map((p) => fs.chmod`;
   const openSteps = [
     { label: "live handle", needle: spec.handle },
     { label: "first guard", needle: spec.firstGuard },
@@ -1811,8 +1769,7 @@ function admissionOrderProblems(source: string, spec: AdmissionOrderSpec): strin
       (statement, index) => statement !== undefined && admissionTry?.tryBlock.statements[index] === statement
     );
     if (
-      !handleTry ||
-      handleTry.tryBlock.statements.length !== 1 ||
+      handleTry?.tryBlock.statements.length !== 1 ||
       handleTry.tryBlock.statements[0] !== handle ||
       !admissionTry ||
       handleTryAt < 0 ||
@@ -1940,8 +1897,7 @@ const EMBED_ADMISSION_ORDER: AdmissionOrderSpec = {
   firstAssert: "assertEmbedAdmission(admission);",
   expectedAssert: "assertExpectedEmbedDiscovery(expected, fileExisted, admission);",
   bootstrapCall: "this.bootstrapSchema(admission.kind, admission.signature);",
-  bootstrapStart:
-    '  private bootstrapSchema(initialKind: "empty" | "owned", initialSignature: string): void {',
+  bootstrapStart: '  private bootstrapSchema(initialKind: "empty" | "owned", initialSignature: string): void {',
   bootstrapEnd: "  private writeMeta(",
   bootstrapPrefix: ["const db = this.requireDb();"],
   secondGuard: "const admission = inspectEmbedAdmission(db, this.vaultRoot);",
@@ -2340,7 +2296,7 @@ describe("K-1 class invariant (v3.6.3 methodological guard; recursive scan since
         "  let discovered = await discoverEmbedDbConfigCached(embedFile, vault.root);"
       ),
       "  await db.open(discovered);",
-      '  const mutateDiscovery = () => {\n' +
+      "  const mutateDiscovery = () => {\n" +
         '    discovered = { kind: "missing" };\n' +
         "  };\n" +
         "  mutateDiscovery();\n" +
@@ -2460,6 +2416,8 @@ describe("K-1 class invariant (v3.6.3 methodological guard; recursive scan since
     expect(safeByDesignOpenProblems(safeComputedOpen)).toContain(
       "CLI clear-index: safe instance use escaped sole clearOnDisk call"
     );
+    expect(realSafeMarkerCount("// SAFE BY DESIGN: real comment\nconst value = 1;\n")).toBe(1);
+    expect(realSafeMarkerCount("const decoy = `// SAFE BY DESIGN: string only`;\n")).toBe(0);
 
     const cliSetupFtsRefusalRemoved = replaceExactly(
       cliSource,
@@ -2489,8 +2447,8 @@ describe("K-1 class invariant (v3.6.3 methodological guard; recursive scan since
         "            ? resolveStoredEmbeddingConfiguration(discoveredEmbed.meta)\n            : null;",
         "            ? null\n            : null;"
       ),
-      "        process.stdout.write(`enquire setup — ${opts.vault}\\n\\n`);",
-      "        process.stdout.write(`enquire setup — ${opts.vault}\\n\\n`);\n" +
+      `        process.stdout.write(\`enquire setup — \${opts.vault}\\n\\n\`);`,
+      `        process.stdout.write(\`enquire setup — \${opts.vault}\\n\\n\`);\n` +
         "        resolveStoredEmbeddingConfiguration(discoveredEmbed.meta);"
     );
     expect(configurationDiscoveryFailClosedProblems(setupResolverAfterProgress, serverSource, searchSource)).toContain(
@@ -2554,7 +2512,7 @@ describe("K-1 class invariant (v3.6.3 methodological guard; recursive scan since
         '    throw new Error("Embedding index configuration could not be verified");\n' +
         "  }\n",
       '  if (discovered.kind === "refused") {\n' +
-        '    const decoy = \'throw new Error("Embedding index configuration could not be verified");\';\n' +
+        "    const decoy = 'throw new Error(\"Embedding index configuration could not be verified\");';\n" +
         "    void decoy;\n" +
         "  }\n"
     );
@@ -2661,12 +2619,7 @@ describe("K-1 class invariant (v3.6.3 methodological guard; recursive scan since
       "shared stored Embed resolver: legacy v1 f32 normalization is missing"
     );
 
-    const cliFtsRefusalsRemoved = replaceExactly(
-      cliSource,
-      'if (discovered.kind === "refused")',
-      "if (false)",
-      4
-    );
+    const cliFtsRefusalsRemoved = replaceExactly(cliSource, 'if (discovered.kind === "refused")', "if (false)", 4);
     expect(configurationDiscoveryFailClosedProblems(cliFtsRefusalsRemoved, serverSource, searchSource)).toEqual(
       expect.arrayContaining([
         "CLI query FTS: refused discovery refusal/degrade is missing",
@@ -2696,7 +2649,7 @@ describe("K-1 class invariant (v3.6.3 methodological guard; recursive scan since
     const rawCliFailOpen = replaceExactly(
       cliSource,
       'assertTokenizeMode(rawTokenize, "--tokenize")',
-      'rawTokenize as TokenizeMode',
+      "rawTokenize as TokenizeMode",
       2
     );
     expect(tokenizerCallerProblems(rawCliFailOpen, serverSource)).toContain(
@@ -3035,11 +2988,11 @@ describe("K-1 class invariant (v3.6.3 methodological guard; recursive scan since
 
     const artifactChmodBlock =
       "    await Promise.all(\n" +
-      "      [this.file, `${this.file}-wal`, `${this.file}-shm`].map((p) => fs.chmod(p, 0o600).catch(() => {}))\n" +
+      `      [this.file, \`\${this.file}-wal\`, \`\${this.file}-shm\`].map((p) => fs.chmod(p, 0o600).catch(() => {}))\n` +
       "    );\n";
     const earlyArtifactChmod =
       "      await Promise.all(\n" +
-      "        [this.file, `${this.file}-wal`, `${this.file}-shm`].map((p) => fs.chmod(p, 0o600).catch(() => {}))\n" +
+      `        [this.file, \`\${this.file}-wal\`, \`\${this.file}-shm\`].map((p) => fs.chmod(p, 0o600).catch(() => {}))\n` +
       "      );\n";
     const ftsChmodBeforeGuard = replaceExactly(
       replaceExactly(ftsSource, artifactChmodBlock, ""),
@@ -3106,20 +3059,14 @@ describe("K-1 class invariant (v3.6.3 methodological guard; recursive scan since
     const files = await collectTsFiles(SRC_ROOT);
     const hasToolsFile = files.some((f) => f.includes(`${path.sep}src${path.sep}tools${path.sep}`));
     expect(hasToolsFile, "recursive walker should pick up src/tools/*.ts").toBe(true);
-    expect(["caller.ts", "caller.tsx", "caller.mts", "caller.cts"].every(isTypeScriptImplementationFile)).toBe(
-      true
-    );
-    expect(["caller.d.ts", "caller.d.mts", "caller.d.cts"].some(isTypeScriptImplementationFile)).toBe(
-      false
-    );
+    expect(["caller.ts", "caller.tsx", "caller.mts", "caller.cts"].every(isTypeScriptImplementationFile)).toBe(true);
+    expect(["caller.d.ts", "caller.d.mts", "caller.d.cts"].some(isTypeScriptImplementationFile)).toBe(false);
 
     const extensionRoot = await fs.mkdtemp(path.join(tmpdir(), "enquire-k1-class-walker-"));
     try {
       const included = ["caller.ts", "caller.tsx", "caller.mts", "caller.cts"];
       const excluded = ["caller.d.ts", "caller.d.mts", "caller.d.cts", "caller.js"];
-      await Promise.all(
-        [...included, ...excluded].map((name) => fs.writeFile(path.join(extensionRoot, name), ""))
-      );
+      await Promise.all([...included, ...excluded].map((name) => fs.writeFile(path.join(extensionRoot, name), "")));
       const collected = (await collectTsFiles(extensionRoot)).map((file) => path.basename(file)).sort();
       expect(collected).toEqual([...included].sort());
     } finally {

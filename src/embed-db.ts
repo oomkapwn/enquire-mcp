@@ -501,7 +501,9 @@ function hasExactAdmissionColumns(
   expected: readonly EmbedAdmissionColumn[]
 ): boolean {
   const columns = db
-    .prepare("SELECT cid, name, type, notnull, dflt_value, pk FROM pragma_table_info(?) ORDER BY cid LIMIT ?")
+    .prepare(
+      "SELECT cid, name, type, \"notnull\", dflt_value, pk FROM pragma_table_info(?) ORDER BY cid LIMIT ?"
+    )
     .all<EmbedAdmissionColumn & { cid: number; dflt_value: string | null }>(table, expected.length + 1);
   return (
     columns.length === expected.length &&
@@ -562,7 +564,9 @@ function inspectEmbedAdmission(db: Db, expectedVaultRoot: string): EmbedAdmissio
     }
 
     const metaColumns = db
-      .prepare("SELECT cid, name, type, notnull, dflt_value, pk FROM pragma_table_info('meta') ORDER BY cid LIMIT 3")
+      .prepare(
+        "SELECT cid, name, type, \"notnull\", dflt_value, pk FROM pragma_table_info('meta') ORDER BY cid LIMIT 3"
+      )
       .all<{
         cid: number;
         dflt_value: string | null;
@@ -2234,9 +2238,7 @@ export type EmbedDbConfigDiscovery =
 
 const EMBED_DISCOVERY_CHANGED_ERROR = "Embedding index configuration changed before open";
 
-function cloneEmbedDbOpenDiscovery(
-  expected: EmbedDbConfigDiscovery | undefined
-): EmbedDbConfigDiscovery | null {
+function cloneEmbedDbOpenDiscovery(expected: EmbedDbConfigDiscovery | undefined): EmbedDbConfigDiscovery | null {
   if (expected === undefined) return null;
   try {
     const kind = (expected as { readonly kind?: unknown }).kind;
@@ -2331,10 +2333,7 @@ function assertExpectedEmbedDiscovery(
  * }
  * ```
  */
-export async function discoverEmbedDbConfig(
-  file: string,
-  expectedVaultRoot: string
-): Promise<EmbedDbConfigDiscovery> {
+export async function discoverEmbedDbConfig(file: string, expectedVaultRoot: string): Promise<EmbedDbConfigDiscovery> {
   try {
     const artifact = await fs.lstat(file);
     if (!artifact.isFile()) return { kind: "refused" };
@@ -2428,10 +2427,7 @@ type PeekEmbedDbMetaResult = {
  * console.log(meta?.schema_version); // diagnostic only
  * ```
  */
-export async function peekEmbedDbMeta(
-  file: string,
-  expectedVaultRoot?: string
-): Promise<PeekEmbedDbMetaResult> {
+export async function peekEmbedDbMeta(file: string, expectedVaultRoot?: string): Promise<PeekEmbedDbMetaResult> {
   const fsMod = await import("node:fs");
   if (!fsMod.existsSync(file)) return null;
   // Lazy-import better-sqlite3 (optionalDependency).
@@ -2563,9 +2559,7 @@ function deleteEmbedConfigDiscoveryCacheFile(file: string): void {
   }
 }
 
-async function readEmbedConfigDiscoveryFingerprint(
-  file: string
-): Promise<EmbedConfigDiscoveryFingerprint | null> {
+async function readEmbedConfigDiscoveryFingerprint(file: string): Promise<EmbedConfigDiscoveryFingerprint | null> {
   let main: { isFile(): boolean; mtimeMs: number; size: number };
   try {
     main = await fs.lstat(file);
@@ -2728,10 +2722,7 @@ export async function discoverEmbedDbConfigCached(
  * const meta = await peekEmbedDbMetaCached(embedFile, canonicalVaultRoot);
  * ```
  */
-export async function peekEmbedDbMetaCached(
-  file: string,
-  expectedVaultRoot?: string
-): Promise<PeekEmbedDbMetaResult> {
+export async function peekEmbedDbMetaCached(file: string, expectedVaultRoot?: string): Promise<PeekEmbedDbMetaResult> {
   const fsMod = await import("node:fs/promises");
   const cacheKey = peekCacheKey(file, expectedVaultRoot);
   let mtimeMs: number;

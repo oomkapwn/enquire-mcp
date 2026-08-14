@@ -218,7 +218,7 @@ describe("searchHybrid (v2.0 beta — RRF over available signals)", () => {
 
         const hybridCombined = await searchHybrid(
           owningVault,
-          { query: "foreign", limit: 1 },
+          { query: "OAuth JWT tokens", limit: 1 },
           { ftsIndex: null, embedFile: foreignEmbedFile }
         );
         expect(hybridCombined.signals_used).toEqual(["tfidf"]);
@@ -370,11 +370,7 @@ describe("searchHybrid (v2.0 beta — RRF over available signals)", () => {
       const legacyMeta = await peekEmbedDbMeta(legacyEmbedFile, owningVault.root);
       expect(legacyMeta?.schema_version).toBe("2");
       expect(legacyMeta?.quantization).toBeUndefined();
-      const legacyResult = await embeddingsSearch(
-        owningVault,
-        { query: "legacy", limit: 1 },
-        legacyEmbedFile
-      );
+      const legacyResult = await embeddingsSearch(owningVault, { query: "legacy", limit: 1 }, legacyEmbedFile);
       expect(legacyResult.total_chunks).toBe(0);
       expect(legacyResult.matches).toEqual([]);
 
@@ -388,11 +384,7 @@ describe("searchHybrid (v2.0 beta — RRF over available signals)", () => {
       const schemaEmpty = new Database(schemaEmptyEmbedFile);
       schemaEmpty.close();
       for (const emptyEmbedFile of [zeroByteEmbedFile, schemaEmptyEmbedFile]) {
-        const emptyResult = await embeddingsSearch(
-          owningVault,
-          { query: "empty-discovery", limit: 1 },
-          emptyEmbedFile
-        );
+        const emptyResult = await embeddingsSearch(owningVault, { query: "empty-discovery", limit: 1 }, emptyEmbedFile);
         expect(emptyResult.total_chunks).toBe(0);
         expect(emptyResult.matches).toEqual([]);
       }

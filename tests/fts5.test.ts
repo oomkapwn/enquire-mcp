@@ -874,9 +874,7 @@ describe("FtsIndex — full lifecycle", () => {
     cohabitingSeed.close();
     const cohabitingRaw = new Database(cohabitingFile);
     cohabitingRaw.exec("CREATE TABLE foreign_payload (id TEXT PRIMARY KEY, body BLOB NOT NULL)");
-    cohabitingRaw
-      .prepare("INSERT INTO foreign_payload VALUES (?, ?)")
-      .run("keep", Buffer.from([255, 0, 127, 1]));
+    cohabitingRaw.prepare("INSERT INTO foreign_payload VALUES (?, ?)").run("keep", Buffer.from([255, 0, 127, 1]));
     cohabitingRaw.close();
     const cohabitingQueries = [...ftsQueries, "SELECT * FROM foreign_payload ORDER BY id"];
     const beforeCohabiting = snapshot(cohabitingFile, cohabitingQueries);
@@ -903,9 +901,7 @@ describe("FtsIndex — full lifecycle", () => {
     const malformedShadowRaw = new Database(malformedShadowFile);
     malformedShadowRaw.exec("ALTER TABLE chunks_data ADD COLUMN foreign_payload BLOB");
     const shadowMutation = malformedShadowRaw
-      .prepare(
-        "UPDATE chunks_data SET foreign_payload = ? WHERE id = (SELECT min(id) FROM chunks_data)"
-      )
+      .prepare("UPDATE chunks_data SET foreign_payload = ? WHERE id = (SELECT min(id) FROM chunks_data)")
       .run(Buffer.from([0xde, 0xad, 0x00, 0xbe, 0xef]));
     expect(shadowMutation.changes).toBeGreaterThan(0);
     malformedShadowRaw.close();
@@ -931,9 +927,7 @@ describe("FtsIndex — full lifecycle", () => {
     likeBypassSeed.close();
     const likeBypassRaw = new Database(likeBypassFile);
     likeBypassRaw.exec("CREATE TABLE sqliteXpayload (id TEXT PRIMARY KEY, body BLOB NOT NULL)");
-    likeBypassRaw
-      .prepare("INSERT INTO sqliteXpayload VALUES (?, ?)")
-      .run("keep", Buffer.from([0, 255, 1, 127]));
+    likeBypassRaw.prepare("INSERT INTO sqliteXpayload VALUES (?, ?)").run("keep", Buffer.from([0, 255, 1, 127]));
     likeBypassRaw.close();
     const likeBypassQueries = [...ftsQueries, "SELECT * FROM sqliteXpayload ORDER BY id"];
     const beforeLikeBypass = snapshot(likeBypassFile, likeBypassQueries);
@@ -1217,9 +1211,9 @@ describe("FtsIndex — full lifecycle", () => {
         value: "/tmp/vault-B"
       });
       expect(
-        raceAfter.prepare("SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = ?").get(
-          "source_state_revision_insert"
-        )
+        raceAfter
+          .prepare("SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = ?")
+          .get("source_state_revision_insert")
       ).toMatchObject({ sql: expect.stringContaining("SELECT 1") });
       expect(raceAfter.prepare("SELECT raw_content FROM chunks WHERE rel_path = 'race.md'").get()).toEqual({
         raw_content: "root-race-marker"
@@ -1239,8 +1233,7 @@ describe("FtsIndex — full lifecycle", () => {
     // Structural half: pin the same-handle two-guard order and prove the
     // detector kills both a missing transactional recheck and a deferred
     // (non-IMMEDIATE) bootstrap mutant.
-    const expectedDiscoveryAssertionLine =
-      "      assertExpectedFtsDiscovery(expected, fileExisted, initialAdmission);";
+    const expectedDiscoveryAssertionLine = "      assertExpectedFtsDiscovery(expected, fileExisted, initialAdmission);";
     const bootstrapCallLine = "      this.bootstrapSchema(initialAdmission);";
     const admissionProblems = (source: string): string[] => {
       const problems: string[] = [];
@@ -1305,9 +1298,9 @@ describe("FtsIndex — full lifecycle", () => {
     expect(admissionProblems(source.replace("admission.signature !== initialAdmission.signature", "false"))).toContain(
       "transactional recheck must match the preflight authority snapshot"
     );
-    expect(
-      admissionProblems(source.replace(`${expectedDiscoveryAssertionLine}\n`, ""))
-    ).toContain("expected discovery must bind initial admission before bootstrap");
+    expect(admissionProblems(source.replace(`${expectedDiscoveryAssertionLine}\n`, ""))).toContain(
+      "expected discovery must bind initial admission before bootstrap"
+    );
     expect(
       admissionProblems(
         source.replace(
@@ -1939,9 +1932,7 @@ describe("FtsIndex — PDF chunks (v2.8.0)", () => {
       legacy.prepare("INSERT INTO meta VALUES ('vault_root', '/v')").run();
       legacy.prepare("INSERT INTO meta VALUES ('tokenize_mode', 'unicode61')").run();
       legacy
-        .prepare(
-          "INSERT INTO chunks (content, rel_path, chunk_index, line_start, line_end) VALUES (?, ?, 0, 1, 1)"
-        )
+        .prepare("INSERT INTO chunks (content, rel_path, chunk_index, line_start, line_end) VALUES (?, ?, 0, 1, 1)")
         .run(`legacy-v${version}-marker`, `legacy-v${version}.md`);
       if (version >= 4) {
         legacy
@@ -1951,9 +1942,7 @@ describe("FtsIndex — PDF chunks (v2.8.0)", () => {
           .run(`legacy-v${version}.md`);
       } else {
         legacy
-          .prepare(
-            "INSERT INTO source_state (rel_path, mtime_ms, n_chunks, indexed_at) VALUES (?, 1000, 1, 'now')"
-          )
+          .prepare("INSERT INTO source_state (rel_path, mtime_ms, n_chunks, indexed_at) VALUES (?, 1000, 1, 'now')")
           .run(`legacy-v${version}.md`);
       }
       expect(legacy.prepare("SELECT count(*) AS n FROM chunks").get()).toEqual({ n: 1 });

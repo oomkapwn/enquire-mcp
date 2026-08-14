@@ -141,9 +141,7 @@ describe("EmbedDb", () => {
     db1.close();
 
     const rawMeta = await peekEmbedDbMeta(file);
-    expect(rawMeta).toEqual(
-      expect.objectContaining({ vault_root: "/v1", model_alias: "multilingual", dim: "4" })
-    );
+    expect(rawMeta).toEqual(expect.objectContaining({ vault_root: "/v1", model_alias: "multilingual", dim: "4" }));
     expect(await peekEmbedDbMeta(file, "/v1")).toEqual(rawMeta);
     expect(await peekEmbedDbMeta(file, "/foreign")).toBeNull();
     const ownedDiscovery = await discoverEmbedDbConfig(file, "/v1");
@@ -292,9 +290,7 @@ describe("EmbedDb", () => {
 
     const oversizedMeta = new Database(file);
     oversizedMeta.prepare("DELETE FROM meta WHERE key = 'foreign_key'").run();
-    oversizedMeta
-      .prepare("UPDATE meta SET value = ? WHERE key = 'model_alias'")
-      .run("x".repeat(8_193));
+    oversizedMeta.prepare("UPDATE meta SET value = ? WHERE key = 'model_alias'").run("x".repeat(8_193));
     oversizedMeta.close();
     expect(await peekEmbedDbMeta(file, "/v1")).toBeNull();
 
@@ -323,9 +319,7 @@ describe("EmbedDb", () => {
     const inspectSchemaEmpty = new Database(schemaEmptyFile, { readonly: true, fileMustExist: true });
     try {
       expect(
-        inspectSchemaEmpty
-          .prepare("SELECT type, name, sql FROM sqlite_master WHERE name NOT GLOB 'sqlite_*'")
-          .all()
+        inspectSchemaEmpty.prepare("SELECT type, name, sql FROM sqlite_master WHERE name NOT GLOB 'sqlite_*'").all()
       ).toEqual([]);
     } finally {
       inspectSchemaEmpty.close();
@@ -442,9 +436,7 @@ describe("EmbedDb", () => {
         schema: inspectMalformedDiscovery
           .prepare("SELECT type, name, sql FROM sqlite_master WHERE name NOT GLOB 'sqlite_*' ORDER BY type, name")
           .all(),
-        cells: inspectMalformedDiscovery
-          .prepare("SELECT id, hex(payload) AS payload_hex FROM foreign_payload")
-          .all()
+        cells: inspectMalformedDiscovery.prepare("SELECT id, hex(payload) AS payload_hex FROM foreign_payload").all()
       }).toEqual(malformedDiscoveryBefore);
     } finally {
       inspectMalformedDiscovery.close();
@@ -991,7 +983,7 @@ describe("EmbedDb", () => {
     const normalizeSource = embedSource.slice(normalizeStart, normalizeEnd);
     expect(normalizeStart).toBeGreaterThanOrEqual(0);
     expect(normalizeEnd).toBeGreaterThan(normalizeStart);
-    expect(normalizeSource).toContain("if (sql[index + 1] === \"'\")");
+    expect(normalizeSource).toContain('if (sql[index + 1] === "\'")');
     expect(normalizeSource).toContain("normalized += char.toLowerCase()");
     expect(admissionSource).toContain("substr(name, 1, ?) AS name");
     expect(admissionSource).toContain("substr(sql, 1, ?) AS sql");
@@ -1276,9 +1268,7 @@ describe("EmbedDb", () => {
         rootMutations++;
         const writer = new Database(betweenReadsFile);
         try {
-          writer
-            .prepare("UPDATE meta SET value = ? WHERE key = 'vault_root'")
-            .run("/changed-between-admissions");
+          writer.prepare("UPDATE meta SET value = ? WHERE key = 'vault_root'").run("/changed-between-admissions");
         } finally {
           writer.close();
         }
@@ -1370,15 +1360,15 @@ describe("EmbedDb", () => {
   it("rejects vectors with the wrong dim at insert time", async () => {
     const unopenedParent = path.join(dir, "invalid-runtime-options");
     const unopenedFile = path.join(unopenedParent, "invalid.embed.db");
-    expect(
-      () => new EmbedDb({ file: "", vaultRoot: "/v", modelAlias: "multilingual", dim: 4 })
-    ).toThrow(/file must be a non-empty string/);
-    expect(
-      () => new EmbedDb({ file: unopenedFile, vaultRoot: "", modelAlias: "multilingual", dim: 4 })
-    ).toThrow(/vault root must be a non-empty string/);
-    expect(
-      () => new EmbedDb({ file: unopenedFile, vaultRoot: "/v", modelAlias: "", dim: 4 })
-    ).toThrow(/model alias must be a non-empty string/);
+    expect(() => new EmbedDb({ file: "", vaultRoot: "/v", modelAlias: "multilingual", dim: 4 })).toThrow(
+      /file must be a non-empty string/
+    );
+    expect(() => new EmbedDb({ file: unopenedFile, vaultRoot: "", modelAlias: "multilingual", dim: 4 })).toThrow(
+      /vault root must be a non-empty string/
+    );
+    expect(() => new EmbedDb({ file: unopenedFile, vaultRoot: "/v", modelAlias: "", dim: 4 })).toThrow(
+      /model alias must be a non-empty string/
+    );
     expect(
       () =>
         new EmbedDb({
@@ -1388,9 +1378,9 @@ describe("EmbedDb", () => {
           dim: 0
         })
     ).toThrow(/positive safe integer/);
-    expect(
-      () => new EmbedDb({ file: unopenedFile, vaultRoot: "/v", modelAlias: "multilingual", dim: -1 })
-    ).toThrow(/positive safe integer/);
+    expect(() => new EmbedDb({ file: unopenedFile, vaultRoot: "/v", modelAlias: "multilingual", dim: -1 })).toThrow(
+      /positive safe integer/
+    );
     expect(
       () =>
         new EmbedDb({
@@ -2447,9 +2437,7 @@ describe("EmbedDb", () => {
     }
 
     const raw = new Database(file);
-    raw
-      .prepare("UPDATE meta SET value = ? WHERE key = 'schema_version'")
-      .run(String(EMBED_DB_SCHEMA_VERSION - 1));
+    raw.prepare("UPDATE meta SET value = ? WHERE key = 'schema_version'").run(String(EMBED_DB_SCHEMA_VERSION - 1));
     raw.close();
 
     // POSITIVE: rc.19's fp32 → q8 inference-contract migration discards old vectors.
@@ -2509,9 +2497,7 @@ describe("EmbedDb", () => {
     await expectPathFreeRecoveryOwnershipRefusal(file, "/v");
 
     const missingRoot = new Database(file);
-    missingRoot
-      .prepare("UPDATE meta SET value = ? WHERE key = 'schema_version'")
-      .run(String(EMBED_DB_SCHEMA_VERSION));
+    missingRoot.prepare("UPDATE meta SET value = ? WHERE key = 'schema_version'").run(String(EMBED_DB_SCHEMA_VERSION));
     missingRoot.prepare("DELETE FROM meta WHERE key = 'vault_root'").run();
     missingRoot.close();
     await expectRefusalToPreserve(/ownership could not be verified/);
@@ -2523,9 +2509,7 @@ describe("EmbedDb", () => {
 
     const oversizedAuthority = new Database(file);
     oversizedAuthority.prepare("UPDATE meta SET value = ? WHERE key = 'vault_root'").run("/v");
-    oversizedAuthority
-      .prepare("UPDATE meta SET value = ? WHERE key = 'model_alias'")
-      .run("x".repeat(8_193));
+    oversizedAuthority.prepare("UPDATE meta SET value = ? WHERE key = 'model_alias'").run("x".repeat(8_193));
     oversizedAuthority.close();
     // Bounded admission projects at most cap+1 characters and refuses the
     // oversized authority cell; it never selects the full hostile value.

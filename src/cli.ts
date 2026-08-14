@@ -538,8 +538,7 @@ export async function main(invocation?: ConfigInput["invocation"]): Promise<void
       if (discovered.kind === "refused") {
         throw new Error("FTS index configuration could not be verified");
       }
-      const honoredTokenize: TokenizeMode =
-        discovered.kind === "owned" ? discovered.meta.tokenize_mode : "unicode61";
+      const honoredTokenize: TokenizeMode = discovered.kind === "owned" ? discovered.meta.tokenize_mode : "unicode61";
       const ftsIndex = new FtsIndex({ file: indexFile, vaultRoot: v.root, tokenize: honoredTokenize });
       try {
         await ftsIndex.open(discovered);
@@ -856,12 +855,7 @@ export async function main(invocation?: ConfigInput["invocation"]): Promise<void
         const vault = new Vault(opts.vault, { excludeGlobs: opts.excludeGlob, readPaths: opts.readPaths });
         await vault.ensureExists();
         const embedFile = opts.embedFile ?? embedDbPath(vault.root);
-        await assertEmbeddingWriterGuardClear(
-          embedFile,
-          vault.root,
-          "build-embeddings",
-          opts.embedFile !== undefined
-        );
+        await assertEmbeddingWriterGuardClear(embedFile, vault.root, "build-embeddings", opts.embedFile !== undefined);
         // v3.6.4 K-1 closure: discover the admitted embed-db configuration before constructing
         // EmbedDb. If user didn't explicitly pass --embedding-model /
         // --quantize-embeddings, honor the existing config to avoid silent

@@ -1128,10 +1128,7 @@ export async function embeddingsSearch(
   const [
     { discoverEmbedDbConfigCached, EmbedDb },
     { loadEmbedder, resolveModel, resolveStoredEmbeddingConfiguration }
-  ] = await Promise.all([
-    import("../embed-db.js"),
-    import("../embeddings.js")
-  ]);
+  ] = await Promise.all([import("../embed-db.js"), import("../embeddings.js")]);
 
   // One bounded discovery distinguishes a genuinely missing database from a
   // present empty, owned, or refused artifact without laundering fail-soft
@@ -1167,8 +1164,7 @@ export async function embeddingsSearch(
   if (discovered.kind === "refused") {
     throw new Error("Embedding index configuration could not be verified");
   }
-  const storedConfiguration =
-    discovered.kind === "owned" ? resolveStoredEmbeddingConfiguration(discovered.meta) : null;
+  const storedConfiguration = discovered.kind === "owned" ? resolveStoredEmbeddingConfiguration(discovered.meta) : null;
   // v3.7.5 CRITICAL — external-audit caught read-only-search-can-DROP
   // (K-1-class sibling that v3.6.4 cli.ts closure didn't model).
   // Read-only search MUST NOT trigger destructive rebuild. Pre-fix: if user passed

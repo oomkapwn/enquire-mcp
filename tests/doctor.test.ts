@@ -861,16 +861,21 @@ describe("runDoctor — strict source-state preservation", () => {
     db.close();
   });
 
-  it("NEGATIVE control — FtsIndex.open mutates the same legacy fixture and drops its row", async (ctx) => {
+  it("NEGATIVE control — FtsIndex.open intentionally rebuilds a same-root tokenizer mismatch", async (ctx) => {
     if (!canRunSqlite) return ctx.skip();
     const dir = path.join(cacheRoot, "legacy-negative");
     await fs.mkdir(dir);
     const indexFile = path.join(dir, "legacy.fts5.db");
     const vaultRoot = await fs.realpath(root);
-    await createFts(indexFile, vaultRoot, true);
-    await updateMeta(indexFile, "schema_version", "0");
+    const trigramIndex = new FtsIndex({ file: indexFile, vaultRoot, tokenize: "trigram" });
+    await trigramIndex.open();
+    trigramIndex.reindexFile("sentinel.md", 1, "sentinel content");
+    trigramIndex.close();
     const before = await snapshotDir(dir);
 
+    // A low-level no-argument open deliberately retains same-root rebuild
+    // authority. Unlike doctor(), changing the requested tokenizer therefore
+    // mutates this admitted store and removes its old row.
     const mutatingPrimitive = new FtsIndex({ file: indexFile, vaultRoot });
     await mutatingPrimitive.open();
     expect(mutatingPrimitive.totalChunks()).toBe(0);

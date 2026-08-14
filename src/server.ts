@@ -1,12 +1,7 @@
 import { existsSync } from "node:fs";
 import { McpServer } from "@modelcontextprotocol/server";
 import { serveStdio } from "@modelcontextprotocol/server/stdio";
-import {
-  assertEmbedDbRecoveryOwnership,
-  discoverEmbedDbConfig,
-  EmbedDb,
-  hnswPersistBase
-} from "./embed-db.js";
+import { assertEmbedDbRecoveryOwnership, discoverEmbedDbConfig, EmbedDb, hnswPersistBase } from "./embed-db.js";
 import { syncEmbedDb, syncPdfEmbedDb } from "./embed-sync.js";
 import { resolveModel, resolveStoredEmbeddingConfiguration, setEmbeddingsOffline } from "./embeddings.js";
 import { defaultFeedbackFile, FeedbackStore } from "./feedback.js";

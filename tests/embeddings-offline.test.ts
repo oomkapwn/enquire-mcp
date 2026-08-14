@@ -186,8 +186,7 @@ describe("embeddings serve-offline enforcement (rc.42 F1)", () => {
             combinedRefusal = error;
           }
           expect(combinedRefusal).toBeInstanceOf(Error);
-          const combinedMessage =
-            combinedRefusal instanceof Error ? combinedRefusal.message : String(combinedRefusal);
+          const combinedMessage = combinedRefusal instanceof Error ? combinedRefusal.message : String(combinedRefusal);
           expect(combinedMessage).toBe("Embedding index ownership could not be verified");
           expect(combinedMessage).not.toMatch(/clear-embeddings|quarantined|recovery/i);
           for (const sensitivePath of [vault, canonicalVault, foreignVault, canonicalForeignVault, embedFile]) {

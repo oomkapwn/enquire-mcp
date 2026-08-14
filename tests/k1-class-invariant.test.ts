@@ -2455,7 +2455,7 @@ describe("K-1 class invariant (v3.6.3 methodological guard; recursive scan since
       "CLI setup Embed omitted configuration: constructor runs before supported stored-config resolution"
     );
 
-    const serverEmbedFallbackReenabled = replaceExactly(
+    const serverEmbedFallbackReenabled = replaceAllExactly(
       serverSource,
       'if (discovered.kind === "missing" || discovered.kind === "refused")',
       "if (false)",

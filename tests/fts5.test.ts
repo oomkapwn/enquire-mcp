@@ -910,14 +910,19 @@ describe("FtsIndex — full lifecycle", () => {
       // SQLite intentionally forbids ALTER TABLE on FTS5 shadow tables. Edit
       // only this disposable fixture's parseable catalog SQL, then reopen so
       // the extra column is loaded from disk rather than the stale cache.
-      malformedShadowRaw.exec("PRAGMA writable_schema = ON");
+      malformedShadowRaw.unsafeMode(true);
       try {
-        const schemaMutation = malformedShadowRaw
-          .prepare("UPDATE sqlite_master SET sql = ? WHERE type = 'table' AND name = 'chunks_data' AND sql = ?")
-          .run(malformedShadowSql, shadowSchema.sql);
-        expect(schemaMutation.changes).toBe(1);
+        malformedShadowRaw.exec("PRAGMA writable_schema = ON");
+        try {
+          const schemaMutation = malformedShadowRaw
+            .prepare("UPDATE sqlite_master SET sql = ? WHERE type = 'table' AND name = 'chunks_data' AND sql = ?")
+            .run(malformedShadowSql, shadowSchema.sql);
+          expect(schemaMutation.changes).toBe(1);
+        } finally {
+          malformedShadowRaw.exec("PRAGMA writable_schema = OFF");
+        }
       } finally {
-        malformedShadowRaw.exec("PRAGMA writable_schema = OFF");
+        malformedShadowRaw.unsafeMode(false);
       }
     } finally {
       malformedShadowRaw.close();

@@ -2670,10 +2670,8 @@ describe("K-1 class invariant (v3.6.3 methodological guard; recursive scan since
 
     const customPathDropped = replaceExactly(
       cliSource,
-      "        const indexFile = opts.indexFile ?? defaultIndexFile(vault.root);\n" +
-        "        // v3.6.4 K-1 closure: if user passed --tokenize, honor user's intent.",
-      "        const indexFile = defaultIndexFile(vault.root);\n" +
-        "        // v3.6.4 K-1 closure: if user passed --tokenize, honor user's intent."
+      "        const indexFile = opts.indexFile ?? defaultIndexFile(vault.root);",
+      "        const indexFile = defaultIndexFile(vault.root);"
     );
     expect(tokenizerCallerProblems(customPathDropped, serverSource)).toContain(
       "cli custom/default vault-root FTS paths: expected 2, found 1"
@@ -2817,11 +2815,9 @@ describe("K-1 class invariant (v3.6.3 methodological guard; recursive scan since
 
     const ftsBootstrapCallBeforeTxn = replaceExactly(
       ftsSource,
+      '    const tokenizeArg = this.tokenize === "trigram" ? "trigram" : "unicode61 remove_diacritics 2";\n',
       '    const tokenizeArg = this.tokenize === "trigram" ? "trigram" : "unicode61 remove_diacritics 2";\n' +
-        "    const txn = db.transaction(() => {",
-      '    const tokenizeArg = this.tokenize === "trigram" ? "trigram" : "unicode61 remove_diacritics 2";\n' +
-        '    db.exec("CREATE TABLE admission_bypass(x)");\n' +
-        "    const txn = db.transaction(() => {"
+        '    db.exec("CREATE TABLE admission_bypass(x)");\n'
     );
     expect(admissionOrderProblems(ftsBootstrapCallBeforeTxn, FTS_ADMISSION_ORDER)).toContain(
       "FTS bootstrap: exact top-level sequence changed"

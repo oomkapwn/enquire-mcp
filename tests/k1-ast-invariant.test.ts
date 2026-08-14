@@ -2454,9 +2454,7 @@ function openUsesSameDiscovery(
     if (!K1_ARG_NAMES.has(name)) continue;
     const sources = collectDiscoveryBindings(value, context, authority);
     sharedDiscovery =
-      sharedDiscovery === undefined
-        ? sources
-        : new Set([...sharedDiscovery].filter((binding) => sources.has(binding)));
+      sharedDiscovery === undefined ? sources : new Set([...sharedDiscovery].filter((binding) => sources.has(binding)));
   }
   if (sharedDiscovery?.size !== 1) return false;
   const expectedDiscovery = [...sharedDiscovery][0];
@@ -2736,8 +2734,7 @@ describe("K-1 AST invariant (v3.7.0 M-2 — strengthens v3.6.4 grep-based guard)
     }
 
     const typeOnlyConsumer =
-      'import type { EmbedDb } from "./embed-db.js";\n' +
-      'import type { FtsIndex } from "./fts5.js";\n';
+      'import type { EmbedDb } from "./embed-db.js";\n' + 'import type { FtsIndex } from "./fts5.js";\n';
     expect(
       analyzeSource(path.join(process.cwd(), "src/type-only-k1-consumer.ts"), typeOnlyConsumer, false, true)
     ).toEqual([]);
@@ -2746,8 +2743,7 @@ describe("K-1 AST invariant (v3.7.0 M-2 — strengthens v3.6.4 grep-based guard)
     expect(
       analyzeSource(path.join(process.cwd(), "src/resolver-only-consumer.ts"), resolverOnlyConsumer, false, true)
     ).toEqual([]);
-    const resolverOnlyReexport =
-      'export { parseQuantizationMode } from "./tool-registry.js";\n';
+    const resolverOnlyReexport = 'export { parseQuantizationMode } from "./tool-registry.js";\n';
     expect(
       analyzeSource(path.join(process.cwd(), "src/resolver-only-reexport.ts"), resolverOnlyReexport, false, true)
     ).toEqual([]);
@@ -2814,8 +2810,7 @@ async function unpinnedAliasSite(file, vaultRoot) {
     expect(aliasInventoryViolations).toHaveLength(1);
     expect(aliasInventoryViolations[0]?.reason).toMatch(/outside the exact pinned production inventory/);
 
-    const reexportAlias =
-      'export { EmbedDb as E, discoverEmbedDbConfig as discover } from "./embed-db.js";\n';
+    const reexportAlias = 'export { EmbedDb as E, discoverEmbedDbConfig as discover } from "./embed-db.js";\n';
     const reexportInventoryViolations = analyzeSource(
       path.join(process.cwd(), "src/unpinned-k1-reexport.ts"),
       reexportAlias,

@@ -1,0 +1,136 @@
+name: Temporary nanoid 3.3.18 identity capture
+
+on:
+  push:
+    branches:
+      - codex/fix-nanoid-audit-20260814
+
+permissions:
+  contents: read
+
+concurrency:
+  group: capture-nanoid-3-3-18-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  capture:
+    if: github.repository == 'oomkapwn/enquire-mcp'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 22.13.0
+          cache: npm
+
+      - name: Resolve only nanoid 3.3.18 in the lockfile
+        shell: bash
+        run: |
+          set -euo pipefail
+          capture_dir="$RUNNER_TEMP/nanoid-3-3-18"
+          mkdir -p "$capture_dir"
+          cp package-lock.json "$capture_dir/package-lock.before.json"
+          npm update nanoid --package-lock-only --ignore-scripts --no-audit --no-fund
+          cp package-lock.json "$capture_dir/package-lock.json"
+          node --input-type=module <<'NODE'
+          import { readFileSync, writeFileSync } from "node:fs";
+
+          const captureDir = `${process.env.RUNNER_TEMP}/nanoid-3-3-18`;
+          const before = JSON.parse(readFileSync(`${captureDir}/package-lock.before.json`, "utf8"));
+          const after = JSON.parse(readFileSync(`${captureDir}/package-lock.json`, "utf8"));
+          const key = "node_modules/nanoid";
+          const beforeNode = before.packages?.[key];
+          const afterNode = after.packages?.[key];
+          if (beforeNode?.version !== "3.3.17") throw new Error("expected nanoid 3.3.17 baseline");
+          if (afterNode?.version !== "3.3.18") throw new Error("expected nanoid 3.3.18 result");
+          if (afterNode.resolved !== "https://registry.npmjs.org/nanoid/-/nanoid-3.3.18.tgz") {
+            throw new Error("unexpected nanoid tarball");
+          }
+          if (
+            afterNode.integrity !==
+            "sha512-DTg4MJbGMWkfi6VZFdNt2/caMbQy4Ou+Op/hJQvGEWcnVfoA1QA+xzRKAzw9jD6+GVOOeYr/mIcuDSdug6F6+w=="
+          ) {
+            throw new Error("unexpected nanoid integrity");
+          }
+          after.packages[key] = beforeNode;
+          if (JSON.stringify(after) !== JSON.stringify(before)) {
+            throw new Error("lockfile changed outside the nanoid node");
+          }
+          writeFileSync(
+            `${captureDir}/lock-receipt.json`,
+            `${JSON.stringify({ before: beforeNode, after: afterNode }, null, 2)}\n`
+          );
+          NODE
+
+      - name: Generate the exact frozen identity fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          capture_dir="$RUNNER_TEMP/nanoid-3-3-18"
+          current_source="$capture_dir/release-integrity.current.ts"
+          cp tests/release-integrity.test.ts "$current_source"
+          current_sha="$(sha256sum "$current_source" | cut -d ' ' -f 1)"
+          test "$current_sha" = "2a15da915814bdfd4baacda33c87d93ce8679d89a93fb459ac97c37d3ba8763e"
+          restore_current() {
+            cp "$current_source" tests/release-integrity.test.ts
+          }
+          trap restore_current EXIT
+          git show 8420e2fca3ed0dac994859a9e9a30b933d5ddf9e:tests/release-integrity.test.ts \
+            > tests/release-integrity.test.ts
+          historical_sha="$(sha256sum tests/release-integrity.test.ts | cut -d ' ' -f 1)"
+          test "$historical_sha" = "3fa0b67411e2fc0f4d7c6bce6075ba91eb25edc19a210b5c2f8dd408def6e18b"
+          node scripts/generate-release-mutation-identity.mjs > "$capture_dir/release-mutation-identity.v2.json"
+          restore_current
+          trap - EXIT
+          restored_sha="$(sha256sum tests/release-integrity.test.ts | cut -d ' ' -f 1)"
+          test "$restored_sha" = "$current_sha"
+          node --input-type=module <<'NODE'
+          import { createHash } from "node:crypto";
+          import { readFileSync, writeFileSync } from "node:fs";
+
+          const captureDir = `${process.env.RUNNER_TEMP}/nanoid-3-3-18`;
+          const beforeText = readFileSync("tests/fixtures/release-mutation-identity.v2.json", "utf8");
+          const afterText = readFileSync(`${captureDir}/release-mutation-identity.v2.json`, "utf8");
+          const before = JSON.parse(beforeText);
+          const after = JSON.parse(afterText);
+          const beforeSource = before.sources.find((source) => source.id === "manifest.package-lock");
+          const afterSource = after.sources.find((source) => source.id === "manifest.package-lock");
+          if (!beforeSource || !afterSource) throw new Error("manifest.package-lock source missing");
+          const receipt = {
+            before: {
+              contentSha256: beforeSource.contentSha256,
+              semanticFingerprint: beforeSource.semanticFingerprint
+            },
+            after: {
+              contentSha256: afterSource.contentSha256,
+              semanticFingerprint: afterSource.semanticFingerprint
+            }
+          };
+          afterSource.contentSha256 = beforeSource.contentSha256;
+          afterSource.semanticFingerprint = beforeSource.semanticFingerprint;
+          if (JSON.stringify(after) !== JSON.stringify(before)) {
+            throw new Error("fixture changed outside manifest.package-lock identity");
+          }
+          const sha256 = (text) => createHash("sha256").update(text, "utf8").digest("hex");
+          writeFileSync(
+            `${captureDir}/fixture-receipt.json`,
+            `${JSON.stringify({ ...receipt, fixtureSha256: sha256(afterText) }, null, 2)}\n`
+          );
+          NODE
+
+      - name: Upload bounded capture
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: nanoid-3-3-18-identity
+          path: |
+            ${{ runner.temp }}/nanoid-3-3-18/package-lock.json
+            ${{ runner.temp }}/nanoid-3-3-18/release-mutation-identity.v2.json
+            ${{ runner.temp }}/nanoid-3-3-18/lock-receipt.json
+            ${{ runner.temp }}/nanoid-3-3-18/fixture-receipt.json
+          compression-level: 0
+          retention-days: 3
+          if-no-files-found: error

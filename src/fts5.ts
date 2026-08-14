@@ -22,6 +22,12 @@ import { iterateContentLines } from "./structure.js";
 import type { Vault } from "./vault.js";
 import { countLineBreaks, stripTrailingSlashes } from "./wildcard-match.js";
 
+function errnoCode(err: unknown): string | undefined {
+  if (typeof err !== "object" || err === null || !("code" in err)) return undefined;
+  const code = (err as { code?: unknown }).code;
+  return typeof code === "string" ? code : undefined;
+}
+
 // v3.11.6-rc.6 (competitive-study C-3) — FTS5 column weights for BM25. The
 // chunks table indexes `content` (col 0), `title` (col 1), `aliases` (col 2);
 // bm25(chunks, ...) takes a weight per column in definition order. A note whose
@@ -145,6 +151,129 @@ export function ftsScopeTokens(relPath: string): string {
  * but better recall on CJK / agglutinative scripts.
  */
 export type TokenizeMode = "unicode61" | "trigram";
+
+/**
+ * Exact metadata returned only after full readonly FTS class admission.
+ *
+ * @example
+ * ```ts
+ * const meta: FtsIndexOwnedMeta = {
+ *   schema_version: "6",
+ *   vault_root: "/vault",
+ *   tokenize_mode: "unicode61"
+ * };
+ * ```
+ */
+export interface FtsIndexOwnedMeta {
+  /** Supported historical on-disk schema version. */
+  readonly schema_version: string;
+  /** Exact stored vault root proven equal to the expected canonical root. */
+  readonly vault_root: string;
+  /** Stored tokenizer proven to match the physical FTS5 definition. */
+  readonly tokenize_mode: TokenizeMode;
+}
+
+/**
+ * Readonly classification of a configured FTS index path.
+ * Only `missing` and genuinely schema-`empty` paths may select a requested or
+ * default tokenizer. `owned` must use its returned tokenizer; every other
+ * existing file is `refused` without exposing native or path details.
+ *
+ * @example
+ * ```ts
+ * const discovery: FtsIndexDiscovery = { kind: "empty" };
+ * if (discovery.kind === "empty") {
+ *   // A caller may initialize with its requested tokenizer.
+ * }
+ * ```
+ */
+export type FtsIndexDiscovery =
+  | { /** No filesystem entry exists at the configured path. */ readonly kind: "missing" }
+  | { /** SQLite contains no non-internal logical schema objects. */ readonly kind: "empty" }
+  | {
+      /** Same-root, fully admitted FTS class and exact stored config. */
+      readonly kind: "owned";
+      readonly meta: Readonly<FtsIndexOwnedMeta>;
+    }
+  | { /** Existing path could not prove the exact same-root FTS class. */ readonly kind: "refused" };
+
+const FTS_DISCOVERY_CHANGED_ERROR = "FTS index configuration changed before open";
+
+function cloneFtsIndexDiscovery(expected: FtsIndexDiscovery | undefined): FtsIndexDiscovery | null {
+  if (expected === undefined) return null;
+  try {
+    const kind = (expected as { readonly kind?: unknown }).kind;
+    if (kind === "missing") return Object.freeze({ kind: "missing" });
+    if (kind === "empty") return Object.freeze({ kind: "empty" });
+    if (kind === "refused") return Object.freeze({ kind: "refused" });
+    const candidateMeta = (expected as { readonly meta?: unknown }).meta;
+    const meta =
+      typeof candidateMeta === "object" && candidateMeta !== null
+        ? (candidateMeta as Readonly<Record<string, unknown>>)
+        : null;
+    const schemaVersion = meta?.schema_version;
+    const vaultRoot = meta?.vault_root;
+    const tokenizeMode = meta?.tokenize_mode;
+    if (
+      kind === "owned" &&
+      typeof schemaVersion === "string" &&
+      typeof vaultRoot === "string" &&
+      (tokenizeMode === "unicode61" || tokenizeMode === "trigram")
+    ) {
+      return Object.freeze({
+        kind: "owned",
+        meta: Object.freeze({
+          schema_version: schemaVersion,
+          vault_root: vaultRoot,
+          tokenize_mode: tokenizeMode
+        })
+      });
+    }
+  } catch {
+    // Treat malformed/getter-backed runtime input exactly like a refused
+    // discovery without reflecting its values in the public diagnostic.
+  }
+  return Object.freeze({ kind: "refused" });
+}
+
+function assertExpectedFtsDiscovery(
+  expected: FtsIndexDiscovery | null,
+  fileExisted: boolean,
+  admission: FtsAdmission
+): void {
+  if (expected === null) return;
+  const matches =
+    (expected.kind === "missing" && !fileExisted && admission.kind === "empty") ||
+    (expected.kind === "empty" && fileExisted && admission.kind === "empty") ||
+    (expected.kind === "owned" &&
+      admission.kind === "owned" &&
+      expected.meta.schema_version === admission.meta.schema_version &&
+      expected.meta.vault_root === admission.meta.vault_root &&
+      expected.meta.tokenize_mode === admission.meta.tokenize_mode);
+  if (!matches) throw new Error(FTS_DISCOVERY_CHANGED_ERROR);
+}
+
+/**
+ * Validate an untrusted FTS tokenizer value without silently selecting a
+ * fallback. This is intentionally synchronous so callers can reject invalid
+ * CLI, config, or programmatic input before preparing any index path.
+ *
+ * @param value - Candidate tokenizer value.
+ * @param label - Safe, caller-facing name for the input surface.
+ * @returns The exact supported tokenizer mode.
+ * @throws {Error} If `value` is not exactly `unicode61` or `trigram`.
+ * @example
+ * ```ts
+ * const tokenize = assertTokenizeMode(rawTokenize, "--tokenize");
+ * ```
+ */
+export function assertTokenizeMode(value: unknown, label = "tokenize mode"): TokenizeMode {
+  if (value === "unicode61" || value === "trigram") return value;
+  const subject = typeof label === "string" && /^[a-z0-9 _-]{1,64}$/i.test(label) ? label : "tokenize mode";
+  const received =
+    typeof value === "string" && /^[a-z0-9_-]{1,32}$/i.test(value) ? JSON.stringify(value) : `type ${typeof value}`;
+  throw new Error(`${subject} must be exactly "unicode61" or "trigram"; received ${received}`);
+}
 
 /** Content-source kind. v2.7.0 added `pdf`; v2.8.0 indexes them. */
 export type ChunkKind = "md" | "pdf";
@@ -339,13 +468,404 @@ interface Db {
   // v3.7.10 (external audit #10) — added for transactional reindexFile().
   // better-sqlite3 wraps the passed function in a SAVEPOINT and rolls back
   // on throw. Returns a callable that re-uses the prepared transaction.
-  transaction<F extends (...args: never[]) => unknown>(fn: F): F;
+  transaction<F extends (...args: never[]) => unknown>(fn: F): F & { immediate: F };
 }
 interface Stmt {
   run(...params: unknown[]): { changes: number };
   all<T = unknown>(...params: unknown[]): T[];
   get<T = unknown>(...params: unknown[]): T | undefined;
   iterate<T = unknown>(...params: unknown[]): IterableIterator<T>;
+}
+
+interface SqliteColumnInfo {
+  cid: unknown;
+  dflt_value: unknown;
+  name: unknown;
+  notnull: unknown;
+  pk: unknown;
+  type: unknown;
+}
+
+interface SqliteXColumnInfo extends SqliteColumnInfo {
+  hidden: unknown;
+}
+
+interface ExpectedSqliteColumn {
+  dflt_value: string | null;
+  name: string;
+  notnull: number;
+  pk: number;
+  type: string;
+}
+
+interface ExpectedSqliteXColumn extends ExpectedSqliteColumn {
+  hidden: number;
+}
+
+type FtsAdmission =
+  | { kind: "empty"; rebuildReasons: []; signature: "empty" }
+  | { kind: "owned"; meta: FtsIndexOwnedMeta; rebuildReasons: string[]; signature: string };
+
+const FTS_CHUNK_COLUMNS_BY_SCHEMA = new Map<number, readonly string[]>([
+  [1, ["content", "rel_path", "chunk_index", "line_start", "line_end"]],
+  [2, ["content", "rel_path", "chunk_index", "line_start", "line_end", "tags"]],
+  [3, ["content", "rel_path", "chunk_index", "line_start", "line_end", "tags", "raw_content"]],
+  [
+    4,
+    ["content", "rel_path", "chunk_index", "line_start", "line_end", "tags", "raw_content", "kind"]
+  ],
+  [
+    5,
+    [
+      "content",
+      "title",
+      "aliases",
+      "rel_path",
+      "chunk_index",
+      "line_start",
+      "line_end",
+      "tags",
+      "raw_content",
+      "kind"
+    ]
+  ],
+  [
+    6,
+    [
+      "content",
+      "title",
+      "aliases",
+      "scope_tokens",
+      "rel_path",
+      "chunk_index",
+      "line_start",
+      "line_end",
+      "tags",
+      "raw_content",
+      "kind"
+    ]
+  ]
+]);
+const FTS_SOURCE_REVISION_TRIGGER_NAMES = [
+  "source_state_revision_insert",
+  "source_state_revision_update",
+  "source_state_revision_delete",
+  "source_quarantine_revision_insert",
+  "source_quarantine_revision_update",
+  "source_quarantine_revision_delete"
+] as const;
+const FTS_ADMISSION_OBJECT_TYPES = new Map<string, string>([
+  ["meta", "table"],
+  ["chunks", "table"],
+  ["chunks_data", "table"],
+  ["chunks_idx", "table"],
+  ["chunks_content", "table"],
+  ["chunks_docsize", "table"],
+  ["chunks_config", "table"],
+  ["source_state", "table"],
+  ["source_quarantine", "table"],
+  ["source_revision", "table"],
+  ...FTS_SOURCE_REVISION_TRIGGER_NAMES.map((name) => [name, "trigger"] as const)
+]);
+const FTS_REQUIRED_OBJECT_NAMES = [
+  "meta",
+  "chunks",
+  "chunks_data",
+  "chunks_idx",
+  "chunks_content",
+  "chunks_docsize",
+  "chunks_config",
+  "source_state"
+] as const;
+const MAX_FTS_ADMISSION_OBJECTS = FTS_ADMISSION_OBJECT_TYPES.size;
+const MAX_FTS_ADMISSION_NAME_CHARS = 128;
+const MAX_FTS_ADMISSION_SQL_CHARS = 32_768;
+const MAX_FTS_META_VALUE_CHARS = 8_192;
+const MAX_FTS_ADMISSION_COLUMN_CHARS = 128;
+const FTS_META_CREATE_SQL = `CREATE TABLE IF NOT EXISTS meta (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+)`;
+const FTS_SOURCE_STATE_LEGACY_CREATE_SQL = `CREATE TABLE IF NOT EXISTS source_state (
+  rel_path TEXT PRIMARY KEY,
+  mtime_ms INTEGER NOT NULL,
+  n_chunks INTEGER NOT NULL,
+  indexed_at TEXT NOT NULL
+)`;
+const FTS_SOURCE_STATE_CURRENT_CREATE_SQL = `CREATE TABLE IF NOT EXISTS source_state (
+  rel_path TEXT PRIMARY KEY,
+  mtime_ms INTEGER NOT NULL,
+  n_chunks INTEGER NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'md',
+  indexed_at TEXT NOT NULL
+)`;
+const FTS_SOURCE_STATE_CREATE_SQL_BY_SCHEMA = new Map<number, string>([
+  [1, FTS_SOURCE_STATE_LEGACY_CREATE_SQL],
+  [2, FTS_SOURCE_STATE_LEGACY_CREATE_SQL],
+  [3, FTS_SOURCE_STATE_LEGACY_CREATE_SQL],
+  [4, FTS_SOURCE_STATE_CURRENT_CREATE_SQL],
+  [5, FTS_SOURCE_STATE_CURRENT_CREATE_SQL],
+  [6, FTS_SOURCE_STATE_CURRENT_CREATE_SQL]
+]);
+const FTS_SOURCE_QUARANTINE_COLUMNS: readonly ExpectedSqliteColumn[] = [
+  { name: "rel_path", type: "TEXT", notnull: 1, dflt_value: null, pk: 1 },
+  { name: "kind", type: "TEXT", notnull: 1, dflt_value: null, pk: 2 }
+];
+const FTS_SOURCE_REVISION_COLUMNS: readonly ExpectedSqliteColumn[] = [
+  { name: "rel_path", type: "TEXT", notnull: 1, dflt_value: null, pk: 1 },
+  { name: "kind", type: "TEXT", notnull: 1, dflt_value: null, pk: 2 },
+  { name: "revision", type: "INTEGER", notnull: 1, dflt_value: null, pk: 0 }
+];
+const FTS_SOURCE_QUARANTINE_CREATE_SQL = `CREATE TABLE IF NOT EXISTS source_quarantine (
+  rel_path TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  PRIMARY KEY (rel_path, kind)
+) WITHOUT ROWID`;
+const FTS_SOURCE_REVISION_CREATE_SQL = `CREATE TABLE IF NOT EXISTS source_revision (
+  rel_path TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('md', 'pdf')),
+  revision INTEGER NOT NULL CHECK (
+    typeof(revision) = 'integer'
+    AND revision BETWEEN 1 AND ${MAX_SOURCE_REVISION}
+  ),
+  PRIMARY KEY (rel_path, kind)
+) WITHOUT ROWID`;
+
+function normalizeFtsAdmissionSql(sql: string): string {
+  let normalized = "";
+  let inLiteral = false;
+  let pendingSpace = false;
+  for (let index = 0; index < sql.length; index++) {
+    const char = sql[index];
+    if (char === undefined) break;
+    if (inLiteral) {
+      normalized += char;
+      if (char === "'") {
+        if (sql[index + 1] === "'") {
+          normalized += "'";
+          index += 1;
+        } else {
+          inLiteral = false;
+        }
+      }
+      continue;
+    }
+    if (/\s/u.test(char)) {
+      pendingSpace = normalized.length > 0;
+      continue;
+    }
+    if (pendingSpace) normalized += " ";
+    pendingSpace = false;
+    if (char === "'") {
+      normalized += char;
+      inLiteral = true;
+    } else {
+      normalized += char.toLowerCase();
+    }
+  }
+  if (normalized.endsWith(";")) normalized = normalized.slice(0, -1).trimEnd();
+  return normalized
+    .replace(/^create table if not exists /i, "create table ")
+    .replace(/^create virtual table if not exists /i, "create virtual table ");
+}
+
+// FTS5 emits its five shadow tables with quoted table identifiers, while
+// SQLite versions are free to vary harmless whitespace and identifier quote
+// style. These CREATE statements contain no string literals, so a deliberately
+// small lexer can compare the complete token stream without conflating a
+// semantic literal (the reason normalizeFtsAdmissionSql is quote-aware).
+function tokenizeFtsShadowSql(sql: string): string[] | null {
+  const tokens: string[] = [];
+  let index = 0;
+  while (index < sql.length) {
+    const char = sql[index];
+    if (char === undefined) return null;
+    if (/\s/u.test(char)) {
+      index += 1;
+      continue;
+    }
+    if (char === ";") {
+      index += 1;
+      while (index < sql.length && /\s/u.test(sql[index] ?? "")) index += 1;
+      return index === sql.length ? tokens : null;
+    }
+    if (char === "(" || char === ")" || char === ",") {
+      tokens.push(char);
+      index += 1;
+      continue;
+    }
+    if (char === "'" || char === '"' || char === "`" || char === "[") {
+      const closing = char === "[" ? "]" : char;
+      let identifier = "";
+      index += 1;
+      let closed = false;
+      while (index < sql.length) {
+        const quoted = sql[index];
+        if (quoted === undefined) return null;
+        if (quoted === closing) {
+          if (sql[index + 1] === closing) {
+            identifier += closing;
+            index += 2;
+            continue;
+          }
+          index += 1;
+          closed = true;
+          break;
+        }
+        identifier += quoted;
+        index += 1;
+      }
+      if (!closed || identifier.length === 0) return null;
+      tokens.push(identifier.toLowerCase());
+      continue;
+    }
+    if (/[a-z0-9_]/iu.test(char)) {
+      const start = index;
+      index += 1;
+      while (index < sql.length && /[a-z0-9_]/iu.test(sql[index] ?? "")) index += 1;
+      tokens.push(sql.slice(start, index).toLowerCase());
+      continue;
+    }
+    return null;
+  }
+  return tokens;
+}
+
+function hasExactFtsShadowSql(actualSql: string, expectedSql: string): boolean {
+  const actual = tokenizeFtsShadowSql(actualSql);
+  const expected = tokenizeFtsShadowSql(expectedSql);
+  return (
+    actual !== null &&
+    expected !== null &&
+    actual.length === expected.length &&
+    actual.every((token, index) => token === expected[index])
+  );
+}
+
+function ftsShadowAdmissionTables(contentColumnCount: number): ReadonlyArray<{
+  columns: readonly ExpectedSqliteXColumn[];
+  name: string;
+  sql: string;
+}> {
+  const column = (
+    name: string,
+    type: string,
+    notnull: number,
+    pk: number
+  ): ExpectedSqliteXColumn => ({ name, type, notnull, dflt_value: null, pk, hidden: 0 });
+  const contentColumns = Array.from({ length: contentColumnCount }, (_, index) => `c${index}`);
+  return [
+    {
+      name: "chunks_data",
+      sql: "CREATE TABLE chunks_data(id INTEGER PRIMARY KEY, block BLOB)",
+      columns: [column("id", "INTEGER", 0, 1), column("block", "BLOB", 0, 0)]
+    },
+    {
+      name: "chunks_idx",
+      sql: "CREATE TABLE chunks_idx(segid, term, pgno, PRIMARY KEY(segid, term)) WITHOUT ROWID",
+      columns: [column("segid", "", 1, 1), column("term", "", 1, 2), column("pgno", "", 0, 0)]
+    },
+    {
+      name: "chunks_content",
+      sql: `CREATE TABLE chunks_content(id INTEGER PRIMARY KEY${contentColumns
+        .map((name) => `, ${name}`)
+        .join("")})`,
+      columns: [
+        column("id", "INTEGER", 0, 1),
+        ...contentColumns.map((name) => column(name, "", 0, 0))
+      ]
+    },
+    {
+      name: "chunks_docsize",
+      sql: "CREATE TABLE chunks_docsize(id INTEGER PRIMARY KEY, sz BLOB)",
+      columns: [column("id", "INTEGER", 0, 1), column("sz", "BLOB", 0, 0)]
+    },
+    {
+      name: "chunks_config",
+      sql: "CREATE TABLE chunks_config(k PRIMARY KEY, v) WITHOUT ROWID",
+      columns: [column("k", "", 1, 1), column("v", "", 0, 0)]
+    }
+  ];
+}
+
+function readExactFtsShadowTable(
+  db: Db,
+  actualSql: string,
+  expectedSql: string,
+  table: string,
+  expectedColumns: readonly ExpectedSqliteXColumn[]
+): SqliteXColumnInfo[] | null {
+  if (!hasExactFtsShadowSql(actualSql, expectedSql)) return null;
+  const columns = db
+    .prepare(
+      `SELECT cid,
+              substr(name, 1, ?) AS name,
+              substr(type, 1, ?) AS type,
+              notnull,
+              CASE WHEN dflt_value IS NULL THEN NULL ELSE substr(CAST(dflt_value AS TEXT), 1, ?) END AS dflt_value,
+              pk,
+              hidden
+       FROM pragma_table_xinfo(?)
+       ORDER BY cid
+       LIMIT ?`
+    )
+    .all<SqliteXColumnInfo>(
+      MAX_FTS_ADMISSION_COLUMN_CHARS + 1,
+      MAX_FTS_ADMISSION_COLUMN_CHARS + 1,
+      MAX_FTS_ADMISSION_COLUMN_CHARS + 1,
+      table,
+      expectedColumns.length + 1
+    );
+  if (columns.length !== expectedColumns.length) return null;
+  return columns.every((column, index) => {
+    const expected = expectedColumns[index];
+    return (
+      expected !== undefined &&
+      column.cid === index &&
+      typeof column.name === "string" &&
+      column.name.length <= MAX_FTS_ADMISSION_COLUMN_CHARS &&
+      column.name === expected.name &&
+      typeof column.type === "string" &&
+      column.type.length <= MAX_FTS_ADMISSION_COLUMN_CHARS &&
+      column.type === expected.type &&
+      column.notnull === expected.notnull &&
+      column.dflt_value === expected.dflt_value &&
+      column.pk === expected.pk &&
+      column.hidden === expected.hidden
+    );
+  })
+    ? columns
+    : null;
+}
+
+function hasExactFtsAdmissionTable(
+  db: Db,
+  table: string,
+  expectedColumns: readonly ExpectedSqliteColumn[],
+  actualSql: string,
+  expectedSql: string
+): boolean {
+  if (normalizeFtsAdmissionSql(actualSql) !== normalizeFtsAdmissionSql(expectedSql)) return false;
+  const columns = db
+    .prepare(
+      "SELECT cid, name, type, notnull, dflt_value, pk FROM pragma_table_info(?) ORDER BY cid LIMIT ?"
+    )
+    .all<SqliteColumnInfo>(table, expectedColumns.length + 1);
+  return (
+    columns.length === expectedColumns.length &&
+    columns.every((column, index) => {
+      const expected = expectedColumns[index];
+      return (
+        expected !== undefined &&
+        column.cid === index &&
+        column.name === expected.name &&
+        column.type === expected.type &&
+        column.notnull === expected.notnull &&
+        column.dflt_value === expected.dflt_value &&
+        column.pk === expected.pk
+      );
+    })
+  );
 }
 
 function updateManifestValue(hash: ReturnType<typeof createHash>, value: string | number | Buffer): void {
@@ -388,47 +908,83 @@ export class FtsIndex {
   constructor(opts: { file: string; vaultRoot: string; tokenize?: TokenizeMode }) {
     this.file = opts.file;
     this.vaultRoot = opts.vaultRoot;
-    this.tokenize = opts.tokenize ?? "unicode61";
+    this.tokenize = assertTokenizeMode(opts.tokenize === undefined ? "unicode61" : opts.tokenize);
   }
 
   /**
-   * Open the SQLite database, bootstrap the FTS5 virtual table + helpers,
-   * and tighten file perms to 0o600 on the db + WAL/SHM sidecars. Idempotent —
-   * a second `open()` call is a no-op.
+   * Open the SQLite database, admit only a fresh or same-vault FTS schema,
+   * bootstrap the FTS5 virtual table + helpers, then enable WAL and best-effort
+   * tighten file perms to 0o600 on the db + sidecars. A populated foreign, malformed,
+   * or newer-schema database is refused before Enquire issues persistent
+   * PRAGMA, DDL, DML, or chmod operations. SQLite itself may still take locks
+   * or perform recovery while the live handle reads ownership metadata.
+   * Idempotent — a second `open()` call is a no-op.
    *
-   * @throws {Error} If `better-sqlite3` (optional dep) fails to load or
-   *   the native binding can't be loaded.
+   * @param expectedDiscovery - Optional readonly preflight result to bind this
+   *   mutating open to. No argument preserves the low-level intentional-rebuild
+   *   contract; a supplied stale result is refused before bootstrap.
+   * @throws {Error} If `better-sqlite3` fails to load, the native binding is
+   *   unavailable, or a populated database cannot prove same-vault FTS
+   *   ownership with a supported non-future schema.
    */
-  async open(): Promise<void> {
+  async open(expectedDiscovery?: FtsIndexDiscovery): Promise<void> {
     if (this.db) return;
+    // Copy the caller's preflight result before the first await. A caller may
+    // retain and mutate its object; that must not widen later bootstrap
+    // authority while this open is waiting on filesystem/native work.
+    const expected = cloneFtsIndexDiscovery(expectedDiscovery);
     const Ctor = await loadBetterSqlite();
-    // v3.7.6 M-9 (external audit) — only chmod the parent directory if WE
-    // created it (parent didn't exist before mkdir). For user-supplied
-    // custom paths like `--index-file /existing/shared/path.fts5.db`, the
-    // pre-fix code would tighten the existing parent to 0o700 — surprising
-    // and potentially breaking for shared parent directories (Dropbox,
-    // shared NFS mounts, etc.). Now: existence check before mkdir; chmod
-    // only when we just created the dir.
-    const parentDir = path.dirname(this.file);
-    const parentExisted = await fs
-      .stat(parentDir)
-      .then(() => true)
-      .catch(() => false);
-    await fs.mkdir(parentDir, { recursive: true, mode: 0o700 });
-    if (!parentExisted) {
-      await fs.chmod(parentDir, 0o700).catch(() => {});
+    let fileExisted = true;
+    try {
+      const indexStat = await fs.lstat(this.file);
+      if (!indexStat.isFile()) throw new Error("non-regular FTS index path");
+    } catch (err) {
+      if (errnoCode(err) === "ENOENT") fileExisted = false;
+      else throw new Error("FTS index could not be inspected");
     }
-    this.db = new Ctor(this.file) as Db;
+    if (!fileExisted) {
+      // Parent creation/chmod is the narrow fresh-file exception. Existing
+      // paths reach live-handle admission without any filesystem preparation.
+      const parentDir = path.dirname(this.file);
+      const parentExisted = await fs
+        .stat(parentDir)
+        .then(() => true)
+        .catch(() => false);
+      await fs.mkdir(parentDir, { recursive: true, mode: 0o700 });
+      if (!parentExisted) {
+        await fs.chmod(parentDir, 0o700).catch(() => {});
+      }
+    }
+    try {
+      this.db = new Ctor(this.file) as Db;
+    } catch {
+      throw new Error("FTS index could not be opened");
+    }
     // v3.10.0-rc.70 (round-3 re-sweep, reserve-before-try) — close-on-throw: release the handle if
-    // pragma/bootstrapSchema throws on a corrupt/legacy index, so no caller can leak it (mirrors
+    // admission/bootstrap/pragma throws on a corrupt or unowned index, so no caller can leak it (mirrors
     // EmbedDb.open()). The serve call site already wraps this in a catch, but self-cleaning here
     // makes the contract hold for every caller (CLI build paths, future ones).
     try {
+      // AH-2: this same-handle read is authoritative admission, not the
+      // caller-level fail-soft peek. bootstrapSchema repeats it as the first
+      // action inside its IMMEDIATE transaction before any schema mutation.
+      const initialAdmission = this.inspectAdmission();
+      assertExpectedFtsDiscovery(expected, fileExisted, initialAdmission);
+      this.bootstrapSchema(initialAdmission);
       this.db.pragma("journal_mode = WAL");
       this.db.pragma("synchronous = NORMAL");
-      this.bootstrapSchema();
     } catch (e) {
-      this.close();
+      // Preserve the admission/bootstrap failure as the public error. A
+      // native close failure must neither replace that bounded diagnostic nor
+      // leave a closed handle installed so the next open() becomes a stale
+      // no-op.
+      const failedDb = this.db;
+      this.db = null;
+      try {
+        failedDb?.close();
+      } catch {
+        // best-effort cleanup; the original failure remains authoritative
+      }
       throw e;
     }
     // Best-effort: tighten perms on the DB and its WAL/SHM sidecar files to
@@ -463,22 +1019,9 @@ export class FtsIndex {
     }
   }
 
-  private bootstrapSchema(): void {
+  private bootstrapSchema(initialAdmission: FtsAdmission): void {
     const db = this.requireDb();
     const tokenizeArg = this.tokenize === "trigram" ? "trigram" : "unicode61 remove_diacritics 2";
-
-    // Meta is always present so we can read it before deciding on rebuilds.
-    db.exec(`
-      CREATE TABLE IF NOT EXISTS meta (
-        key TEXT PRIMARY KEY,
-        value TEXT NOT NULL
-      );
-    `);
-
-    const meta = this.readMeta();
-    const tokenizeMatch = meta.tokenize_mode === undefined || meta.tokenize_mode === this.tokenize;
-    const rootMatch = meta.vault_root === undefined || meta.vault_root === this.vaultRoot;
-    const versionMatch = meta.schema_version === undefined || meta.schema_version === String(FTS_SCHEMA_VERSION);
     // v3.7.19 γ3 / R-6 from round-20 — wrap the DROP+CREATE+writeMeta
     // sequence in a single db.transaction(). Pre-3.7.19 the steps ran
     // independently; while the existing code IS self-healing on next open
@@ -489,12 +1032,15 @@ export class FtsIndex {
     // the auditor's concern. FTS5 virtual table CREATE is supported
     // inside transactions on SQLite >= 3.7 (better-sqlite3 ships 3.40+).
     const txn = db.transaction(() => {
-      if (!tokenizeMatch || !rootMatch || !versionMatch) {
-        const reason: string[] = [];
-        if (!tokenizeMatch) reason.push(`tokenize ${meta.tokenize_mode} → ${this.tokenize}`);
-        if (!rootMatch) reason.push(`vault_root ${meta.vault_root} → ${this.vaultRoot}`);
-        if (!versionMatch) reason.push(`schema_version ${meta.schema_version} → ${FTS_SCHEMA_VERSION}`);
-        process.stderr.write(`enquire: rebuilding fts5 index (${reason.join("; ")})\n`);
+      // AH-2 race closure: this MUST remain the first callback action. The
+      // IMMEDIATE wrapper acquires SQLite's write reservation before this
+      // second same-handle proof, closing the preflight-to-bootstrap window.
+      const admission = this.inspectAdmission();
+      if (admission.kind !== initialAdmission.kind || admission.signature !== initialAdmission.signature) {
+        throw new Error("FTS index ownership changed during admission");
+      }
+      if (admission.rebuildReasons.length > 0) {
+        process.stderr.write(`enquire: rebuilding fts5 index (${admission.rebuildReasons.join("; ")})\n`);
         // DROP rather than DELETE — schema may have changed (e.g. v1 → v2 added
         // the `tags` column). DROP IF EXISTS handles a fresh DB too.
         db.exec(`
@@ -504,6 +1050,12 @@ export class FtsIndex {
           DROP TABLE IF EXISTS source_revision;
         `);
       }
+
+      // A genuinely schema-empty database is the only populated-without-meta
+      // case admitted. Create ownership metadata only after the second guard.
+      db.exec(`
+        ${FTS_META_CREATE_SQL};
+      `);
 
       // Trigger names are additive-schema authority. Recreate them on every
       // open inside this transaction so a legacy, partial, or no-op same-name
@@ -532,27 +1084,9 @@ export class FtsIndex {
           kind UNINDEXED,
           tokenize='${tokenizeArg}'
         );
-        CREATE TABLE IF NOT EXISTS source_state (
-          rel_path TEXT PRIMARY KEY,
-          mtime_ms INTEGER NOT NULL,
-          n_chunks INTEGER NOT NULL,
-          kind TEXT NOT NULL DEFAULT 'md',
-          indexed_at TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS source_quarantine (
-          rel_path TEXT NOT NULL,
-          kind TEXT NOT NULL,
-          PRIMARY KEY (rel_path, kind)
-        ) WITHOUT ROWID;
-        CREATE TABLE IF NOT EXISTS source_revision (
-          rel_path TEXT NOT NULL,
-          kind TEXT NOT NULL CHECK (kind IN ('md', 'pdf')),
-          revision INTEGER NOT NULL CHECK (
-            typeof(revision) = 'integer'
-            AND revision BETWEEN 1 AND ${MAX_SOURCE_REVISION}
-          ),
-          PRIMARY KEY (rel_path, kind)
-        ) WITHOUT ROWID;
+        ${FTS_SOURCE_STATE_CURRENT_CREATE_SQL};
+        ${FTS_SOURCE_QUARANTINE_CREATE_SQL};
+        ${FTS_SOURCE_REVISION_CREATE_SQL};
 
         INSERT OR IGNORE INTO source_revision (rel_path, kind, revision)
         SELECT rel_path, kind, 1
@@ -647,15 +1181,321 @@ export class FtsIndex {
         tokenize_mode: this.tokenize
       });
     });
-    txn();
+    txn.immediate();
   }
 
-  private readMeta(): Record<string, string> {
-    const db = this.requireDb();
-    const rows = db.prepare("SELECT key, value FROM meta").all<{ key: string; value: string }>();
-    const out: Record<string, string> = {};
-    for (const r of rows) out[r.key] = r.value;
-    return out;
+  /**
+   * Inspect logical ownership on the already-open live handle without writing.
+   * A populated database must prove FTS class, exact vault ownership, a known
+   * tokenizer, and an exact historically shipped core shape through
+   * {@link FTS_SCHEMA_VERSION}. Legacy/config mismatches for the same vault are
+   * returned as intentional rebuild reasons.
+   * The bounded signature covers the complete non-SQLite inventory: the core
+   * tables, all five engine-owned FTS5 shadows with exact CREATE tokens and
+   * bounded `pragma_table_xinfo` shapes, and only the optional additive
+   * revision/quarantine tables plus their six canonical trigger names.
+   *
+   * @internal Shared with the module-local readonly discovery adapter.
+   */
+  protected inspectAdmission(
+    db: Db = this.requireDb(),
+    configuredTokenize: TokenizeMode | null = this.tokenize
+  ): FtsAdmission {
+    let schemaRows: Array<{
+      name: string;
+      sql: string | null;
+      type: string;
+    }>;
+    try {
+      schemaRows = db
+        .prepare(
+          `SELECT type,
+                  substr(name, 1, ?) AS name,
+                  substr(sql, 1, ?) AS sql
+           FROM sqlite_master
+           WHERE name NOT GLOB 'sqlite_*'
+           LIMIT ?`
+        )
+        .all<{
+          name: string;
+          sql: string | null;
+          type: string;
+        }>(
+          MAX_FTS_ADMISSION_NAME_CHARS + 1,
+          MAX_FTS_ADMISSION_SQL_CHARS + 1,
+          MAX_FTS_ADMISSION_OBJECTS + 1
+        );
+    } catch {
+      throw new Error("Refusing to open a populated SQLite database without valid FTS ownership metadata");
+    }
+    if (schemaRows.length === 0) return { kind: "empty", rebuildReasons: [], signature: "empty" };
+    if (schemaRows.length > MAX_FTS_ADMISSION_OBJECTS) {
+      throw new Error("Refusing to open a populated SQLite database without valid FTS ownership metadata");
+    }
+    for (const object of schemaRows) {
+      if (
+        typeof object.name !== "string" ||
+        object.name.length > MAX_FTS_ADMISSION_NAME_CHARS ||
+        typeof object.sql !== "string" ||
+        object.sql.length > MAX_FTS_ADMISSION_SQL_CHARS ||
+        FTS_ADMISSION_OBJECT_TYPES.get(object.name) !== object.type
+      ) {
+        throw new Error("Refusing to open a populated SQLite database without valid FTS ownership metadata");
+      }
+    }
+    schemaRows.sort((a, b) => a.type.localeCompare(b.type) || a.name.localeCompare(b.name));
+
+    const objects = new Map(schemaRows.map((row) => [row.name, row]));
+    if (FTS_REQUIRED_OBJECT_NAMES.some((name) => objects.get(name)?.type !== "table")) {
+      throw new Error("Refusing to open a populated SQLite database without valid FTS ownership metadata");
+    }
+    const chunksSql = objects.get("chunks")?.sql;
+    const metaSql = objects.get("meta")?.sql;
+    const sourceStateSql = objects.get("source_state")?.sql;
+    if (
+      typeof metaSql !== "string" ||
+      typeof chunksSql !== "string" ||
+      typeof sourceStateSql !== "string" ||
+      normalizeFtsAdmissionSql(metaSql) !== normalizeFtsAdmissionSql(FTS_META_CREATE_SQL)
+    ) {
+      throw new Error("Refusing to open a populated SQLite database without valid FTS ownership metadata");
+    }
+
+    let metaColumns: SqliteColumnInfo[];
+    let rows: Array<{ key: unknown; value: unknown }>;
+    try {
+      metaColumns = db
+        .prepare(
+          "SELECT cid, name, type, notnull, dflt_value, pk FROM pragma_table_info('meta') ORDER BY cid LIMIT 3"
+        )
+        .all<SqliteColumnInfo>();
+      rows = db
+        .prepare("SELECT substr(key, 1, ?) AS key, substr(value, 1, ?) AS value FROM meta LIMIT 4")
+        .all<{
+          key: unknown;
+          value: unknown;
+        }>(MAX_FTS_ADMISSION_NAME_CHARS + 1, MAX_FTS_META_VALUE_CHARS + 1);
+    } catch {
+      throw new Error("Refusing to open a populated SQLite database without valid FTS ownership metadata");
+    }
+    const exactMetaShape =
+      metaColumns.length === 2 &&
+      metaColumns[0]?.cid === 0 &&
+      metaColumns[0]?.name === "key" &&
+      metaColumns[0]?.type === "TEXT" &&
+      metaColumns[0]?.notnull === 0 &&
+      metaColumns[0]?.dflt_value === null &&
+      metaColumns[0]?.pk === 1 &&
+      metaColumns[1]?.cid === 1 &&
+      metaColumns[1]?.name === "value" &&
+      metaColumns[1]?.type === "TEXT" &&
+      metaColumns[1]?.notnull === 1 &&
+      metaColumns[1]?.dflt_value === null &&
+      metaColumns[1]?.pk === 0;
+    if (!exactMetaShape || rows.length !== 3) {
+      throw new Error("Refusing to open a populated SQLite database without valid FTS ownership metadata");
+    }
+    const meta = new Map<string, string>();
+    for (const row of rows) {
+      if (
+        typeof row.key !== "string" ||
+        row.key.length > MAX_FTS_ADMISSION_NAME_CHARS ||
+        typeof row.value !== "string" ||
+        row.value.length > MAX_FTS_META_VALUE_CHARS ||
+        meta.has(row.key)
+      ) {
+        throw new Error("Refusing to open a populated SQLite database without valid FTS ownership metadata");
+      }
+      meta.set(row.key, row.value);
+    }
+
+    const storedRoot = meta.get("vault_root");
+    const storedVersion = meta.get("schema_version");
+    const storedTokenize = meta.get("tokenize_mode");
+    if (storedRoot === undefined || storedVersion === undefined || storedTokenize === undefined) {
+      throw new Error("Refusing to open a populated SQLite database without valid FTS ownership metadata");
+    }
+    if (storedRoot !== this.vaultRoot) {
+      throw new Error("Refusing to open an FTS index owned by a different vault root");
+    }
+    let exactStoredTokenize: TokenizeMode;
+    try {
+      exactStoredTokenize = assertTokenizeMode(storedTokenize, "stored FTS tokenizer");
+    } catch {
+      throw new Error("Refusing to open an FTS index with an unsupported stored tokenizer");
+    }
+    if (!/^[1-9]\d*$/.test(storedVersion)) {
+      throw new Error("Refusing to open an FTS index with malformed ownership metadata");
+    }
+    const numericVersion = Number(storedVersion);
+    if (!Number.isSafeInteger(numericVersion)) {
+      throw new Error("Refusing to open an FTS index with malformed ownership metadata");
+    }
+    if (numericVersion > FTS_SCHEMA_VERSION) {
+      throw new Error("Refusing to open an FTS index with a newer schema version");
+    }
+
+    const expectedChunkColumns = FTS_CHUNK_COLUMNS_BY_SCHEMA.get(numericVersion);
+    const expectedSourceStateSql = FTS_SOURCE_STATE_CREATE_SQL_BY_SCHEMA.get(numericVersion);
+    if (!expectedChunkColumns || expectedSourceStateSql === undefined) {
+      throw new Error("Refusing to open an FTS index with an unsupported legacy schema version");
+    }
+    if (normalizeFtsAdmissionSql(sourceStateSql) !== normalizeFtsAdmissionSql(expectedSourceStateSql)) {
+      throw new Error("Refusing to open a populated SQLite database without valid FTS ownership metadata");
+    }
+    const unindexedColumns = new Set([
+      "rel_path",
+      "chunk_index",
+      "line_start",
+      "line_end",
+      "tags",
+      "raw_content",
+      "kind"
+    ]);
+    const declaredColumns = expectedChunkColumns
+      .map((name) => `${name}${unindexedColumns.has(name) ? " UNINDEXED" : ""}`)
+      .join(",\n  ");
+    const declaredTokenizer =
+      exactStoredTokenize === "trigram" ? "trigram" : "unicode61 remove_diacritics 2";
+    const expectedChunksSql = `CREATE VIRTUAL TABLE IF NOT EXISTS chunks USING fts5(
+  ${declaredColumns},
+  tokenize='${declaredTokenizer}'
+)`;
+    if (normalizeFtsAdmissionSql(chunksSql) !== normalizeFtsAdmissionSql(expectedChunksSql)) {
+      throw new Error("Refusing to open an FTS index whose physical tokenizer or schema contradicts metadata");
+    }
+    let shadowColumns: Array<{ columns: SqliteXColumnInfo[]; name: string }>;
+    try {
+      shadowColumns = ftsShadowAdmissionTables(expectedChunkColumns.length).map((shadow) => {
+        const actualSql = objects.get(shadow.name)?.sql;
+        if (typeof actualSql !== "string") throw new Error("missing FTS shadow table");
+        const columns = readExactFtsShadowTable(
+          db,
+          actualSql,
+          shadow.sql,
+          shadow.name,
+          shadow.columns
+        );
+        if (columns === null) throw new Error("invalid FTS shadow table");
+        return { name: shadow.name, columns };
+      });
+    } catch {
+      throw new Error("Refusing to open a populated SQLite database without valid FTS ownership metadata");
+    }
+    let chunkColumns: SqliteColumnInfo[];
+    let sourceStateColumns: SqliteColumnInfo[];
+    try {
+      chunkColumns = db
+        .prepare(
+          "SELECT cid, name, type, notnull, dflt_value, pk FROM pragma_table_info('chunks') ORDER BY cid LIMIT 12"
+        )
+        .all<SqliteColumnInfo>();
+      sourceStateColumns = db
+        .prepare(
+          "SELECT cid, name, type, notnull, dflt_value, pk " +
+            "FROM pragma_table_info('source_state') ORDER BY cid LIMIT 6"
+        )
+        .all<SqliteColumnInfo>();
+    } catch {
+      throw new Error("Refusing to open a populated SQLite database without valid FTS ownership metadata");
+    }
+    const exactChunkShape =
+      chunkColumns.length === expectedChunkColumns.length &&
+      chunkColumns.every(
+        (column, index) =>
+          column.cid === index &&
+          column.name === expectedChunkColumns[index] &&
+          column.type === "" &&
+          column.notnull === 0 &&
+          column.dflt_value === null &&
+          column.pk === 0
+      );
+    const expectedSourceStateColumns =
+      numericVersion >= 4
+        ? [
+            ["rel_path", "TEXT", 0, null, 1],
+            ["mtime_ms", "INTEGER", 1, null, 0],
+            ["n_chunks", "INTEGER", 1, null, 0],
+            ["kind", "TEXT", 1, "'md'", 0],
+            ["indexed_at", "TEXT", 1, null, 0]
+          ]
+        : [
+            ["rel_path", "TEXT", 0, null, 1],
+            ["mtime_ms", "INTEGER", 1, null, 0],
+            ["n_chunks", "INTEGER", 1, null, 0],
+            ["indexed_at", "TEXT", 1, null, 0]
+          ];
+    const exactSourceStateShape =
+      sourceStateColumns.length === expectedSourceStateColumns.length &&
+      sourceStateColumns.every(
+        (column, index) =>
+          column.cid === index &&
+          column.name === expectedSourceStateColumns[index]?.[0] &&
+          column.type === expectedSourceStateColumns[index]?.[1] &&
+          column.notnull === expectedSourceStateColumns[index]?.[2] &&
+          column.dflt_value === expectedSourceStateColumns[index]?.[3] &&
+          column.pk === expectedSourceStateColumns[index]?.[4]
+      );
+    if (!exactChunkShape || !exactSourceStateShape) {
+      throw new Error("Refusing to open a populated SQLite database without valid FTS ownership metadata");
+    }
+
+    try {
+      const quarantineSql = objects.get("source_quarantine")?.sql;
+      if (
+        quarantineSql !== undefined &&
+        (typeof quarantineSql !== "string" ||
+          !hasExactFtsAdmissionTable(
+            db,
+            "source_quarantine",
+            FTS_SOURCE_QUARANTINE_COLUMNS,
+            quarantineSql,
+            FTS_SOURCE_QUARANTINE_CREATE_SQL
+          ))
+      ) {
+        throw new Error("invalid optional FTS table");
+      }
+      const revisionSql = objects.get("source_revision")?.sql;
+      if (
+        revisionSql !== undefined &&
+        (typeof revisionSql !== "string" ||
+          !hasExactFtsAdmissionTable(
+            db,
+            "source_revision",
+            FTS_SOURCE_REVISION_COLUMNS,
+            revisionSql,
+            FTS_SOURCE_REVISION_CREATE_SQL
+          ))
+      ) {
+        throw new Error("invalid optional FTS table");
+      }
+    } catch {
+      throw new Error("Refusing to open a populated SQLite database without valid FTS ownership metadata");
+    }
+
+    const rebuildReasons: string[] = [];
+    if (configuredTokenize !== null && exactStoredTokenize !== configuredTokenize) {
+      rebuildReasons.push(`tokenize ${exactStoredTokenize} → ${configuredTokenize}`);
+    }
+    if (numericVersion < FTS_SCHEMA_VERSION) {
+      rebuildReasons.push(`schema_version ${numericVersion} → ${FTS_SCHEMA_VERSION}`);
+    }
+    return {
+      kind: "owned",
+      meta: {
+        schema_version: storedVersion,
+        vault_root: storedRoot,
+        tokenize_mode: exactStoredTokenize
+      },
+      rebuildReasons,
+      signature: JSON.stringify([
+        schemaRows,
+        shadowColumns,
+        chunkColumns,
+        sourceStateColumns,
+        [...meta.entries()].sort(([a], [b]) => a.localeCompare(b))
+      ])
+    };
   }
 
   private writeMeta(kv: Record<string, string>): void {
@@ -1531,6 +2371,15 @@ export class FtsIndex {
   }
 }
 
+// Keeps the authoritative admission implementation single-sourced while the
+// exported discovery function supplies a readonly handle instead of opening or
+// mutating through FtsIndex.open().
+class ReadonlyFtsAdmissionInspector extends FtsIndex {
+  inspectReadonlyHandle(db: Db): FtsAdmission {
+    return this.inspectAdmission(db, null);
+  }
+}
+
 /**
  * Incrementally synchronize Markdown notes into an opened FTS5 index.
  *
@@ -1890,65 +2739,90 @@ export function planCachePrune(entries: readonly string[], keepHash: string): st
 }
 
 /**
- * v3.6.2 K-1b — non-destructive peek at an existing fts5 index's meta row.
+ * Classify a configured FTS path through the same exact admission logic used
+ * by {@link FtsIndex.open}, but on one readonly handle and without Enquire
+ * bootstrap, persistent PRAGMA mutation, DDL, DML, or chmod. SQLite/VFS lock,
+ * recovery, and WAL/SHM bookkeeping remain outside this logical guarantee.
  *
- * Mirror of `peekEmbedDbMeta()` in `src/embed-db.ts`. Reads `tokenize_mode`,
- * `vault_root`, `schema_version` from a SQLite file WITHOUT opening it via
- * `FtsIndex` (which would trigger `bootstrapSchema()` and DROP TABLE on any
- * tokenize-mode mismatch with the caller's declared mode).
- *
- * **Why this exists (audit class K-1b):** the original v3.6.1 CRIT-1 fix
- * (peek-before-open) was applied ONLY to the `serve --use-hnsw` embed-db
- * path. The SAME bootstrap-schema-DROP class affects FtsIndex on
- * `tokenize_mode` mismatch.
- *
- * **Class-closure timeline (retroactive correction batch — see also
- * v3.7.2 audit response for the 4th drift instance: this TSDoc itself
- * previously mis-attributed the closure to v3.6.3):**
- * - v3.6.1 fixed 1 callsite (`server.ts` HNSW path), claimed "CRIT-1
- *   closed". External audit caught 9 residual.
- * - v3.6.2 fixed `server.ts:174` (serve start) + `doctor.ts:328` +
- *   `src/tools/search.ts:917` (3 callsites total). The v3.6.2 CHANGELOG
- *   TL;DR + this TSDoc previously claimed "all 10 callsites" — that
- *   was an overclaim. cli.ts had 5 residual sites.
- * - v3.6.3 was deferred to a marketing-only patch ("memory for AI
- *   agents" positioning); K-1 work was pushed to v3.6.4.
- * - v3.6.4 closes the cli.ts class: `cli.ts:638` (eval, diagnostic class
- *   like doctor), `cli.ts:514,554` (setup, idempotent class), and
- *   `cli.ts:311,398` (index, build-embeddings — peek-and-honor when
- *   user did NOT explicitly pass `--tokenize` / `--embedding-model`).
- *   `clear-index` and `clear-embeddings` call only `.clearOnDisk()` and
- *   never trigger bootstrapSchema — marked `// SAFE BY DESIGN`. Added
- *   `tests/k1-class-invariant.test.ts` (grep gate, 40-line window).
- * - v3.7.0 added `tests/k1-ast-invariant.test.ts` (TypeScript compiler
- *   API def-use trace) catching the "peek called but result discarded"
- *   bypass that grep would miss.
- *
- * **K-1 class is structurally enforced at v3.6.4 (grep) + v3.7.0 (AST).**
- * `tests/k1-class-invariant.test.ts` enforces the grep rule: every
- * `new EmbedDb(...)` / `new FtsIndex(...)` must be preceded by a
- * `peek*Meta` call OR an explicit `// SAFE BY DESIGN` comment within
- * 40 lines. `tests/k1-ast-invariant.test.ts` enforces the deeper rule:
- * the peek result must trace to one of the constructor's K-1-relevant
- * args (modelAlias / dim / tokenize / quantization).
- *
- * Returns null if the file doesn't exist OR doesn't have a `meta` table
- * yet. v3.11.0-rc.9 (audit re-verify) — TSDoc corrected: this NEVER throws
- * (rc.33 wrapped `new Database()` + the meta queries in a catch that maps ANY
- * failure — corrupt / unreadable / not-a-DB / directory / missing dep — to null);
- * it is the pre-open peek on the serve boot path, so a throw would crash serve.
- *
- * @param file - Absolute path to a `.fts5.db` file.
- * @returns Meta dict if the file is a populated fts5 index, null otherwise.
+ * @param file - Configured `.fts5.db` path.
+ * @param expectedVaultRoot - Exact canonical vault root expected to own it.
+ * @returns `missing` or genuinely schema-`empty` when caller defaults are safe,
+ *   `owned` with the physically proven stored tokenizer, or generic `refused`.
  * @example
  * ```ts
- * const meta = await peekFtsMetaSafe(indexFile);
- * if (meta?.tokenize_mode) {
- *   const idx = new FtsIndex({ file: indexFile, vaultRoot, tokenize: meta.tokenize_mode });
- * }
+ * const discovery = await discoverFtsIndexConfig(indexFile, vaultRoot);
+ * const tokenize = discovery.kind === "owned" ? discovery.meta.tokenize_mode : "unicode61";
+ * const index = new FtsIndex({ file: indexFile, vaultRoot, tokenize });
+ * await index.open(discovery);
  * ```
  */
-export async function peekFtsMetaSafe(file: string): Promise<{
+export async function discoverFtsIndexConfig(
+  file: string,
+  expectedVaultRoot: string
+): Promise<FtsIndexDiscovery> {
+  try {
+    const indexStat = await fs.lstat(file);
+    if (!indexStat.isFile()) return { kind: "refused" };
+  } catch (error) {
+    return errnoCode(error) === "ENOENT" ? { kind: "missing" } : { kind: "refused" };
+  }
+
+  let Database: typeof import("better-sqlite3");
+  try {
+    Database = (await import("better-sqlite3")).default as unknown as typeof import("better-sqlite3");
+  } catch {
+    return { kind: "refused" };
+  }
+
+  let db: Db | null = null;
+  let discovery: FtsIndexDiscovery = { kind: "refused" };
+  try {
+    db = new Database(file, { readonly: true, fileMustExist: true }) as unknown as Db;
+    const inspector = new ReadonlyFtsAdmissionInspector({
+      file,
+      vaultRoot: expectedVaultRoot
+    });
+    const admission = inspector.inspectReadonlyHandle(db);
+    discovery = admission.kind === "empty"
+      ? { kind: "empty" }
+      : { kind: "owned", meta: admission.meta };
+  } catch {
+    discovery = { kind: "refused" };
+  } finally {
+    try {
+      db?.close();
+    } catch {
+      // A native close failure invalidates even a previously admitted result;
+      // never expose the error or a path it may carry.
+      discovery = { kind: "refused" };
+    }
+  }
+  return discovery;
+}
+
+/**
+ * Legacy fail-soft diagnostic peek at bounded FTS metadata.
+ *
+ * Production configuration decisions use {@link discoverFtsIndexConfig}, whose
+ * discriminated result distinguishes missing and exactly schema-empty files
+ * from full-class, exact-root ownership and generic refusal. This compatibility
+ * helper never authorizes an open or rebuild. Missing dependencies,
+ * unreadable/corrupt files, malformed rows, unsupported tokenizer values, and
+ * query failures collapse to `null`. A close failure never escapes; this
+ * legacy diagnostic may still return metadata already read.
+ *
+ * @param file - Absolute path to a `.fts5.db` file.
+ * @param expectedVaultRoot - When supplied, return metadata only when its
+ *   exact stored owner matches this vault root.
+ * @returns Bounded metadata when readable and root-compatible, otherwise
+ *   `null`. This is not a substitute for {@link FtsIndex.open}'s admission.
+ * @example
+ * ```ts
+ * const meta = await peekFtsMetaSafe(indexFile, vaultRoot);
+ * console.log(meta?.schema_version); // diagnostic only
+ * ```
+ */
+export async function peekFtsMetaSafe(file: string, expectedVaultRoot?: string): Promise<{
   schema_version?: string;
   vault_root?: string;
   tokenize_mode?: TokenizeMode;
@@ -1963,28 +2837,56 @@ export async function peekFtsMetaSafe(file: string): Promise<{
   }
   // v3.10.0-rc.33 (post-rc.31 audit) — `new Database()` + the meta queries are
   // now INSIDE the try: a "Safe" peek must NEVER throw. Previously a corrupt /
-  // unreadable / not-a-DB index file (or a path that is a directory) made
-  // `new Database(file)` throw and crashed serve startup at the `--persistent-
-  // index` pre-open peek — before the open() fail-soft could catch it. Any
-  // failure now → null ("no usable meta"), and the caller degrades to TF-IDF.
+  // unreadable / not-a-DB index file (or a path that is a directory) must not
+  // escape this legacy diagnostic. Any failure maps to null.
   let db: Db | null = null;
   try {
     db = new Database(file, { readonly: true, fileMustExist: true }) as unknown as Db;
     const tableCheck = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='meta'").get();
     if (!tableCheck) return null;
-    const rows = db.prepare("SELECT key, value FROM meta").all() as { key: string; value: string }[];
+    const rows = db
+      .prepare("SELECT substr(key, 1, ?) AS key, substr(value, 1, ?) AS value FROM meta LIMIT 4")
+      .all<{ key: unknown; value: unknown }>(
+        MAX_FTS_ADMISSION_NAME_CHARS + 1,
+        MAX_FTS_META_VALUE_CHARS + 1
+      );
+    if (rows.length !== 3) return null;
     const meta: { schema_version?: string; vault_root?: string; tokenize_mode?: TokenizeMode } = {};
     for (const row of rows) {
-      if (row.key === "schema_version") meta.schema_version = row.value;
-      else if (row.key === "vault_root") meta.vault_root = row.value;
-      else if (row.key === "tokenize_mode") {
-        meta.tokenize_mode = row.value === "trigram" ? "trigram" : "unicode61";
+      if (
+        typeof row.key !== "string" ||
+        row.key.length > MAX_FTS_ADMISSION_NAME_CHARS ||
+        typeof row.value !== "string" ||
+        row.value.length > MAX_FTS_META_VALUE_CHARS
+      ) {
+        return null;
       }
+      if (row.key === "schema_version" && meta.schema_version === undefined) meta.schema_version = row.value;
+      else if (row.key === "vault_root" && meta.vault_root === undefined) meta.vault_root = row.value;
+      else if (row.key === "tokenize_mode") {
+        // Discovery is fail-soft, never authoritative: an unsupported stored
+        // value must not be laundered into unicode61 and then used by a caller.
+        if (meta.tokenize_mode !== undefined || (row.value !== "unicode61" && row.value !== "trigram")) return null;
+        meta.tokenize_mode = row.value;
+      } else return null;
     }
+    if (
+      meta.schema_version === undefined ||
+      meta.vault_root === undefined ||
+      meta.tokenize_mode === undefined
+    ) {
+      return null;
+    }
+    if (expectedVaultRoot !== undefined && meta.vault_root !== expectedVaultRoot) return null;
     return meta;
   } catch {
     return null;
   } finally {
-    db?.close();
+    try {
+      db?.close();
+    } catch {
+      // Discovery is fail-soft even if the optional native handle reports a
+      // close failure; never replace the bounded result with a pathful error.
+    }
   }
 }

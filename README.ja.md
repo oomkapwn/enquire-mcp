@@ -277,7 +277,7 @@ graph LR
 | **プライバシーフィルタ** | FTS5 + embed-db + chunk リソースパスで検証；空の許可 / 拒否リストには fail-closed |
 | **HTTP トランスポート** | Bearer 認証（定数時間 SHA-256 + `timingSafeEqual`）、トークン別レート制限、厳格な CORS |
 | **Frontmatter** | `js-yaml@5` の `load`（YAML 1.2 コアスキーマ、デフォルトで安全）—— コード実行なし |
-| **キャッシュ + インデックスファイル** | chmod 0600、親ディレクトリ 0700 |
+| **キャッシュ + インデックスファイル** | POSIX モードが機能する環境では Enquire が機密ファイルへベストエフォートで `0600` を再適用。Enquire が作成した親ディレクトリは `0700` で開始し、既存/カスタムの親は運用者管理のまま |
 | **1807 ユニットテスト · リリース必須 CI チェック 12 個 · 現在ブランチ保護対象は 7 個** | 現在確認済みのリリース状態。運用詳細は下に固定しています。 |
 | **CI** | `release.yml` は **12 個のリリース gate** を直接列挙し、各 PR ですべて実行します（`lint`、`test (22)`、`test (24)`、`smoke`、`audit`、`coverage`、`version-consistency`、`docs`、`oia`、`protocol-conformance`、`package-consumer`、`mcpb-basic`）。固定された Windows hostile-filesystem job `test-windows` は追加の名前付き check-run で、`smoke` のブロッキング前提条件として推移的に強制されます。ブランチ保護が現在強制するのは **7 個**だけで、`docs`、`oia`、`protocol-conformance`、`package-consumer`、`mcpb-basic` はリリース必須ですが未保護です（ブランチ保護スナップショットは 2026-07-23 にライブ確認）。`test-macos` は `continue-on-error` を持つ唯一のアドバイザリ job です。`docker` は CI workflow を失敗させ得ますが未保護で、CodeQL は [GitHub default setup](https://docs.github.com/code-security/code-scanning/automatically-scanning-your-code-for-vulnerabilities-and-errors/configuring-default-setup-for-code-scanning) により 2 つの独立した未保護分析を実行します。npm publish 前に `release.yml` がタグ付き SHA 上で直接列挙した 12 個の gate を再検証します。 |
 | **カバレッジ** | 行 ≥86% · ステートメント ≥82% · 関数 ≥75% · 分岐 ≥74%（ゲート付き） |

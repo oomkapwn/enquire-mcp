@@ -1,3 +1,4 @@
+import { Buffer } from "node:buffer";
 import { execFileSync, spawnSync } from "node:child_process";
 import { promises as fs, type Stats } from "node:fs";
 import * as os from "node:os";
@@ -5,8 +6,8 @@ import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { EmbedDb, peekEmbedDbMeta } from "../src/embed-db.js";
-import { peekFtsMetaSafe } from "../src/fts5.js";
-import { parsePositiveInt, parseQuantizationMode } from "../src/index.js";
+import { defaultIndexFile, peekFtsMetaSafe } from "../src/fts5.js";
+import { parsePositiveInt, parseQuantizationMode, prepareServerDeps } from "../src/index.js";
 import {
   armWatcherActivationGuard,
   releaseWatcherActivationGuard,
@@ -579,8 +580,56 @@ describe("CLI subcommands E2E (against built dist/)", () => {
   // action (reconciled with startHttpServer's ≥16 throw) so the user gets a
   // friendly hint + clean exit(1) before any server setup. Both branches exit
   // before binding, so spawnSync returns fast.
-  it("`serve-http --bearer-token <short>` exits 1 with a ≥16-char hint (NEGATIVE control)", (ctx) => {
+  it("`serve-http --bearer-token <short>` exits 1 with a ≥16-char hint (NEGATIVE control)", async (ctx) => {
     if (!distExists()) return ctx.skip();
+    const rejectedIndex = path.join(tmpdir, "invalid-tokenizer-http.fts5.db");
+    const invalidTokenizer = spawnSync(
+      process.execPath,
+      [
+        distEntry,
+        "serve-http",
+        "--vault",
+        vault,
+        "--persistent-index",
+        "--index-file",
+        rejectedIndex,
+        "--tokenize",
+        "porter",
+        "--bearer-token",
+        "0123456789abcdef",
+        "--port",
+        "0"
+      ],
+      { encoding: "utf8", timeout: 20000 }
+    );
+    expect(invalidTokenizer.status).not.toBe(0);
+    expect(`${invalidTokenizer.stdout ?? ""}${invalidTokenizer.stderr ?? ""}`).toMatch(
+      /--tokenize.*unicode61.*trigram.*porter/is
+    );
+    await expect(fs.stat(rejectedIndex)).rejects.toThrow();
+
+    const rejectedStdioIndex = path.join(tmpdir, "invalid-tokenizer-stdio.fts5.db");
+    const invalidStdioTokenizer = spawnSync(
+      process.execPath,
+      [
+        distEntry,
+        "serve",
+        "--vault",
+        vault,
+        "--persistent-index",
+        "--index-file",
+        rejectedStdioIndex,
+        "--tokenize",
+        "porter"
+      ],
+      { encoding: "utf8", timeout: 20_000 }
+    );
+    expect(invalidStdioTokenizer.status).not.toBe(0);
+    expect(`${invalidStdioTokenizer.stdout ?? ""}${invalidStdioTokenizer.stderr ?? ""}`).toMatch(
+      /--tokenize.*unicode61.*trigram.*porter/is
+    );
+    await expect(fs.stat(rejectedStdioIndex)).rejects.toThrow();
+
     const res = spawnSync(process.execPath, [distEntry, "serve-http", "--vault", vault, "--bearer-token", "short"], {
       encoding: "utf8",
       timeout: 20000
@@ -624,7 +673,7 @@ describe("CLI subcommands E2E (against built dist/)", () => {
     expect(out).toContain("no fts5 index");
   });
 
-  it("`enquire-mcp index` builds the FTS5 index and reports per-status counts", (ctx) => {
+  it("`enquire-mcp index` builds the FTS5 index and reports per-status counts", async (ctx) => {
     if (!distExists()) return ctx.skip();
     if (!canRunFts5) return ctx.skip();
     const indexFile = path.join(tmpdir, "test.fts5.db");
@@ -633,6 +682,26 @@ describe("CLI subcommands E2E (against built dist/)", () => {
     });
     expect(out).toMatch(/added=2 updated=0 deleted=0 unchanged=0 total_chunks=\d+/);
     expect(out).toContain(indexFile);
+
+    // Discriminated discovery must keep present zero-byte and schema-empty
+    // files in the safe initialization class. The old peek-null + exists gate
+    // falsely refused both even though live-handle admission classifies them
+    // as empty and permits bootstrap.
+    const zeroByteIndex = path.join(tmpdir, "zero-byte.fts5.db");
+    await fs.writeFile(zeroByteIndex, "");
+    const schemaEmptyIndex = path.join(tmpdir, "schema-empty.fts5.db");
+    const { default: Database } = await import("better-sqlite3");
+    const schemaEmpty = new Database(schemaEmptyIndex);
+    schemaEmpty.close();
+    for (const emptyIndex of [zeroByteIndex, schemaEmptyIndex]) {
+      const emptyOut = execFileSync(
+        process.execPath,
+        [distEntry, "index", "--vault", vault, "--index-file", emptyIndex],
+        { encoding: "utf8" }
+      );
+      expect(emptyOut).toMatch(/added=2 updated=0 deleted=0 unchanged=0/);
+      expect((await peekFtsMetaSafe(emptyIndex))?.tokenize_mode).toBe("unicode61");
+    }
   });
 
   it("`enquire-mcp clear-index` removes db + WAL/SHM after a build", async (ctx) => {
@@ -676,9 +745,47 @@ describe("CLI subcommands E2E (against built dist/)", () => {
     expect(out2).toMatch(/added=0 updated=0 deleted=0 unchanged=2/);
   });
 
-  it("`enquire-mcp index --tokenize trigram` then re-run WITHOUT --tokenize PRESERVES trigram (v3.6.4 K-1 fix)", (ctx) => {
+  const preserveTrigramTestName =
+    "`enquire-mcp index --tokenize trigram` then re-run WITHOUT --tokenize " +
+    "PRESERVES trigram (v3.6.4 K-1 fix)";
+  it(preserveTrigramTestName, async (ctx) => {
     if (!distExists()) return ctx.skip();
     if (!canRunFts5) return ctx.skip();
+    const rejectedCustom = path.join(tmpdir, "invalid-tokenizer-custom.fts5.db");
+    const invalidCustom = spawnSync(
+      process.execPath,
+      [distEntry, "index", "--vault", vault, "--index-file", rejectedCustom, "--tokenize", "porter"],
+      { encoding: "utf8", timeout: 20000 }
+    );
+    expect(invalidCustom.status).not.toBe(0);
+    expect(`${invalidCustom.stdout ?? ""}${invalidCustom.stderr ?? ""}`).toMatch(
+      /--tokenize.*unicode61.*trigram.*porter/is
+    );
+    await expect(fs.stat(rejectedCustom)).rejects.toThrow();
+
+    const rejectedDefault = defaultIndexFile(await fs.realpath(vault));
+    const invalidDefault = spawnSync(
+      process.execPath,
+      [distEntry, "index", "--vault", vault, "--tokenize", "porter"],
+      { encoding: "utf8", timeout: 20000 }
+    );
+    expect(invalidDefault.status).not.toBe(0);
+    expect(`${invalidDefault.stdout ?? ""}${invalidDefault.stderr ?? ""}`).toMatch(
+      /--tokenize.*unicode61.*trigram.*porter/is
+    );
+    await expect(fs.stat(rejectedDefault)).rejects.toThrow();
+
+    const rejectedProgrammatic = path.join(tmpdir, "invalid-tokenizer-programmatic.fts5.db");
+    await expect(
+      prepareServerDeps({
+        vault,
+        persistentIndex: true,
+        indexFile: rejectedProgrammatic,
+        tokenize: "porter" as unknown as "unicode61" | "trigram"
+      })
+    ).rejects.toThrow(/tokenize option.*unicode61.*trigram.*porter/is);
+    await expect(fs.stat(rejectedProgrammatic)).rejects.toThrow();
+
     const indexFile = path.join(tmpdir, "tokenize-flip.fts5.db");
     execFileSync(
       process.execPath,
@@ -726,7 +833,7 @@ describe("CLI subcommands E2E (against built dist/)", () => {
   // Note: where the command path requires loading the embedder model (which
   // depends on a network-cached HuggingFace download), we don't assert exit
   // code — we capture stderr and assert the K-1 honoring message fires
-  // BEFORE the embedder load. That proves the peek-and-honor logic ran
+  // BEFORE the embedder load. That proves configuration discovery and honoring ran
   // even when the test environment can't complete the full subcommand.
 
   it("`enquire-mcp setup --skip-embeddings` PRESERVES existing --tokenize trigram FTS5 index (v3.7.0 M-1)", async (ctx) => {
@@ -853,6 +960,132 @@ describe("CLI subcommands E2E (against built dist/)", () => {
       await releaseWatcherActivationGuard(guard);
     }
     await expect(fs.lstat(guardPath)).rejects.toThrow();
+
+    // Combined ownership + guard negative: recovery guidance is safe only for
+    // a missing or exactly-owned EmbedDb. A foreign default artifact must win
+    // with the generic class refusal while the guard and logical cells remain.
+    const foreignSetupRoot = path.join(tmpdir, "setup-foreign-root");
+    await fs.mkdir(foreignSetupRoot);
+    const canonicalForeignSetupRoot = await fs.realpath(foreignSetupRoot);
+    const foreignSetupDb = new EmbedDb({
+      file: embedFile,
+      vaultRoot: canonicalForeignSetupRoot,
+      modelAlias: "multilingual",
+      dim: 2
+    });
+    await foreignSetupDb.open();
+    foreignSetupDb.upsertNote("Foreign.md", 1, [
+      {
+        chunkIndex: 0,
+        lineStart: 1,
+        lineEnd: 1,
+        textPreview: "setup-foreign-cell",
+        vector: new Float32Array([1, 0])
+      }
+    ]);
+    foreignSetupDb.close();
+    const Database = (await import("better-sqlite3")).default;
+    const setupLogicalSnapshot = () => {
+      const inspect = new Database(embedFile, { readonly: true, fileMustExist: true });
+      try {
+        return {
+          schema: inspect
+            .prepare(
+              "SELECT type, name, sql FROM sqlite_master WHERE name NOT GLOB 'sqlite_*' ORDER BY type, name"
+            )
+            .all(),
+          meta: inspect.prepare("SELECT key, value FROM meta ORDER BY key").all(),
+          rows: inspect
+            .prepare("SELECT rel_path, text_preview, hex(vector) AS vector_hex FROM embeddings ORDER BY id")
+            .all()
+        };
+      } finally {
+        inspect.close();
+      }
+    };
+    const setupLogicalBefore = setupLogicalSnapshot();
+    const combinedSetupGuard = await armWatcherActivationGuard(embedFile);
+    try {
+      const combinedSetup = spawnSync(
+        process.execPath,
+        [distEntry, "setup", "--vault", vault, "--skip-embeddings"],
+        { encoding: "utf8", timeout: 10_000 }
+      );
+      const combinedRefusal = `${combinedSetup.stdout ?? ""}${combinedSetup.stderr ?? ""}`;
+      expect(combinedSetup.status).not.toBe(0);
+      expect(combinedRefusal).toMatch(/Embedding index ownership could not be verified/i);
+      expect(combinedRefusal).not.toMatch(/clear-embeddings|incomplete watcher startup|strict recovery/i);
+      for (const sensitivePath of [
+        vault,
+        realVault,
+        foreignSetupRoot,
+        canonicalForeignSetupRoot,
+        embedFile,
+        guardPath
+      ]) {
+        expect(combinedRefusal).not.toContain(sensitivePath);
+      }
+      expect(setupLogicalSnapshot()).toEqual(setupLogicalBefore);
+      expect((await fs.lstat(guardPath)).isDirectory()).toBe(true);
+    } finally {
+      await releaseWatcherActivationGuard(combinedSetupGuard);
+    }
+    await Promise.all(
+      [embedFile, `${embedFile}-wal`, `${embedFile}-shm`].map((artifact) => fs.rm(artifact, { force: true }))
+    );
+
+    // Fail-soft discovery negative: a present same-root index whose metadata
+    // cannot be classified must not be laundered through the unicode61
+    // fallback. Setup has no explicit tokenizer override, so it refuses before
+    // FtsIndex construction and preserves every logical row.
+    const corruptFtsMeta = new Database(indexFile);
+    corruptFtsMeta.prepare("UPDATE meta SET value = ? WHERE key = 'tokenize_mode'").run("porter/path-secret");
+    corruptFtsMeta.close();
+    expect(await peekFtsMetaSafe(indexFile, realVault)).toBeNull();
+    const ftsLogicalSnapshot = () => {
+      const inspect = new Database(indexFile, { readonly: true, fileMustExist: true });
+      try {
+        return {
+          schema: inspect
+            .prepare(
+              `SELECT type, name, sql
+               FROM sqlite_master
+               WHERE name NOT GLOB 'sqlite_*'
+               ORDER BY type, name`
+            )
+            .all(),
+          meta: inspect.prepare("SELECT key, value FROM meta ORDER BY key").all(),
+          chunks: inspect
+            .prepare(
+              `SELECT rowid, content, title, aliases, scope_tokens, rel_path,
+                      chunk_index, line_start, line_end, tags, raw_content, kind
+               FROM chunks
+               ORDER BY rowid`
+            )
+            .all(),
+          sourceState: inspect.prepare("SELECT * FROM source_state ORDER BY rel_path, kind").all()
+        };
+      } finally {
+        inspect.close();
+      }
+    };
+    const ftsLogicalBeforeRefusal = ftsLogicalSnapshot();
+    const unverifiedSetup = spawnSync(
+      process.execPath,
+      [distEntry, "setup", "--vault", vault, "--skip-embeddings"],
+      { encoding: "utf8", timeout: 10_000 }
+    );
+    const unverifiedFtsRefusal = `${unverifiedSetup.stdout ?? ""}${unverifiedSetup.stderr ?? ""}`;
+    expect(unverifiedSetup.status).not.toBe(0);
+    expect(unverifiedFtsRefusal).toMatch(/FTS index configuration could not be verified/i);
+    expect(unverifiedFtsRefusal).not.toContain("porter/path-secret");
+    for (const sensitivePath of [vault, realVault, indexFile]) {
+      expect(unverifiedFtsRefusal).not.toContain(sensitivePath);
+    }
+    expect(ftsLogicalSnapshot()).toEqual(ftsLogicalBeforeRefusal);
+    await Promise.all(
+      [indexFile, `${indexFile}-wal`, `${indexFile}-shm`].map((artifact) => fs.rm(artifact, { force: true }))
+    );
   });
 
   it("`enquire-mcp eval --persistent-index` PRESERVES existing --tokenize trigram FTS5 index (v3.7.0 M-1)", async (ctx) => {
@@ -915,7 +1148,7 @@ describe("CLI subcommands E2E (against built dist/)", () => {
     expect(metaBefore?.model_alias).toBe("bge");
     // Run `build-embeddings` without --embedding-model flag. The Commander
     // default is "multilingual" — pre-v3.6.4 this would silently destroy
-    // bge and rebuild as multilingual. Post-v3.6.4: peek + honor + emit
+    // bge and rebuild as multilingual. Current behavior: discover + honor + emit
     // stderr line BEFORE embedder load.
     //
     const registerFixture = path.resolve(__dirname, "fixtures", "transformers-test-loader", "register.mjs");
@@ -1010,6 +1243,83 @@ describe("CLI subcommands E2E (against built dist/)", () => {
       await releaseWatcherActivationGuard(guard);
     }
     await expect(fs.lstat(customGuardPath)).rejects.toThrow();
+
+    // Combined malformed-class + guard control: even fully explicit writer
+    // configuration cannot turn recovery guidance into authority over an
+    // unrelated SQLite file. The payload BLOB and guard both remain exact.
+    const { default: Database } = await import("better-sqlite3");
+    const wrongClass = new Database(customEmbedFile);
+    wrongClass.exec("CREATE TABLE payload (id INTEGER PRIMARY KEY, value BLOB NOT NULL)");
+    wrongClass.prepare("INSERT INTO payload (id, value) VALUES (?, ?)").run(7, Buffer.from([0, 1, 127, 255]));
+    wrongClass.close();
+    const wrongClassSnapshot = () => {
+      const inspect = new Database(customEmbedFile, { readonly: true, fileMustExist: true });
+      try {
+        return {
+          schema: inspect
+            .prepare(
+              `SELECT type, name, sql
+               FROM sqlite_master
+               WHERE name NOT GLOB 'sqlite_*'
+               ORDER BY type, name`
+            )
+            .all(),
+          payload: inspect.prepare("SELECT id, hex(value) AS value_hex FROM payload ORDER BY id").all()
+        };
+      } finally {
+        inspect.close();
+      }
+    };
+    const wrongClassBefore = wrongClassSnapshot();
+    const wrongClassGuard = await armWatcherActivationGuard(customEmbedFile);
+    try {
+      const wrongClassModelMarker = path.join(tmpdir, "build-embeddings-wrong-class.model");
+      const wrongClassNetworkMarker = path.join(tmpdir, "build-embeddings-wrong-class.network");
+      const refusedWrongClass = spawnSync(
+        process.execPath,
+        [
+          distEntry,
+          "build-embeddings",
+          "--vault",
+          vault,
+          "--embed-file",
+          customEmbedFile,
+          "--embedding-model",
+          "multilingual",
+          "--quantize-embeddings",
+          "f32"
+        ],
+        {
+          encoding: "utf8",
+          env: {
+            ...hermeticEnv,
+            ENQUIRE_TEST_MODEL_STATE: "missing",
+            ENQUIRE_TEST_MODEL_MARKER: wrongClassModelMarker,
+            ENQUIRE_TEST_NETWORK_MARKER: wrongClassNetworkMarker
+          },
+          timeout: 10_000
+        }
+      );
+      const wrongClassRefusal = `${refusedWrongClass.stdout ?? ""}${refusedWrongClass.stderr ?? ""}`;
+      expect(refusedWrongClass.error, refusedWrongClass.stderr).toBeUndefined();
+      expect(refusedWrongClass.status).not.toBe(0);
+      expect(wrongClassRefusal).toMatch(/Embedding index ownership could not be verified/i);
+      expect(wrongClassRefusal).not.toMatch(/clear-embeddings|incomplete watcher startup|strict recovery/i);
+      for (const sensitivePath of [vault, realVault, customEmbedFile, customGuardPath]) {
+        expect(wrongClassRefusal).not.toContain(sensitivePath);
+      }
+      expect(wrongClassSnapshot()).toEqual(wrongClassBefore);
+      expect((await fs.lstat(customGuardPath)).isDirectory()).toBe(true);
+      await expect(fs.stat(wrongClassModelMarker)).rejects.toThrow();
+      await expect(fs.stat(wrongClassNetworkMarker)).rejects.toThrow();
+    } finally {
+      await releaseWatcherActivationGuard(wrongClassGuard);
+    }
+    await Promise.all(
+      [customEmbedFile, `${customEmbedFile}-wal`, `${customEmbedFile}-shm`].map((file) =>
+        fs.rm(file, { force: true })
+      )
+    );
 
     // NEGATIVE control: prove the same child-process tripwire would record
     // and reject a real outbound attempt instead of merely leaving no marker.

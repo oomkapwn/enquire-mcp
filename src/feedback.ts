@@ -238,7 +238,7 @@ export class FeedbackStore {
     try {
       // Mirror the sibling per-vault cache writers (fts5.ts / embed-db.ts /
       // vault.ts): create the cache dir 0700 and chmod it when WE created it, so
-      // the SECURITY.md "Parent dir mode is 0700" guarantee holds even when the
+      // the SECURITY.md Enquire-created-parent 0700 posture holds when the
       // feedback store is the FIRST writer to materialize <cache>/enquire (e.g.
       // `serve --feedback-weight 0.2` with no --persistent-index / embeddings).
       const dirExisted = await fs
@@ -250,8 +250,8 @@ export class FeedbackStore {
       await fs.writeFile(tmp, JSON.stringify(this.data), { mode: 0o600 });
       await fs.rename(tmp, this.file);
       // Defense-in-depth, matching the fts5.ts / embed-db.ts every-write posture:
-      // re-assert 0600 on the landed file so SECURITY.md's "sidecar is chmod'd to
-      // 0600" is an ENFORCED guard, not merely writeFile's create-time mode (which
+      // best-effort re-assert 0600 on the landed file, rather than relying only
+      // on writeFile's create-time mode (which
       // a 'w'-truncate over a pre-existing looser-mode <file> would not re-apply).
       await fs.chmod(this.file, 0o600).catch(() => {});
     } catch (err) {

@@ -47,6 +47,8 @@ describe("peekEmbedDbMeta (v3.6.2 K-1a)", () => {
     expect(meta?.model_alias).toBe("bge");
     expect(meta?.dim).toBe("384");
     expect(meta?.vault_root).toBe(tmpDir);
+    expect((await peekEmbedDbMeta(file, tmpDir))?.model_alias).toBe("bge");
+    expect(await peekEmbedDbMeta(file, path.join(tmpDir, "foreign-root"))).toBeNull();
   });
 
   it("regression guard: peek does NOT trigger DROP TABLE on the underlying db", async () => {
@@ -93,6 +95,17 @@ describe("peekFtsMetaSafe (v3.6.2 K-1b — sibling class)", () => {
     expect(meta).not.toBeNull();
     expect(meta?.tokenize_mode).toBe("trigram");
     expect(meta?.vault_root).toBe(tmpDir);
+    expect((await peekFtsMetaSafe(file, tmpDir))?.tokenize_mode).toBe("trigram");
+    expect(await peekFtsMetaSafe(file, path.join(tmpDir, "foreign-root"))).toBeNull();
+
+    // Discovery is deliberately fail-soft, but it must not turn an unknown
+    // stored value into unicode61. The same-handle open admission remains the
+    // authority and will reject this metadata without rebuilding it.
+    const { default: Database } = await import("better-sqlite3");
+    const raw = new Database(file);
+    raw.prepare("UPDATE meta SET value = ? WHERE key = 'tokenize_mode'").run("porter");
+    raw.close();
+    expect(await peekFtsMetaSafe(file)).toBeNull();
   });
 
   it("regression guard: peek does NOT trigger DROP TABLE chunks", async () => {
@@ -115,30 +128,26 @@ describe("peekFtsMetaSafe (v3.6.2 K-1b — sibling class)", () => {
 
   // K-1b critical regression: this is the EXACT scenario the external auditor
   // caught — a trigram-built index opened with default tokenize (unicode61)
-  // pre-fix would DROP TABLE. Post-fix, the caller peeks first and honors
-  // the existing mode. We assert the helper returns the right tokenize_mode
-  // so a calling chain that does `peek → honor → open` is data-safe.
+  // pre-fix would DROP TABLE. This legacy compatibility helper still exposes
+  // the historical value without coercion; production callers now use the
+  // discriminated full-class discovery API instead.
   it("K-1b regression: trigram-built db returns tokenize_mode='trigram' for callers to honor", async () => {
     const file = path.join(tmpDir, "k1b.fts5.db");
     const idx = new FtsIndex({ file, vaultRoot: tmpDir, tokenize: "trigram" });
     await idx.open();
     idx.close();
     const meta = await peekFtsMetaSafe(file);
-    // Caller pattern: `const tokenize = peeked?.tokenize_mode ?? "unicode61"`.
-    // If we returned "unicode61" by default here, callers would DROP.
+    // Historical diagnostic contract: never fabricate "unicode61" here.
     expect(meta?.tokenize_mode).toBe("trigram");
   });
 });
 
-// v3.6.3 caller-pattern coverage. The peek-meta unit tests above verify the
-// HELPERS work. But the actual K-1 bug class lives in CALLERS forgetting to
-// call peek before constructing EmbedDb/FtsIndex. These tests exercise the
-// full writable caller chain — "build with non-default config; invoke the caller
-// without specifying that config; assert the existing config is preserved
-// (not silently rebuilt)" — so a regression in any caller (search.ts,
-// server.ts and cli.ts) would fail here even if the helpers stay
-// correct.
-describe("K-1 caller-pattern regression guards (v3.6.3)", () => {
+// Historical v3.6.3 compatibility controls. These pin the old raw helper's
+// non-destructive behavior and the bootstrap failure mode that motivated K-1.
+// Current production cli/server/search callers do not use this pattern: they
+// consume discriminated, expected-root, full-class discovery results, whose
+// structural and behavioral controls live in k1-class-invariant/CLI/server/search tests.
+describe("K-1 historical peek compatibility guards (v3.6.3)", () => {
   let tmpDir: string;
   beforeEach(async () => {
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-peek-caller-"));
@@ -147,17 +156,16 @@ describe("K-1 caller-pattern regression guards (v3.6.3)", () => {
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
-  it("EmbedDb caller pattern: build with `bge`, re-open peeking, meta stays `bge`", async () => {
+  it("legacy Embed peek compatibility: build with `bge`, re-open honoring it, meta stays `bge`", async () => {
     const file = path.join(tmpDir, "caller.embed.db");
     // Build with bge.
     const db1 = new EmbedDb({ file, vaultRoot: tmpDir, modelAlias: "bge", dim: 384 });
     await db1.open();
     db1.close();
 
-    // Simulate the canonical caller pattern: peek FIRST, honor what we find,
-    // open with the honored model. This is what search.ts:917, server.ts:254,
-    // cli.ts:398, and cli.ts:554 all do. If a caller skips peek (the K-1
-    // bug), bootstrapSchema would DROP and rebuild as "multilingual" here.
+    // Simulate the historical pre-discovery caller pattern solely as a
+    // compatibility control. A skipped read demonstrates the K-1 bootstrap
+    // consequence in the negative sibling below.
     const peeked = await peekEmbedDbMeta(file);
     expect(peeked?.model_alias).toBe("bge");
     const honored = peeked?.model_alias ?? "multilingual";
@@ -170,14 +178,14 @@ describe("K-1 caller-pattern regression guards (v3.6.3)", () => {
     expect(after?.model_alias).toBe("bge");
   });
 
-  it("FtsIndex caller pattern: build with trigram, re-open peeking, meta stays trigram", async () => {
+  it("legacy FTS peek compatibility: build with trigram, re-open honoring it, meta stays trigram", async () => {
     const file = path.join(tmpDir, "caller.fts5.db");
     // Build with trigram.
     const idx1 = new FtsIndex({ file, vaultRoot: tmpDir, tokenize: "trigram" });
     await idx1.open();
     idx1.close();
 
-    // Canonical writable caller pattern (server.ts and cli.ts).
+    // Historical compatibility pattern; production uses discoverFtsIndexConfig.
     const peeked = await peekFtsMetaSafe(file);
     expect(peeked?.tokenize_mode).toBe("trigram");
     const honored = peeked?.tokenize_mode ?? "unicode61";
@@ -189,7 +197,7 @@ describe("K-1 caller-pattern regression guards (v3.6.3)", () => {
     expect(after?.tokenize_mode).toBe("trigram");
   });
 
-  it("EmbedDb caller pattern: NEGATIVE control — caller without peek does DROP", async () => {
+  it("legacy Embed pattern: NEGATIVE control — constructor without discovery can DROP", async () => {
     // Pre-v3.6.3 (and pre-v3.6.2 for several callers): caller constructs
     // EmbedDb with the default modelAlias without peeking. bootstrapSchema
     // detects mismatch and DROPs. This test pins the BAD behavior so any
@@ -200,7 +208,7 @@ describe("K-1 caller-pattern regression guards (v3.6.3)", () => {
     await db1.open();
     db1.close();
 
-    // Caller SKIPS peek and uses a different alias.
+    // The intentionally bad historical caller skips all discovery and uses a different alias.
     const dbBad = new EmbedDb({ file, vaultRoot: tmpDir, modelAlias: "wrong-alias", dim: 384 });
     await dbBad.open();
     dbBad.close();
@@ -269,8 +277,10 @@ describe("K-1 / K-2 external-audit regression guards (v3.7.5)", () => {
     const src = fs.readFileSync(path.join(process.cwd(), "src/tools/search.ts"), "utf8");
     // The K-2 throw must reference "Read-only search refuses to rebuild"
     expect(src).toMatch(/Read-only search refuses to rebuild/);
-    // The throw must use args.model + existingMeta?.model_alias inputs.
-    expect(src).toMatch(/args\.model.*existingMeta\?\.model_alias/);
+    // Full-class metadata must pass through the shared supported-catalog
+    // projection before the mismatch check can inspect its safe alias.
+    expect(src).toMatch(/resolveStoredEmbeddingConfiguration\(discovered\.meta\)/);
+    expect(src).toMatch(/args\.model.*storedConfiguration\.model\.alias/);
 
     // Behavioral pin: simulate the K-2 path locally. The actual fix
     // throws BEFORE EmbedDb opens; so the on-disk file is untouched.

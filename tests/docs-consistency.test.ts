@@ -1844,7 +1844,7 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
       "TypeDoc exposes non-public entry point src/internal.ts"
     );
 
-    // AH-1 — compile the persisted-index compatibility split through the
+    // AH-1/AH-2 — compile receipt compatibility plus ownership discovery through the
     // package's real NodeNext self-reference, not a source-file deep import.
     // CI always builds before tests. A direct local `npm test` may legitimately
     // run without dist/, so only CI treats a missing declaration as a failure;
@@ -1874,6 +1874,7 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
       | "legacy-fts-receipt-leak"
       | "optional-revision"
       | "hnsw-helper-swap"
+      | "unowned-discovery-meta"
       | "missing-subpath";
 
     const virtualConsumerPath = path.join(repoRoot, "tests", "fixtures", "persisted-index-public-consumer.mts");
@@ -1898,22 +1899,35 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
       const legacyFtsReturn = variant === "legacy-fts-receipt-leak" ? "FtsReceiptSearchHit[]" : "FtsSearchHit[]";
       const revisionType = variant === "optional-revision" ? "number | undefined" : "number";
       const legacyHnswReturn = variant === "hnsw-helper-swap" ? "EmbedReceiptSearchHit[]" : "EmbedSearchHit[]";
+      const unsafeDiscoveryUse =
+        variant === "unowned-discovery-meta"
+          ? `declare const unownedDiscovery: EmbedDbConfigDiscovery;
+export const unownedVaultRoot: string = unownedDiscovery.meta.vault_root;`
+          : "";
 
       return `
 import type {
   EmbedChunkKind,
   EmbedDb,
+  EmbedDbConfigDiscovery,
+  EmbedDbOwnedMeta,
+  EmbedQuantization,
   EmbedReceiptSearchHit,
   EmbedSearchHit
 } from "@oomkapwn/enquire-mcp/embed-db";
 import type {
   ChunkKind,
   FtsIndex,
+  FtsIndexDiscovery,
+  FtsIndexOwnedMeta,
   FtsReceiptChunk,
   FtsReceiptSearchHit,
-  FtsSearchHit
+  FtsSearchHit,
+  TokenizeMode
 } from "${ftsSpecifier}";
 
+type EmbedDbModule = typeof import("@oomkapwn/enquire-mcp/embed-db");
+type FtsModule = typeof import("${ftsSpecifier}");
 type HnswModule = typeof import("@oomkapwn/enquire-mcp/hnsw");
 type Equal<Left, Right> =
   (<Value>() => Value extends Left ? 1 : 2) extends
@@ -1931,6 +1945,28 @@ type FtsSearchOptions = {
   sinceMtimeMs?: number;
 };
 type EmbedSearchOptions = { folder?: string; minScore?: number };
+type EmbedPeekMeta = {
+  schema_version?: string;
+  vault_root?: string;
+  model_alias?: string;
+  dim?: string;
+  quantization?: string;
+} | null;
+type FtsPeekMeta = {
+  schema_version?: string;
+  vault_root?: string;
+  tokenize_mode?: TokenizeMode;
+} | null;
+type ExpectedEmbedDbConfigDiscovery =
+  | { readonly kind: "missing" }
+  | { readonly kind: "empty" }
+  | { readonly kind: "refused" }
+  | { readonly kind: "owned"; readonly meta: Readonly<EmbedDbOwnedMeta> };
+type ExpectedFtsIndexDiscovery =
+  | { readonly kind: "missing" }
+  | { readonly kind: "empty" }
+  | { readonly kind: "owned"; readonly meta: Readonly<FtsIndexOwnedMeta> }
+  | { readonly kind: "refused" };
 type LegacyEmbedVectorRow = {
   label: number;
   vector: Float32Array;
@@ -1952,6 +1988,37 @@ type LegacyHnswRow = {
 
 export type PersistedIndexPublicConsumerContract = [
   Assert<Equal<ChunkKind, "md" | "pdf">>,
+  Assert<Equal<TokenizeMode, "unicode61" | "trigram">>,
+  Assert<
+    Equal<
+      FtsIndexOwnedMeta,
+      {
+        readonly schema_version: string;
+        readonly vault_root: string;
+        readonly tokenize_mode: TokenizeMode;
+      }
+    >
+  >,
+  Assert<Equal<FtsIndexDiscovery, ExpectedFtsIndexDiscovery>>,
+  Assert<Equal<FtsIndex["open"], (expectedDiscovery?: FtsIndexDiscovery) => Promise<void>>>,
+  Assert<
+    Equal<
+      FtsModule["assertTokenizeMode"],
+      (value: unknown, label?: string) => TokenizeMode
+    >
+  >,
+  Assert<
+    Equal<
+      FtsModule["discoverFtsIndexConfig"],
+      (file: string, expectedVaultRoot: string) => Promise<FtsIndexDiscovery>
+    >
+  >,
+  Assert<
+    Equal<
+      FtsModule["peekFtsMetaSafe"],
+      (file: string, expectedVaultRoot?: string) => Promise<FtsPeekMeta>
+    >
+  >,
   Assert<
     Equal<
       keyof FtsSearchHit,
@@ -2006,6 +2073,51 @@ export type PersistedIndexPublicConsumerContract = [
     >
   >,
   Assert<Equal<EmbedChunkKind, "md" | "pdf">>,
+  Assert<Equal<EmbedQuantization, "f32" | "int8">>,
+  Assert<
+    Equal<
+      EmbedDbOwnedMeta,
+      {
+        readonly schema_version: string;
+        readonly vault_root: string;
+        readonly model_alias: string;
+        readonly dim: string;
+        readonly quantization?: EmbedQuantization;
+      }
+    >
+  >,
+  Assert<Equal<EmbedDbConfigDiscovery, ExpectedEmbedDbConfigDiscovery>>,
+  Assert<Equal<EmbedDb["open"], (expectedDiscovery?: EmbedDbConfigDiscovery) => Promise<void>>>,
+  Assert<
+    Equal<
+      EmbedDbModule["discoverEmbedDbConfig"],
+      (file: string, expectedVaultRoot: string) => Promise<EmbedDbConfigDiscovery>
+    >
+  >,
+  Assert<
+    Equal<
+      EmbedDbModule["discoverEmbedDbConfigCached"],
+      (file: string, expectedVaultRoot: string) => Promise<EmbedDbConfigDiscovery>
+    >
+  >,
+  Assert<
+    Equal<
+      EmbedDbModule["assertEmbedDbRecoveryOwnership"],
+      (file: string, expectedVaultRoot: string) => Promise<void>
+    >
+  >,
+  Assert<
+    Equal<
+      EmbedDbModule["peekEmbedDbMeta"],
+      (file: string, expectedVaultRoot?: string) => Promise<EmbedPeekMeta>
+    >
+  >,
+  Assert<
+    Equal<
+      EmbedDbModule["peekEmbedDbMetaCached"],
+      (file: string, expectedVaultRoot?: string) => Promise<EmbedPeekMeta>
+    >
+  >,
   Assert<
     Equal<
       keyof EmbedSearchHit,
@@ -2072,6 +2184,7 @@ export type PersistedIndexPublicConsumerContract = [
     >
   >
 ];
+${unsafeDiscoveryUse}
 `;
     };
 
@@ -2148,6 +2261,7 @@ export type PersistedIndexPublicConsumerContract = [
       ["legacy-fts-receipt-leak", 2344],
       ["optional-revision", 2344],
       ["hnsw-helper-swap", 2344],
+      ["unowned-discovery-meta", 2339],
       ["missing-subpath", 2307]
     ] as const satisfies ReadonlyArray<readonly [Exclude<PublicConsumerVariant, "positive">, number]>;
     for (const [variant, expectedCode] of causalVariants) {

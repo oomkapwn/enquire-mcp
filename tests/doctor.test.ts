@@ -320,9 +320,63 @@ describe("runDoctor — tiers and readiness", () => {
         dependencyProbe: async () => false
       });
       const directoryHint = directoryResult.checks.find((check) => check.id === "watcher:activation-guard")?.hint;
+      expect(directoryHint).toContain("clear-embeddings");
       expect(directoryHint).toMatch(/strict recovery preflights/i);
       expect(directoryHint).toMatch(/manual ownership audit/i);
       expect((await fs.lstat(guardPath)).isDirectory()).toBe(true);
+
+      const assertManualOwnershipHint = async () => {
+        const result = await diagnose({
+          tier: "hybrid",
+          dependencyProbe: async () => false
+        });
+        const hint = result.checks.find((check) => check.id === "watcher:activation-guard")?.hint;
+        expect(hint).toMatch(/manual ownership inspection/i);
+        expect(hint).not.toContain("clear-embeddings");
+        expect(hint).not.toContain(guardedEmbedFile);
+        expect(hint).not.toContain(guardPath);
+        expect((await fs.lstat(guardPath)).isDirectory()).toBe(true);
+      };
+
+      // Causal NEGATIVE controls: the same recoverable guard may suggest the
+      // cleanup command only while its database is missing or exact-owned.
+      // An exactly schema-empty container and a malformed/foreign database
+      // receive a path-free manual-ownership hint and leave both artifacts in
+      // place. Removing the ownership call would make these cases regress to
+      // the missing-database command asserted immediately above.
+      await fs.writeFile(guardedEmbedFile, "");
+      await assertManualOwnershipHint();
+      expect((await fs.stat(guardedEmbedFile)).size).toBe(0);
+
+      const malformedBytes = Buffer.from("not an enquire sqlite database");
+      await fs.writeFile(guardedEmbedFile, malformedBytes);
+      await assertManualOwnershipHint();
+      expect(await fs.readFile(guardedEmbedFile)).toEqual(malformedBytes);
+      await fs.unlink(guardedEmbedFile);
+
+      if (canRunSqlite) {
+        await createEmbed(guardedEmbedFile, path.join(cacheRoot, "foreign-vault"));
+        const foreignBytes = await fs.readFile(guardedEmbedFile);
+        await assertManualOwnershipHint();
+        expect(await fs.readFile(guardedEmbedFile)).toEqual(foreignBytes);
+        await Promise.all(
+          [guardedEmbedFile, `${guardedEmbedFile}-wal`, `${guardedEmbedFile}-shm`].map((file) =>
+            fs.rm(file, { force: true })
+          )
+        );
+
+        // Paired positive control: the same present guard and exact supported
+        // store for the canonical vault restore the bounded recovery command.
+        await createEmbed(guardedEmbedFile);
+        const ownedResult = await diagnose({
+          tier: "hybrid",
+          dependencyProbe: async () => false
+        });
+        const ownedHint = ownedResult.checks.find((check) => check.id === "watcher:activation-guard")?.hint;
+        expect(ownedHint).toContain("clear-embeddings");
+        expect(ownedHint).toMatch(/strict recovery preflights/i);
+        expect((await fs.lstat(guardPath)).isDirectory()).toBe(true);
+      }
       await fs.rmdir(guardPath);
 
       await fs.writeFile(guardPath, "foreign guard object");

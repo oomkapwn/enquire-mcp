@@ -23,7 +23,11 @@ import {
   setEmbeddingsOffline
 } from "../src/embeddings.js";
 import { defaultIndexFile } from "../src/fts5.js";
-import { armWatcherActivationGuard, watcherActivationGuardPath } from "../src/watcher-activation-guard.js";
+import {
+  armWatcherActivationGuard,
+  releaseWatcherActivationGuard,
+  watcherActivationGuardPath
+} from "../src/watcher-activation-guard.js";
 
 afterEach(() => {
   setEmbeddingsOffline(false); // module-global flag — reset so it can't leak across tests
@@ -85,6 +89,181 @@ describe("embeddings serve-offline enforcement (rc.42 F1)", () => {
       const canonicalVault = await fs.realpath(vault);
       const embedFile = defaultIndexFile(canonicalVault).replace(/\.fts5\.db$/u, ".embed.db");
       await fs.mkdir(path.dirname(embedFile), { recursive: true });
+
+      // A valid index owned by another vault must be refused before watcher
+      // activation is armed. This lives in the existing programmatic-boundary
+      // registration so the behavior cannot drift away from the offline gate.
+      let sqliteAvailable = false;
+      try {
+        const Database = (await import("better-sqlite3")).default;
+        const probe = new Database(":memory:");
+        probe.close();
+        sqliteAvailable = true;
+      } catch {
+        // Optional native dependency absent: the structural order gate still
+        // runs, while this native integration phase is exercised in CI.
+      }
+      if (sqliteAvailable) {
+        const Database = (await import("better-sqlite3")).default;
+        const foreignVault = path.join(scratch, "foreign-vault");
+        await fs.mkdir(foreignVault);
+        const canonicalForeignVault = await fs.realpath(foreignVault);
+        const { EmbedDb, peekEmbedDbMeta } = await import("../src/embed-db.js");
+        const seed = new EmbedDb({
+          file: embedFile,
+          vaultRoot: canonicalForeignVault,
+          modelAlias: "multilingual",
+          dim: 2
+        });
+        await seed.open();
+        seed.upsertNote("Foreign.md", 1, [
+          {
+            chunkIndex: 0,
+            lineStart: 1,
+            lineEnd: 1,
+            textPreview: "foreign-owner-marker",
+            vector: new Float32Array([1, 0])
+          }
+        ]);
+        seed.close();
+        expect((await peekEmbedDbMeta(embedFile, canonicalForeignVault))?.vault_root).toBe(canonicalForeignVault);
+        expect(await peekEmbedDbMeta(embedFile, canonicalVault)).toBeNull();
+        const logicalSnapshot = () => {
+          const inspect = new Database(embedFile, { readonly: true, fileMustExist: true });
+          try {
+            return {
+              schema: inspect
+                .prepare(
+                  `SELECT type, name, sql
+                   FROM sqlite_master
+                   WHERE name NOT GLOB 'sqlite_*'
+                   ORDER BY type, name`
+                )
+                .all(),
+              meta: inspect.prepare("SELECT key, value FROM meta ORDER BY key").all(),
+              rows: inspect
+                .prepare(
+                  `SELECT id, rel_path, chunk_index, line_start, line_end, text_preview,
+                          hex(vector) AS vector_hex, kind
+                   FROM embeddings
+                   ORDER BY id`
+                )
+                .all(),
+              sourceState: inspect.prepare("SELECT * FROM source_state ORDER BY rel_path, kind").all()
+            };
+          } finally {
+            inspect.close();
+          }
+        };
+        const logicalBeforeForeignRefusal = logicalSnapshot();
+        const guardPath = watcherActivationGuardPath(embedFile);
+        await expect(fs.lstat(guardPath)).rejects.toThrow();
+
+        let foreignRefusal: unknown;
+        try {
+          const unexpected = await prepareServerDeps({ vault, watch: true });
+          await unexpected.watcher?.close();
+          unexpected.watcherEmbedDb?.close();
+        } catch (error) {
+          foreignRefusal = error;
+        }
+        expect(foreignRefusal).toBeInstanceOf(Error);
+        const foreignMessage = foreignRefusal instanceof Error ? foreignRefusal.message : String(foreignRefusal);
+        expect(foreignMessage).toMatch(/configuration could not be verified/i);
+        expect(foreignMessage).not.toMatch(/clear-embeddings|embedding-derived indexes are quarantined/i);
+        for (const sensitivePath of [vault, canonicalVault, foreignVault, canonicalForeignVault, embedFile]) {
+          expect(foreignMessage).not.toContain(sensitivePath);
+        }
+        expect(logicalSnapshot()).toEqual(logicalBeforeForeignRefusal);
+        await expect(fs.lstat(guardPath)).rejects.toThrow();
+
+        const combinedGuard = await armWatcherActivationGuard(embedFile);
+        try {
+          let combinedRefusal: unknown;
+          try {
+            await prepareServerDeps({ vault, watch: true });
+          } catch (error) {
+            combinedRefusal = error;
+          }
+          expect(combinedRefusal).toBeInstanceOf(Error);
+          const combinedMessage =
+            combinedRefusal instanceof Error ? combinedRefusal.message : String(combinedRefusal);
+          expect(combinedMessage).toBe("Embedding index ownership could not be verified");
+          expect(combinedMessage).not.toMatch(/clear-embeddings|quarantined|recovery/i);
+          for (const sensitivePath of [vault, canonicalVault, foreignVault, canonicalForeignVault, embedFile]) {
+            expect(combinedMessage).not.toContain(sensitivePath);
+          }
+          expect(logicalSnapshot()).toEqual(logicalBeforeForeignRefusal);
+          expect((await fs.lstat(guardPath)).isDirectory()).toBe(true);
+        } finally {
+          await releaseWatcherActivationGuard(combinedGuard);
+        }
+
+        const verify = new EmbedDb({
+          file: embedFile,
+          vaultRoot: canonicalForeignVault,
+          modelAlias: "multilingual",
+          dim: 2
+        });
+        await verify.open();
+        try {
+          expect(verify.totalChunks()).toBe(1);
+          expect(verify.search(new Float32Array([1, 0]), 1)[0]?.text_preview).toBe("foreign-owner-marker");
+        } finally {
+          verify.close();
+        }
+        await Promise.all(
+          [embedFile, `${embedFile}-wal`, `${embedFile}-shm`].map((artifact) => fs.rm(artifact, { force: true }))
+        );
+
+        // A low-level same-root EmbedDb may legitimately store a custom
+        // alias/dim tuple, but the server can only load catalog models. Prove
+        // its caller-local projection refuses a path-like alias before
+        // watcher open/arm/start without echoing the stored value.
+        const pathLikeAlias = "../../private/server-model-secret";
+        const customSeed = new EmbedDb({
+          file: embedFile,
+          vaultRoot: canonicalVault,
+          modelAlias: pathLikeAlias,
+          dim: 384,
+          quantization: "f32"
+        });
+        await customSeed.open();
+        const customVector = new Float32Array(384);
+        customVector[0] = 1;
+        customSeed.upsertNote("Custom.md", 1, [
+          {
+            chunkIndex: 0,
+            lineStart: 1,
+            lineEnd: 1,
+            textPreview: "same-root-server-class-marker",
+            vector: customVector
+          }
+        ]);
+        customSeed.close();
+        expect((await peekEmbedDbMeta(embedFile, canonicalVault))?.model_alias).toBe(pathLikeAlias);
+        const customLogicalBefore = logicalSnapshot();
+        let customConfigRefusal: unknown;
+        try {
+          await prepareServerDeps({ vault, watch: true });
+        } catch (error) {
+          customConfigRefusal = error;
+        }
+        expect(customConfigRefusal).toBeInstanceOf(Error);
+        const customConfigMessage =
+          customConfigRefusal instanceof Error ? customConfigRefusal.message : String(customConfigRefusal);
+        expect(customConfigMessage).toBe("Embedding index configuration could not be verified");
+        expect(customConfigMessage).not.toMatch(/clear-embeddings|quarantined|unknown embedding model/i);
+        for (const sensitiveValue of [vault, canonicalVault, embedFile, pathLikeAlias]) {
+          expect(customConfigMessage).not.toContain(sensitiveValue);
+        }
+        expect(logicalSnapshot()).toEqual(customLogicalBefore);
+        await expect(fs.lstat(watcherActivationGuardPath(embedFile))).rejects.toThrow();
+        await Promise.all(
+          [embedFile, `${embedFile}-wal`, `${embedFile}-shm`].map((artifact) => fs.rm(artifact, { force: true }))
+        );
+      }
+
       await fs.writeFile(embedFile, "stranded full-edition embedding index");
       await armWatcherActivationGuard(embedFile);
 

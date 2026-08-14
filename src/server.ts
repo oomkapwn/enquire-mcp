@@ -1,11 +1,23 @@
 import { existsSync } from "node:fs";
 import { McpServer } from "@modelcontextprotocol/server";
 import { serveStdio } from "@modelcontextprotocol/server/stdio";
-import { EmbedDb, hnswPersistBase, peekEmbedDbMeta } from "./embed-db.js";
+import {
+  assertEmbedDbRecoveryOwnership,
+  discoverEmbedDbConfig,
+  EmbedDb,
+  hnswPersistBase
+} from "./embed-db.js";
 import { syncEmbedDb, syncPdfEmbedDb } from "./embed-sync.js";
-import { resolveModel, setEmbeddingsOffline } from "./embeddings.js";
+import { resolveModel, resolveStoredEmbeddingConfiguration, setEmbeddingsOffline } from "./embeddings.js";
 import { defaultFeedbackFile, FeedbackStore } from "./feedback.js";
-import { defaultIndexFile, FtsIndex, peekFtsMetaSafe, syncFtsIndex } from "./fts5.js";
+import {
+  assertTokenizeMode,
+  defaultIndexFile,
+  discoverFtsIndexConfig,
+  FtsIndex,
+  syncFtsIndex,
+  type TokenizeMode
+} from "./fts5.js";
 import { VERSION } from "./index.js";
 import { buildInitializeInstructions, resolveInitializeToolProfile } from "./initialize-instructions.js";
 import { createToolRegistrationAdapter } from "./mcp-registration.js";
@@ -148,10 +160,9 @@ export interface ServeOptions {
    *  - `"f32"` (default) — Float32 BLOB, identical to v2.16- behavior.
    *  - `"int8"` — int8-quantized BLOB + per-vector (vMin, scale) Float32
    *    tuple. ~4× storage reduction at ~1-2% recall@10 cost.
-   *  Mode is per-database; switching modes triggers a full rebuild
-   *  (the meta-table contamination guard treats it as a schema change).
-   *  Must match the mode used at build-embeddings time — serving with a
-   *  different mode would auto-rebuild the index. */
+   *  Mode is per-database. Explicit writer configuration changes may rebuild
+   *  an exact-owned index; serve discovers and honors an admitted stored mode
+   *  rather than switching it. */
   quantizeEmbeddings?: "f32" | "int8";
 }
 
@@ -270,6 +281,8 @@ function closeWatcherEmbedDbAfterFailure(db: EmbedDb | null, phase: string): voi
  * resources. Stdio + HTTP each call this exactly once at startup.
  */
 export async function prepareServerDeps(opts: ServeOptions): Promise<ServerDeps> {
+  const requestedTokenize =
+    opts.tokenize === undefined ? undefined : assertTokenizeMode(opts.tokenize, "tokenize option");
   // Programmatic stdio/HTTP consumers bypass src/cli.ts, so the privacy
   // boundary belongs here as well: every server preparation is local-cache-only
   // before any embedder/reranker can load. Explicit setup/install commands do
@@ -321,6 +334,7 @@ export async function prepareServerDeps(opts: ServeOptions): Promise<ServerDeps>
     try {
       await assertWatcherActivationGuardClear(startupEmbedFile);
     } catch (error) {
+      await assertEmbedDbRecoveryOwnership(startupEmbedFile, vault.root);
       throw watcherActivationRecoveryError(error);
     }
   }
@@ -335,67 +349,75 @@ export async function prepareServerDeps(opts: ServeOptions): Promise<ServerDeps>
   let ftsIndex: FtsIndex | null = null;
   if (opts.persistentIndex) {
     const indexFile = opts.indexFile ?? defaultIndexFile(vault.root);
-    // v3.6.2 K-1b — peek the existing fts5 index's tokenize_mode BEFORE
+    // v3.6.2 K-1b — discover the existing FTS index's admitted tokenize_mode BEFORE
     // open. If user built with `--tokenize trigram` and restarts `serve`
     // without explicit --tokenize, the default "unicode61" would mismatch
     // and trigger bootstrapSchema DROP TABLE chunks. Honor the existing
     // mode unless caller passes --tokenize explicitly. Same class as
     // CRIT-1 (v3.6.1) — K-1b residual on FTS5 side. External audit
     // caught this on v3.6.1.
-    const peeked = await peekFtsMetaSafe(indexFile);
-    let tokenize: "unicode61" | "trigram" = opts.tokenize === "trigram" ? "trigram" : "unicode61";
-    if (peeked?.tokenize_mode && !opts.tokenize) {
-      tokenize = peeked.tokenize_mode;
+    const discovered = await discoverFtsIndexConfig(indexFile, vault.root);
+    const refusedFts = discovered.kind === "refused";
+    let tokenize: TokenizeMode =
+      requestedTokenize ?? (discovered.kind === "owned" ? discovered.meta.tokenize_mode : "unicode61");
+    if (discovered.kind === "owned" && requestedTokenize === undefined) {
+      tokenize = discovered.meta.tokenize_mode;
       if (tokenize !== "unicode61") {
         process.stderr.write(
           `enquire: --persistent-index — honoring fts5 index stored tokenize '${tokenize}' (avoids DROP TABLE on schema mismatch); pass --tokenize to override.\n`
         );
       }
     }
-    ftsIndex = new FtsIndex({ file: indexFile, vaultRoot: vault.root, tokenize });
-    try {
-      await ftsIndex.open();
-      await syncFtsIndex(vault, ftsIndex);
-      // v2.8.0: opt-in PDF indexing. Runs after the markdown sync so
-      // partial-progress logs interleave naturally. PDF extraction is
-      // ~10-30x slower than markdown chunk-and-index, so we surface a
-      // separate progress line for each .pdf processed.
-      if (opts.includePdfs) {
-        try {
-          const pdfReport = await syncPdfFtsIndex(vault, ftsIndex);
-          if (pdfReport.added + pdfReport.updated + pdfReport.deleted > 0) {
+    if (refusedFts) {
+      process.stderr.write(
+        "enquire: --persistent-index FTS5/BM25 configuration could not be verified — degrading to TF-IDF search\n"
+      );
+    } else {
+      ftsIndex = new FtsIndex({ file: indexFile, vaultRoot: vault.root, tokenize });
+      try {
+        await ftsIndex.open(discovered);
+        await syncFtsIndex(vault, ftsIndex);
+        // v2.8.0: opt-in PDF indexing. Runs after the markdown sync so
+        // partial-progress logs interleave naturally. PDF extraction is
+        // ~10-30x slower than markdown chunk-and-index, so we surface a
+        // separate progress line for each .pdf processed.
+        if (opts.includePdfs) {
+          try {
+            const pdfReport = await syncPdfFtsIndex(vault, ftsIndex);
+            if (pdfReport.added + pdfReport.updated + pdfReport.deleted > 0) {
+              process.stderr.write(
+                `enquire: pdf-fts5 sync — added=${pdfReport.added} updated=${pdfReport.updated} deleted=${pdfReport.deleted} unchanged=${pdfReport.unchanged}\n`
+              );
+            }
+          } catch (err) {
+            // Bad PDF / missing pdfjs-dist — don't take down the markdown
+            // index path. Markdown search keeps working without PDFs.
             process.stderr.write(
-              `enquire: pdf-fts5 sync — added=${pdfReport.added} updated=${pdfReport.updated} deleted=${pdfReport.deleted} unchanged=${pdfReport.unchanged}\n`
+              `enquire: pdf-fts5 sync skipped — ${err instanceof Error ? err.message : String(err)}\n`
             );
           }
-        } catch (err) {
-          // Bad PDF / missing pdfjs-dist — don't take down the markdown
-          // index path. Markdown search keeps working without PDFs.
-          process.stderr.write(
-            `enquire: pdf-fts5 sync skipped — ${err instanceof Error ? err.message : String(err)}\n`
-          );
         }
+      } catch (err) {
+        // v3.10.0-rc.33 (post-rc.31 audit) — FAIL-SOFT to TF-IDF instead of
+        // crashing serve, matching the embed-db / PDF / HNSW paths below and the
+        // "auto-degrades gracefully: works with any subset of signals available"
+        // guarantee. The common trigger is better-sqlite3 missing/unbuilt (the
+        // Docker introspection image, or an install whose native build failed)
+        // + `--persistent-index` — which previously hard-crashed startup with an
+        // unactionable "npm rebuild" stack trace. Setting `ftsIndex = null`
+        // yields exactly the (heavily-tested) no-`--persistent-index` state:
+        // BM25/FTS5 is skipped and search degrades to pure-JS TF-IDF, with a
+        // loud stderr warning so a genuinely-broken native install is visible.
+        try {
+          ftsIndex?.close(); // open() may have thrown before a handle existed
+        } catch {
+          // no handle to close — ignore
+        }
+        ftsIndex = null;
+        process.stderr.write(
+          `enquire: --persistent-index FTS5/BM25 unavailable — degrading to TF-IDF search (${err instanceof Error ? err.message : String(err)})\n`
+        );
       }
-    } catch (err) {
-      // v3.10.0-rc.33 (post-rc.31 audit) — FAIL-SOFT to TF-IDF instead of
-      // crashing serve, matching the embed-db / PDF / HNSW paths below and the
-      // "auto-degrades gracefully: works with any subset of signals available"
-      // guarantee. The common trigger is better-sqlite3 missing/unbuilt (the
-      // Docker introspection image, or an install whose native build failed)
-      // + `--persistent-index` — which previously hard-crashed startup with an
-      // unactionable "npm rebuild" stack trace. Setting `ftsIndex = null`
-      // yields exactly the (heavily-tested) no-`--persistent-index` state:
-      // BM25/FTS5 is skipped and search degrades to pure-JS TF-IDF, with a
-      // loud stderr warning so a genuinely-broken native install is visible.
-      try {
-        ftsIndex?.close(); // open() may have thrown before a handle existed
-      } catch {
-        // no handle to close — ignore
-      }
-      ftsIndex = null;
-      process.stderr.write(
-        `enquire: --persistent-index FTS5/BM25 unavailable — degrading to TF-IDF search (${err instanceof Error ? err.message : String(err)})\n`
-      );
     }
   }
 
@@ -413,6 +435,7 @@ export async function prepareServerDeps(opts: ServeOptions): Promise<ServerDeps>
   // file exists; closed by startServer's shutdown handler.
   let watcherEmbedDb: EmbedDb | null = null;
   let watcherActivationGuard: WatcherActivationGuard | null = null;
+  let guardArmAttempted = false;
   // v3.9.0-rc.16 — `--ocr-pdfs` only takes effect on the watcher path (it
   // re-OCRs scanned PDFs as they change and feeds the embed pipeline). Warn
   // if it was passed without `--watch` so the flag isn't a silent no-op.
@@ -427,9 +450,9 @@ export async function prepareServerDeps(opts: ServeOptions): Promise<ServerDeps>
     // the pairing (OCR without includePdfs is wasted CPU because PDF
     // events would be filtered out before the OCR codepath runs). Note
     // we DON'T pass `ocrPdfs` at this point — the watcher's constructor
-    // also requires an `embedDb`, which we wire below via attachEmbed()
-    // because the embed-db open happens AFTER watcher start. The watcher
-    // captures (but does not process) boot-window events until the optional
+    // also requires an `embedDb`, which we wire below via attachEmbed(). The
+    // owning handle is admitted before the activation guard and watcher start;
+    // the watcher then captures (but does not process) boot-window events until
     // embed + HNSW sinks reach their terminal startup state below. The
     // ocrPdfs flag is therefore set during attachEmbed, once that handle is
     // ready; activate() later reconciles every captured path across all
@@ -441,11 +464,37 @@ export async function prepareServerDeps(opts: ServeOptions): Promise<ServerDeps>
       deferActivation: true
     });
     try {
+      const embedFile = startupEmbedFile;
+      let watcherEmbedModel: ReturnType<typeof resolveModel> | null = null;
+      let watcherEmbedQuantization: "f32" | "int8" | null = null;
+      if (startupEmbedDbAvailable) {
+        // Discover the complete admitted class for this canonical vault. A
+        // foreign artifact is refused before a writable handle is constructed
+        // or any durable activation guard is armed.
+        const discovered = await discoverEmbedDbConfig(embedFile, vault.root);
+        if (discovered.kind === "missing" || discovered.kind === "refused") {
+          throw new Error("Embedding index configuration could not be verified");
+        }
+        const storedConfiguration =
+          discovered.kind === "owned" ? resolveStoredEmbeddingConfiguration(discovered.meta) : null;
+        watcherEmbedModel = storedConfiguration?.model ?? resolveModel(undefined);
+        watcherEmbedQuantization = storedConfiguration?.quantization ?? opts.quantizeEmbeddings ?? "f32";
+        watcherEmbedDb = new EmbedDb({
+          file: embedFile,
+          vaultRoot: vault.root,
+          modelAlias: watcherEmbedModel.alias,
+          dim: watcherEmbedModel.dim,
+          quantization: watcherEmbedQuantization
+        });
+        await watcherEmbedDb.open(discovered);
+      }
+
       // Arm before chokidar can receive its first event. Any crash, attachment
       // failure, overflow, or non-quiescing activation leaves this exact
       // interlock behind; every later serve then refuses to publish the
       // potentially stale embedding index until explicit recovery.
       if (startupEmbedDbAvailable) {
+        guardArmAttempted = true;
         watcherActivationGuard = await armWatcherActivationGuard(startupEmbedFile);
       }
       await watcher.start();
@@ -472,33 +521,20 @@ export async function prepareServerDeps(opts: ServeOptions): Promise<ServerDeps>
       // cannot be attached, startup now fails closed: the same file would
       // otherwise remain lazily available to search tools while no watcher
       // could keep it fresh.
-      const embedFile = startupEmbedFile;
       if (startupEmbedDbAvailable) {
-        // Peek the existing embed-db meta to match the model alias +
-        // dim + quantization the file was built with. Same posture as
-        // HNSW init (CRIT-1 v3.6.1) — never DROP TABLE on mismatch.
-        const existingMeta = await peekEmbedDbMeta(embedFile);
-        const model = resolveModel(existingMeta?.model_alias);
-        const quantization =
-          (existingMeta?.quantization as "f32" | "int8" | undefined) ?? opts.quantizeEmbeddings ?? "f32";
-        watcherEmbedDb = new EmbedDb({
-          file: embedFile,
-          vaultRoot: vault.root,
-          modelAlias: model.alias,
-          dim: model.dim,
-          quantization
-        });
-        await watcherEmbedDb.open();
+        if (!watcherEmbedDb || !watcherEmbedModel || !watcherEmbedQuantization) {
+          throw new Error("enquire: watcher EmbedDb configuration was not retained through startup");
+        }
         // Load the already-cached embedder (~2-5s warm for the default
         // multilingual model); subsequent calls reuse the transformers.js
         // pipeline. The watcher is already capturing events, but none can
         // mutate FTS/embed state until the startup activation barrier.
         const { loadEmbedder } = await import("./embeddings.js");
-        const embedder = await loadEmbedder(model.alias);
+        const embedder = await loadEmbedder(watcherEmbedModel.alias);
         const lateChunk = validatedLateChunkContext;
         watcher.attachEmbed(watcherEmbedDb, embedder, lateChunk);
         process.stderr.write(
-          `enquire: watcher embed-db sync enabled (model=${model.alias}, dim=${model.dim}, quantization=${quantization}, late-chunk-context=${lateChunk})\n`
+          `enquire: watcher embed-db sync enabled (model=${watcherEmbedModel.alias}, dim=${watcherEmbedModel.dim}, quantization=${watcherEmbedQuantization}, late-chunk-context=${lateChunk})\n`
         );
         // v3.9.0-rc.1 — wire OCR-on-watch AFTER attachEmbed. setOcrPdfs
         // fails loud if includePdfs is off, which is the right posture:
@@ -556,7 +592,7 @@ export async function prepareServerDeps(opts: ServeOptions): Promise<ServerDeps>
       } catch {
         // Preserve the watcher startup error below.
       }
-      if (startupEmbedDbAvailable) throw watcherActivationRecoveryError(err);
+      if (guardArmAttempted) throw watcherActivationRecoveryError(err);
       throw err;
     }
   }
@@ -574,24 +610,28 @@ export async function prepareServerDeps(opts: ServeOptions): Promise<ServerDeps>
             `Stop this server, run \`enquire-mcp build-embeddings --vault ${vault.root}\`, then restart.\n`
         );
       } else {
-        // v3.6.1 CRIT-1 — peek the existing embed-db's meta to discover
+        // v3.6.1 CRIT-1 — discover the existing embed-db's admitted configuration to determine
         // which model alias was used at build-embeddings time. Without
         // this, `serve --use-hnsw` always opened with the default
         // ("multilingual"). If the user had built with `--embedding-model
         // bge`, the bootstrap-schema mismatch check fired DROP TABLE
         // embeddings → data destruction on every restart.
         //
-        // Now: peek first, resolve to the matching model, open without
+        // Now: full-class discovery first, resolve to the matching model, open without
         // forcing a rebuild. Fresh embed-dbs (no meta yet) still
         // gracefully fall back to the default.
-        const existingMeta = await peekEmbedDbMeta(embedFile);
-        const builtAlias = existingMeta?.model_alias;
-        const builtQuant = existingMeta?.quantization as "f32" | "int8" | undefined;
-        const model = resolveModel(builtAlias);
+        const discovered = await discoverEmbedDbConfig(embedFile, vault.root);
+        if (discovered.kind === "missing" || discovered.kind === "refused") {
+          throw new Error("Embedding index configuration could not be verified");
+        }
+        const storedConfiguration =
+          discovered.kind === "owned" ? resolveStoredEmbeddingConfiguration(discovered.meta) : null;
+        const model = storedConfiguration?.model ?? resolveModel(undefined);
+        const builtAlias = model.alias;
         // v2.17.0 — quantization mode honored same way as the model:
         // prefer the existing db's quantization over CLI default, since
         // mismatching it would also trigger DROP TABLE (same class).
-        const quantization = builtQuant ?? opts.quantizeEmbeddings ?? "f32";
+        const quantization = storedConfiguration?.quantization ?? opts.quantizeEmbeddings ?? "f32";
         if (builtAlias && builtAlias !== resolveModel(undefined).alias) {
           process.stderr.write(
             `enquire: --use-hnsw — embed-db was built with model '${builtAlias}'; honoring (avoiding DROP TABLE on schema mismatch).\n`
@@ -604,7 +644,7 @@ export async function prepareServerDeps(opts: ServeOptions): Promise<ServerDeps>
           dim: model.dim,
           quantization
         });
-        await db.open();
+        await db.open(discovered);
         try {
           const startMs = Date.now();
           // v2.16.0 — try to load from disk first if persistence is enabled.

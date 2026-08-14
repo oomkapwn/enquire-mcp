@@ -277,7 +277,7 @@ graph LR
 | **隐私过滤** | 在 FTS5 + 向量库 + chunk 资源路径校验；空白名/黑名单时按"失败即拒绝"处理 |
 | **HTTP 传输** | Bearer 鉴权（常量时间 SHA-256 + `timingSafeEqual`）、按 token 限流、严格 CORS |
 | **Frontmatter** | `js-yaml@5` `load`（YAML 1.2 核心 schema，默认安全）——不执行代码 |
-| **缓存 + 索引文件** | chmod 0600，父目录 0700 |
+| **缓存 + 索引文件** | 在 POSIX 权限可用时，Enquire 会尽力对敏感文件重新应用 `0600`；Enquire 创建的父目录初始为 `0700`，现有/自定义父目录仍由运维方管理 |
 | **1807 单元测试 · 每个 PR 12 项发布必需 CI 检查 · 当前 7 项受分支保护** | 当前已核验的发布态；详细运行说明如下。 |
 | **CI** | `release.yml` 直接列出 **12 项发布门禁**，且每个 PR 都会运行：`lint`、`test (22)`、`test (24)`、`smoke`、`audit`、`coverage`、`version-consistency`、`docs`、`oia`、`protocol-conformance`、`package-consumer` 和 `mcpb-basic`。固定的 Windows hostile-filesystem job `test-windows` 是一个额外的具名 check-run，并作为 `smoke` 的阻断性前置条件被间接强制。当前分支保护仅强制其中 **7 项**；`docs`、`oia`、`protocol-conformance`、`package-consumer` 与 `mcpb-basic` 是发布必需项，但未受保护（分支保护快照在线核验于 2026-07-23）。`test-macos` 是唯一带 `continue-on-error` 的指导性 job。`docker` 可使 CI workflow 失败，但未受保护；CodeQL 通过 [GitHub default setup](https://docs.github.com/code-security/code-scanning/automatically-scanning-your-code-for-vulnerabilities-and-errors/configuring-default-setup-for-code-scanning) 运行两项独立且未受保护的分析。npm publish 前，`release.yml` 会在带 tag 的 SHA 上重新核验其直接列出的全部 12 项门禁。 |
 | **覆盖率** | 行 ≥86% · 语句 ≥82% · 函数 ≥75% · 分支 ≥74%（已设门禁） |

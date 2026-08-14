@@ -2619,7 +2619,12 @@ describe("K-1 class invariant (v3.6.3 methodological guard; recursive scan since
       "shared stored Embed resolver: legacy v1 f32 normalization is missing"
     );
 
-    const cliFtsRefusalsRemoved = replaceExactly(cliSource, 'if (discovered.kind === "refused")', "if (false)", 4);
+    const cliFtsRefusalsRemoved = replaceAllExactly(
+      cliSource,
+      'if (discovered.kind === "refused")',
+      "if (false)",
+      4
+    );
     expect(configurationDiscoveryFailClosedProblems(cliFtsRefusalsRemoved, serverSource, searchSource)).toEqual(
       expect.arrayContaining([
         "CLI query FTS: refused discovery refusal/degrade is missing",

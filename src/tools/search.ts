@@ -1593,10 +1593,7 @@ async function filterCurrentHybridHits(
   let embedMask: boolean[];
   try {
     if (ftsEntries.length > 512 || embedEntries.length > 512) return [];
-    ftsMask =
-      ftsEntries.length > 0 && ftsIndex
-        ? ftsIndex.currentSourceReceiptMask(ftsEntries.map((e) => e.receipt))
-        : [];
+    ftsMask = ftsEntries.length > 0 && ftsIndex ? ftsIndex.currentSourceReceiptMask(ftsEntries.map((e) => e.receipt)) : [];
     embedMask =
       embedEntries.length > 0 && embedReceiptReader
         ? embedReceiptReader.currentSourceReceiptMask(embedEntries.map((e) => e.receipt))
@@ -1906,14 +1903,7 @@ export async function readLiveFtsChunk(
   try {
     const stat = await vault.stat(relPath);
     if (!stat.isFile || stat.mtimeMs !== chunk.indexed_mtime_ms) throw notFound();
-    if (
-      !idx.isCurrentSourceReceipt(
-        relPath,
-        chunk.kind,
-        chunk.indexed_mtime_ms,
-        chunk.indexed_revision
-      )
-    ) {
+    if (!idx.isCurrentSourceReceipt(relPath, chunk.kind, chunk.indexed_mtime_ms, chunk.indexed_revision)) {
       throw notFound();
     }
   } catch {

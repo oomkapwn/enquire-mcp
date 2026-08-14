@@ -16,12 +16,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { EmbedDb } from "../src/embed-db.js";
-import {
-  buildHnsw,
-  hnswResultsToHits,
-  hnswResultsToReceiptHits,
-  loadHnswFromDisk
-} from "../src/hnsw.js";
+import { buildHnsw, hnswResultsToHits, hnswResultsToReceiptHits, loadHnswFromDisk } from "../src/hnsw.js";
 import { adaptiveHnswRefill, assertHnswModelMatchesEmbedder, selectUsableHnswContext } from "../src/tools/search.js";
 
 /** L2-normalize a Float32Array in place; returns it for chaining. */
@@ -219,14 +214,17 @@ describe("hnswResultsToHits (v2.13.0)", () => {
     expect(legacyHits[1]?.kind).toBe("pdf");
 
     const receiptRows = new Map(
-      [...legacyRows].map(([label, row]) => [
-        label,
-        {
-          ...row,
-          indexed_mtime_ms: label === 7 ? 1700000000001 : 1700000000002,
-          indexed_revision: label === 7 ? 11 : 12
-        }
-      ] as const)
+      [...legacyRows].map(
+        ([label, row]) =>
+          [
+            label,
+            {
+              ...row,
+              indexed_mtime_ms: label === 7 ? 1700000000001 : 1700000000002,
+              indexed_revision: label === 7 ? 11 : 12
+            }
+          ] as const
+      )
     );
     const receiptHits = hnswResultsToReceiptHits(result, receiptRows);
     expect(receiptHits).toHaveLength(2);

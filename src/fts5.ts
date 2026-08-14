@@ -840,20 +840,17 @@ export class FtsIndex {
    *   : false;
    * ```
    */
-  isCurrentSourceReceipt(
-    relPath: string,
-    kind: ChunkKind,
-    indexedMtimeMs: number,
-    indexedRevision: number
-  ): boolean {
-    return this.currentSourceReceiptMask([
-      {
-        rel_path: relPath,
-        kind,
-        indexed_mtime_ms: indexedMtimeMs,
-        indexed_revision: indexedRevision
-      }
-    ])[0] === true;
+  isCurrentSourceReceipt(relPath: string, kind: ChunkKind, indexedMtimeMs: number, indexedRevision: number): boolean {
+    return (
+      this.currentSourceReceiptMask([
+        {
+          rel_path: relPath,
+          kind,
+          indexed_mtime_ms: indexedMtimeMs,
+          indexed_revision: indexedRevision
+        }
+      ])[0] === true
+    );
   }
 
   /**
@@ -1506,21 +1503,15 @@ export class FtsIndex {
           WHERE quarantined.rel_path = chunks.rel_path
             AND quarantined.kind = chunks.kind
         )`;
-    const row = db
-      .prepare(sql)
-      .get<{
-        rel_path: string;
-        content: string;
-        line_start: number;
-        line_end: number;
-        kind: ChunkKind;
-        indexed_mtime_ms: number;
-        indexed_revision: number;
-      }>(
-        `scope_tokens : ${ftsPathToken(relPath)}`,
-        relPath,
-        chunkIndex
-      );
+    const row = db.prepare(sql).get<{
+      rel_path: string;
+      content: string;
+      line_start: number;
+      line_end: number;
+      kind: ChunkKind;
+      indexed_mtime_ms: number;
+      indexed_revision: number;
+    }>(`scope_tokens : ${ftsPathToken(relPath)}`, relPath, chunkIndex);
     return row ?? null;
   }
 

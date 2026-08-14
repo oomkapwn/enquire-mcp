@@ -596,12 +596,7 @@ describe("EmbedDb", () => {
     if (!abaAfter) throw new Error("expected re-added ABA hit");
     expect(abaAfter.indexed_revision).toBeGreaterThan(abaBefore.indexed_revision);
     expect(
-      db.isCurrentSourceReceipt(
-        abaAfter.rel_path,
-        abaAfter.kind,
-        abaAfter.indexed_mtime_ms,
-        abaAfter.indexed_revision
-      )
+      db.isCurrentSourceReceipt(abaAfter.rel_path, abaAfter.kind, abaAfter.indexed_mtime_ms, abaAfter.indexed_revision)
     ).toBe(true);
     db.deleteNote("aba.md");
     db.quarantineSource("removed.md", "md");
@@ -706,9 +701,7 @@ describe("EmbedDb", () => {
     let oldLegacy: ReturnType<EmbedDb["searchWithReceipts"]>[number] | undefined;
     let sibling: ReturnType<EmbedDb["searchWithReceipts"]>[number] | undefined;
     try {
-      const migratedHits = new Map(
-        migrated.searchWithReceipts(l2([1, 0, 0, 0]), 10).map((hit) => [hit.rel_path, hit])
-      );
+      const migratedHits = new Map(migrated.searchWithReceipts(l2([1, 0, 0, 0]), 10).map((hit) => [hit.rel_path, hit]));
       oldLegacy = migratedHits.get("legacy.md");
       sibling = migratedHits.get("sibling.md");
       if (!oldLegacy || !sibling) throw new Error("expected backfilled legacy receipts");
@@ -727,9 +720,7 @@ describe("EmbedDb", () => {
             vector: l2([1, 0, 0, 0])
           }
         ]);
-        const newLegacy = migrated
-          .searchWithReceipts(l2([1, 0, 0, 0]), 10)
-          .find((hit) => hit.rel_path === "legacy.md");
+        const newLegacy = migrated.searchWithReceipts(l2([1, 0, 0, 0]), 10).find((hit) => hit.rel_path === "legacy.md");
         if (!newLegacy) throw new Error("expected replacement receipt");
         expect(reader.currentSourceReceiptMask([oldLegacy, sibling, newLegacy])).toEqual([false, true, true]);
         expect(newLegacy.indexed_revision).toBeGreaterThan(oldLegacy.indexed_revision);
@@ -762,9 +753,7 @@ describe("EmbedDb", () => {
     try {
       const repairedReader = await openEmbedReceiptReader(file, "/v");
       try {
-        const current = repaired
-          .searchWithReceipts(l2([1, 0, 0, 0]), 10)
-          .find((hit) => hit.rel_path === "legacy.md");
+        const current = repaired.searchWithReceipts(l2([1, 0, 0, 0]), 10).find((hit) => hit.rel_path === "legacy.md");
         if (!oldLegacy || !sibling || !current) throw new Error("expected receipt after canonical trigger repair");
         expect(repairedReader.currentSourceReceiptMask([oldLegacy, sibling, current])).toEqual([false, true, true]);
       } finally {

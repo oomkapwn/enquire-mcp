@@ -93,12 +93,7 @@ function seedPriorRow(db: EmbedDb, relPath: string, mtimeMs = 1, kind: "md" | "p
   );
 }
 
-function expectPriorRowPreserved(
-  db: EmbedDb,
-  relPath: string,
-  kind: "md" | "pdf" = "md",
-  quarantined = false
-): void {
+function expectPriorRowPreserved(db: EmbedDb, relPath: string, kind: "md" | "pdf" = "md", quarantined = false): void {
   expect(db.getSourceStates(kind).find((state) => state.rel_path === relPath)).toEqual({
     rel_path: relPath,
     mtime_ms: 1

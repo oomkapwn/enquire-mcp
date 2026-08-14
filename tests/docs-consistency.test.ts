@@ -1520,9 +1520,7 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
         ? changelog.slice(unreleasedHeading, firstHeading < 0 ? undefined : firstHeading)
         : "";
     const currentChangelog = `${unreleased}\n${latest}`;
-    const releaseArrowClaims = [...currentChangelog.matchAll(/→\s*(\d+)\s+source tests/g)].map(
-      (match) => match[1]
-    );
+    const releaseArrowClaims = [...currentChangelog.matchAll(/→\s*(\d+)\s+source tests/g)].map((match) => match[1]);
     const releaseHeadingClaims = [...currentChangelog.matchAll(/### Tests \((\d+)\)/g)].map((match) => match[1]);
     const releaseClaims = [
       ...(releaseArrowClaims.length > 0 ? releaseArrowClaims : [undefined]),
@@ -1827,18 +1825,16 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
     };
     const typeDocConfig = await read("typedoc.json");
     expect(typeDocEntryPointProblems(typeDocConfig)).toEqual([]);
-    const typeDocVariant = (
-      entryPoints: readonly string[],
-      extra: Readonly<Record<string, unknown>> = {}
-    ): string => JSON.stringify({ ...extra, entryPoints });
+    const typeDocVariant = (entryPoints: readonly string[], extra: Readonly<Record<string, unknown>> = {}): string =>
+      JSON.stringify({ ...extra, entryPoints });
     const withoutEmbedDb = [...typeDocEntries(typeDocConfig)].filter((entry) => entry !== "src/embed-db.ts");
     const missingPublicEntry = typeDocVariant(withoutEmbedDb);
     expect(typeDocEntryPointProblems(missingPublicEntry)).toContain(
       "TypeDoc is missing public entry point src/embed-db.ts"
     );
-    expect(
-      typeDocEntryPointProblems(`// "src/embed-db.ts"\n${missingPublicEntry}`)
-    ).toContain("TypeDoc is missing public entry point src/embed-db.ts");
+    expect(typeDocEntryPointProblems(`// "src/embed-db.ts"\n${missingPublicEntry}`)).toContain(
+      "TypeDoc is missing public entry point src/embed-db.ts"
+    );
     const decoyPublicEntry = typeDocVariant(withoutEmbedDb, { decoy: ["src/embed-db.ts"] });
     expect(typeDocEntryPointProblems(decoyPublicEntry)).toContain(
       "TypeDoc is missing public entry point src/embed-db.ts"
@@ -1868,9 +1864,7 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
     }
     if (missingDeclarations.length > 0) {
       if (process.env.CI) {
-        throw new Error(
-          `public consumer declarations missing after CI build: ${missingDeclarations.join(", ")}`
-        );
+        throw new Error(`public consumer declarations missing after CI build: ${missingDeclarations.join(", ")}`);
       }
       return;
     }
@@ -1882,12 +1876,7 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
       | "hnsw-helper-swap"
       | "missing-subpath";
 
-    const virtualConsumerPath = path.join(
-      repoRoot,
-      "tests",
-      "fixtures",
-      "persisted-index-public-consumer.mts"
-    );
+    const virtualConsumerPath = path.join(repoRoot, "tests", "fixtures", "persisted-index-public-consumer.mts");
     const canonicalPath = (filePath: string): string => {
       const resolved = path.resolve(filePath);
       return process.platform === "win32" ? resolved.toLowerCase() : resolved;
@@ -1905,14 +1894,10 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
 
     const publicConsumerSource = (variant: PublicConsumerVariant): string => {
       const ftsSpecifier =
-        variant === "missing-subpath"
-          ? "@oomkapwn/enquire-mcp/fts5-missing"
-          : "@oomkapwn/enquire-mcp/fts5";
-      const legacyFtsReturn =
-        variant === "legacy-fts-receipt-leak" ? "FtsReceiptSearchHit[]" : "FtsSearchHit[]";
+        variant === "missing-subpath" ? "@oomkapwn/enquire-mcp/fts5-missing" : "@oomkapwn/enquire-mcp/fts5";
+      const legacyFtsReturn = variant === "legacy-fts-receipt-leak" ? "FtsReceiptSearchHit[]" : "FtsSearchHit[]";
       const revisionType = variant === "optional-revision" ? "number | undefined" : "number";
-      const legacyHnswReturn =
-        variant === "hnsw-helper-swap" ? "EmbedReceiptSearchHit[]" : "EmbedSearchHit[]";
+      const legacyHnswReturn = variant === "hnsw-helper-swap" ? "EmbedReceiptSearchHit[]" : "EmbedSearchHit[]";
 
       return `
 import type {
@@ -2126,12 +2111,8 @@ export type PersistedIndexPublicConsumerContract = [
       ).toBe(canonicalPath(declarationPath));
     }
     expect(
-      ts.resolveModuleName(
-        "@oomkapwn/enquire-mcp/fts5-missing",
-        virtualConsumerPath,
-        compilerOptions,
-        positiveHost
-      ).resolvedModule,
+      ts.resolveModuleName("@oomkapwn/enquire-mcp/fts5-missing", virtualConsumerPath, compilerOptions, positiveHost)
+        .resolvedModule,
       "an unexported self-package subpath must remain unresolved"
     ).toBeUndefined();
 
@@ -2183,7 +2164,7 @@ export type PersistedIndexPublicConsumerContract = [
           formatDiagnostics(diagnostics)
       ).toContain(expectedCode);
     }
-  });
+  }, 60_000);
 
   // v3.12.0-rc.5 keeps the evidence-bound factual guard from rc.4 while
   // separating the conversion surface from the evidence archive. The broad

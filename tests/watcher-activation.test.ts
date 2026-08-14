@@ -825,15 +825,20 @@ describe("VaultWatcher single-generation staging", () => {
     // Both allowed attempts observed a different post-embed generation, so the
     // event must stop without publishing any of its three transient states.
     expect(embedCalls).toBe(2);
-    expect(markerPathsInFts(fixture.fts, "churnoldmarker")).toEqual(["Churn.md"]);
-    expect(markerPathsInEmbedDb(fixture.embedDb, "churnoldmarker")).toEqual(["Churn.md"]);
+    // The prior rows stay physically recoverable but the observed failed
+    // generation durably quarantines both DB authorities. HNSW metadata may
+    // retain the old label, but search rehydrates labels from EmbedDb and
+    // therefore cannot treat this sidecar text as output authority.
+    expect(markerPathsInFts(fixture.fts, "churnoldmarker")).toEqual([]);
+    expect(markerPathsInEmbedDb(fixture.embedDb, "churnoldmarker")).toEqual([]);
     expect(markerPathsInHnsw(fixture.hnswRowsByLabel, "churnoldmarker")).toEqual(["Churn.md"]);
+    expect(fixture.fts.auditKind("md").mismatched_files).toBe(1);
+    expect(fixture.embedDb.auditKind("md").mismatched_files).toBe(1);
     for (const marker of ["churncandidate", "churnsecondmarker", "churnthirdmarker"]) {
       expect(markerPathsInFts(fixture.fts, marker)).toEqual([]);
       expect(markerPathsInEmbedDb(fixture.embedDb, marker)).toEqual([]);
       expect(markerPathsInHnsw(fixture.hnswRowsByLabel, marker)).toEqual([]);
     }
-    expectHnswMatchesEmbedDb(fixture);
 
     // Retry exhaustion is per accepted event, not a permanent poison pill. A
     // later event sees the now-quiet third generation and commits it coherently.

@@ -1737,9 +1737,7 @@ export async function openEmbedReceiptReader(file: string, expectedVaultRoot: st
     db = null;
     return {
       isCurrentSourceReceipt(relPath, kind, indexedMtimeMs, indexedRevision) {
-        return activeDb
-          ? currentSourceReceipt(activeDb, relPath, kind, indexedMtimeMs, indexedRevision)
-          : false;
+        return activeDb ? currentSourceReceipt(activeDb, relPath, kind, indexedMtimeMs, indexedRevision) : false;
       },
       currentSourceReceiptMask(receipts) {
         return activeDb ? currentSourceReceiptMaskFromDb(activeDb, receipts) : receipts.map(() => false);

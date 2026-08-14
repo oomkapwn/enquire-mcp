@@ -490,13 +490,15 @@ describe("FtsIndex — full lifecycle", () => {
         )
     ).toBe(false);
     expect(quarantined.auditKind("md").mismatched_files).toBe(1);
-    expect(quarantined.diff(
-      [
-        { relPath: "stale.md", mtimeMs: 1000 },
-        { relPath: "control.md", mtimeMs: 1000 }
-      ],
-      "md"
-    )).toEqual({ added: [], updated: ["stale.md"], deleted: [], unchanged: ["control.md"] });
+    expect(
+      quarantined.diff(
+        [
+          { relPath: "stale.md", mtimeMs: 1000 },
+          { relPath: "control.md", mtimeMs: 1000 }
+        ],
+        "md"
+      )
+    ).toEqual({ added: [], updated: ["stale.md"], deleted: [], unchanged: ["control.md"] });
 
     // Negative control: unrelated, receipt-backed rows remain available.
     const visibleControl = quarantined.searchWithReceipts("unchanged-control-marker");

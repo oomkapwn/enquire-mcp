@@ -5,7 +5,6 @@ import * as path from "node:path";
 import type { FSWatcher } from "chokidar";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { defaultIndexFile, FtsIndex } from "../src/fts5.js";
-import { syncPdfFtsIndex } from "../src/server.js";
 import { Vault } from "../src/vault.js";
 import { VaultWatcher } from "../src/watcher.js";
 import { makePdf } from "./helpers/make-pdf.js";
@@ -1027,9 +1026,10 @@ describe("VaultWatcher with FTS5 index (v3.6 — reindex branches)", () => {
         return originalReadNote(...args);
       };
       try {
-        await (
-          w as unknown as { handle(absPath: string, kind: "add" | "change" | "unlink"): Promise<void> }
-        ).handle(aPath, "change");
+        await (w as unknown as { handle(absPath: string, kind: "add" | "change" | "unlink"): Promise<void> }).handle(
+          aPath,
+          "change"
+        );
       } finally {
         v.readNote = originalReadNote;
       }
@@ -1097,9 +1097,10 @@ describe("VaultWatcher with FTS5 index (v3.6 — reindex branches)", () => {
       await fs.utimes(aPath, pinnedTime, pinnedTime);
       expect((await fs.stat(aPath)).mtimeMs).toBe(pinnedMtimeMs);
       expect((await fs.stat(bPath)).mtimeMs).toBe(pinnedMtimeMs);
-      await (
-        w as unknown as { handle(absPath: string, kind: "add" | "change" | "unlink"): Promise<void> }
-      ).handle(aPath, "change");
+      await (w as unknown as { handle(absPath: string, kind: "add" | "change" | "unlink"): Promise<void> }).handle(
+        aPath,
+        "change"
+      );
 
       expect(commitFailureInjected).toBe(true);
       expect(bothAliasesStagedAtFailure).toBe(true);
@@ -1153,14 +1154,17 @@ describe("VaultWatcher with FTS5 index (v3.6 — reindex branches)", () => {
       await fs.utimes(aPath, pinnedTime, pinnedTime);
       expect((await fs.stat(aPath)).mtimeMs).toBe(pinnedMtimeMs);
       expect((await fs.stat(bPath)).mtimeMs).toBe(pinnedMtimeMs);
-      await (
-        w as unknown as { handle(absPath: string, kind: "add" | "change" | "unlink"): Promise<void> }
-      ).handle(aPath, "change");
+      await (w as unknown as { handle(absPath: string, kind: "add" | "change" | "unlink"): Promise<void> }).handle(
+        aPath,
+        "change"
+      );
       expect(fts.search("alias_control_old", { limit: 10 })).toEqual([]);
-      expect(fts.search("alias_control_new", { limit: 10 }).map((hit) => hit.rel_path).sort()).toEqual([
-        aRel,
-        bRel
-      ]);
+      expect(
+        fts
+          .search("alias_control_new", { limit: 10 })
+          .map((hit) => hit.rel_path)
+          .sort()
+      ).toEqual([aRel, bRel]);
     } finally {
       await w.close();
       fts.close();
@@ -1214,6 +1218,10 @@ describe("VaultWatcher with FTS5 index (v3.6 — reindex branches)", () => {
       fts.quarantineFile(relPath, "pdf");
       expect(fts.auditKind("pdf").mismatched_files).toBe(1);
 
+      // Server bootstrap is intentionally registration boilerplate and cannot
+      // be a static test dependency. Load only the real PDF sync integration
+      // at the causal boundary, matching the existing server integration tests.
+      const { syncPdfFtsIndex } = await import("../src/server.js");
       const report = await syncPdfFtsIndex(v, fts);
 
       expect(report).toMatchObject({ added: 1, updated: 0, total_chunks: 0 });

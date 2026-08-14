@@ -582,7 +582,7 @@ describe("enforcement-guarantee → code-guard invariant (rc.3, overclaim #15/#1
 
     const chunkValidator = "!idx.isCurrentSourceReceipt(";
     expect(search).toContain(chunkValidator);
-    expect(persistedEgressGuardViolations(search.replace(chunkValidator, "!true || (")).toContain(
+    expect(persistedEgressGuardViolations(search.replace(chunkValidator, "!true || ("))).toContain(
       `chunk resource: missing ${chunkValidator}`
     );
 

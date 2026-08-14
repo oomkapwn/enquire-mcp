@@ -346,7 +346,7 @@ describe("searchHybrid — BM25 + TF-IDF fusion path", () => {
         const originalReadNote = v.readNote.bind(v);
         let replaced = false;
         v.readNote = async (...args: Parameters<Vault["readNote"]>) => {
-          if (!replaced && args[0] === absPath && args[1] === undefined) {
+          if (!replaced && args[0] === v.resolveInside(relPath) && args[1] === undefined) {
             replaced = true;
             idx.reindexFile(
               relPath,

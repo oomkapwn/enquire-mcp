@@ -727,9 +727,7 @@ describe("Persistent indexes — search-time privacy filter (v2.0.0-beta.2)", ()
         vServe.stat = originalStat;
       }
       expect(diagnosticReindexed).toBe(true);
-      expect((await callFts("sibling_generation_control")).map((hit) => hit.rel_path)).toEqual([
-        "Public/sibling.md"
-      ]);
+      expect((await callFts("sibling_generation_control")).map((hit) => hit.rel_path)).toEqual(["Public/sibling.md"]);
 
       idx.reindexFile("Public/auth.md", publicMtimeMs, publicContent, [], []);
       let chunkReindexed = false;

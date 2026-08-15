@@ -79,6 +79,31 @@ function collectWatcherCalls(
   return calls;
 }
 
+/** Collect calls to one method on one local receiver. */
+function collectReceiverCalls(
+  fn: ts.FunctionDeclaration,
+  sourceFile: ts.SourceFile,
+  receiver: string,
+  method: string
+): WatcherCall[] {
+  const calls: WatcherCall[] = [];
+  const visit = (node: ts.Node): void => {
+    if (node !== fn.body && ts.isFunctionLike(node)) return;
+    if (
+      ts.isCallExpression(node) &&
+      ts.isPropertyAccessExpression(node.expression) &&
+      ts.isIdentifier(node.expression.expression) &&
+      node.expression.expression.text === receiver &&
+      node.expression.name.text === method
+    ) {
+      calls.push({ call: node, position: node.getStart(sourceFile) });
+    }
+    ts.forEachChild(node, visit);
+  };
+  if (fn.body) visit(fn.body);
+  return calls;
+}
+
 /** Collect direct calls to one imported lifecycle helper. */
 function collectIdentifierCalls(
   fn: ts.FunctionDeclaration,
@@ -118,6 +143,14 @@ function findContainingTryBlock(node: ts.Node, boundary: ts.Node): ts.TryStateme
   return undefined;
 }
 
+/** Find the nearest statement containing a lifecycle call. */
+function findContainingStatement(node: ts.Node, boundary: ts.Node): ts.Statement | undefined {
+  for (let parent = node.parent; parent && parent !== boundary; parent = parent.parent) {
+    if (ts.isExpressionStatement(parent)) return parent;
+  }
+  return undefined;
+}
+
 /** Catch/finally are failure-only paths and may never release the guard. */
 function isWithinCatchOrFinally(node: ts.Node, boundary: ts.Node): boolean {
   for (let parent = node.parent; parent && parent !== boundary; parent = parent.parent) {
@@ -144,6 +177,20 @@ function isActivationRecoveryRethrow(statement: ts.ThrowStatement, caughtName: s
     ts.isIdentifier(argument) &&
     argument.text === caughtName
   );
+}
+
+/** Require one EmbedDb cleanup call before every direct escape from a catch. */
+function catchClosesWatcherEmbedBeforeEscape(catchClause: ts.CatchClause, closeCalls: WatcherCall[]): boolean {
+  const matchingCloses = closeCalls.filter(({ call }) => isWithin(call, catchClause.block));
+  const escapes: ts.Statement[] = [];
+  const visit = (node: ts.Node): void => {
+    if (node !== catchClause.block && ts.isFunctionLike(node)) return;
+    if (ts.isThrowStatement(node) || ts.isReturnStatement(node)) escapes.push(node);
+    ts.forEachChild(node, visit);
+  };
+  visit(catchClause.block);
+  const close = matchingCloses[0];
+  return matchingCloses.length === 1 && close !== undefined && escapes.every((exit) => close.position < exit.pos);
 }
 
 /**
@@ -211,6 +258,8 @@ function watcherStartupOrderViolations(source: string): string[] {
   const guardClearChecks = collectIdentifierCalls(fn, sourceFile, "assertWatcherActivationGuardClear");
   const guardArms = collectIdentifierCalls(fn, sourceFile, "armWatcherActivationGuard");
   const guardReleases = collectIdentifierCalls(fn, sourceFile, "releaseWatcherActivationGuard");
+  const watcherEmbedOpens = collectReceiverCalls(fn, sourceFile, "watcherEmbedDb", "open");
+  const watcherEmbedFailureCloses = collectIdentifierCalls(fn, sourceFile, "closeWatcherEmbedDbAfterFailure");
   const hnswAcquisitionPositions = [
     ...collectIdentifierCalls(fn, sourceFile, "loadHnswFromDisk").map(({ position }) => position),
     ...collectIdentifierCalls(fn, sourceFile, "buildHnsw").map(({ position }) => position)
@@ -242,6 +291,60 @@ function watcherStartupOrderViolations(source: string): string[] {
   }
   if (guardArm && isWithinCatchOrFinally(guardArm.call, fn)) {
     violations.push("activation guard arm must stay on the watcher startup success path");
+  }
+  if (watcherEmbedOpens.length !== 1) {
+    violations.push(`expected exactly one watcher EmbedDb open, found ${watcherEmbedOpens.length}`);
+  }
+  const watcherEmbedOpen = watcherEmbedOpens[0];
+  const watcherStartupTry = watcherEmbedOpen ? findContainingTryBlock(watcherEmbedOpen.call, fn) : undefined;
+  if (watcherEmbedOpen && !isDirectlyAwaited(watcherEmbedOpen.call)) {
+    violations.push("watcher EmbedDb open must be directly awaited");
+  }
+  if (watcherEmbedOpen && guardArm && watcherEmbedOpen.position >= guardArm.position) {
+    violations.push("watcher EmbedDb must open before activation guard arm");
+  }
+  if (watcherEmbedOpen && start && watcherEmbedOpen.position >= start.position) {
+    violations.push("watcher EmbedDb must open before watcher.start()");
+  }
+  if (watcherEmbedOpen && guardArm && start) {
+    const openTry = watcherStartupTry;
+    const armTry = findContainingTryBlock(guardArm.call, fn);
+    const startTry = findContainingTryBlock(start.call, fn);
+    if (!openTry || openTry !== armTry || openTry !== startTry) {
+      violations.push("watcher EmbedDb open, guard arm, and watcher.start() must share one cleanup try");
+    } else {
+      const armStatement = findContainingStatement(guardArm.call, fn);
+      const armBlock = armStatement?.parent;
+      const armIndex = armStatement && ts.isBlock(armBlock) ? armBlock.statements.indexOf(armStatement) : -1;
+      const previousStatement = armIndex > 0 && ts.isBlock(armBlock) ? armBlock.statements[armIndex - 1] : undefined;
+      if (previousStatement?.getText(sourceFile).replace(/\s+/g, "") !== "guardArmAttempted=true;") {
+        violations.push("guardArmAttempted must be set immediately before awaited guard arm");
+      }
+      const catchClause = openTry.catchClause;
+      const caughtName =
+        catchClause?.variableDeclaration && ts.isIdentifier(catchClause.variableDeclaration.name)
+          ? catchClause.variableDeclaration.name.text
+          : null;
+      const catchText = catchClause?.block.getText(sourceFile).replace(/\s+/g, "") ?? "";
+      if (
+        !caughtName ||
+        !catchText.includes(
+          `if(guardArmAttempted)throwwatcherActivationRecoveryError(${caughtName});throw${caughtName};`
+        ) ||
+        catchText.includes("if(startupEmbedDbAvailable)throwwatcherActivationRecoveryError(")
+      ) {
+        violations.push("watcher startup recovery must wrap iff guard arm was attempted");
+      }
+    }
+  }
+  if (watcherEmbedFailureCloses.length !== 2) {
+    violations.push(`expected exactly two watcher EmbedDb failure cleanups, found ${watcherEmbedFailureCloses.length}`);
+  }
+  if (
+    !watcherStartupTry?.catchClause ||
+    !catchClosesWatcherEmbedBeforeEscape(watcherStartupTry.catchClause, watcherEmbedFailureCloses)
+  ) {
+    violations.push("watcher startup catch must close watcher EmbedDb before rethrow/return");
   }
   if (attachEmbed.length === 0) violations.push("watcher.attachEmbed() branch is missing");
   if (captureAttachedSinkDrift.length !== 1) {
@@ -398,6 +501,9 @@ function watcherStartupOrderViolations(source: string): string[] {
         if (!cleanupCompleted) {
           violations.push("watcher.close() cleanup must complete before activation failure is rethrown");
         }
+      }
+      if (!catchClosesWatcherEmbedBeforeEscape(failureCatch, watcherEmbedFailureCloses)) {
+        violations.push("watcher activation catch must close watcher EmbedDb before rethrow/return");
       }
     }
 
@@ -653,30 +759,49 @@ const GOOD_STARTUP = `
 export async function prepareServerDeps(opts) {
 ${REQUIRED_PURE_VALIDATION_BLOCK}
   let watcher = null;
+  let watcherEmbedDb = null;
   let watcherActivationGuard = null;
+  let guardArmAttempted = false;
   await assertWatcherActivationGuardClear(embedFile);
   const startupEmbedDbAvailable = existsSync(embedFile);
   if (opts.watch) {
     watcher = new VaultWatcher({ vault, ftsIndex, deferActivation: true });
-    if (startupEmbedDbAvailable) {
-      watcherActivationGuard = await armWatcherActivationGuard(embedFile);
-    }
-    await watcher.start();
-    if (ftsIndex) {
-      await syncFtsIndex(vault, ftsIndex);
-      if (opts.includePdfs) {
-        await syncPdfFtsIndex(vault, ftsIndex);
-      }
-    }
     try {
-      watcher.attachEmbed(embedDb, embedder, 0);
-      if (opts.ocrPdfs) {
-        watcher.setOcrPdfs(true, opts.ocrLangs);
+      if (startupEmbedDbAvailable) {
+        const discovered = await discoverEmbedDbConfig(embedFile, vault.root);
+        if (discovered.kind === "missing" || discovered.kind === "refused") {
+          throw new Error("Embedding index configuration could not be verified");
+        }
+        const embedConfig =
+          discovered.kind === "owned" ? resolveStoredEmbeddingConfiguration(discovered.meta) : defaultEmbedConfig;
+        watcherEmbedDb = new EmbedDb({ file: embedFile, vaultRoot: vault.root, embedConfig });
+        await watcherEmbedDb.open();
+        guardArmAttempted = true;
+        watcherActivationGuard = await armWatcherActivationGuard(embedFile);
       }
+      await watcher.start();
+      if (ftsIndex) {
+        await syncFtsIndex(vault, ftsIndex);
+        if (opts.includePdfs) {
+          await syncPdfFtsIndex(vault, ftsIndex);
+        }
+      }
+      try {
+        watcher.attachEmbed(watcherEmbedDb, embedder, 0);
+        if (opts.ocrPdfs) {
+          watcher.setOcrPdfs(true, opts.ocrLangs);
+        }
+      } catch (error) {
+        warn(error);
+      }
+      await watcher.captureAttachedSinkDrift();
     } catch (error) {
-      warn(error);
+      closeWatcherEmbedDbAfterFailure(watcherEmbedDb, "watcher startup");
+      watcherEmbedDb = null;
+      await watcher.close();
+      if (guardArmAttempted) throw watcherActivationRecoveryError(error);
+      throw error;
     }
-    await watcher.captureAttachedSinkDrift();
   }
   if (opts.useHnsw) {
     if (loaded && watcher) {
@@ -693,6 +818,8 @@ ${REQUIRED_PURE_VALIDATION_BLOCK}
         watcherActivationGuard = null;
       }
     } catch (error) {
+      closeWatcherEmbedDbAfterFailure(watcherEmbedDb, "watcher activation");
+      watcherEmbedDb = null;
       await watcher.close();
       throw error;
     }
@@ -735,8 +862,8 @@ describe("watcher startup activation ordering (v3.12.0-rc.25 S-8c)", () => {
     expect(startupPureValidationViolations(GOOD_STARTUP)).toEqual([]);
 
     const wrappedRecovery = GOOD_STARTUP.replace(
-      "      throw error;",
-      "      throw watcherActivationRecoveryError(error);"
+      "      await watcher.close();\n      throw error;\n    }\n  }\n  const feedbackStore",
+      "      await watcher.close();\n      throw watcherActivationRecoveryError(error);\n    }\n  }\n  const feedbackStore"
     );
     expect(watcherStartupOrderViolations(wrappedRecovery)).toEqual([]);
   });
@@ -752,12 +879,18 @@ describe("watcher startup activation ordering (v3.12.0-rc.25 S-8c)", () => {
     const source = GOOD_STARTUP.replace("      await watcher.activate();\n", "");
     expect(watcherStartupOrderViolations(source)).toContain("expected exactly one watcher.activate() barrier, found 0");
 
-    const swallowed = GOOD_STARTUP.replace("      throw error;\n", "");
+    const swallowed = GOOD_STARTUP.replace(
+      "      await watcher.close();\n      throw error;\n    }\n  }\n  const feedbackStore",
+      "      await watcher.close();\n    }\n  }\n  const feedbackStore"
+    );
     expect(watcherStartupOrderViolations(swallowed)).toContain(
       "watcher.activate() failure must rethrow the caught error after cleanup"
     );
 
-    const conditionallyRethrown = GOOD_STARTUP.replace("      throw error;", "      if (opts.strict) throw error;");
+    const conditionallyRethrown = GOOD_STARTUP.replace(
+      "      await watcher.close();\n      throw error;\n    }\n  }\n  const feedbackStore",
+      "      await watcher.close();\n      if (opts.strict) throw error;\n    }\n  }\n  const feedbackStore"
+    );
     expect(watcherStartupOrderViolations(conditionallyRethrown)).toContain(
       "watcher.activate() failure must rethrow the caught error after cleanup"
     );
@@ -770,7 +903,34 @@ describe("watcher startup activation ordering (v3.12.0-rc.25 S-8c)", () => {
       "watcher.close() cleanup must complete before activation failure is rethrown"
     );
 
-    const missingDriftCapture = GOOD_STARTUP.replace("    await watcher.captureAttachedSinkDrift();\n", "");
+    const missingStartupEmbedCleanup = GOOD_STARTUP.replace(
+      '      closeWatcherEmbedDbAfterFailure(watcherEmbedDb, "watcher startup");\n',
+      ""
+    );
+    expect(watcherStartupOrderViolations(missingStartupEmbedCleanup)).toContain(
+      "watcher startup catch must close watcher EmbedDb before rethrow/return"
+    );
+
+    const missingActivationEmbedCleanup = GOOD_STARTUP.replace(
+      '      closeWatcherEmbedDbAfterFailure(watcherEmbedDb, "watcher activation");\n',
+      ""
+    );
+    expect(watcherStartupOrderViolations(missingActivationEmbedCleanup)).toContain(
+      "watcher activation catch must close watcher EmbedDb before rethrow/return"
+    );
+
+    const lateStartupEmbedCleanup = GOOD_STARTUP.replace(
+      '      closeWatcherEmbedDbAfterFailure(watcherEmbedDb, "watcher startup");\n',
+      ""
+    ).replace(
+      "      throw error;\n    }\n  }\n  if (opts.useHnsw)",
+      '      throw error;\n      closeWatcherEmbedDbAfterFailure(watcherEmbedDb, "watcher startup");\n    }\n  }\n  if (opts.useHnsw)'
+    );
+    expect(watcherStartupOrderViolations(lateStartupEmbedCleanup)).toContain(
+      "watcher startup catch must close watcher EmbedDb before rethrow/return"
+    );
+
+    const missingDriftCapture = GOOD_STARTUP.replace("      await watcher.captureAttachedSinkDrift();\n", "");
     expect(watcherStartupOrderViolations(missingDriftCapture)).toContain(
       "expected exactly one watcher.captureAttachedSinkDrift() call, found 0"
     );
@@ -783,12 +943,12 @@ describe("watcher startup activation ordering (v3.12.0-rc.25 S-8c)", () => {
       "watcher.captureAttachedSinkDrift() must be directly awaited"
     );
 
-    const missingPostReadyFts = GOOD_STARTUP.replace("      await syncFtsIndex(vault, ftsIndex);\n", "");
+    const missingPostReadyFts = GOOD_STARTUP.replace("        await syncFtsIndex(vault, ftsIndex);\n", "");
     expect(watcherStartupOrderViolations(missingPostReadyFts)).toContain(
       "expected exactly one post-ready syncFtsIndex reconciliation before activation, found 0"
     );
 
-    const missingPostReadyPdf = GOOD_STARTUP.replace("        await syncPdfFtsIndex(vault, ftsIndex);\n", "");
+    const missingPostReadyPdf = GOOD_STARTUP.replace("          await syncPdfFtsIndex(vault, ftsIndex);\n", "");
     expect(watcherStartupOrderViolations(missingPostReadyPdf)).toContain(
       "expected exactly one post-ready syncPdfFtsIndex reconciliation before activation, found 0"
     );
@@ -815,8 +975,8 @@ describe("watcher startup activation ordering (v3.12.0-rc.25 S-8c)", () => {
       "  await assertWatcherActivationGuardClear(embedFile);\n",
       ""
     ).replace(
-      "    await watcher.start();",
-      "    await watcher.start();\n    await assertWatcherActivationGuardClear(embedFile);"
+      "      await watcher.start();",
+      "      await watcher.start();\n      await assertWatcherActivationGuardClear(embedFile);"
     );
     expect(watcherStartupOrderViolations(lateClearAssertion)).toContain(
       "activation guard must be asserted clear before FTS/watcher/HNSW acquisition"
@@ -831,11 +991,46 @@ describe("watcher startup activation ordering (v3.12.0-rc.25 S-8c)", () => {
     );
 
     const armAfterStart = GOOD_STARTUP.replace(
-      "    if (startupEmbedDbAvailable) {\n      watcherActivationGuard = await armWatcherActivationGuard(embedFile);\n    }\n    await watcher.start();",
-      "    await watcher.start();\n    if (startupEmbedDbAvailable) {\n      watcherActivationGuard = await armWatcherActivationGuard(embedFile);\n    }"
+      "        guardArmAttempted = true;\n        watcherActivationGuard = await armWatcherActivationGuard(embedFile);\n      }\n      await watcher.start();",
+      "      }\n      await watcher.start();\n      if (startupEmbedDbAvailable) {\n        guardArmAttempted = true;\n        watcherActivationGuard = await armWatcherActivationGuard(embedFile);\n      }"
     );
     expect(watcherStartupOrderViolations(armAfterStart)).toContain(
       "activation guard must be armed before watcher.start()"
+    );
+
+    const openAfterArm = GOOD_STARTUP.replace("        await watcherEmbedDb.open();\n", "").replace(
+      "        watcherActivationGuard = await armWatcherActivationGuard(embedFile);\n",
+      "        watcherActivationGuard = await armWatcherActivationGuard(embedFile);\n        await watcherEmbedDb.open();\n"
+    );
+    expect(watcherStartupOrderViolations(openAfterArm)).toContain(
+      "watcher EmbedDb must open before activation guard arm"
+    );
+
+    const duplicateOpen = GOOD_STARTUP.replace(
+      "        await watcherEmbedDb.open();",
+      "        await watcherEmbedDb.open();\n        await watcherEmbedDb.open();"
+    );
+    expect(watcherStartupOrderViolations(duplicateOpen)).toContain(
+      "expected exactly one watcher EmbedDb open, found 2"
+    );
+
+    const unawaitedOpen = GOOD_STARTUP.replace("await watcherEmbedDb.open()", "watcherEmbedDb.open()");
+    expect(watcherStartupOrderViolations(unawaitedOpen)).toContain("watcher EmbedDb open must be directly awaited");
+
+    const lateArmAttempt = GOOD_STARTUP.replace(
+      "        guardArmAttempted = true;\n        watcherActivationGuard = await armWatcherActivationGuard(embedFile);",
+      "        watcherActivationGuard = await armWatcherActivationGuard(embedFile);\n        guardArmAttempted = true;"
+    );
+    expect(watcherStartupOrderViolations(lateArmAttempt)).toContain(
+      "guardArmAttempted must be set immediately before awaited guard arm"
+    );
+
+    const availabilityWrappedStartup = GOOD_STARTUP.replace(
+      "if (guardArmAttempted) throw watcherActivationRecoveryError(error);",
+      "if (startupEmbedDbAvailable) throw watcherActivationRecoveryError(error);"
+    );
+    expect(watcherStartupOrderViolations(availabilityWrappedStartup)).toContain(
+      "watcher startup recovery must wrap iff guard arm was attempted"
     );
 
     const releaseBeforeActivation = GOOD_STARTUP.replace(
@@ -874,8 +1069,8 @@ describe("watcher startup activation ordering (v3.12.0-rc.25 S-8c)", () => {
       "      if (watcherActivationGuard) {\n        await releaseWatcherActivationGuard(watcherActivationGuard);\n        watcherActivationGuard = null;\n      }\n",
       ""
     ).replace(
-      "    } catch (error) {\n      await watcher.close();",
-      "    } catch (error) {\n      if (watcherActivationGuard) {\n        await releaseWatcherActivationGuard(watcherActivationGuard);\n        watcherActivationGuard = null;\n      }\n      await watcher.close();"
+      '    } catch (error) {\n      closeWatcherEmbedDbAfterFailure(watcherEmbedDb, "watcher activation");\n      watcherEmbedDb = null;\n      await watcher.close();',
+      '    } catch (error) {\n      closeWatcherEmbedDbAfterFailure(watcherEmbedDb, "watcher activation");\n      watcherEmbedDb = null;\n      if (watcherActivationGuard) {\n        await releaseWatcherActivationGuard(watcherActivationGuard);\n        watcherActivationGuard = null;\n      }\n      await watcher.close();'
     );
     expect(watcherStartupOrderViolations(releaseInFailureCatch)).toContain(
       "activation guard release must stay on watcher.activate() successful try path"
@@ -926,8 +1121,8 @@ describe("watcher startup activation ordering (v3.12.0-rc.25 S-8c)", () => {
     );
 
     const latePureValidation = GOOD_STARTUP.replace(REQUIRED_PURE_VALIDATION_BLOCK, "").replace(
-      "    await watcher.start();",
-      `    await watcher.start();
+      "      await watcher.start();",
+      `      await watcher.start();
 ${REQUIRED_PURE_VALIDATION_BLOCK}`
     );
     expect(startupPureValidationViolations(latePureValidation)).toContain(

@@ -439,8 +439,9 @@ export class Vault {
   /**
    * Flush the in-memory parse cache to disk. Writes to a temp file then
    * atomically renames over the target so a crash mid-flush can't
-   * corrupt the cache. Sets mode 0o600 on the cache file and 0o700 on
-   * its directory to keep note bodies private to the user account.
+   * corrupt the cache. Best-effort reasserts mode 0o600 on the cache file;
+   * a parent created by Enquire starts at 0o700, while an existing/custom
+   * parent remains operator-managed.
    *
    * No-op when persistent cache wasn't configured or the cache hasn't
    * been modified since the last save (`cacheDirty` flag).

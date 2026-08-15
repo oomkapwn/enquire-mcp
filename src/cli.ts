@@ -25,7 +25,7 @@ import {
   TOKENIZE_HELP,
   WATCH_HELP
 } from "./cli-help.js";
-import { EmbedDb, peekEmbedDbMeta } from "./embed-db.js";
+import { assertEmbedDbRecoveryOwnership, discoverEmbedDbConfig, EmbedDb } from "./embed-db.js";
 import {
   DEFAULT_MODEL_ALIAS,
   DEFAULT_RERANKER_ALIAS,
@@ -35,11 +35,19 @@ import {
   RERANKER_MODELS,
   resolveModel,
   resolveRerankerModel,
+  resolveStoredEmbeddingConfiguration,
   resolveTransformersCacheDir,
   setEmbeddingsOffline
 } from "./embeddings.js";
 import { buildFirstRunPlan, executeFirstRunPlan, type FirstRunStep, renderFirstRunStep } from "./first-run.js";
-import { defaultIndexFile, FtsIndex, peekFtsMetaSafe, planCachePrune, type TokenizeMode } from "./fts5.js";
+import {
+  assertTokenizeMode,
+  defaultIndexFile,
+  discoverFtsIndexConfig,
+  FtsIndex,
+  planCachePrune,
+  type TokenizeMode
+} from "./fts5.js";
 import { VERSION } from "./index.js";
 import {
   buildPrivacyArgs,
@@ -70,8 +78,16 @@ import { searchHybrid } from "./tools/index.js";
 import { Vault } from "./vault.js";
 import { assertWatcherActivationGuardClear } from "./watcher-activation-guard.js";
 
+/** Raw `serve` flags as parsed by commander. */
+interface ServeCli extends Omit<ServeOptions, "tokenize"> {
+  /** Untrusted tokenizer flag; validated before server preparation. */
+  tokenize?: string;
+}
+
 /** Raw `serve-http` flags as parsed by commander (string-typed). */
-interface HttpServeCli extends ServeOptions {
+interface HttpServeCli extends Omit<ServeOptions, "tokenize"> {
+  /** Untrusted tokenizer flag; validated before HTTP or server preparation. */
+  tokenize?: string;
   port?: string;
   host?: string;
   bearerToken?: string;
@@ -105,12 +121,14 @@ async function resolveConfiguredVault(
 
 async function assertEmbeddingWriterGuardClear(
   embedFile: string,
+  vaultRoot: string,
   commandName: "build-embeddings" | "setup",
   customEmbedFile = false
 ): Promise<void> {
   try {
     await assertWatcherActivationGuardClear(embedFile);
   } catch (error) {
+    await assertEmbedDbRecoveryOwnership(embedFile, vaultRoot);
     const customRecoveryGuidance = customEmbedFile
       ? " Because this command selected a custom embedding index, repeat the exact same `--embed-file` option " +
         "on both `clear-embeddings` and the rebuild command; the absolute path is intentionally omitted here."
@@ -186,7 +204,7 @@ function addAdvancedRetrievalOptions(cmd: Command): Command {
     )
     .option(
       "--late-chunk-context <chars>",
-      "v2.15.0 — late-chunking-style context windowing on embeddings. When > 0, prepends doc title + heading breadcrumb + tails of neighboring chunks (this many chars from each side) before sending to the embedder. Typical +2-5 NDCG@10 retrieval boost at zero new dep cost. Default 0 (off; matches v2.1.0+ breadcrumb-only behavior). Only effective during `build-embeddings` or auto-rebuild."
+      "v2.15.0 — late-chunking-style context windowing on embeddings. When > 0, prepends doc title + heading breadcrumb + tails of neighboring chunks (this many chars from each side) before sending to the embedder. Typical +2-5 NDCG@10 retrieval boost at zero new dep cost. Default 0 (off; matches v2.1.0+ breadcrumb-only behavior). Applies during `build-embeddings` and, with `serve --watch`, to subsequently refreshed chunks; it does not rebuild existing rows at serve start."
     )
     .option(
       "--no-hnsw-persist",
@@ -282,14 +300,17 @@ export async function main(invocation?: ConfigInput["invocation"]): Promise<void
     .option("--diagnostic-search-tools", DIAGNOSTIC_SEARCH_TOOLS_HELP);
   addAdvancedRetrievalOptions(serveCmd)
     .option("--quantize-embeddings <mode>", QUANTIZE_EMBEDDINGS_HELP)
-    .action(async (opts: ServeOptions) => {
+    .action(async (opts: ServeCli) => {
+      const { tokenize: rawTokenize, ...serveBaseOpts } = opts;
+      const tokenize = rawTokenize === undefined ? undefined : assertTokenizeMode(rawTokenize, "--tokenize");
       // Validate up-front so a bad value fails before we touch the vault, and forward the
       // NORMALIZED mode (aliases "q8"/"float32"/"none" → "int8"/"f32") — parity with
       // serve-http (v3.11.5-rc.1 CLI-QUANT-NORM-1). Downstream (server.ts) exact-matches
       // "f32"/"int8", so forwarding the raw alias silently degrades to the default.
       const quantMode = parseQuantizationMode(opts.quantizeEmbeddings as string | undefined);
       const serveOpts: ServeOptions = {
-        ...opts,
+        ...serveBaseOpts,
+        ...(tokenize !== undefined ? { tokenize } : {}),
         ...(quantMode !== undefined ? { quantizeEmbeddings: quantMode } : {})
       };
       // rc.42 F1 — enforce "zero cloud calls during serve": a model not already in the
@@ -364,6 +385,8 @@ export async function main(invocation?: ConfigInput["invocation"]): Promise<void
   addAdvancedRetrievalOptions(serveHttpCmd)
     .option("--quantize-embeddings <mode>", QUANTIZE_EMBEDDINGS_HELP)
     .action(async (opts: HttpServeCli) => {
+      const { tokenize: rawTokenize, ...httpBaseOpts } = opts;
+      const tokenize = rawTokenize === undefined ? undefined : assertTokenizeMode(rawTokenize, "--tokenize");
       // rc.42 F1 — enforce "zero cloud calls during serve" for the HTTP transport too
       // (bearer-reachable embeddings_search / reranker). Set offline before any load.
       setEmbeddingsOffline();
@@ -408,7 +431,8 @@ export async function main(invocation?: ConfigInput["invocation"]): Promise<void
       // v2.17.0 — fail fast on a typo'd quantization mode.
       const quantMode = parseQuantizationMode(opts.quantizeEmbeddings as string | undefined);
       const httpOpts = {
-        ...(opts as ServeOptions),
+        ...httpBaseOpts,
+        ...(tokenize !== undefined ? { tokenize } : {}),
         ...(quantMode !== undefined ? { quantizeEmbeddings: quantMode } : {}),
         port: portNum,
         host: opts.host ?? "127.0.0.1",
@@ -475,7 +499,7 @@ export async function main(invocation?: ConfigInput["invocation"]): Promise<void
       const indexFile = opts.indexFile ?? defaultIndexFile(vault.root);
       // SAFE BY DESIGN (v3.6.4 K-1 invariant): `clearOnDisk()` only deletes
       // files. It never calls `.open()` → no `bootstrapSchema()` → no DROP
-      // TABLE risk. Peek-before-open does not apply.
+      // TABLE risk. Configuration discovery before open does not apply.
       const idx = new FtsIndex({ file: indexFile, vaultRoot: vault.root });
       const removed = await idx.clearOnDisk();
       if (removed) {
@@ -508,13 +532,16 @@ export async function main(invocation?: ConfigInput["invocation"]): Promise<void
       await v.ensureExists();
       const limit = parsePositiveInt(opts.limit ?? "10", "--limit");
       const indexFile = opts.indexFile ?? defaultIndexFile(v.root);
-      // Peek tokenize_mode before constructing (v3.6.4 K-1: never DROP TABLE on
-      // a mismatch) — identical to the `eval` command's safe-open pattern.
-      const peeked = await peekFtsMetaSafe(indexFile);
-      const honoredTokenize: TokenizeMode = peeked?.tokenize_mode ?? "unicode61";
+      // Discover the full admitted configuration before constructing (v3.6.4
+      // K-1: never DROP TABLE on a mismatch) — identical to `eval`.
+      const discovered = await discoverFtsIndexConfig(indexFile, v.root);
+      if (discovered.kind === "refused") {
+        throw new Error("FTS index configuration could not be verified");
+      }
+      const honoredTokenize: TokenizeMode = discovered.kind === "owned" ? discovered.meta.tokenize_mode : "unicode61";
       const ftsIndex = new FtsIndex({ file: indexFile, vaultRoot: v.root, tokenize: honoredTokenize });
       try {
-        await ftsIndex.open();
+        await ftsIndex.open(discovered);
         await syncFtsIndex(v, ftsIndex);
         const result = await searchHybrid(v, { query: text, limit }, { ftsIndex, embedFile: embedDbPath(v.root) });
         if (opts.json) {
@@ -626,33 +653,38 @@ export async function main(invocation?: ConfigInput["invocation"]): Promise<void
       async (opts: {
         vault: string;
         indexFile?: string;
-        tokenize?: "unicode61" | "trigram";
+        tokenize?: string;
         includePdfs?: boolean;
         excludeGlob?: string[];
         readPaths?: string[];
       }) => {
+        const requestedTokenize =
+          opts.tokenize === undefined ? undefined : assertTokenizeMode(opts.tokenize, "--tokenize");
         const vault = new Vault(opts.vault, { excludeGlobs: opts.excludeGlob, readPaths: opts.readPaths });
         await vault.ensureExists();
         const indexFile = opts.indexFile ?? defaultIndexFile(vault.root);
+        const discovered = await discoverFtsIndexConfig(indexFile, vault.root);
+        if (discovered.kind === "refused") {
+          throw new Error("FTS index configuration could not be verified");
+        }
         // v3.6.4 K-1 closure: if user passed --tokenize, honor user's intent.
-        // If not passed, peek existing to avoid silently rebuilding (which
+        // If not passed, honor an admitted existing configuration to avoid silently rebuilding (which
         // would destroy a `--tokenize trigram`-built index when user just
         // wanted to refresh content). To force a rebuild with different
         // tokenize, pass --tokenize explicitly.
         let tokenize: TokenizeMode;
-        if (opts.tokenize === "trigram" || opts.tokenize === "unicode61") {
-          tokenize = opts.tokenize;
+        if (requestedTokenize !== undefined) {
+          tokenize = requestedTokenize;
         } else {
-          const peeked = await peekFtsMetaSafe(indexFile);
-          tokenize = peeked?.tokenize_mode ?? "unicode61";
-          if (peeked?.tokenize_mode === "trigram") {
+          tokenize = discovered.kind === "owned" ? discovered.meta.tokenize_mode : "unicode61";
+          if (discovered.kind === "owned" && discovered.meta.tokenize_mode === "trigram") {
             process.stderr.write(
               `enquire index: honoring existing tokenize_mode=trigram (pass --tokenize unicode61 to rebuild)\n`
             );
           }
         }
         const idx = new FtsIndex({ file: indexFile, vaultRoot: vault.root, tokenize });
-        await idx.open();
+        await idx.open(discovered);
         try {
           const report = await syncFtsIndex(vault, idx);
           process.stdout.write(
@@ -823,32 +855,39 @@ export async function main(invocation?: ConfigInput["invocation"]): Promise<void
         const vault = new Vault(opts.vault, { excludeGlobs: opts.excludeGlob, readPaths: opts.readPaths });
         await vault.ensureExists();
         const embedFile = opts.embedFile ?? embedDbPath(vault.root);
-        await assertEmbeddingWriterGuardClear(embedFile, "build-embeddings", opts.embedFile !== undefined);
-        // v3.6.4 K-1 closure: peek existing embed-db before constructing
+        await assertEmbeddingWriterGuardClear(embedFile, vault.root, "build-embeddings", opts.embedFile !== undefined);
+        // v3.6.4 K-1 closure: discover the admitted embed-db configuration before constructing
         // EmbedDb. If user didn't explicitly pass --embedding-model /
         // --quantize-embeddings, honor the existing config to avoid silent
         // rebuild (which destroys the user's pre-built data). To force a
         // switch, pass the explicit flag.
         const explicitModel = command.getOptionValueSource("embeddingModel") === "cli";
         const explicitQuant = command.getOptionValueSource("quantizeEmbeddings") === "cli";
-        const peeked = await peekEmbedDbMeta(embedFile);
+        const discovered = await discoverEmbedDbConfig(embedFile, vault.root);
+        if (discovered.kind === "refused") {
+          throw new Error("Embedding index configuration could not be verified");
+        }
         const requestedModel = resolveModel(opts.embeddingModel);
         let model = requestedModel;
-        if (!explicitModel && peeked?.model_alias) {
-          const honored = resolveModel(peeked.model_alias);
+        const storedConfiguration =
+          discovered.kind === "owned" && !(explicitModel && explicitQuant)
+            ? resolveStoredEmbeddingConfiguration(discovered.meta)
+            : null;
+        if (!explicitModel && storedConfiguration) {
+          const honored = storedConfiguration.model;
           if (honored.alias !== requestedModel.alias) {
             process.stderr.write(
-              `enquire build-embeddings: honoring existing model_alias=${peeked.model_alias} (pass --embedding-model to override)\n`
+              `enquire build-embeddings: honoring existing model_alias=${honored.alias} (pass --embedding-model to override)\n`
             );
             model = honored;
           }
         }
         const requestedQuant = parseQuantizationMode(opts.quantizeEmbeddings) ?? "f32";
         let quantization = requestedQuant;
-        if (!explicitQuant && peeked?.quantization && peeked.quantization !== requestedQuant) {
-          quantization = peeked.quantization === "int8" ? "int8" : "f32";
+        if (!explicitQuant && storedConfiguration && storedConfiguration.quantization !== requestedQuant) {
+          quantization = storedConfiguration.quantization;
           process.stderr.write(
-            `enquire build-embeddings: honoring existing quantization=${peeked.quantization} (pass --quantize-embeddings to override)\n`
+            `enquire build-embeddings: honoring existing quantization=${storedConfiguration.quantization} (pass --quantize-embeddings to override)\n`
           );
         }
         const db = new EmbedDb({
@@ -862,7 +901,7 @@ export async function main(invocation?: ConfigInput["invocation"]): Promise<void
           opts.lateChunkContext !== undefined
             ? Math.max(0, parsePositiveInt(opts.lateChunkContext, "--late-chunk-context"))
             : 0;
-        await db.open();
+        await db.open(discovered);
         try {
           process.stderr.write(`enquire: loading embedder ${model.alias} (${model.hfId})...\n`);
           const embedder = await loadEmbedder(model.alias);
@@ -896,7 +935,7 @@ export async function main(invocation?: ConfigInput["invocation"]): Promise<void
       // SAFE BY DESIGN (v3.6.4 K-1 invariant): `clearOnDisk()` only deletes
       // files. It never calls `.open()` → no `bootstrapSchema()` → no DROP
       // TABLE risk. Dummy `modelAlias`/`dim` are never consulted because
-      // we never construct the schema. Peek-before-open does not apply.
+      // we never construct the schema. Configuration discovery before open does not apply.
       const db = new EmbedDb({ file, vaultRoot: vault.root, modelAlias: "n/a", dim: 1 });
       const removed = await db.clearOnDisk();
       if (removed) {
@@ -906,13 +945,13 @@ export async function main(invocation?: ConfigInput["invocation"]): Promise<void
       }
     });
 
-  // v2.11.0 — diagnostic + onboarding. `doctor` preserves SQLite source state
-  // and returns 0 if the selected capability tier is structurally ready.
+  // v2.11.0 — diagnostic + onboarding. `doctor` preserves logical SQLite
+  // schema/content and returns 0 if the selected tier is structurally ready.
   // `setup` runs the install + build sequence in order, idempotent.
   program
     .command("doctor")
     .description(
-      "Run a source-state-preserving health check for a capability tier: basic (live scan), hybrid (FTS5 + embeddings + reranker + HNSW), or hybrid-live (hybrid + PDFs/watch). Every tier verifies that no incomplete watcher startup interlock blocks serving. SQLite indexes are inspected from in-memory snapshots: doctor does not write their contents/schema or create sidecars (ordinary reads may update OS access-time metadata). Structural/runtime READY does not certify index freshness or complete PDF coverage."
+      "Run a logical-content-preserving health check for a capability tier: basic (live scan), hybrid (FTS5 + embeddings + reranker + HNSW), or hybrid-live (hybrid + PDFs/watch). Every tier verifies that no incomplete watcher startup interlock blocks serving. Index-health checks use in-memory SQLite snapshots; stranded-guard recovery guidance separately performs read-only full-class ownership admission, whose SQLite/VFS open may update recovery or WAL/SHM bookkeeping. Doctor does not issue schema/content writes. Structural/runtime READY does not certify index freshness or complete PDF coverage."
     )
     .requiredOption("--vault <path>", "Path to the Obsidian vault root")
     .option("--tier <tier>", CONFIG_TIER_HELP)
@@ -1270,24 +1309,42 @@ export async function main(invocation?: ConfigInput["invocation"]): Promise<void
         const v = new Vault(opts.vault, { excludeGlobs: opts.excludeGlob, readPaths: opts.readPaths });
         await v.ensureExists();
         const embedFile = embedDbPath(v.root);
-        await assertEmbeddingWriterGuardClear(embedFile, "setup");
-        process.stdout.write(`enquire setup — ${opts.vault}\n\n`);
-
-        // Step 1: FTS5 index.
-        process.stdout.write(">> Step 1/3: Cold-build FTS5 index\n");
+        await assertEmbeddingWriterGuardClear(embedFile, v.root, "setup");
         const indexFile = defaultIndexFile(v.root);
         // v3.6.4 K-1 closure (setup is idempotent per its description):
         // honor existing tokenize_mode so re-running `setup` on a vault
         // built with `--tokenize trigram` doesn't silently downgrade to
         // unicode61. The setup command has no `--tokenize` flag, so the
         // user's only way to "switch" is to clear-index first.
-        const peekedFts = await peekFtsMetaSafe(indexFile);
-        const setupTokenize: TokenizeMode = peekedFts?.tokenize_mode ?? "unicode61";
-        if (peekedFts?.tokenize_mode === "trigram") {
+        const discoveredFts = await discoverFtsIndexConfig(indexFile, v.root);
+        if (discoveredFts.kind === "refused") {
+          throw new Error("FTS index configuration could not be verified");
+        }
+        // When this invocation will write embeddings, resolve the complete
+        // expected-root configuration before emitting progress or opening FTS.
+        // `--skip-embeddings` is not an embedding writer and deliberately avoids
+        // adopting an unrelated EmbedDb configuration decision.
+        const explicitEmbedModel = command.getOptionValueSource("embeddingModel") === "cli";
+        const explicitQuant = command.getOptionValueSource("quantizeEmbeddings") === "cli";
+        const discoveredEmbed = opts.skipEmbeddings ? null : await discoverEmbedDbConfig(embedFile, v.root);
+        if (discoveredEmbed?.kind === "refused") {
+          throw new Error("Embedding index configuration could not be verified");
+        }
+        const storedConfiguration =
+          discoveredEmbed?.kind === "owned" && !(explicitEmbedModel && explicitQuant)
+            ? resolveStoredEmbeddingConfiguration(discoveredEmbed.meta)
+            : null;
+        process.stdout.write(`enquire setup — ${opts.vault}\n\n`);
+
+        // Step 1: FTS5 index.
+        process.stdout.write(">> Step 1/3: Cold-build FTS5 index\n");
+        const setupTokenize: TokenizeMode =
+          discoveredFts.kind === "owned" ? discoveredFts.meta.tokenize_mode : "unicode61";
+        if (discoveredFts.kind === "owned" && discoveredFts.meta.tokenize_mode === "trigram") {
           process.stdout.write(`   (honoring existing tokenize_mode=trigram — run clear-index then setup to reset)\n`);
         }
         const idx = new FtsIndex({ file: indexFile, vaultRoot: v.root, tokenize: setupTokenize });
-        await idx.open();
+        await idx.open(discoveredFts);
         try {
           const ftsReport = await syncFtsIndex(v, idx);
           process.stdout.write(
@@ -1329,32 +1386,32 @@ export async function main(invocation?: ConfigInput["invocation"]): Promise<void
           );
           return;
         }
+        if (discoveredEmbed === null) {
+          throw new Error("Embedding index configuration could not be verified");
+        }
 
-        // v3.6.4 K-1 closure: peek existing embed-db BEFORE loading the
+        // v3.6.4 K-1 closure: discover the admitted embed-db configuration BEFORE loading the
         // embedder so step 2 loads the right model. setup is idempotent
         // per its description — re-running on a vault built with
         // `--embedding-model bge` must NOT silently rebuild as
         // multilingual. Honor existing model unless user passed
         // --embedding-model explicitly on the CLI.
-        const explicitEmbedModel = command.getOptionValueSource("embeddingModel") === "cli";
-        const explicitQuant = command.getOptionValueSource("quantizeEmbeddings") === "cli";
-        const peekedEmbed = await peekEmbedDbMeta(embedFile);
         const requestedModel = resolveModel(opts.embeddingModel);
         let setupModel = requestedModel;
-        if (!explicitEmbedModel && peekedEmbed?.model_alias) {
-          setupModel = resolveModel(peekedEmbed.model_alias);
+        if (!explicitEmbedModel && storedConfiguration) {
+          setupModel = storedConfiguration.model;
           if (setupModel.alias !== requestedModel.alias) {
             process.stdout.write(
-              `   (note: existing embed-db built with ${peekedEmbed.model_alias}; honoring it — pass --embedding-model to override)\n`
+              `   (note: existing embed-db built with ${setupModel.alias}; honoring it — pass --embedding-model to override)\n`
             );
           }
         }
         const requestedQuant = parseQuantizationMode(opts.quantizeEmbeddings) ?? "f32";
         let quantization = requestedQuant;
-        if (!explicitQuant && peekedEmbed?.quantization && peekedEmbed.quantization !== requestedQuant) {
-          quantization = peekedEmbed.quantization === "int8" ? "int8" : "f32";
+        if (!explicitQuant && storedConfiguration && storedConfiguration.quantization !== requestedQuant) {
+          quantization = storedConfiguration.quantization;
           process.stdout.write(
-            `   (note: existing embed-db built with quantization=${peekedEmbed.quantization}; honoring it — pass --quantize-embeddings to override)\n`
+            `   (note: existing embed-db built with quantization=${storedConfiguration.quantization}; honoring it — pass --quantize-embeddings to override)\n`
           );
         }
 
@@ -1381,7 +1438,7 @@ export async function main(invocation?: ConfigInput["invocation"]): Promise<void
           dim: setupModel.dim,
           quantization
         });
-        await db.open();
+        await db.open(discoveredEmbed);
         try {
           const embReport = await syncEmbedDb(v, db, embedder);
           process.stdout.write(
@@ -1479,15 +1536,19 @@ export async function main(invocation?: ConfigInput["invocation"]): Promise<void
         if (opts.persistentIndex) {
           const indexFile = defaultIndexFile(v.root);
           // v3.6.4 K-1 closure (eval = diagnostic, MUST never destroy):
-          // peek existing tokenize_mode before constructing. Without peek,
+          // discover the admitted tokenize_mode before constructing. Without discovery,
           // an eval run against a `--tokenize trigram`-built index would
           // silently DROP TABLE because the default `unicode61` mismatches.
           // Same historical K-1 class; doctor now uses immutable byte snapshots.
-          const peeked = await peekFtsMetaSafe(indexFile);
-          const honoredTokenize: TokenizeMode = peeked?.tokenize_mode ?? "unicode61";
+          const discovered = await discoverFtsIndexConfig(indexFile, v.root);
+          if (discovered.kind === "refused") {
+            throw new Error("FTS index configuration could not be verified");
+          }
+          const honoredTokenize: TokenizeMode =
+            discovered.kind === "owned" ? discovered.meta.tokenize_mode : "unicode61";
           ftsIndex = new FtsIndex({ file: indexFile, vaultRoot: v.root, tokenize: honoredTokenize });
           try {
-            await ftsIndex.open();
+            await ftsIndex.open(discovered);
             await syncFtsIndex(v, ftsIndex);
           } catch (err) {
             ftsIndex.close();

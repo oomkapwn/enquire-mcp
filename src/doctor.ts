@@ -1,16 +1,19 @@
-// Tier-aware, source-state-preserving project health diagnostics for enquire-mcp.
+// Tier-aware, logical-content-preserving project health diagnostics for enquire-mcp.
 //
 // `doctor` classifies prerequisites for basic, hybrid, or hybrid-live and
 // returns structured checks plus a tier-relative readiness verdict. SQLite
-// sources are copied into memory and inspected there: the diagnostic never
-// invokes migration-capable index openers and never lets SQLite touch a source
-// path. Readiness is structural/runtime capability, not proof that an index is
-// fresh or that every current vault document was indexed.
+// health sources are copied into memory and inspected there. Stranded-guard
+// recovery guidance separately performs a full-class, root-scoped read-only
+// admission on the candidate embedding database before it may print a cleanup
+// command. The diagnostic never invokes migration-capable index openers.
+// Readiness is structural/runtime capability, not proof that an index is fresh
+// or that every current vault document was indexed.
 
 import { Buffer } from "node:buffer";
 import { constants, type Dirent, promises as fs, type Stats } from "node:fs";
 import type { FileHandle } from "node:fs/promises";
 import * as path from "node:path";
+import { assertEmbedDbRecoveryOwnership } from "./embed-db.js";
 import {
   DEFAULT_MODEL_ALIAS,
   DEFAULT_RERANKER_ALIAS,
@@ -887,7 +890,7 @@ function unverifiedStatus(): CheckStatus {
   return "unverified";
 }
 
-/** Options accepted by the source-state-preserving project health diagnostic. */
+/** Options accepted by the logical-content-preserving project health diagnostic. */
 export interface RunDoctorOptions {
   /** Path to the Obsidian vault root. */
   vault: string;
@@ -1074,6 +1077,10 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
         `shapes. If it refuses, inspect ${shellQuote(guardPath, opts.repairCommandPlatform)} without following ` +
         "it and remove it only after a manual ownership audit; then rerun the same recovery command and rebuild " +
         "with the same model, quantization, late-chunk, privacy and PDF settings.";
+      const ownershipAudit =
+        "Manual ownership inspection is required before any destructive recovery. Keep the watcher activation " +
+        "guard in place until the embedding database has been proven to be an exact supported Enquire store " +
+        "for this vault.";
 
       try {
         const guardStat = await fs.lstat(guardPath);
@@ -1084,13 +1091,21 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
             : guardStat.isFile()
               ? "file"
               : "special object";
+        let hint = ownershipAudit;
+        try {
+          await assertEmbedDbRecoveryOwnership(embedFile, vault.root);
+          hint = `Stop every enquire-mcp process using this vault; run ${recoveryCommand}. ${manualAudit}`;
+        } catch {
+          // Refused, empty, future, malformed, unreadable, and close-failing
+          // databases expose neither paths nor destructive recovery guidance.
+        }
         checks.push({
           id,
           label,
           status: required ? "error" : "warn",
           required,
           detail: `stranded ${objectKind} ${blockedDetail}`,
-          hint: `Stop every enquire-mcp process using this vault; run ${recoveryCommand}. ${manualAudit}`
+          hint
         });
       } catch (error) {
         if (isMissingPathError(error)) {

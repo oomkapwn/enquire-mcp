@@ -9,12 +9,18 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  assertEmbedDbRecoveryOwnership,
+  clearPeekCache,
   decodeInt8Vector,
+  discoverEmbedDbConfig,
+  discoverEmbedDbConfigCached,
   EmbedDb,
   encodeInt8Vector,
   openEmbedReceiptReader,
-  peekEmbedDbMeta
+  peekEmbedDbMeta,
+  peekEmbedDbMetaCached
 } from "../src/embed-db.js";
+import { EMBED_DB_SCHEMA_VERSION } from "../src/schema-contract.js";
 
 let dir: string;
 
@@ -39,6 +45,90 @@ function l2(v: number[]): Float32Array {
   return new Float32Array(v.map((x) => x / (n || 1)));
 }
 
+async function exactEmbedLogicalSnapshot(file: string): Promise<unknown> {
+  const Database = (await import("better-sqlite3")).default;
+  const raw = new Database(file, { readonly: true, fileMustExist: true });
+  try {
+    return {
+      schema: raw
+        .prepare(
+          `SELECT type, name, tbl_name, sql
+           FROM sqlite_master
+           WHERE name NOT GLOB 'sqlite_*'
+           ORDER BY type, name`
+        )
+        .all(),
+      meta: raw.prepare("SELECT key, value FROM meta ORDER BY key").all(),
+      embeddings: raw
+        .prepare(
+          `SELECT id, rel_path, chunk_index, line_start, line_end, text_preview,
+                  hex(vector) AS vector_hex, kind
+           FROM embeddings
+           ORDER BY id`
+        )
+        .all(),
+      sourceState: raw.prepare("SELECT * FROM source_state ORDER BY rel_path").all(),
+      sourceQuarantine: raw.prepare("SELECT * FROM source_quarantine ORDER BY rel_path, kind").all(),
+      sourceRevision: raw.prepare("SELECT * FROM source_revision ORDER BY rel_path, kind").all()
+    };
+  } finally {
+    raw.close();
+  }
+}
+
+async function expectPathFreeEmbedOwnershipRefusal(file: string, vaultRoot: string, before: unknown): Promise<void> {
+  const refused = new EmbedDb({ file, vaultRoot, modelAlias: "multilingual", dim: 4 });
+  let error: unknown;
+  try {
+    await refused.open();
+  } catch (caught) {
+    error = caught;
+  } finally {
+    refused.close();
+  }
+  expect(error).toBeInstanceOf(Error);
+  const message = error instanceof Error ? error.message : String(error);
+  expect(message).toMatch(/ownership could not be verified/);
+  expect(message).not.toContain(file);
+  expect(message).not.toContain(vaultRoot);
+  expect(await exactEmbedLogicalSnapshot(file)).toEqual(before);
+}
+
+async function expectPathFreeRecoveryOwnershipRefusal(file: string, vaultRoot: string): Promise<void> {
+  let error: unknown;
+  try {
+    await assertEmbedDbRecoveryOwnership(file, vaultRoot);
+  } catch (caught) {
+    error = caught;
+  }
+  expect(error).toBeInstanceOf(Error);
+  const message = error instanceof Error ? error.message : String(error);
+  expect(message).toBe("Embedding index ownership could not be verified");
+  expect(message).not.toContain(file);
+  expect(message).not.toContain(vaultRoot);
+}
+
+async function seedExactEmbedFile(file: string, relPath: string): Promise<void> {
+  const seed = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
+  await seed.open();
+  try {
+    seed.upsertNote(relPath, 1, [
+      { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: relPath, vector: l2([1, 0, 0, 0]) }
+    ]);
+  } finally {
+    seed.close();
+  }
+}
+
+const DROP_EMBED_REVISION_TRIGGERS_SQL = `
+  DROP TRIGGER embed_source_state_revision_insert;
+  DROP TRIGGER embed_source_state_revision_update;
+  DROP TRIGGER embed_source_state_revision_delete;
+  DROP TRIGGER embed_source_quarantine_revision_insert;
+  DROP TRIGGER embed_source_quarantine_revision_update;
+  DROP TRIGGER embed_source_quarantine_revision_delete;
+`;
+
 describe("EmbedDb", () => {
   it("opens, closes, and reopens cleanly with the same meta", async () => {
     const file = path.join(dir, "test.embed.db");
@@ -50,10 +140,340 @@ describe("EmbedDb", () => {
     expect(db1.totalChunks()).toBe(1);
     db1.close();
 
+    const rawMeta = await peekEmbedDbMeta(file);
+    expect(rawMeta).toEqual(expect.objectContaining({ vault_root: "/v1", model_alias: "multilingual", dim: "4" }));
+    expect(await peekEmbedDbMeta(file, "/v1")).toEqual(rawMeta);
+    expect(await peekEmbedDbMeta(file, "/foreign")).toBeNull();
+    const ownedDiscovery = await discoverEmbedDbConfig(file, "/v1");
+    expect(ownedDiscovery.kind).toBe("owned");
+    if (ownedDiscovery.kind !== "owned") throw new Error("expected owned embedding discovery");
+    expect(ownedDiscovery.meta).toEqual(rawMeta);
+    expect(await discoverEmbedDbConfig(file, "/foreign")).toEqual({ kind: "refused" });
+    await expect(assertEmbedDbRecoveryOwnership(file, "/v1")).resolves.toBeUndefined();
+
+    // Cache the raw bounded result, never the first caller's filtered view:
+    // foreign -> owner and owner -> foreign must both remain root-scoped.
+    clearPeekCache();
+    expect(await peekEmbedDbMetaCached(file, "/foreign")).toBeNull();
+    expect(await peekEmbedDbMetaCached(file, "/v1")).toEqual(rawMeta);
+    clearPeekCache();
+    expect(await peekEmbedDbMetaCached(file, "/v1")).toEqual(rawMeta);
+    expect(await peekEmbedDbMetaCached(file, "/foreign")).toBeNull();
+
+    // The production discovery cache has its own root-scoped keyspace: a
+    // refused lookup cannot poison the owner, the owner cannot launder a
+    // foreign lookup, and legacy raw cache entries cannot affect either.
+    clearPeekCache();
+    expect(await discoverEmbedDbConfigCached(file, "/foreign")).toEqual({ kind: "refused" });
+    const cachedOwnerAfterForeign = await discoverEmbedDbConfigCached(file, "/v1");
+    expect(cachedOwnerAfterForeign.kind).toBe("owned");
+    clearPeekCache();
+    const cachedOwnerFirst = await discoverEmbedDbConfigCached(file, "/v1");
+    expect(cachedOwnerFirst.kind).toBe("owned");
+    if (cachedOwnerFirst.kind !== "owned") throw new Error("expected cached owner before mutation");
+    (cachedOwnerFirst.meta as { model_alias: string }).model_alias = "poisoned-return-value";
+    const cachedOwnerAfterReturnedMutation = await discoverEmbedDbConfigCached(file, "/v1");
+    expect(cachedOwnerAfterReturnedMutation.kind).toBe("owned");
+    if (cachedOwnerAfterReturnedMutation.kind !== "owned") {
+      throw new Error("expected cached owner after returned mutation");
+    }
+    expect(cachedOwnerAfterReturnedMutation.meta.model_alias).toBe("multilingual");
+    expect(await discoverEmbedDbConfigCached(file, "/foreign")).toEqual({ kind: "refused" });
+    clearPeekCache();
+    expect(await peekEmbedDbMetaCached(file)).toEqual(rawMeta);
+    expect(await discoverEmbedDbConfigCached(file, "/foreign")).toEqual({ kind: "refused" });
+    expect((await discoverEmbedDbConfigCached(file, "/v1")).kind).toBe("owned");
+
     const db2 = new EmbedDb({ file, vaultRoot: "/v1", modelAlias: "multilingual", dim: 4 });
     await db2.open();
     expect(db2.totalChunks()).toBe(1);
     db2.close();
+
+    const Database = (await import("better-sqlite3")).default;
+
+    // A committed config change can live only in an active WAL while the main
+    // database's mtime and size remain identical. Presence/mtime/size of the
+    // WAL must therefore participate in the cache fingerprint, or an owned
+    // snapshot for the old config survives this mutation.
+    const walWriter = new Database(file);
+    try {
+      walWriter.pragma("journal_mode = WAL");
+      walWriter.pragma("wal_autocheckpoint = 0");
+      walWriter.prepare("UPDATE meta SET value = 'bge' WHERE key = 'model_alias'").run();
+      walWriter.prepare("UPDATE meta SET value = 'multilingual' WHERE key = 'model_alias'").run();
+      walWriter.pragma("wal_checkpoint(TRUNCATE)");
+
+      // A transient close/read refusal is not a stable property of this
+      // unchanged main+WAL fingerprint. If `refused` enters the LRU, the
+      // second call below remains refused after the one-shot failure is gone.
+      const readDiscoveryFingerprint = async () => {
+        const main = await fs.lstat(file);
+        const wal = await fs
+          .lstat(`${file}-wal`)
+          .then((stat) => ({ mtimeMs: stat.mtimeMs, size: stat.size }))
+          .catch(() => null);
+        return { mainMtimeMs: main.mtimeMs, mainSize: main.size, wal };
+      };
+      type TransientCloseHandle = { readonly name: string };
+      type TransientClosePrototype = { close(this: TransientCloseHandle): void };
+      const transientClosePrototype = Database.prototype as unknown as TransientClosePrototype;
+      const originalTransientClose = transientClosePrototype.close;
+      let transientCloseFailures = 0;
+      transientClosePrototype.close = function (this: TransientCloseHandle): void {
+        const inject = this.name === file && transientCloseFailures === 0;
+        originalTransientClose.call(this);
+        if (inject) {
+          transientCloseFailures++;
+          throw new Error(`one-shot close failure at ${file}`);
+        }
+      };
+      clearPeekCache();
+      const transientFingerprintBefore = await readDiscoveryFingerprint();
+      let transientRefusal: Awaited<ReturnType<typeof discoverEmbedDbConfigCached>> = { kind: "refused" };
+      try {
+        transientRefusal = await discoverEmbedDbConfigCached(file, "/v1");
+      } finally {
+        transientClosePrototype.close = originalTransientClose;
+      }
+      const transientFingerprintAfter = await readDiscoveryFingerprint();
+      expect(transientCloseFailures).toBe(1);
+      expect(transientRefusal).toEqual({ kind: "refused" });
+      expect(transientFingerprintAfter).toEqual(transientFingerprintBefore);
+      const recoveredAfterTransientRefusal = await discoverEmbedDbConfigCached(file, "/v1");
+      expect(recoveredAfterTransientRefusal.kind).toBe("owned");
+      if (recoveredAfterTransientRefusal.kind !== "owned") {
+        throw new Error("expected owner after transient cached refusal");
+      }
+      expect(recoveredAfterTransientRefusal.meta.model_alias).toBe("multilingual");
+
+      clearPeekCache();
+      const cachedBeforeWalChange = await discoverEmbedDbConfigCached(file, "/v1");
+      expect(cachedBeforeWalChange.kind).toBe("owned");
+      if (cachedBeforeWalChange.kind !== "owned") throw new Error("expected cached owner before WAL change");
+      expect(cachedBeforeWalChange.meta.model_alias).toBe("multilingual");
+      const mainBeforeWalChange = await fs.lstat(file);
+      const walBeforeChange = await fs.lstat(`${file}-wal`);
+
+      walWriter.prepare("UPDATE meta SET value = 'bge' WHERE key = 'model_alias'").run();
+      const mainAfterWalChange = await fs.lstat(file);
+      const walAfterChange = await fs.lstat(`${file}-wal`);
+      expect({ mtimeMs: mainAfterWalChange.mtimeMs, size: mainAfterWalChange.size }).toEqual({
+        mtimeMs: mainBeforeWalChange.mtimeMs,
+        size: mainBeforeWalChange.size
+      });
+      expect({ mtimeMs: walAfterChange.mtimeMs, size: walAfterChange.size }).not.toEqual({
+        mtimeMs: walBeforeChange.mtimeMs,
+        size: walBeforeChange.size
+      });
+
+      const cachedAfterWalChange = await discoverEmbedDbConfigCached(file, "/v1");
+      expect(cachedAfterWalChange.kind).toBe("owned");
+      if (cachedAfterWalChange.kind !== "owned") throw new Error("expected cached owner after WAL change");
+      expect(cachedAfterWalChange.meta.model_alias).toBe("bge");
+
+      walWriter.prepare("UPDATE meta SET value = 'multilingual' WHERE key = 'model_alias'").run();
+      const cachedAfterWalRestore = await discoverEmbedDbConfigCached(file, "/v1");
+      expect(cachedAfterWalRestore.kind).toBe("owned");
+      if (cachedAfterWalRestore.kind !== "owned") throw new Error("expected cached owner after WAL restore");
+      expect(cachedAfterWalRestore.meta.model_alias).toBe("multilingual");
+    } finally {
+      walWriter.close();
+    }
+
+    const malformedMeta = new Database(file);
+    malformedMeta.prepare("INSERT INTO meta (key, value) VALUES ('foreign_key', 'foreign')").run();
+    malformedMeta.close();
+    const malformedStat = await fs.stat(file);
+    await fs.utimes(file, new Date(malformedStat.atimeMs), new Date(malformedStat.mtimeMs + 2_000));
+    expect(await peekEmbedDbMeta(file, "/v1")).toBeNull();
+    expect(await discoverEmbedDbConfigCached(file, "/v1")).toEqual({ kind: "refused" });
+
+    const oversizedMeta = new Database(file);
+    oversizedMeta.prepare("DELETE FROM meta WHERE key = 'foreign_key'").run();
+    oversizedMeta.prepare("UPDATE meta SET value = ? WHERE key = 'model_alias'").run("x".repeat(8_193));
+    oversizedMeta.close();
+    expect(await peekEmbedDbMeta(file, "/v1")).toBeNull();
+
+    // A pre-existing zero-byte file and a non-zero SQLite file with an exact
+    // empty logical schema are safe fresh-config candidates. Legacy peek keeps
+    // returning null, while discriminated production discovery alone exposes
+    // the causal `empty` state without writing either artifact.
+    const zeroByteFile = path.join(dir, "zero-byte.embed.db");
+    await fs.writeFile(zeroByteFile, "");
+    const zeroByteBefore = await fs.readFile(zeroByteFile);
+    expect(await discoverEmbedDbConfig(zeroByteFile, "/v1")).toEqual({ kind: "empty" });
+    expect(await discoverEmbedDbConfigCached(zeroByteFile, "/v1")).toEqual({ kind: "empty" });
+    expect(await peekEmbedDbMeta(zeroByteFile)).toBeNull();
+    expect(await peekEmbedDbMeta(zeroByteFile, "/v1")).toBeNull();
+    expect(await fs.readFile(zeroByteFile)).toEqual(zeroByteBefore);
+
+    const schemaEmptyFile = path.join(dir, "schema-empty.embed.db");
+    const schemaEmptySetup = new Database(schemaEmptyFile);
+    schemaEmptySetup.exec(`
+      CREATE TABLE transient_probe (value BLOB NOT NULL);
+      DROP TABLE transient_probe;
+    `);
+    schemaEmptySetup.close();
+    expect((await fs.stat(schemaEmptyFile)).size).toBeGreaterThan(0);
+    expect(await discoverEmbedDbConfig(schemaEmptyFile, "/v1")).toEqual({ kind: "empty" });
+    const inspectSchemaEmpty = new Database(schemaEmptyFile, { readonly: true, fileMustExist: true });
+    try {
+      expect(
+        inspectSchemaEmpty.prepare("SELECT type, name, sql FROM sqlite_master WHERE name NOT GLOB 'sqlite_*'").all()
+      ).toEqual([]);
+    } finally {
+      inspectSchemaEmpty.close();
+    }
+
+    const logicalInventory = (candidateFile: string) => {
+      const raw = new Database(candidateFile, { readonly: true, fileMustExist: true });
+      try {
+        return raw
+          .prepare("SELECT type, name, sql FROM sqlite_master WHERE name NOT GLOB 'sqlite_*' ORDER BY type, name")
+          .all();
+      } finally {
+        raw.close();
+      }
+    };
+    const expectDiscoveryStateRefusal = async (
+      candidateFile: string,
+      expected: Awaited<ReturnType<typeof discoverEmbedDbConfig>>
+    ) => {
+      const candidate = new EmbedDb({
+        file: candidateFile,
+        vaultRoot: "/v1",
+        modelAlias: "multilingual",
+        dim: 4
+      });
+      const error = await candidate.open(expected).then(
+        () => null,
+        (caught: unknown) => caught
+      );
+      candidate.close();
+      expect(error).toBeInstanceOf(Error);
+      const message = error instanceof Error ? error.message : "";
+      expect(message).toBe("Embedding index configuration changed before open");
+      expect(message).not.toContain(candidateFile);
+      expect(message).not.toContain("/v1");
+    };
+
+    // Bind all four preflight states: missing and present-empty cannot
+    // substitute for one another, while refused never becomes write authority
+    // merely because the path later becomes empty.
+    const missingThenEmpty = path.join(dir, "missing-then-empty.embed.db");
+    const expectedMissing = await discoverEmbedDbConfig(missingThenEmpty, "/v1");
+    expect(expectedMissing).toEqual({ kind: "missing" });
+    new Database(missingThenEmpty).close();
+    await expectDiscoveryStateRefusal(missingThenEmpty, expectedMissing);
+    expect(logicalInventory(missingThenEmpty)).toEqual([]);
+
+    const emptyThenMissing = path.join(dir, "empty-then-missing.embed.db");
+    new Database(emptyThenMissing).close();
+    const expectedEmpty = await discoverEmbedDbConfig(emptyThenMissing, "/v1");
+    expect(expectedEmpty).toEqual({ kind: "empty" });
+    await fs.unlink(emptyThenMissing);
+    await expectDiscoveryStateRefusal(emptyThenMissing, expectedEmpty);
+    expect(logicalInventory(emptyThenMissing)).toEqual([]);
+
+    const refusedThenEmpty = path.join(dir, "refused-then-empty.embed.db");
+    const refusedSetup = new Database(refusedThenEmpty);
+    refusedSetup.exec("CREATE TABLE foreign_payload (value BLOB NOT NULL)");
+    refusedSetup.close();
+    const expectedRefused = await discoverEmbedDbConfig(refusedThenEmpty, "/v1");
+    expect(expectedRefused).toEqual({ kind: "refused" });
+    const refusedCleanup = new Database(refusedThenEmpty);
+    refusedCleanup.exec("DROP TABLE foreign_payload");
+    refusedCleanup.close();
+    await expectDiscoveryStateRefusal(refusedThenEmpty, expectedRefused);
+    expect(logicalInventory(refusedThenEmpty)).toEqual([]);
+
+    const matchingMissing = path.join(dir, "matching-missing.embed.db");
+    const matchingMissingDiscovery = await discoverEmbedDbConfig(matchingMissing, "/v1");
+    const missingInitializer = new EmbedDb({
+      file: matchingMissing,
+      vaultRoot: "/v1",
+      modelAlias: "multilingual",
+      dim: 4
+    });
+    await missingInitializer.open(matchingMissingDiscovery);
+    missingInitializer.close();
+    expect((await discoverEmbedDbConfig(matchingMissing, "/v1")).kind).toBe("owned");
+
+    const matchingEmpty = path.join(dir, "matching-empty.embed.db");
+    new Database(matchingEmpty).close();
+    const matchingEmptyDiscovery = await discoverEmbedDbConfig(matchingEmpty, "/v1");
+    const emptyInitializer = new EmbedDb({
+      file: matchingEmpty,
+      vaultRoot: "/v1",
+      modelAlias: "multilingual",
+      dim: 4
+    });
+    await emptyInitializer.open(matchingEmptyDiscovery);
+    emptyInitializer.close();
+    expect((await discoverEmbedDbConfig(matchingEmpty, "/v1")).kind).toBe("owned");
+
+    // Paired NEGATIVE control: merely being a valid SQLite container is not
+    // enough. One foreign logical table flips discovery to `refused`, and its
+    // schema/cell/BLOB snapshot must remain unchanged.
+    const malformedDiscoveryFile = path.join(dir, "nonempty-foreign.embed.db");
+    const malformedDiscovery = new Database(malformedDiscoveryFile);
+    malformedDiscovery.exec("CREATE TABLE foreign_payload (id INTEGER PRIMARY KEY, payload BLOB NOT NULL)");
+    malformedDiscovery.prepare("INSERT INTO foreign_payload VALUES (1, ?)").run(Buffer.from([0, 127, 255]));
+    const malformedDiscoveryBefore = {
+      schema: malformedDiscovery
+        .prepare("SELECT type, name, sql FROM sqlite_master WHERE name NOT GLOB 'sqlite_*' ORDER BY type, name")
+        .all(),
+      cells: malformedDiscovery.prepare("SELECT id, hex(payload) AS payload_hex FROM foreign_payload").all()
+    };
+    malformedDiscovery.close();
+    expect(await discoverEmbedDbConfig(malformedDiscoveryFile, "/v1")).toEqual({ kind: "refused" });
+    const inspectMalformedDiscovery = new Database(malformedDiscoveryFile, {
+      readonly: true,
+      fileMustExist: true
+    });
+    try {
+      expect({
+        schema: inspectMalformedDiscovery
+          .prepare("SELECT type, name, sql FROM sqlite_master WHERE name NOT GLOB 'sqlite_*' ORDER BY type, name")
+          .all(),
+        cells: inspectMalformedDiscovery.prepare("SELECT id, hex(payload) AS payload_hex FROM foreign_payload").all()
+      }).toEqual(malformedDiscoveryBefore);
+    } finally {
+      inspectMalformedDiscovery.close();
+    }
+
+    // A pre-existing dangling symlink is neither missing nor an admissible
+    // empty file. Refusal must happen before SQLite can follow it and create
+    // the target, with no path material in the error or discovery result.
+    if (process.platform !== "win32") {
+      const danglingTarget = path.join(dir, "must-not-be-created.embed.db");
+      const danglingLink = path.join(dir, "dangling.embed.db");
+      await fs.symlink(danglingTarget, danglingLink);
+      expect(await discoverEmbedDbConfig(danglingLink, "/v1")).toEqual({ kind: "refused" });
+      expect(await discoverEmbedDbConfigCached(danglingLink, "/v1")).toEqual({ kind: "refused" });
+      const symlinkDb = new EmbedDb({
+        file: danglingLink,
+        vaultRoot: "/v1",
+        modelAlias: "multilingual",
+        dim: 4
+      });
+      let symlinkError: unknown;
+      try {
+        await symlinkDb.open();
+      } catch (error) {
+        symlinkError = error;
+      } finally {
+        symlinkDb.close();
+      }
+      expect(symlinkError).toBeInstanceOf(Error);
+      const symlinkMessage = symlinkError instanceof Error ? symlinkError.message : String(symlinkError);
+      expect(symlinkMessage).toBe("Embedding index could not be inspected");
+      expect(symlinkMessage).not.toContain(danglingLink);
+      expect(symlinkMessage).not.toContain(danglingTarget);
+      await expect(fs.stat(danglingTarget)).rejects.toMatchObject({ code: "ENOENT" });
+      expect((await fs.lstat(danglingLink)).isSymbolicLink()).toBe(true);
+      await expectPathFreeRecoveryOwnershipRefusal(danglingLink, "/v1");
+    }
   });
 
   it("releases its handle when open() throws on a corrupt db — close-on-throw (rc.70 reserve-before-try)", async () => {
@@ -67,9 +487,548 @@ describe("EmbedDb", () => {
     // so a second open() RE-THROWS: the behavioral proof the handle was released. (NEGATIVE control:
     // without the reset, the next line would resolve instead of reject.)
     await expect(db.open()).rejects.toThrow();
+
+    const Database = (await import("better-sqlite3")).default;
+
+    // Causal close-failure control: native close releases the handle and then
+    // throws a pathful error. open() must preserve its original generic refusal
+    // and clear this.db before close, or the retry below becomes a stale no-op.
+    const closeFailureFile = path.join(dir, "close-failure.embed.db");
+    await seedExactEmbedFile(closeFailureFile, "close.md");
+    const closeFailureBefore = await exactEmbedLogicalSnapshot(closeFailureFile);
+    type CloseFailureHandle = { readonly name: string };
+    type CloseFailurePrototype = { close(this: CloseFailureHandle): void };
+    const closePrototype = Database.prototype as unknown as CloseFailurePrototype;
+    const originalClose = closePrototype.close;
+    let injectedCloseErrors = 0;
+    closePrototype.close = function (this: CloseFailureHandle): void {
+      const targetHandle = this.name === closeFailureFile;
+      originalClose.call(this);
+      if (targetHandle) {
+        injectedCloseErrors++;
+        throw new Error(`native close leaked path ${closeFailureFile}`);
+      }
+    };
+
+    const closeRefused = new EmbedDb({
+      file: closeFailureFile,
+      vaultRoot: "/foreign",
+      modelAlias: "multilingual",
+      dim: 4
+    });
+    let closeRefusalError: unknown;
+    let legacyMetaAfterCloseError: Awaited<ReturnType<typeof peekEmbedDbMeta>> = null;
+    let discoveryAfterCloseError: Awaited<ReturnType<typeof discoverEmbedDbConfig>> = { kind: "refused" };
+    try {
+      try {
+        await closeRefused.open();
+      } catch (error) {
+        closeRefusalError = error;
+      }
+      legacyMetaAfterCloseError = await peekEmbedDbMeta(closeFailureFile);
+      discoveryAfterCloseError = await discoverEmbedDbConfig(closeFailureFile, "/v");
+      await expectPathFreeRecoveryOwnershipRefusal(closeFailureFile, "/v");
+    } finally {
+      closePrototype.close = originalClose;
+    }
+
+    expect(closeRefusalError).toBeInstanceOf(Error);
+    const closeRefusalMessage =
+      closeRefusalError instanceof Error ? closeRefusalError.message : String(closeRefusalError);
+    expect(closeRefusalMessage).toBe("Embedding index ownership could not be verified");
+    expect(closeRefusalMessage).not.toContain(closeFailureFile);
+    expect(closeRefusalMessage).not.toContain("/foreign");
+    expect(legacyMetaAfterCloseError?.vault_root).toBe("/v");
+    expect(discoveryAfterCloseError).toEqual({ kind: "refused" });
+    expect(injectedCloseErrors).toBeGreaterThanOrEqual(4);
+
+    let retryError: unknown;
+    try {
+      await closeRefused.open();
+    } catch (error) {
+      retryError = error;
+    } finally {
+      closeRefused.close();
+    }
+    expect(retryError).toBeInstanceOf(Error);
+    const retryMessage = retryError instanceof Error ? retryError.message : String(retryError);
+    expect(retryMessage).toBe("Embedding index ownership could not be verified");
+    expect(retryMessage).not.toContain(closeFailureFile);
+    expect(await exactEmbedLogicalSnapshot(closeFailureFile)).toEqual(closeFailureBefore);
+
+    const wrongClassFile = path.join(dir, "fts-lookalike.embed.db");
+    const wrongClass = new Database(wrongClassFile);
+    wrongClass.exec(`
+      CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+      INSERT INTO meta VALUES ('schema_version', '4'), ('vault_root', '/v'), ('tokenize_mode', 'unicode61');
+      CREATE TABLE chunks (id INTEGER PRIMARY KEY, content BLOB NOT NULL);
+      INSERT INTO chunks VALUES (1, x'00017fff');
+    `);
+    const before = {
+      schema: wrongClass
+        .prepare(
+          `SELECT type, name, tbl_name, sql
+           FROM sqlite_master
+           WHERE name NOT GLOB 'sqlite_*'
+           ORDER BY type, name`
+        )
+        .all(),
+      meta: wrongClass.prepare("SELECT key, value FROM meta ORDER BY key").all(),
+      cells: wrongClass.prepare("SELECT id, hex(content) AS content_hex FROM chunks ORDER BY id").all()
+    };
+    wrongClass.close();
+
+    const lookalike = new EmbedDb({ file: wrongClassFile, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
+    await expect(lookalike.open()).rejects.toThrow(/ownership could not be verified/);
+    const inspectWrongClass = new Database(wrongClassFile, { readonly: true, fileMustExist: true });
+    try {
+      expect({
+        schema: inspectWrongClass
+          .prepare(
+            `SELECT type, name, tbl_name, sql
+             FROM sqlite_master
+             WHERE name NOT GLOB 'sqlite_*'
+             ORDER BY type, name`
+          )
+          .all(),
+        meta: inspectWrongClass.prepare("SELECT key, value FROM meta ORDER BY key").all(),
+        cells: inspectWrongClass.prepare("SELECT id, hex(content) AS content_hex FROM chunks ORDER BY id").all()
+      }).toEqual(before);
+    } finally {
+      inspectWrongClass.close();
+    }
+    expect(await peekEmbedDbMeta(wrongClassFile, "/v")).toBeNull();
+    await expectPathFreeRecoveryOwnershipRefusal(wrongClassFile, "/v");
+
+    const malformedFile = path.join(dir, "malformed-lookalike.embed.db");
+    const malformed = new Database(malformedFile);
+    malformed.exec(`
+      CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+      INSERT INTO meta VALUES
+        ('schema_version', '${EMBED_DB_SCHEMA_VERSION}'),
+        ('vault_root', '/v'),
+        ('model_alias', 'multilingual'),
+        ('dim', '4'),
+        ('quantization', 'f32');
+      CREATE TABLE embeddings (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        rel_path TEXT NOT NULL,
+        chunk_index INTEGER NOT NULL,
+        line_start INTEGER NOT NULL,
+        line_end INTEGER NOT NULL,
+        text_preview TEXT NOT NULL,
+        vector BLOB NOT NULL,
+        kind TEXT NOT NULL DEFAULT 'md',
+        UNIQUE(rel_path, chunk_index),
+        UNIQUE(text_preview)
+      );
+      CREATE INDEX embeddings_rel_path ON embeddings(rel_path);
+      CREATE TABLE source_state (
+        rel_path TEXT PRIMARY KEY,
+        mtime_ms INTEGER NOT NULL,
+        n_chunks INTEGER NOT NULL,
+        kind TEXT NOT NULL DEFAULT 'md',
+        indexed_at TEXT NOT NULL
+      );
+    `);
+    malformed
+      .prepare("INSERT INTO embeddings VALUES (1, ?, 0, 1, 1, ?, ?, 'md')")
+      .run("keep.md", "keep", Buffer.from([0, 1, 127, 255]));
+    const malformedBefore = {
+      schema: malformed
+        .prepare(
+          `SELECT type, name, tbl_name, sql
+           FROM sqlite_master
+           WHERE name NOT GLOB 'sqlite_*'
+           ORDER BY type, name`
+        )
+        .all(),
+      meta: malformed.prepare("SELECT key, value FROM meta ORDER BY key").all(),
+      cells: malformed.prepare("SELECT id, rel_path, hex(vector) AS vector_hex FROM embeddings").all()
+    };
+    malformed.close();
+
+    const malformedLookalike = new EmbedDb({
+      file: malformedFile,
+      vaultRoot: "/v",
+      modelAlias: "multilingual",
+      dim: 4
+    });
+    await expect(malformedLookalike.open()).rejects.toThrow(/ownership could not be verified/);
+    const inspectMalformed = new Database(malformedFile, { readonly: true, fileMustExist: true });
+    try {
+      expect({
+        schema: inspectMalformed
+          .prepare(
+            `SELECT type, name, tbl_name, sql
+             FROM sqlite_master
+             WHERE name NOT GLOB 'sqlite_*'
+             ORDER BY type, name`
+          )
+          .all(),
+        meta: inspectMalformed.prepare("SELECT key, value FROM meta ORDER BY key").all(),
+        cells: inspectMalformed.prepare("SELECT id, rel_path, hex(vector) AS vector_hex FROM embeddings").all()
+      }).toEqual(malformedBefore);
+    } finally {
+      inspectMalformed.close();
+    }
+    await expectPathFreeRecoveryOwnershipRefusal(malformedFile, "/v");
+
+    // Columns and index inventory alone cannot see an added CHECK constraint.
+    // This otherwise exact current-schema lookalike must be refused without
+    // changing its persisted BLOB or logical schema.
+    const constrainedFile = path.join(dir, "constrained-lookalike.embed.db");
+    const constrained = new Database(constrainedFile);
+    constrained.exec(`
+      CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+      INSERT INTO meta VALUES
+        ('schema_version', '${EMBED_DB_SCHEMA_VERSION}'),
+        ('vault_root', '/v'),
+        ('model_alias', 'multilingual'),
+        ('dim', '4'),
+        ('quantization', 'f32');
+      CREATE TABLE embeddings (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        rel_path TEXT NOT NULL,
+        chunk_index INTEGER NOT NULL,
+        line_start INTEGER NOT NULL,
+        line_end INTEGER NOT NULL,
+        text_preview TEXT NOT NULL CHECK (text_preview <> ''),
+        vector BLOB NOT NULL,
+        kind TEXT NOT NULL DEFAULT 'md',
+        UNIQUE(rel_path, chunk_index)
+      );
+      CREATE INDEX embeddings_rel_path ON embeddings(rel_path);
+      CREATE TABLE source_state (
+        rel_path TEXT PRIMARY KEY,
+        mtime_ms INTEGER NOT NULL,
+        n_chunks INTEGER NOT NULL,
+        kind TEXT NOT NULL DEFAULT 'md',
+        indexed_at TEXT NOT NULL
+      );
+    `);
+    constrained
+      .prepare("INSERT INTO embeddings VALUES (1, ?, 0, 1, 1, ?, ?, 'md')")
+      .run("check.md", "check", Buffer.from([255, 127, 1, 0]));
+    const constrainedBefore = {
+      schema: constrained
+        .prepare(
+          `SELECT type, name, tbl_name, sql
+           FROM sqlite_master
+           WHERE name NOT GLOB 'sqlite_*'
+           ORDER BY type, name`
+        )
+        .all(),
+      cells: constrained.prepare("SELECT id, rel_path, hex(vector) AS vector_hex FROM embeddings").all()
+    };
+    constrained.close();
+
+    const constrainedLookalike = new EmbedDb({
+      file: constrainedFile,
+      vaultRoot: "/v",
+      modelAlias: "multilingual",
+      dim: 4
+    });
+    await expect(constrainedLookalike.open()).rejects.toThrow(/ownership could not be verified/);
+    const inspectConstrained = new Database(constrainedFile, { readonly: true, fileMustExist: true });
+    try {
+      expect({
+        schema: inspectConstrained
+          .prepare(
+            `SELECT type, name, tbl_name, sql
+             FROM sqlite_master
+             WHERE name NOT GLOB 'sqlite_*'
+             ORDER BY type, name`
+          )
+          .all(),
+        cells: inspectConstrained.prepare("SELECT id, rel_path, hex(vector) AS vector_hex FROM embeddings").all()
+      }).toEqual(constrainedBefore);
+    } finally {
+      inspectConstrained.close();
+    }
+
+    // Exact columns do not prove the source authority ledger's CHECK and
+    // WITHOUT ROWID semantics. Keep the same names/columns but remove both.
+    const ledgerFile = path.join(dir, "malformed-ledger.embed.db");
+    const ledgerSeed = new EmbedDb({ file: ledgerFile, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
+    await ledgerSeed.open();
+    ledgerSeed.upsertNote("ledger.md", 1, [
+      { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "ledger", vector: l2([1, 0, 0, 0]) }
+    ]);
+    ledgerSeed.close();
+    const ledger = new Database(ledgerFile);
+    ledger.exec(`
+      DROP TRIGGER embed_source_state_revision_insert;
+      DROP TRIGGER embed_source_state_revision_update;
+      DROP TRIGGER embed_source_state_revision_delete;
+      DROP TRIGGER embed_source_quarantine_revision_insert;
+      DROP TRIGGER embed_source_quarantine_revision_update;
+      DROP TRIGGER embed_source_quarantine_revision_delete;
+      DROP TABLE source_revision;
+      CREATE TABLE source_revision (
+        rel_path TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        revision INTEGER NOT NULL,
+        PRIMARY KEY (rel_path, kind)
+      );
+      INSERT INTO source_revision VALUES ('ledger.md', 'md', 1);
+    `);
+    const ledgerBefore = {
+      schema: ledger
+        .prepare(
+          `SELECT type, name, tbl_name, sql
+           FROM sqlite_master
+           WHERE name NOT GLOB 'sqlite_*'
+           ORDER BY type, name`
+        )
+        .all(),
+      cells: ledger
+        .prepare(
+          `SELECT rel_path, text_preview, hex(vector) AS vector_hex
+           FROM embeddings
+           ORDER BY rel_path`
+        )
+        .all(),
+      revisions: ledger.prepare("SELECT * FROM source_revision ORDER BY rel_path, kind").all()
+    };
+    ledger.close();
+
+    const malformedLedger = new EmbedDb({
+      file: ledgerFile,
+      vaultRoot: "/v",
+      modelAlias: "multilingual",
+      dim: 4
+    });
+    await expect(malformedLedger.open()).rejects.toThrow(/ownership could not be verified/);
+    const inspectLedger = new Database(ledgerFile, { readonly: true, fileMustExist: true });
+    try {
+      expect({
+        schema: inspectLedger
+          .prepare(
+            `SELECT type, name, tbl_name, sql
+             FROM sqlite_master
+             WHERE name NOT GLOB 'sqlite_*'
+             ORDER BY type, name`
+          )
+          .all(),
+        cells: inspectLedger
+          .prepare(
+            `SELECT rel_path, text_preview, hex(vector) AS vector_hex
+             FROM embeddings
+             ORDER BY rel_path`
+          )
+          .all(),
+        revisions: inspectLedger.prepare("SELECT * FROM source_revision ORDER BY rel_path, kind").all()
+      }).toEqual(ledgerBefore);
+    } finally {
+      inspectLedger.close();
+    }
+
+    // Quote-aware normalization must preserve SQL literal bytes. Lowercasing
+    // the whole statement previously laundered this always-false 'INTEGER'
+    // typeof check into the canonical lowercase 'integer' contract.
+    const literalCaseFile = path.join(dir, "revision-literal-case.embed.db");
+    await seedExactEmbedFile(literalCaseFile, "literal.md");
+    const literalCase = new Database(literalCaseFile);
+    literalCase.exec(`
+      ${DROP_EMBED_REVISION_TRIGGERS_SQL}
+      DROP TABLE source_revision;
+      CREATE TABLE source_revision (
+        rel_path TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        revision INTEGER NOT NULL CHECK (
+          typeof(revision) = 'INTEGER'
+            AND revision BETWEEN 1 AND 9007199254740991
+        ),
+        PRIMARY KEY (rel_path, kind)
+      ) WITHOUT ROWID;
+    `);
+    literalCase.close();
+    const literalCaseBefore = await exactEmbedLogicalSnapshot(literalCaseFile);
+    expect(await peekEmbedDbMeta(literalCaseFile, "/v")).toBeNull();
+    await expectPathFreeEmbedOwnershipRefusal(literalCaseFile, "/v", literalCaseBefore);
+
+    // source_quarantine keeps the exact column projection but loses the
+    // canonical WITHOUT ROWID authority semantics.
+    const quarantineShapeFile = path.join(dir, "quarantine-shape.embed.db");
+    await seedExactEmbedFile(quarantineShapeFile, "quarantine.md");
+    const quarantineShape = new Database(quarantineShapeFile);
+    quarantineShape.exec(`
+      ${DROP_EMBED_REVISION_TRIGGERS_SQL}
+      DROP TABLE source_quarantine;
+      CREATE TABLE source_quarantine (
+        rel_path TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        PRIMARY KEY (rel_path, kind)
+      );
+      INSERT INTO source_quarantine VALUES ('quarantine.md', 'md');
+    `);
+    quarantineShape.close();
+    const quarantineShapeBefore = await exactEmbedLogicalSnapshot(quarantineShapeFile);
+    await expectPathFreeEmbedOwnershipRefusal(quarantineShapeFile, "/v", quarantineShapeBefore);
+
+    // COLLATE is invisible to pragma_table_info: the meta columns are
+    // identical, but the authority key contract is not the shipped table.
+    const metaCollationFile = path.join(dir, "meta-collation.embed.db");
+    await seedExactEmbedFile(metaCollationFile, "meta.md");
+    const metaCollation = new Database(metaCollationFile);
+    metaCollation.exec(`
+      DROP TABLE meta;
+      CREATE TABLE meta (
+        key TEXT PRIMARY KEY COLLATE NOCASE,
+        value TEXT NOT NULL
+      );
+      INSERT INTO meta VALUES
+        ('schema_version', '${EMBED_DB_SCHEMA_VERSION}'),
+        ('vault_root', '/v'),
+        ('model_alias', 'multilingual'),
+        ('dim', '4'),
+        ('quantization', 'f32');
+    `);
+    metaCollation.close();
+    const metaCollationBefore = await exactEmbedLogicalSnapshot(metaCollationFile);
+    expect((await peekEmbedDbMeta(metaCollationFile))?.vault_root).toBe("/v");
+    expect(await peekEmbedDbMeta(metaCollationFile, "/v")).toBeNull();
+    clearPeekCache();
+    expect((await peekEmbedDbMetaCached(metaCollationFile))?.vault_root).toBe("/v");
+    expect(await peekEmbedDbMetaCached(metaCollationFile, "/v")).toBeNull();
+    clearPeekCache();
+    expect(await peekEmbedDbMetaCached(metaCollationFile, "/v")).toBeNull();
+    expect((await peekEmbedDbMetaCached(metaCollationFile))?.vault_root).toBe("/v");
+    await expectPathFreeEmbedOwnershipRefusal(metaCollationFile, "/v", metaCollationBefore);
+
+    // A table-level CHECK is likewise absent from the column projection.
+    const sourceStateShapeFile = path.join(dir, "source-state-shape.embed.db");
+    await seedExactEmbedFile(sourceStateShapeFile, "state.md");
+    const sourceStateShape = new Database(sourceStateShapeFile);
+    sourceStateShape.exec(`
+      ${DROP_EMBED_REVISION_TRIGGERS_SQL}
+      DROP TABLE source_state;
+      CREATE TABLE source_state (
+        rel_path TEXT PRIMARY KEY,
+        mtime_ms INTEGER NOT NULL,
+        n_chunks INTEGER NOT NULL,
+        kind TEXT NOT NULL DEFAULT 'md',
+        indexed_at TEXT NOT NULL,
+        CHECK (n_chunks >= 0)
+      );
+      INSERT INTO source_state VALUES ('state.md', 1, 1, 'md', 'now');
+    `);
+    sourceStateShape.close();
+    const sourceStateShapeBefore = await exactEmbedLogicalSnapshot(sourceStateShapeFile);
+    await expectPathFreeEmbedOwnershipRefusal(sourceStateShapeFile, "/v", sourceStateShapeBefore);
+
+    // NEGATIVE control for SQL LIKE semantics: `_` is a wildcard, so the old
+    // `NOT LIKE 'sqlite_%'` inventory hid this foreign application table.
+    const sqlitePrefixFile = path.join(dir, "sqlite-prefix-lookalike.embed.db");
+    const sqlitePrefixSeed = new EmbedDb({
+      file: sqlitePrefixFile,
+      vaultRoot: "/v",
+      modelAlias: "multilingual",
+      dim: 4
+    });
+    await sqlitePrefixSeed.open();
+    sqlitePrefixSeed.close();
+    const sqlitePrefix = new Database(sqlitePrefixFile);
+    sqlitePrefix.exec("CREATE TABLE sqliteXpayload (id INTEGER PRIMARY KEY, payload BLOB NOT NULL)");
+    sqlitePrefix.prepare("INSERT INTO sqliteXpayload VALUES (1, ?)").run(Buffer.from([255, 0, 127]));
+    const sqlitePrefixBefore = {
+      schema: sqlitePrefix
+        .prepare(
+          `SELECT type, name, tbl_name, sql
+           FROM sqlite_master
+           WHERE name NOT GLOB 'sqlite_*'
+           ORDER BY type, name`
+        )
+        .all(),
+      cells: sqlitePrefix.prepare("SELECT id, hex(payload) AS payload_hex FROM sqliteXpayload").all()
+    };
+    sqlitePrefix.close();
+
+    const sqlitePrefixLookalike = new EmbedDb({
+      file: sqlitePrefixFile,
+      vaultRoot: "/v",
+      modelAlias: "multilingual",
+      dim: 4
+    });
+    await expect(sqlitePrefixLookalike.open()).rejects.toThrow(/ownership could not be verified/);
+    const inspectSqlitePrefix = new Database(sqlitePrefixFile, { readonly: true, fileMustExist: true });
+    try {
+      expect({
+        schema: inspectSqlitePrefix
+          .prepare(
+            `SELECT type, name, tbl_name, sql
+             FROM sqlite_master
+             WHERE name NOT GLOB 'sqlite_*'
+             ORDER BY type, name`
+          )
+          .all(),
+        cells: inspectSqlitePrefix.prepare("SELECT id, hex(payload) AS payload_hex FROM sqliteXpayload").all()
+      }).toEqual(sqlitePrefixBefore);
+    } finally {
+      inspectSqlitePrefix.close();
+    }
+
+    // Static mutation controls pin bounded projection rather than merely the
+    // over-cap refusal result: removing substr or any cap+1 binding fails this
+    // existing registration even if a later JS length check still rejects.
+    const embedSource = await fs.readFile(new URL("../src/embed-db.ts", import.meta.url), "utf8");
+    const admissionStart = embedSource.indexOf("function inspectEmbedAdmission(");
+    const admissionEnd = embedSource.indexOf("function assertEmbedAdmission(", admissionStart);
+    const admissionSource = embedSource.slice(admissionStart, admissionEnd);
+    expect(admissionStart).toBeGreaterThanOrEqual(0);
+    expect(admissionEnd).toBeGreaterThan(admissionStart);
+    const normalizeStart = embedSource.indexOf("function normalizeSql(");
+    const normalizeEnd = embedSource.indexOf("function normalizeCreateTableSql(", normalizeStart);
+    const normalizeSource = embedSource.slice(normalizeStart, normalizeEnd);
+    expect(normalizeStart).toBeGreaterThanOrEqual(0);
+    expect(normalizeEnd).toBeGreaterThan(normalizeStart);
+    expect(normalizeSource).toContain('if (sql[index + 1] === "\'")');
+    expect(normalizeSource).toContain("normalized += char.toLowerCase()");
+    expect(admissionSource).toContain("substr(name, 1, ?) AS name");
+    expect(admissionSource).toContain("substr(sql, 1, ?) AS sql");
+    expect(admissionSource).toContain(
+      ">(MAX_EMBED_ADMISSION_NAME_CHARS + 1, MAX_EMBED_ADMISSION_SQL_CHARS + 1, MAX_EMBED_ADMISSION_OBJECTS + 1)"
+    );
+    expect(admissionSource).toContain("substr(key, 1, ?) AS key");
+    expect(admissionSource).toContain("substr(value, 1, ?) AS value");
+    expect(admissionSource).toContain(
+      "MAX_EMBED_ADMISSION_NAME_CHARS + 1,\n        MAX_EMBED_META_VALUE_CHARS + 1,\n        EMBED_META_KEYS.size + 1"
+    );
+    expect(admissionSource).not.toMatch(/length\s*\(\s*(?:name|sql|key|value)\b/u);
+
+    const peekStart = embedSource.indexOf("export async function peekEmbedDbMeta(");
+    const peekEnd = embedSource.indexOf("const peekCache =", peekStart);
+    const peekSource = embedSource.slice(peekStart, peekEnd);
+    expect(peekStart).toBeGreaterThanOrEqual(0);
+    expect(peekEnd).toBeGreaterThan(peekStart);
+    expect(peekSource).toContain("substr(key, 1, ?) AS key");
+    expect(peekSource).toContain("substr(value, 1, ?) AS value");
+    expect(peekSource).toContain(
+      ".all(MAX_EMBED_ADMISSION_NAME_CHARS + 1, MAX_EMBED_META_VALUE_CHARS + 1, EMBED_META_KEYS.size + 1)"
+    );
+    expect(peekSource).not.toMatch(/length\s*\(\s*(?:key|value)\b/u);
+
+    const cachedDiscoveryStart = embedSource.indexOf("export async function discoverEmbedDbConfigCached(");
+    const cachedDiscoveryEnd = embedSource.indexOf(
+      "export async function peekEmbedDbMetaCached(",
+      cachedDiscoveryStart
+    );
+    const cachedDiscoverySource = embedSource.slice(cachedDiscoveryStart, cachedDiscoveryEnd);
+    expect(cachedDiscoveryStart).toBeGreaterThanOrEqual(0);
+    expect(cachedDiscoveryEnd).toBeGreaterThan(cachedDiscoveryStart);
+    expect(cachedDiscoverySource).toContain("cached.mtimeMs === before.mtimeMs");
+    expect(cachedDiscoverySource).toContain("cached.size === before.size");
+    expect(cachedDiscoverySource).toContain("cached.walMtimeMs === before.walMtimeMs");
+    expect(cachedDiscoverySource).toContain("cached.walSize === before.walSize");
+    expect(cachedDiscoverySource).toContain('cached.discovery.kind !== "refused"');
+    expect(cachedDiscoverySource).toContain('discovery.kind === "refused"');
+    expect(cachedDiscoverySource).toContain("after.size !== before.size");
+    expect(cachedDiscoverySource).toContain("after.walSize !== before.walSize");
+    expect(cachedDiscoverySource).toContain("MAX_PEEK_CACHE_ENTRIES");
   });
 
-  it("rebuilds when vault_root changes (cross-vault contamination guard)", async () => {
+  it("refuses a foreign vault under active WAL without changing logical schema or cells", async () => {
     const file = path.join(dir, "test.embed.db");
     const db1 = new EmbedDb({ file, vaultRoot: "/v1", modelAlias: "multilingual", dim: 4 });
     await db1.open();
@@ -77,12 +1036,295 @@ describe("EmbedDb", () => {
       { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "hello", vector: l2([1, 0, 0, 0]) }
     ]);
     db1.close();
+    await fs.chmod(file, 0o640);
+    const beforeMode = (await fs.stat(file)).mode & 0o777;
+    await fs.chmod(dir, 0o750);
+    const beforeParentMode = (await fs.stat(dir)).mode & 0o777;
 
-    // Re-open with a different vault root — should DROP the table.
-    const db2 = new EmbedDb({ file, vaultRoot: "/v2", modelAlias: "multilingual", dim: 4 });
-    await db2.open();
-    expect(db2.totalChunks()).toBe(0);
-    db2.close();
+    const Database = (await import("better-sqlite3")).default;
+    const live = new Database(file);
+    try {
+      live.pragma("journal_mode = WAL");
+      // Leave a committed content change in the live WAL while the owning
+      // connection remains open. The admission reader must inspect this same
+      // logical state without changing it or adopting the foreign root.
+      live.prepare("UPDATE embeddings SET text_preview = ? WHERE rel_path = ?").run("wal-sentinel", "a.md");
+      live.prepare("UPDATE meta SET value = ? WHERE key = 'vault_root'").run("/foreign-in-wal");
+      const snapshot = () => ({
+        schema: live
+          .prepare(
+            `SELECT type, name, tbl_name, sql
+             FROM sqlite_master
+             WHERE name NOT GLOB 'sqlite_*'
+             ORDER BY type, name`
+          )
+          .all(),
+        meta: live.prepare("SELECT key, value FROM meta ORDER BY key").all(),
+        embeddings: live
+          .prepare(
+            `SELECT id, rel_path, chunk_index, line_start, line_end, text_preview,
+                    hex(vector) AS vector_hex, kind
+             FROM embeddings
+             ORDER BY id`
+          )
+          .all(),
+        sourceState: live.prepare("SELECT * FROM source_state ORDER BY rel_path").all(),
+        sourceQuarantine: live.prepare("SELECT * FROM source_quarantine ORDER BY rel_path, kind").all(),
+        sourceRevision: live.prepare("SELECT * FROM source_revision ORDER BY rel_path, kind").all()
+      });
+      const before = snapshot();
+
+      const db2 = new EmbedDb({ file, vaultRoot: "/v2", modelAlias: "multilingual", dim: 4 });
+      let refusal: unknown;
+      try {
+        await db2.open();
+      } catch (error) {
+        refusal = error;
+      }
+      expect(refusal).toBeInstanceOf(Error);
+      const message = refusal instanceof Error ? refusal.message : String(refusal);
+      expect(message).toMatch(/ownership could not be verified/);
+      expect(message).not.toContain(file);
+      expect(message).not.toContain("/v1");
+      expect(message).not.toContain("/v2");
+      expect(message).not.toContain("/foreign-in-wal");
+      expect(snapshot()).toEqual(before);
+      await expectPathFreeRecoveryOwnershipRefusal(file, "/v2");
+      expect(snapshot()).toEqual(before);
+      expect(live.pragma("journal_mode", { simple: true })).toBe("wal");
+      expect((await fs.stat(file)).mode & 0o777).toBe(beforeMode);
+      expect((await fs.stat(dir)).mode & 0o777).toBe(beforeParentMode);
+      // Causal negative control: the logical snapshot is sensitive to the
+      // exact destructive/mutating class it is used to exclude.
+      live.prepare("UPDATE embeddings SET text_preview = ? WHERE rel_path = ?").run("mutant", "a.md");
+      expect(snapshot()).not.toEqual(before);
+    } finally {
+      live.close();
+    }
+
+    // Bind mutating production opens to the exact configuration discovery
+    // they used. A same-root low-level writer may intentionally replace A with
+    // B between discovery and open; stale A must not become permission to
+    // rebuild B back to A from a read-only caller.
+    const configRaceFile = path.join(dir, "config-race.embed.db");
+    const configASeed = new EmbedDb({
+      file: configRaceFile,
+      vaultRoot: "/config-race",
+      modelAlias: "multilingual",
+      dim: 4,
+      quantization: "f32"
+    });
+    await configASeed.open();
+    configASeed.upsertNote("a.md", 1, [
+      { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "config-a", vector: l2([1, 0, 0, 0]) }
+    ]);
+    configASeed.close();
+    const expectedConfigA = await discoverEmbedDbConfig(configRaceFile, "/config-race");
+    expect(expectedConfigA.kind).toBe("owned");
+
+    const configBWriter = new EmbedDb({
+      file: configRaceFile,
+      vaultRoot: "/config-race",
+      modelAlias: "bge",
+      dim: 4,
+      quantization: "int8"
+    });
+    await configBWriter.open();
+    configBWriter.upsertNote("b.md", 2, [
+      { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "config-b", vector: l2([0, 1, 0, 0]) }
+    ]);
+    configBWriter.close();
+    const expectedConfigB = await discoverEmbedDbConfig(configRaceFile, "/config-race");
+    expect(expectedConfigB.kind).toBe("owned");
+    const beforeStaleConfigOpen = await exactEmbedLogicalSnapshot(configRaceFile);
+
+    const staleConfigOpen = new EmbedDb({
+      file: configRaceFile,
+      vaultRoot: "/config-race",
+      modelAlias: "multilingual",
+      dim: 4,
+      quantization: "f32"
+    });
+    const stalePending = staleConfigOpen.open(expectedConfigA);
+    if (expectedConfigA.kind === "owned") {
+      const mutableMeta = expectedConfigA.meta as { model_alias: string; quantization?: "f32" | "int8" };
+      mutableMeta.model_alias = "bge";
+      mutableMeta.quantization = "int8";
+    }
+    const staleError = await stalePending.then(
+      () => null,
+      (error: unknown) => error
+    );
+    staleConfigOpen.close();
+    expect(staleError).toBeInstanceOf(Error);
+    const staleMessage = staleError instanceof Error ? staleError.message : "";
+    expect(staleMessage).toBe("Embedding index configuration changed before open");
+    for (const value of [configRaceFile, "/config-race", "multilingual", "bge", "f32", "int8"]) {
+      expect(staleMessage).not.toContain(value);
+    }
+    expect(await exactEmbedLogicalSnapshot(configRaceFile)).toEqual(beforeStaleConfigOpen);
+
+    if (expectedConfigB.kind !== "owned") throw new Error("expected current embedding discovery");
+    const currentConfigOpen = new EmbedDb({
+      file: configRaceFile,
+      vaultRoot: "/config-race",
+      modelAlias: expectedConfigB.meta.model_alias,
+      dim: Number(expectedConfigB.meta.dim),
+      quantization: expectedConfigB.meta.quantization ?? "f32"
+    });
+    await currentConfigOpen.open(expectedConfigB);
+    expect(currentConfigOpen.totalChunks()).toBe(1);
+    currentConfigOpen.close();
+
+    // Paired positive: an explicit writer can still move A to B when the live
+    // file is unchanged since discovery A.
+    const explicitOverrideFile = path.join(dir, "explicit-config-override.embed.db");
+    const explicitASeed = new EmbedDb({
+      file: explicitOverrideFile,
+      vaultRoot: "/config-override",
+      modelAlias: "multilingual",
+      dim: 4,
+      quantization: "f32"
+    });
+    await explicitASeed.open();
+    explicitASeed.upsertNote("old.md", 3, [
+      { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "old-config", vector: l2([0, 0, 1, 0]) }
+    ]);
+    explicitASeed.close();
+    const expectedExplicitA = await discoverEmbedDbConfig(explicitOverrideFile, "/config-override");
+    expect(expectedExplicitA.kind).toBe("owned");
+    const explicitBWriter = new EmbedDb({
+      file: explicitOverrideFile,
+      vaultRoot: "/config-override",
+      modelAlias: "bge",
+      dim: 4,
+      quantization: "int8"
+    });
+    await explicitBWriter.open(expectedExplicitA);
+    expect(explicitBWriter.totalChunks()).toBe(0);
+    explicitBWriter.close();
+    const explicitBDiscovery = await discoverEmbedDbConfig(explicitOverrideFile, "/config-override");
+    expect(
+      explicitBDiscovery.kind === "owned" && {
+        modelAlias: explicitBDiscovery.meta.model_alias,
+        quantization: explicitBDiscovery.meta.quantization
+      }
+    ).toEqual({ modelAlias: "bge", quantization: "int8" });
+
+    // Deterministic TOCTOU-window control: mutate the authority root after the
+    // first same-handle admission read but before BEGIN IMMEDIATE invokes its
+    // callback. The callback's first action must refuse before dropping even
+    // a repairable known-name trigger or touching payload cells.
+    const betweenReadsFile = path.join(dir, "between-admission-reads.embed.db");
+    const betweenReadsSeed = new EmbedDb({
+      file: betweenReadsFile,
+      vaultRoot: "/between-owner",
+      modelAlias: "multilingual",
+      dim: 4
+    });
+    await betweenReadsSeed.open();
+    betweenReadsSeed.upsertNote("between.md", 7, [
+      { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "between", vector: l2([0, 0, 1, 0]) }
+    ]);
+    betweenReadsSeed.close();
+    const betweenSetup = new Database(betweenReadsFile);
+    betweenSetup.exec(`
+      DROP TRIGGER embed_source_state_revision_insert;
+      CREATE TRIGGER embed_source_state_revision_insert
+      AFTER INSERT ON source_state
+      BEGIN
+        SELECT 1;
+      END;
+    `);
+    const betweenBefore = {
+      payload: betweenSetup
+        .prepare(
+          `SELECT rel_path, text_preview, hex(vector) AS vector_hex
+           FROM embeddings
+           ORDER BY rel_path`
+        )
+        .all(),
+      trigger: betweenSetup
+        .prepare(
+          `SELECT name, sql
+           FROM sqlite_master
+           WHERE type = 'trigger' AND name = 'embed_source_state_revision_insert'`
+        )
+        .get()
+    };
+    betweenSetup.close();
+    await fs.chmod(betweenReadsFile, 0o640);
+    const betweenMode = (await fs.stat(betweenReadsFile)).mode & 0o777;
+
+    type TestTransaction = (() => unknown) & { immediate: () => unknown };
+    type TestTransactionFactory = (this: unknown, fn: () => unknown) => TestTransaction;
+    const prototype = Database.prototype as unknown as { transaction: TestTransactionFactory };
+    const originalTransaction = prototype.transaction;
+    let rootMutations = 0;
+    prototype.transaction = function (this: unknown, fn: () => unknown): TestTransaction {
+      const transaction = originalTransaction.call(this, fn);
+      const intercepted = (() => transaction()) as TestTransaction;
+      intercepted.immediate = () => {
+        rootMutations++;
+        const writer = new Database(betweenReadsFile);
+        try {
+          writer.prepare("UPDATE meta SET value = ? WHERE key = 'vault_root'").run("/changed-between-admissions");
+        } finally {
+          writer.close();
+        }
+        return transaction.immediate();
+      };
+      return intercepted;
+    };
+    try {
+      const raced = new EmbedDb({
+        file: betweenReadsFile,
+        vaultRoot: "/between-owner",
+        modelAlias: "multilingual",
+        dim: 4
+      });
+      let refusal: unknown;
+      try {
+        await raced.open();
+      } catch (error) {
+        refusal = error;
+      }
+      expect(refusal).toBeInstanceOf(Error);
+      const message = refusal instanceof Error ? refusal.message : String(refusal);
+      expect(message).toMatch(/ownership could not be verified/);
+      expect(message).not.toContain(betweenReadsFile);
+      expect(message).not.toContain("/between-owner");
+      expect(message).not.toContain("/changed-between-admissions");
+    } finally {
+      prototype.transaction = originalTransaction;
+    }
+    expect(rootMutations).toBe(1);
+    const inspectBetween = new Database(betweenReadsFile, { readonly: true, fileMustExist: true });
+    try {
+      expect({
+        payload: inspectBetween
+          .prepare(
+            `SELECT rel_path, text_preview, hex(vector) AS vector_hex
+             FROM embeddings
+             ORDER BY rel_path`
+          )
+          .all(),
+        trigger: inspectBetween
+          .prepare(
+            `SELECT name, sql
+             FROM sqlite_master
+             WHERE type = 'trigger' AND name = 'embed_source_state_revision_insert'`
+          )
+          .get()
+      }).toEqual(betweenBefore);
+      expect(inspectBetween.prepare("SELECT value FROM meta WHERE key = 'vault_root'").pluck().get()).toBe(
+        "/changed-between-admissions"
+      );
+    } finally {
+      inspectBetween.close();
+    }
+    expect((await fs.stat(betweenReadsFile)).mode & 0o777).toBe(betweenMode);
+    expect((await fs.stat(dir)).mode & 0o777).toBe(beforeParentMode);
   });
 
   it("rebuilds when model alias changes", async () => {
@@ -116,6 +1358,40 @@ describe("EmbedDb", () => {
   });
 
   it("rejects vectors with the wrong dim at insert time", async () => {
+    const unopenedParent = path.join(dir, "invalid-runtime-options");
+    const unopenedFile = path.join(unopenedParent, "invalid.embed.db");
+    expect(() => new EmbedDb({ file: "", vaultRoot: "/v", modelAlias: "multilingual", dim: 4 })).toThrow(
+      /file must be a non-empty string/
+    );
+    expect(() => new EmbedDb({ file: unopenedFile, vaultRoot: "", modelAlias: "multilingual", dim: 4 })).toThrow(
+      /vault root must be a non-empty string/
+    );
+    expect(() => new EmbedDb({ file: unopenedFile, vaultRoot: "/v", modelAlias: "", dim: 4 })).toThrow(
+      /model alias must be a non-empty string/
+    );
+    expect(
+      () =>
+        new EmbedDb({
+          file: unopenedFile,
+          vaultRoot: "/v",
+          modelAlias: "multilingual",
+          dim: 0
+        })
+    ).toThrow(/positive safe integer/);
+    expect(() => new EmbedDb({ file: unopenedFile, vaultRoot: "/v", modelAlias: "multilingual", dim: -1 })).toThrow(
+      /positive safe integer/
+    );
+    expect(
+      () =>
+        new EmbedDb({
+          file: unopenedFile,
+          vaultRoot: "/v",
+          modelAlias: "multilingual",
+          dim: Number.MAX_SAFE_INTEGER + 1
+        })
+    ).toThrow(/positive safe integer/);
+    await expect(fs.stat(unopenedParent)).rejects.toMatchObject({ code: "ENOENT" });
+
     const db = new EmbedDb({
       file: path.join(dir, "test.embed.db"),
       vaultRoot: "/v",
@@ -690,12 +1966,20 @@ describe("EmbedDb", () => {
       DROP TRIGGER IF EXISTS embed_source_quarantine_revision_insert;
       DROP TRIGGER IF EXISTS embed_source_quarantine_revision_update;
       DROP TRIGGER IF EXISTS embed_source_quarantine_revision_delete;
-      DROP TABLE source_revision;
+      DELETE FROM source_revision;
+      CREATE TRIGGER embed_source_state_revision_insert
+      AFTER INSERT ON source_revision
+      BEGIN
+        DELETE FROM embeddings;
+      END;
     `);
     legacy.close();
 
     await expect(openEmbedReceiptReader(file, "/v")).rejects.toThrow(/compatible index/);
 
+    // The same-name hostile trigger is admitted only so bootstrap can repair
+    // it. It must be dropped before the revision backfill; the old ordering
+    // fired this trigger and erased both embedding payloads.
     const migrated = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
     await migrated.open();
     let oldLegacy: ReturnType<EmbedDb["searchWithReceipts"]>[number] | undefined;
@@ -1069,7 +2353,7 @@ describe("EmbedDb", () => {
     }
   });
 
-  it("schema mismatch and missing legacy version rebuild; matching schema preserves", async () => {
+  it("rebuilds supported same-root legacy schemas but refuses missing/future authority metadata", async () => {
     const file = path.join(dir, "test.embed.db");
     const db1 = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
     await db1.open();
@@ -1086,8 +2370,74 @@ describe("EmbedDb", () => {
     db2.close();
 
     const Database = (await import("better-sqlite3")).default;
+
+    // Current-v4 additive authority tables may both be absent after an older
+    // interrupted rollout. Exact same-root core ownership repairs them without
+    // rebuilding or changing the embedding payload/vector.
+    const repairFile = path.join(dir, "v4-optional-repair.embed.db");
+    await seedExactEmbedFile(repairFile, "repair.md");
+    const repairRaw = new Database(repairFile);
+    const repairPayloadBefore = repairRaw
+      .prepare(
+        `SELECT id, rel_path, text_preview, hex(vector) AS vector_hex, kind
+         FROM embeddings
+         ORDER BY id`
+      )
+      .all();
+    repairRaw.exec(`
+      ${DROP_EMBED_REVISION_TRIGGERS_SQL}
+      DROP TABLE source_quarantine;
+      DROP TABLE source_revision;
+    `);
+    repairRaw.close();
+    expect(await peekEmbedDbMeta(repairFile, "/v")).toEqual(
+      expect.objectContaining({ schema_version: String(EMBED_DB_SCHEMA_VERSION), vault_root: "/v" })
+    );
+
+    const repairedV4 = new EmbedDb({ file: repairFile, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
+    await repairedV4.open();
+    expect(repairedV4.totalChunks()).toBe(1);
+    repairedV4.close();
+    const repairedRaw = new Database(repairFile, { readonly: true, fileMustExist: true });
+    try {
+      expect(
+        repairedRaw
+          .prepare(
+            `SELECT id, rel_path, text_preview, hex(vector) AS vector_hex, kind
+             FROM embeddings
+             ORDER BY id`
+          )
+          .all()
+      ).toEqual(repairPayloadBefore);
+      const repairedTables = repairedRaw
+        .prepare(
+          `SELECT name, sql
+           FROM sqlite_master
+           WHERE type = 'table' AND name IN ('source_quarantine', 'source_revision')
+           ORDER BY name`
+        )
+        .all<{ name: string; sql: string }>();
+      expect(repairedTables).toHaveLength(2);
+      expect(repairedTables.every((row) => /WITHOUT ROWID/i.test(row.sql))).toBe(true);
+      expect(repairedTables.find((row) => row.name === "source_revision")?.sql).toContain(
+        "typeof(revision) = 'integer'"
+      );
+      expect(repairedRaw.prepare("SELECT * FROM source_quarantine").all()).toEqual([]);
+      expect(repairedRaw.prepare("SELECT * FROM source_revision").all()).toEqual([
+        { rel_path: "repair.md", kind: "md", revision: 1 }
+      ]);
+      expect(
+        repairedRaw
+          .prepare("SELECT count(*) FROM sqlite_master WHERE type = 'trigger' AND name GLOB 'embed_*_revision_*'")
+          .pluck()
+          .get()
+      ).toBe(6);
+    } finally {
+      repairedRaw.close();
+    }
+
     const raw = new Database(file);
-    raw.prepare("UPDATE meta SET value = '3' WHERE key = 'schema_version'").run();
+    raw.prepare("UPDATE meta SET value = ? WHERE key = 'schema_version'").run(String(EMBED_DB_SCHEMA_VERSION - 1));
     raw.close();
 
     // POSITIVE: rc.19's fp32 → q8 inference-contract migration discards old vectors.
@@ -1099,15 +2449,136 @@ describe("EmbedDb", () => {
     ]);
     db3.close();
 
-    const legacy = new Database(file);
-    legacy.prepare("DELETE FROM meta WHERE key = 'schema_version'").run();
-    legacy.close();
+    const logicalSnapshot = () => {
+      const inspection = new Database(file, { readonly: true, fileMustExist: true });
+      try {
+        return {
+          schema: inspection
+            .prepare(
+              `SELECT type, name, tbl_name, sql
+               FROM sqlite_master
+               WHERE name NOT GLOB 'sqlite_*'
+               ORDER BY type, name`
+            )
+            .all(),
+          meta: inspection.prepare("SELECT key, value FROM meta ORDER BY key").all(),
+          embeddings: inspection
+            .prepare("SELECT rel_path, chunk_index, text_preview, hex(vector) AS vector_hex, kind FROM embeddings")
+            .all(),
+          sourceState: inspection.prepare("SELECT * FROM source_state ORDER BY rel_path").all()
+        };
+      } finally {
+        inspection.close();
+      }
+    };
+    const expectRefusalToPreserve = async (message: RegExp) => {
+      const before = logicalSnapshot();
+      const refused = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
+      await expect(refused.open()).rejects.toThrow(message);
+      expect(logicalSnapshot()).toEqual(before);
+    };
 
-    // NEGATIVE control: unknown legacy provenance must not be accepted as q8.
-    const db4 = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
-    await db4.open();
-    expect(db4.totalChunks()).toBe(0);
-    db4.close();
+    const missingVersion = new Database(file);
+    missingVersion.prepare("DELETE FROM meta WHERE key = 'schema_version'").run();
+    missingVersion.close();
+    // NEGATIVE control: a populated database without exact provenance is not
+    // a legacy migration candidate and must retain its rows and BLOBs.
+    expect(await peekEmbedDbMeta(file, "/v")).toBeNull();
+    await expectRefusalToPreserve(/ownership could not be verified/);
+
+    const futureVersion = new Database(file);
+    futureVersion
+      .prepare("INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', ?)")
+      .run(String(EMBED_DB_SCHEMA_VERSION + 1));
+    futureVersion.close();
+    expect((await peekEmbedDbMeta(file))?.schema_version).toBe(String(EMBED_DB_SCHEMA_VERSION + 1));
+    expect(await peekEmbedDbMeta(file, "/v")).toBeNull();
+    await expectRefusalToPreserve(/newer unsupported schema/);
+    await expectPathFreeRecoveryOwnershipRefusal(file, "/v");
+
+    const missingRoot = new Database(file);
+    missingRoot.prepare("UPDATE meta SET value = ? WHERE key = 'schema_version'").run(String(EMBED_DB_SCHEMA_VERSION));
+    missingRoot.prepare("DELETE FROM meta WHERE key = 'vault_root'").run();
+    missingRoot.close();
+    await expectRefusalToPreserve(/ownership could not be verified/);
+
+    const emptyRoot = new Database(file);
+    emptyRoot.prepare("INSERT INTO meta (key, value) VALUES ('vault_root', '')").run();
+    emptyRoot.close();
+    await expectRefusalToPreserve(/ownership could not be verified/);
+
+    const oversizedAuthority = new Database(file);
+    oversizedAuthority.prepare("UPDATE meta SET value = ? WHERE key = 'vault_root'").run("/v");
+    oversizedAuthority.prepare("UPDATE meta SET value = ? WHERE key = 'model_alias'").run("x".repeat(8_193));
+    oversizedAuthority.close();
+    // Bounded admission projects at most cap+1 characters and refuses the
+    // oversized authority cell; it never selects the full hostile value.
+    await expectRefusalToPreserve(/ownership could not be verified/);
+
+    // POSITIVE controls: genuine v1-v3 EmbedDb signatures with the exact
+    // root are supported legacy provenance and may be destructively rebuilt.
+    // The compact meta-table punctuation is intentional: SQLite preserves
+    // caller formatting in sqlite_master, but whitespace around `(`, `)` and
+    // `,` is not part of the historical class identity. The current v4
+    // preservation path was pinned by db2 above.
+    for (const legacyVersion of [1, 2, 3]) {
+      const legacyFile = path.join(dir, `legacy-v${legacyVersion}.embed.db`);
+      const legacy = new Database(legacyFile);
+      const kindColumn = legacyVersion >= 2 ? ",\n          kind TEXT NOT NULL DEFAULT 'md'" : "";
+      legacy.exec(`
+        CREATE TABLE meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);
+        CREATE TABLE embeddings (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          rel_path TEXT NOT NULL,
+          chunk_index INTEGER NOT NULL,
+          line_start INTEGER NOT NULL,
+          line_end INTEGER NOT NULL,
+          text_preview TEXT NOT NULL,
+          vector BLOB NOT NULL${kindColumn},
+          UNIQUE(rel_path, chunk_index)
+        );
+        CREATE INDEX embeddings_rel_path ON embeddings(rel_path);
+        CREATE TABLE source_state (
+          rel_path TEXT PRIMARY KEY,
+          mtime_ms INTEGER NOT NULL,
+          n_chunks INTEGER NOT NULL${kindColumn},
+          indexed_at TEXT NOT NULL
+        );
+      `);
+      const putMeta = legacy.prepare("INSERT INTO meta (key, value) VALUES (?, ?)");
+      for (const [key, value] of [
+        ["schema_version", String(legacyVersion)],
+        ["vault_root", "/v"],
+        ["model_alias", "multilingual"],
+        ["dim", "4"]
+      ]) {
+        putMeta.run(key, value);
+      }
+      if (legacyVersion >= 3) putMeta.run("quantization", "f32");
+      const embeddingKind = legacyVersion >= 2 ? ", kind" : "";
+      const embeddingKindValue = legacyVersion >= 2 ? ", 'md'" : "";
+      legacy
+        .prepare(
+          `INSERT INTO embeddings
+             (rel_path, chunk_index, line_start, line_end, text_preview, vector${embeddingKind})
+           VALUES (?, 0, 1, 1, ?, ?${embeddingKindValue})`
+        )
+        .run("legacy.md", "legacy", Buffer.from(l2([1, 0, 0, 0]).buffer));
+      const stateKind = legacyVersion >= 2 ? ", kind" : "";
+      const stateKindValue = legacyVersion >= 2 ? ", 'md'" : "";
+      legacy
+        .prepare(
+          `INSERT INTO source_state (rel_path, mtime_ms, n_chunks${stateKind}, indexed_at)
+           VALUES (?, 1, 1${stateKindValue}, 'legacy')`
+        )
+        .run("legacy.md");
+      legacy.close();
+
+      const migrated = new EmbedDb({ file: legacyFile, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
+      await migrated.open();
+      expect(migrated.totalChunks()).toBe(0);
+      migrated.close();
+    }
   });
 });
 
@@ -1209,6 +2680,19 @@ describe("EmbedDb int8 quantization", () => {
   });
 
   it("rebuilds when the quantization mode changes (f32 ↔ int8)", async () => {
+    const unopenedParent = path.join(dir, "invalid-quantization");
+    expect(
+      () =>
+        new EmbedDb({
+          file: path.join(unopenedParent, "invalid.embed.db"),
+          vaultRoot: "/v",
+          modelAlias: "multilingual",
+          dim: 4,
+          quantization: "invalid" as never
+        })
+    ).toThrow(/quantization must be/);
+    await expect(fs.stat(unopenedParent)).rejects.toMatchObject({ code: "ENOENT" });
+
     const file = path.join(dir, "swap.embed.db");
     const f32 = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
     await f32.open();
@@ -1497,13 +2981,23 @@ describe("peekEmbedDbMeta is truly safe — never throws (v3.10.0-rc.34, RCA sib
   // threw out of the peek and errored the embeddings_search hot path / crashed
   // CLI subcommands that call it unguarded.
   it("returns null for a non-existent file", async () => {
-    expect(await peekEmbedDbMeta(path.join(os.tmpdir(), `enquire-nope-${Date.now()}.embed.db`))).toBeNull();
+    const missing = path.join(os.tmpdir(), `enquire-nope-${Date.now()}.embed.db`);
+    expect(await peekEmbedDbMeta(missing)).toBeNull();
+    expect(await discoverEmbedDbConfig(missing, "/v")).toEqual({ kind: "missing" });
+    await expect(assertEmbedDbRecoveryOwnership(missing, "/v")).resolves.toBeUndefined();
   });
 
   it("returns null (not throw) when the path is a DIRECTORY", async () => {
     const d = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-embed-dir-"));
     try {
+      const modeBefore = (await fs.stat(d)).mode & 0o777;
       expect(await peekEmbedDbMeta(d)).toBeNull();
+      expect(await discoverEmbedDbConfig(d, "/v")).toEqual({ kind: "refused" });
+      expect(await discoverEmbedDbConfigCached(d, "/v")).toEqual({ kind: "refused" });
+      const directoryDb = new EmbedDb({ file: d, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
+      await expect(directoryDb.open()).rejects.toThrow("Embedding index could not be inspected");
+      expect((await fs.stat(d)).mode & 0o777).toBe(modeBefore);
+      await expectPathFreeRecoveryOwnershipRefusal(d, "/v");
     } finally {
       await fs.rm(d, { recursive: true, force: true });
     }
@@ -1515,6 +3009,7 @@ describe("peekEmbedDbMeta is truly safe — never throws (v3.10.0-rc.34, RCA sib
     await fs.writeFile(f, "this is not a sqlite database");
     try {
       expect(await peekEmbedDbMeta(f)).toBeNull();
+      await expectPathFreeRecoveryOwnershipRefusal(f, "/v");
     } finally {
       await fs.rm(d, { recursive: true, force: true });
     }

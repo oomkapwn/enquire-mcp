@@ -25,19 +25,19 @@ import { optionalDepDetail } from "./optional-dep.js";
  *  alias users pass on the CLI. */
 export interface EmbeddingModel {
   /** CLI-friendly alias passed via `--embedding-model <alias>`. */
-  alias: string;
+  readonly alias: string;
   /** HuggingFace model id (Xenova-converted to ONNX). */
-  hfId: string;
+  readonly hfId: string;
   /** Output vector dimensionality (384 for MiniLM family). */
-  dim: number;
+  readonly dim: number;
   /** Approximate disk footprint in MB after download, for progress messages. */
-  approxSizeMB: number;
+  readonly approxSizeMB: number;
   /** ONNX weight dtype loaded by transformers.js. Pinned to q8 for bounded local inference. */
-  dtype: "q8";
+  readonly dtype: "q8";
   /** True if this model has been trained on multilingual data. */
-  multilingual: boolean;
+  readonly multilingual: boolean;
   /** Maximum input tokens before transformers.js truncates. */
-  maxTokens: number;
+  readonly maxTokens: number;
 }
 
 /**
@@ -47,7 +47,7 @@ export interface EmbeddingModel {
  * runtime can't accidentally mutate.
  */
 export const EMBEDDING_MODELS: Readonly<Record<string, EmbeddingModel>> = Object.freeze({
-  multilingual: {
+  multilingual: Object.freeze({
     alias: "multilingual",
     hfId: "Xenova/paraphrase-multilingual-MiniLM-L12-v2",
     dim: 384,
@@ -55,8 +55,8 @@ export const EMBEDDING_MODELS: Readonly<Record<string, EmbeddingModel>> = Object
     dtype: "q8",
     multilingual: true,
     maxTokens: 128
-  },
-  bge: {
+  }),
+  bge: Object.freeze({
     alias: "bge",
     hfId: "Xenova/bge-small-en-v1.5",
     dim: 384,
@@ -64,7 +64,7 @@ export const EMBEDDING_MODELS: Readonly<Record<string, EmbeddingModel>> = Object
     dtype: "q8",
     multilingual: false,
     maxTokens: 512
-  }
+  })
 });
 
 /** Default model alias when the user doesn't pass `--embedding-model`. */
@@ -138,6 +138,50 @@ export function resolveModel(alias: string | undefined): EmbeddingModel {
     throw new Error(`Unknown embedding model alias '${key}'. Known aliases: ${known}.`);
   }
   return model;
+}
+
+/**
+ * Project storage metadata admitted by expected-root EmbedDb discovery onto the
+ * finite runtime model catalog. Unknown aliases, inconsistent dimensions, and
+ * unsupported quantization values collapse to one path-free error before a
+ * caller can log metadata, load a model, or open a writable database handle.
+ * Historical schema v1/v2 omitted `quantization` by contract and normalize to
+ * `f32`; later admitted schemas must provide exact `f32` or `int8` metadata.
+ *
+ * @param meta - Full-class, expected-root metadata returned by EmbedDb discovery.
+ * @returns The supported catalog model and exact storage quantization.
+ * @throws {Error} If the stored configuration cannot be mapped safely.
+ * @example
+ * ```ts
+ * const stored = resolveStoredEmbeddingConfiguration({
+ *   schema_version: "4",
+ *   model_alias: "multilingual",
+ *   dim: "384",
+ *   quantization: "f32"
+ * });
+ * ```
+ */
+export function resolveStoredEmbeddingConfiguration(
+  meta: Readonly<{
+    schema_version: string;
+    model_alias: string;
+    dim: string;
+    quantization?: string;
+  }>
+): { readonly model: EmbeddingModel; readonly quantization: "f32" | "int8" } {
+  try {
+    if (meta.schema_version === undefined || meta.model_alias === undefined || meta.dim === undefined) {
+      throw new Error("incomplete");
+    }
+    const quantization =
+      meta.quantization ?? (meta.schema_version === "1" || meta.schema_version === "2" ? "f32" : undefined);
+    if (quantization !== "f32" && quantization !== "int8") throw new Error("unsupported");
+    const model = resolveModel(meta.model_alias);
+    if (String(model.dim) !== meta.dim) throw new Error("inconsistent");
+    return Object.freeze({ model, quantization });
+  } catch {
+    throw new Error("Embedding index configuration could not be verified");
+  }
 }
 
 /** Opaque handle for a loaded embedder. Constructed via `loadEmbedder()`. */
@@ -444,15 +488,15 @@ export function cosineSim(a: Float32Array, b: Float32Array): number {
 /** BGE reranker model catalog — analogous to `EMBEDDING_MODELS`. */
 export interface RerankerModel {
   /** CLI-friendly alias passed via `--reranker-model <alias>`. */
-  alias: string;
+  readonly alias: string;
   /** HuggingFace model id (Xenova-converted to ONNX). */
-  hfId: string;
+  readonly hfId: string;
   /** Approximate disk footprint in MB after download. */
-  approxSizeMB: number;
+  readonly approxSizeMB: number;
   /** True if trained on multilingual data. */
-  multilingual: boolean;
+  readonly multilingual: boolean;
   /** Max combined (query + passage) tokens — BGE base is 512. */
-  maxTokens: number;
+  readonly maxTokens: number;
 }
 
 /**
@@ -462,47 +506,47 @@ export interface RerankerModel {
  */
 export const RERANKER_MODELS: Readonly<Record<string, RerankerModel>> = Object.freeze({
   // BGE-reranker-base — English, ~110 MB. Latency ~30-50ms per pair on M1 CPU.
-  "rerank-bge": {
+  "rerank-bge": Object.freeze({
     alias: "rerank-bge",
     hfId: "Xenova/bge-reranker-base",
     approxSizeMB: 110,
     multilingual: false,
     maxTokens: 512
-  },
+  }),
   // mxbai-rerank-xsmall-v1 — multilingual, ~25 MB, much faster than BGE-base.
   // Better default for users on slower hardware or larger candidate sets.
   // Cited in MTEB leaderboard as comparable to BGE-base on English while
   // staying multilingual.
-  "rerank-multilingual": {
+  "rerank-multilingual": Object.freeze({
     alias: "rerank-multilingual",
     hfId: "Xenova/mxbai-rerank-xsmall-v1",
     approxSizeMB: 25,
     multilingual: true,
     maxTokens: 512
-  },
+  }),
   // v3.3.0 — additional reranker options for users who want different
   // size/quality/language tradeoffs.
   //
   // BGE-reranker-large — English, ~560 MB. Larger than rerank-bge with
   // higher quality (often +1-2 NDCG@10 vs base). Use when retrieval
   // quality matters more than memory.
-  "rerank-bge-large": {
+  "rerank-bge-large": Object.freeze({
     alias: "rerank-bge-large",
     hfId: "Xenova/bge-reranker-large",
     approxSizeMB: 560,
     multilingual: false,
     maxTokens: 512
-  },
+  }),
   // jina-reranker-v1-tiny-en — English, ~33 MB. Faster than rerank-bge
   // (the "tiny" reranker), comparable quality on shorter passages.
   // Good when reranker latency is the bottleneck.
-  "rerank-jina-tiny": {
+  "rerank-jina-tiny": Object.freeze({
     alias: "rerank-jina-tiny",
     hfId: "Xenova/jina-reranker-v1-tiny-en",
     approxSizeMB: 33,
     multilingual: false,
     maxTokens: 512
-  },
+  }),
   // mxbai-rerank-large-v2 — multilingual, ~280 MB. Higher quality than
   // the xsmall `rerank-multilingual` (which is the multilingual variant,
   // NOT the project-wide default — see `DEFAULT_RERANKER_ALIAS` below; it
@@ -510,13 +554,13 @@ export const RERANKER_MODELS: Readonly<Record<string, RerankerModel>> = Object.f
   // aliases fail at `AutoTokenizer.from_pretrained` due to a
   // transformers.js compat issue). Multi-language benchmark performance
   // is solid; cost is the larger download.
-  "rerank-multilingual-large": {
+  "rerank-multilingual-large": Object.freeze({
     alias: "rerank-multilingual-large",
     hfId: "Xenova/mxbai-rerank-large-v2",
     approxSizeMB: 280,
     multilingual: true,
     maxTokens: 512
-  }
+  })
 });
 
 // v3.6.1 CRIT-2 — was "rerank-multilingual" but per v3.6.0 CHANGELOG, only

@@ -168,8 +168,8 @@ describe("FeedbackStore (v3.11.0 closed-loop feedback)", () => {
   });
 
   // v3.11.0-rc.1 audit response (MED): persist() must create the cache dir 0700
-  // (every sibling cache writer does), so SECURITY.md's "Parent dir mode is 0700"
-  // holds even when the feedback store is the FIRST writer to materialize it.
+  // (every sibling cache writer does), so SECURITY.md's Enquire-created-parent
+  // 0700 posture holds when feedback is the FIRST writer to materialize it.
   it("persist creates the cache dir 0700 (not 0755) and the file 0600", async () => {
     // A parent that does NOT exist yet, so writeOnce's mkdir is the creator.
     const freshFile = path.join(dir, "nested", "enquire", "abc123def456.feedback.json");

@@ -11,7 +11,7 @@
 //
 // Architecture mirrors fts5.ts:
 //   - Lazy-loaded better-sqlite3 (optional dep)
-//   - 0600 chmod on db + WAL/SHM sidecars
+//   - best-effort 0600 chmod on db + WAL/SHM sidecars
 //   - meta-table cross-vault contamination guard (vault_root, model alias, dim)
 //   - source_state mtime tracking for incremental rebuilds
 //
@@ -50,6 +50,36 @@ export type EmbedChunkKind = "md" | "pdf";
 
 /** v2.17.0 — vector storage encoding. */
 export type EmbedQuantization = "f32" | "int8";
+
+/**
+ * Exact metadata exposed after full readonly embedding-store admission.
+ * Historical schema versions 1 and 2 did not persist `quantization`; those
+ * stores are necessarily `f32` and production callers normalize that absence
+ * through `resolveStoredEmbeddingConfiguration()` in `src/embeddings.ts`.
+ *
+ * @example
+ * ```ts
+ * const meta: EmbedDbOwnedMeta = {
+ *   schema_version: "4",
+ *   vault_root: "/vault",
+ *   model_alias: "multilingual",
+ *   dim: "384",
+ *   quantization: "f32"
+ * };
+ * ```
+ */
+export interface EmbedDbOwnedMeta {
+  /** Supported historical on-disk schema version. */
+  readonly schema_version: string;
+  /** Exact stored vault root proven equal to the expected canonical root. */
+  readonly vault_root: string;
+  /** Stored embedding-model alias. Production callers validate it against their catalog. */
+  readonly model_alias: string;
+  /** Stored positive vector dimension, serialized canonically as a decimal string. */
+  readonly dim: string;
+  /** Stored vector encoding; absent only for historical schema versions 1 and 2. */
+  readonly quantization?: EmbedQuantization;
+}
 
 /**
  * A single hit from {@link EmbedDb.search}. Mirrors the `FtsSearchHit`
@@ -192,7 +222,7 @@ interface Db {
   exec(sql: string): void;
   close(): void;
   pragma(query: string): unknown;
-  transaction(fn: (...args: unknown[]) => unknown): (...args: unknown[]) => unknown;
+  transaction<F extends (...args: never[]) => unknown>(fn: F): F & { immediate: F };
 }
 interface Stmt {
   // better-sqlite3's `run` returns `{ changes, lastInsertRowid }`. We type
@@ -301,7 +331,425 @@ const CURRENT_SOURCE_RECEIPT_SQL = `SELECT 1 AS current
   LIMIT 1`;
 
 function normalizeSql(sql: string): string {
-  return sql.replace(/\s+/g, " ").trim().replace(/;$/, "").toLowerCase();
+  let normalized = "";
+  let inLiteral = false;
+  let omitsFollowingSpace = false;
+  let pendingSpace = false;
+  for (let index = 0; index < sql.length; index++) {
+    const char = sql[index];
+    if (char === undefined) break;
+    if (inLiteral) {
+      normalized += char;
+      if (char === "'") {
+        if (sql[index + 1] === "'") {
+          normalized += "'";
+          index += 1;
+        } else {
+          inLiteral = false;
+        }
+      }
+      continue;
+    }
+    if (/\s/u.test(char)) {
+      pendingSpace = normalized.length > 0;
+      continue;
+    }
+    // Parenthesis/comma spacing is not part of SQLite DDL identity. Keep the
+    // comparison strict on every token and literal byte while admitting the
+    // compact formatting SQLite preserves from historical CREATE statements.
+    const punctuation = char === "(" || char === ")" || char === ",";
+    if (pendingSpace && !punctuation && !omitsFollowingSpace) normalized += " ";
+    pendingSpace = false;
+    if (char === "'") {
+      normalized += char;
+      inLiteral = true;
+      omitsFollowingSpace = false;
+    } else {
+      normalized += char.toLowerCase();
+      omitsFollowingSpace = char === "(" || char === ",";
+    }
+  }
+  if (normalized.endsWith(";")) normalized = normalized.slice(0, -1).trimEnd();
+  return normalized;
+}
+
+function normalizeCreateTableSql(sql: string): string {
+  return normalizeSql(sql).replace(/^create table if not exists /, "create table ");
+}
+
+function normalizeCreateIndexSql(sql: string): string {
+  return normalizeSql(sql).replace(/^create index if not exists /, "create index ");
+}
+
+const META_TABLE_SQL = `CREATE TABLE IF NOT EXISTS meta (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+)`;
+const EMBEDDINGS_V1_TABLE_SQL = `CREATE TABLE IF NOT EXISTS embeddings (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  rel_path TEXT NOT NULL,
+  chunk_index INTEGER NOT NULL,
+  line_start INTEGER NOT NULL,
+  line_end INTEGER NOT NULL,
+  text_preview TEXT NOT NULL,
+  vector BLOB NOT NULL,
+  UNIQUE(rel_path, chunk_index)
+)`;
+const EMBEDDINGS_V2_TABLE_SQL = `CREATE TABLE IF NOT EXISTS embeddings (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  rel_path TEXT NOT NULL,
+  chunk_index INTEGER NOT NULL,
+  line_start INTEGER NOT NULL,
+  line_end INTEGER NOT NULL,
+  text_preview TEXT NOT NULL,
+  vector BLOB NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'md',
+  UNIQUE(rel_path, chunk_index)
+)`;
+const EMBEDDINGS_REL_PATH_INDEX_SQL = "CREATE INDEX IF NOT EXISTS embeddings_rel_path ON embeddings(rel_path)";
+const SOURCE_STATE_V1_TABLE_SQL = `CREATE TABLE IF NOT EXISTS source_state (
+  rel_path TEXT PRIMARY KEY,
+  mtime_ms INTEGER NOT NULL,
+  n_chunks INTEGER NOT NULL,
+  indexed_at TEXT NOT NULL
+)`;
+const SOURCE_STATE_V2_TABLE_SQL = `CREATE TABLE IF NOT EXISTS source_state (
+  rel_path TEXT PRIMARY KEY,
+  mtime_ms INTEGER NOT NULL,
+  n_chunks INTEGER NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'md',
+  indexed_at TEXT NOT NULL
+)`;
+const SOURCE_QUARANTINE_TABLE_SQL = `CREATE TABLE IF NOT EXISTS source_quarantine (
+  rel_path TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  PRIMARY KEY (rel_path, kind)
+) WITHOUT ROWID`;
+const SOURCE_REVISION_TABLE_SQL = `CREATE TABLE IF NOT EXISTS source_revision (
+  rel_path TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  revision INTEGER NOT NULL CHECK (
+    typeof(revision) = 'integer'
+      AND revision BETWEEN 1 AND 9007199254740991
+  ),
+  PRIMARY KEY (rel_path, kind)
+) WITHOUT ROWID`;
+
+const MAX_EMBED_ADMISSION_OBJECTS = 32;
+const MAX_EMBED_ADMISSION_INDEXES = 8;
+const MAX_EMBED_ADMISSION_NAME_CHARS = 128;
+const MAX_EMBED_ADMISSION_SQL_CHARS = 32_768;
+const MAX_EMBED_META_VALUE_CHARS = 8_192;
+const EMBED_ADMISSION_OBJECT_TYPES = new Map<string, string>([
+  ["meta", "table"],
+  ["embeddings", "table"],
+  ["source_state", "table"],
+  ["source_quarantine", "table"],
+  ["source_revision", "table"],
+  ["embeddings_rel_path", "index"],
+  ...SOURCE_REVISION_TRIGGER_NAMES.map((name) => [name, "trigger"] as const)
+]);
+const EMBED_META_KEYS = new Set(["schema_version", "vault_root", "model_alias", "dim", "quantization"]);
+
+type EmbedAdmission =
+  | { kind: "empty"; signature: "empty" }
+  | { kind: "owned"; meta: EmbedDbOwnedMeta; signature: string }
+  | { kind: "refused"; reason: "foreign" | "future" | "malformed" };
+
+interface EmbedAdmissionColumn {
+  name: string;
+  type: string;
+  notnull: number;
+  pk: number;
+}
+
+// Persisted class signatures: v1 is the original markdown-only schema; v2
+// adds `kind`; v3 keeps v2 columns and adds exact quantization metadata; v4
+// keeps the core shape and adds the repairable quarantine/revision ledger.
+const EMBED_V1_COLUMNS: readonly EmbedAdmissionColumn[] = [
+  { name: "id", type: "INTEGER", notnull: 0, pk: 1 },
+  { name: "rel_path", type: "TEXT", notnull: 1, pk: 0 },
+  { name: "chunk_index", type: "INTEGER", notnull: 1, pk: 0 },
+  { name: "line_start", type: "INTEGER", notnull: 1, pk: 0 },
+  { name: "line_end", type: "INTEGER", notnull: 1, pk: 0 },
+  { name: "text_preview", type: "TEXT", notnull: 1, pk: 0 },
+  { name: "vector", type: "BLOB", notnull: 1, pk: 0 }
+];
+const EMBED_V2_COLUMNS: readonly EmbedAdmissionColumn[] = [
+  ...EMBED_V1_COLUMNS,
+  { name: "kind", type: "TEXT", notnull: 1, pk: 0 }
+];
+const SOURCE_STATE_V1_COLUMNS: readonly EmbedAdmissionColumn[] = [
+  { name: "rel_path", type: "TEXT", notnull: 0, pk: 1 },
+  { name: "mtime_ms", type: "INTEGER", notnull: 1, pk: 0 },
+  { name: "n_chunks", type: "INTEGER", notnull: 1, pk: 0 },
+  { name: "indexed_at", type: "TEXT", notnull: 1, pk: 0 }
+];
+const SOURCE_STATE_V2_COLUMNS: readonly EmbedAdmissionColumn[] = [
+  { name: "rel_path", type: "TEXT", notnull: 0, pk: 1 },
+  { name: "mtime_ms", type: "INTEGER", notnull: 1, pk: 0 },
+  { name: "n_chunks", type: "INTEGER", notnull: 1, pk: 0 },
+  { name: "kind", type: "TEXT", notnull: 1, pk: 0 },
+  { name: "indexed_at", type: "TEXT", notnull: 1, pk: 0 }
+];
+const SOURCE_QUARANTINE_COLUMNS: readonly EmbedAdmissionColumn[] = [
+  { name: "rel_path", type: "TEXT", notnull: 1, pk: 1 },
+  { name: "kind", type: "TEXT", notnull: 1, pk: 2 }
+];
+const SOURCE_REVISION_COLUMNS: readonly EmbedAdmissionColumn[] = [
+  { name: "rel_path", type: "TEXT", notnull: 1, pk: 1 },
+  { name: "kind", type: "TEXT", notnull: 1, pk: 2 },
+  { name: "revision", type: "INTEGER", notnull: 1, pk: 0 }
+];
+
+function hasExactAdmissionColumns(
+  db: Db,
+  table: "embeddings" | "source_state" | "source_quarantine" | "source_revision",
+  expected: readonly EmbedAdmissionColumn[]
+): boolean {
+  const columns = db
+    .prepare('SELECT cid, name, type, "notnull", dflt_value, pk FROM pragma_table_info(?) ORDER BY cid LIMIT ?')
+    .all<EmbedAdmissionColumn & { cid: number; dflt_value: string | null }>(table, expected.length + 1);
+  return (
+    columns.length === expected.length &&
+    columns.every((column, index) => {
+      const wanted = expected[index];
+      return (
+        wanted !== undefined &&
+        column.cid === index &&
+        column.name === wanted.name &&
+        column.type.toUpperCase() === wanted.type &&
+        column.notnull === wanted.notnull &&
+        column.dflt_value ===
+          ((table === "embeddings" || table === "source_state") && wanted.name === "kind" ? "'md'" : null) &&
+        column.pk === wanted.pk
+      );
+    })
+  );
+}
+
+function inspectEmbedAdmission(db: Db, expectedVaultRoot: string): EmbedAdmission {
+  try {
+    const objects = db
+      .prepare(
+        `SELECT type,
+                substr(name, 1, ?) AS name,
+                substr(sql, 1, ?) AS sql
+         FROM sqlite_master
+         WHERE name NOT GLOB 'sqlite_*'
+         LIMIT ?`
+      )
+      .all<{
+        type: string;
+        name: string;
+        sql: string | null;
+      }>(MAX_EMBED_ADMISSION_NAME_CHARS + 1, MAX_EMBED_ADMISSION_SQL_CHARS + 1, MAX_EMBED_ADMISSION_OBJECTS + 1);
+    if (objects.length === 0) return { kind: "empty", signature: "empty" };
+    if (objects.length > MAX_EMBED_ADMISSION_OBJECTS) return { kind: "refused", reason: "malformed" };
+    objects.sort((left, right) => left.type.localeCompare(right.type) || left.name.localeCompare(right.name));
+
+    const objectTypes = new Map(objects.map((object) => [object.name, object.type]));
+    const objectSql = new Map(objects.map((object) => [object.name, object.sql]));
+    for (const object of objects) {
+      if (
+        object.name.length > MAX_EMBED_ADMISSION_NAME_CHARS ||
+        object.sql === null ||
+        object.sql.length > MAX_EMBED_ADMISSION_SQL_CHARS ||
+        EMBED_ADMISSION_OBJECT_TYPES.get(object.name) !== object.type
+      ) {
+        return { kind: "refused", reason: "malformed" };
+      }
+    }
+    if (
+      objectTypes.get("meta") !== "table" ||
+      objectTypes.get("embeddings") !== "table" ||
+      objectTypes.get("source_state") !== "table"
+    ) {
+      return { kind: "refused", reason: "malformed" };
+    }
+
+    const metaColumns = db
+      .prepare(
+        "SELECT cid, name, type, \"notnull\", dflt_value, pk FROM pragma_table_info('meta') ORDER BY cid LIMIT 3"
+      )
+      .all<{
+        cid: number;
+        dflt_value: string | null;
+        name: string;
+        type: string;
+        notnull: number;
+        pk: number;
+      }>();
+    if (
+      metaColumns.length !== 2 ||
+      metaColumns[0]?.cid !== 0 ||
+      metaColumns[0]?.name !== "key" ||
+      metaColumns[0]?.type.toUpperCase() !== "TEXT" ||
+      metaColumns[0]?.notnull !== 0 ||
+      metaColumns[0]?.dflt_value !== null ||
+      metaColumns[0]?.pk !== 1 ||
+      metaColumns[1]?.cid !== 1 ||
+      metaColumns[1]?.name !== "value" ||
+      metaColumns[1]?.type.toUpperCase() !== "TEXT" ||
+      metaColumns[1]?.notnull !== 1 ||
+      metaColumns[1]?.dflt_value !== null ||
+      metaColumns[1]?.pk !== 0
+    ) {
+      return { kind: "refused", reason: "malformed" };
+    }
+
+    const rows = db
+      .prepare(
+        `SELECT substr(key, 1, ?) AS key,
+                substr(value, 1, ?) AS value
+         FROM meta
+         LIMIT ?`
+      )
+      .all<{ key: unknown; value: unknown }>(
+        MAX_EMBED_ADMISSION_NAME_CHARS + 1,
+        MAX_EMBED_META_VALUE_CHARS + 1,
+        EMBED_META_KEYS.size + 1
+      );
+    if (rows.length < 4 || rows.length > EMBED_META_KEYS.size) {
+      return { kind: "refused", reason: "malformed" };
+    }
+    const meta: Record<string, string> = {};
+    for (const row of rows) {
+      if (
+        typeof row.key !== "string" ||
+        row.key.length > MAX_EMBED_ADMISSION_NAME_CHARS ||
+        typeof row.value !== "string" ||
+        row.value.length > MAX_EMBED_META_VALUE_CHARS ||
+        !EMBED_META_KEYS.has(row.key) ||
+        Object.hasOwn(meta, row.key)
+      ) {
+        return { kind: "refused", reason: "malformed" };
+      }
+      meta[row.key] = row.value;
+    }
+    rows.sort((left, right) => String(left.key).localeCompare(String(right.key)));
+
+    const storedSchemaVersion = meta.schema_version;
+    const storedRoot = meta.vault_root;
+    const storedModelAlias = meta.model_alias;
+    const storedDim = meta.dim;
+    const storedQuantization = meta.quantization;
+    const schemaVersion = Number(storedSchemaVersion);
+    const dim = Number(storedDim);
+    if (
+      typeof storedSchemaVersion !== "string" ||
+      !Number.isSafeInteger(schemaVersion) ||
+      schemaVersion < 1 ||
+      String(schemaVersion) !== storedSchemaVersion ||
+      typeof storedDim !== "string" ||
+      !Number.isSafeInteger(dim) ||
+      dim < 1 ||
+      String(dim) !== storedDim ||
+      typeof storedRoot !== "string" ||
+      storedRoot.length === 0 ||
+      typeof storedModelAlias !== "string" ||
+      storedModelAlias.length === 0 ||
+      (storedQuantization !== undefined && storedQuantization !== "f32" && storedQuantization !== "int8") ||
+      (schemaVersion >= 3 && storedQuantization === undefined) ||
+      (schemaVersion < 3 && storedQuantization !== undefined)
+    ) {
+      return { kind: "refused", reason: "malformed" };
+    }
+    const expectedEmbedColumns = schemaVersion === 1 ? EMBED_V1_COLUMNS : EMBED_V2_COLUMNS;
+    const expectedSourceColumns = schemaVersion === 1 ? SOURCE_STATE_V1_COLUMNS : SOURCE_STATE_V2_COLUMNS;
+    const expectedEmbedSql = schemaVersion === 1 ? EMBEDDINGS_V1_TABLE_SQL : EMBEDDINGS_V2_TABLE_SQL;
+    const expectedSourceSql = schemaVersion === 1 ? SOURCE_STATE_V1_TABLE_SQL : SOURCE_STATE_V2_TABLE_SQL;
+    if (
+      objectTypes.get("embeddings_rel_path") !== "index" ||
+      normalizeCreateTableSql(objectSql.get("meta") ?? "") !== normalizeCreateTableSql(META_TABLE_SQL) ||
+      normalizeCreateTableSql(objectSql.get("embeddings") ?? "") !== normalizeCreateTableSql(expectedEmbedSql) ||
+      normalizeCreateTableSql(objectSql.get("source_state") ?? "") !== normalizeCreateTableSql(expectedSourceSql) ||
+      normalizeCreateIndexSql(objectSql.get("embeddings_rel_path") ?? "") !==
+        normalizeCreateIndexSql(EMBEDDINGS_REL_PATH_INDEX_SQL) ||
+      !hasExactAdmissionColumns(db, "embeddings", expectedEmbedColumns) ||
+      !hasExactAdmissionColumns(db, "source_state", expectedSourceColumns)
+    ) {
+      return { kind: "refused", reason: "malformed" };
+    }
+    if (
+      (objectTypes.has("source_quarantine") &&
+        (!hasExactAdmissionColumns(db, "source_quarantine", SOURCE_QUARANTINE_COLUMNS) ||
+          normalizeCreateTableSql(objectSql.get("source_quarantine") ?? "") !==
+            normalizeCreateTableSql(SOURCE_QUARANTINE_TABLE_SQL))) ||
+      (objectTypes.has("source_revision") &&
+        (!hasExactAdmissionColumns(db, "source_revision", SOURCE_REVISION_COLUMNS) ||
+          normalizeCreateTableSql(objectSql.get("source_revision") ?? "") !==
+            normalizeCreateTableSql(SOURCE_REVISION_TABLE_SQL)))
+    ) {
+      return { kind: "refused", reason: "malformed" };
+    }
+    const relPathIndex = db
+      .prepare("SELECT seqno, name FROM pragma_index_info(?) ORDER BY seqno LIMIT 2")
+      .all<{ seqno: number; name: string }>("embeddings_rel_path");
+    const embeddingIndexes = db
+      .prepare(
+        `SELECT name, "unique" AS is_unique, origin, partial
+         FROM pragma_index_list('embeddings')
+         LIMIT ?`
+      )
+      .all<{ name: string; is_unique: number; origin: string; partial: number }>(MAX_EMBED_ADMISSION_INDEXES + 1);
+    embeddingIndexes.sort((left, right) => left.name.localeCompare(right.name));
+    if (embeddingIndexes.length !== 2) {
+      return { kind: "refused", reason: "malformed" };
+    }
+    const relPathIndexDefinition = embeddingIndexes.find((index) => index.name === "embeddings_rel_path");
+    const uniquePathChunkIndex = embeddingIndexes.some((index) => {
+      if (index.is_unique !== 1 || index.origin !== "u" || index.partial !== 0) return false;
+      const columns = db
+        .prepare("SELECT seqno, name FROM pragma_index_info(?) ORDER BY seqno LIMIT 3")
+        .all<{ seqno: number; name: string }>(index.name);
+      return (
+        columns.length === 2 &&
+        columns[0]?.seqno === 0 &&
+        columns[0]?.name === "rel_path" &&
+        columns[1]?.seqno === 1 &&
+        columns[1]?.name === "chunk_index"
+      );
+    });
+    if (
+      relPathIndexDefinition === undefined ||
+      relPathIndexDefinition.is_unique !== 0 ||
+      relPathIndexDefinition.origin !== "c" ||
+      relPathIndexDefinition.partial !== 0 ||
+      relPathIndex.length !== 1 ||
+      relPathIndex[0]?.seqno !== 0 ||
+      relPathIndex[0]?.name !== "rel_path" ||
+      !uniquePathChunkIndex
+    ) {
+      return { kind: "refused", reason: "malformed" };
+    }
+    if (schemaVersion > EMBED_DB_SCHEMA_VERSION) return { kind: "refused", reason: "future" };
+    if (storedRoot !== expectedVaultRoot) return { kind: "refused", reason: "foreign" };
+    const ownedMeta: EmbedDbOwnedMeta = {
+      schema_version: storedSchemaVersion,
+      vault_root: storedRoot,
+      model_alias: storedModelAlias,
+      dim: storedDim,
+      ...(storedQuantization === undefined ? {} : { quantization: storedQuantization })
+    };
+    return {
+      kind: "owned",
+      meta: ownedMeta,
+      signature: JSON.stringify([objects, metaColumns, rows, embeddingIndexes])
+    };
+  } catch {
+    return { kind: "refused", reason: "malformed" };
+  }
+}
+
+function assertEmbedAdmission(
+  admission: EmbedAdmission
+): asserts admission is Exclude<EmbedAdmission, { kind: "refused" }> {
+  if (admission.kind !== "refused") return;
+  if (admission.reason === "future") {
+    throw new Error("Embedding index uses a newer unsupported schema");
+  }
+  throw new Error("Embedding index ownership could not be verified");
 }
 
 function isValidSourceReceipt(receipt: EmbedSourceReceipt): boolean {
@@ -475,8 +923,11 @@ export function decodeInt8Vector(buf: Buffer, dim: number): Float32Array {
  * top-K is available via {@link EmbedDb.search}; wrap with HNSW (see
  * `src/hnsw.ts`) for approximate nearest-neighbor retrieval.
  *
- * Schema is bootstrapped on `open()` and auto-rebuilt on any meta
- * mismatch (vault root, model alias, dim, quantization, schema version).
+ * `open()` admits only a truly schema-empty file or a structurally recognized
+ * embedding index for the exact vault root. A recognized same-root index is
+ * rebuilt for supported legacy-schema or model/dim/quantization mismatches;
+ * foreign, malformed, and future-schema databases are refused without
+ * Enquire-issued persistent PRAGMA, DDL, DML, chmod, or HNSW actions.
  *
  * @example
  * ```ts
@@ -498,51 +949,105 @@ export class EmbedDb {
   /** Bytes per encoded vector — pre-computed once for hot-path checks. */
   private readonly encodedBytes: number;
 
+  /**
+   * Create a lazy embedding-index handle after validating all runtime options.
+   *
+   * @param opts - Database path plus exact vault/model/vector authority tuple.
+   * @throws {TypeError} If a string or quantization option is invalid.
+   * @throws {RangeError} If `dim` is not a positive safe integer.
+   */
   constructor(opts: EmbedDbOptions) {
+    if (typeof opts.file !== "string" || opts.file.length === 0) {
+      throw new TypeError("Embedding index file must be a non-empty string");
+    }
+    if (typeof opts.vaultRoot !== "string" || opts.vaultRoot.length === 0) {
+      throw new TypeError("Embedding index vault root must be a non-empty string");
+    }
+    if (typeof opts.modelAlias !== "string" || opts.modelAlias.length === 0) {
+      throw new TypeError("Embedding model alias must be a non-empty string");
+    }
+    if (!Number.isSafeInteger(opts.dim) || opts.dim < 1) {
+      throw new RangeError("Embedding vector dimension must be a positive safe integer");
+    }
+    const quantization = opts.quantization ?? "f32";
+    if (quantization !== "f32" && quantization !== "int8") {
+      throw new TypeError("Embedding quantization must be 'f32' or 'int8'");
+    }
     this.file = opts.file;
     this.vaultRoot = opts.vaultRoot;
     this.modelAlias = opts.modelAlias;
     this.dim = opts.dim;
-    this.quantization = opts.quantization ?? "f32";
+    this.quantization = quantization;
     this.encodedBytes = this.quantization === "int8" ? this.dim + 8 : this.dim * 4;
   }
 
   /**
-   * Open the SQLite database, bootstrap the schema, and tighten file perms
-   * to 0o600 on the db + WAL/SHM sidecars (note bodies live here — same
-   * privacy posture as `vault.ts`'s persistent parse cache). Idempotent —
-   * a second call after an open is a no-op.
+   * Open the SQLite database, verify ownership on the live handle, bootstrap
+   * only an admitted schema, then enable WAL and best-effort tighten file permissions.
+   * Refusal preserves logical schema and cell/BLOB values. SQLite itself may
+   * still take locks, recover/checkpoint an existing journal, or touch physical
+   * container/sidecar bytes while opening and closing; this API does not claim
+   * byte-identical DB/WAL/SHM or directory state. Idempotent after success.
    *
+   * @param expectedDiscovery - Optional readonly preflight result to bind this
+   *   mutating open to. No argument preserves the low-level intentional-rebuild
+   *   contract; a supplied stale result is refused before bootstrap.
    * @throws {Error} If `better-sqlite3` (an optional dependency) fails to
-   *   load or its native binding can't be loaded.
+   *   load, its native binding is unavailable, or a populated database cannot
+   *   prove same-vault EmbedDb ownership under a supported non-future schema.
    */
-  async open(): Promise<void> {
+  async open(expectedDiscovery?: EmbedDbConfigDiscovery): Promise<void> {
     if (this.db) return;
-    const Ctor = await loadBetterSqlite();
-    // v3.7.6 M-9 (external audit) — only chmod the parent directory if WE
-    // created it. See src/fts5.ts:open() for the rationale.
-    const parentDir = path.dirname(this.file);
-    const parentExisted = await fs
-      .stat(parentDir)
-      .then(() => true)
-      .catch(() => false);
-    await fs.mkdir(parentDir, { recursive: true, mode: 0o700 });
-    if (!parentExisted) {
-      await fs.chmod(parentDir, 0o700).catch(() => {});
-    }
-    this.db = new Ctor(this.file) as Db;
-    // v3.10.0-rc.70 (round-3 re-sweep, reserve-before-try) — close-on-throw. `this.db` holds the
-    // live SQLite handle BEFORE pragma + bootstrapSchema run; on a corrupt/legacy/locked file
-    // those throw, and a caller that opened outside its own try/finally (e.g. server.ts's HNSW
-    // path) would otherwise leak the handle + its WAL/SHM locks for the whole serve lifetime.
-    // Self-cleaning here protects EVERY caller regardless of its own discipline (the rc.45/rc.49
-    // "fix the source every caller funnels through" lesson).
+    // Snapshot before the first await so retained/mutable caller objects cannot
+    // change authority while lstat/native loading is in flight.
+    const expected = cloneEmbedDbOpenDiscovery(expectedDiscovery);
+    let fileExisted = true;
     try {
+      const artifact = await fs.lstat(this.file);
+      if (!artifact.isFile()) throw new Error("not a regular file");
+    } catch (err) {
+      if (errnoCode(err) === "ENOENT") fileExisted = false;
+      else throw new Error("Embedding index could not be inspected");
+    }
+    const Ctor = await loadBetterSqlite();
+    if (!fileExisted) {
+      // Directory preparation is needed only for a new, schema-empty index.
+      // Existing paths reach same-handle admission without any chmod/mkdir.
+      const parentDir = path.dirname(this.file);
+      const parentExisted = await fs
+        .stat(parentDir)
+        .then(() => true)
+        .catch(() => false);
+      await fs.mkdir(parentDir, { recursive: true, mode: 0o700 });
+      if (!parentExisted) {
+        await fs.chmod(parentDir, 0o700).catch(() => {});
+      }
+    }
+    try {
+      this.db = new Ctor(this.file) as Db;
+    } catch {
+      throw new Error("Embedding index could not be opened");
+    }
+    try {
+      const admission = inspectEmbedAdmission(this.db, this.vaultRoot);
+      assertEmbedAdmission(admission);
+      assertExpectedEmbedDiscovery(expected, fileExisted, admission);
+      this.bootstrapSchema(admission.kind, admission.signature);
+      // Persistent connection policy is deliberately after the bootstrap
+      // commit. No refused file receives an Enquire-issued journal/sync mode.
       this.db.pragma("journal_mode = WAL");
       this.db.pragma("synchronous = NORMAL");
-      this.bootstrapSchema();
     } catch (e) {
-      this.close();
+      // Detach before native close: a close-time exception must neither
+      // replace the original path-free refusal nor leave a stale non-null
+      // handle that turns the next open() into an idempotent no-op.
+      const failedDb = this.db;
+      this.db = null;
+      try {
+        failedDb?.close();
+      } catch {
+        // Preserve the original admission/bootstrap/pragma error.
+      }
       throw e;
     }
     await Promise.all(
@@ -606,43 +1111,38 @@ export class EmbedDb {
     }
   }
 
-  private bootstrapSchema(): void {
+  private bootstrapSchema(initialKind: "empty" | "owned", initialSignature: string): void {
     const db = this.requireDb();
-
-    db.exec(`
-      CREATE TABLE IF NOT EXISTS meta (
-        key TEXT PRIMARY KEY,
-        value TEXT NOT NULL
-      );
-    `);
-
-    const meta = this.readMeta();
-    const uninitialized = Object.keys(meta).length === 0;
-    // A genuinely new database has no metadata yet. Any populated legacy
-    // database without a schema version is unknown provenance and must rebuild;
-    // accepting it here could preserve pre-rc.19 fp32-model vectors.
-    const versionMatch = uninitialized || meta.schema_version === String(EMBED_DB_SCHEMA_VERSION);
-    const rootMatch = meta.vault_root === undefined || meta.vault_root === this.vaultRoot;
-    const modelMatch = meta.model_alias === undefined || meta.model_alias === this.modelAlias;
-    const dimMatch = meta.dim === undefined || meta.dim === String(this.dim);
-    // v2.17.0 — quantization mode is part of the contamination guard.
-    // Existing pre-v2.17 dbs have no `quantization` meta key; treat as
-    // "f32" (the only mode v2.16- supported) for backward compatibility.
-    const existingQuant = meta.quantization ?? "f32";
-    const quantMatch = existingQuant === this.quantization;
-    // v3.7.19 γ4 / R-6 — wrap DROP+CREATE+writeMeta in one transaction.
-    // Same rationale as fts5.ts bootstrapSchema fix. Closes the auditor's
-    // round-20 R-6 finding (deferred from that release).
     const txn = db.transaction(() => {
-      if (!versionMatch || !rootMatch || !modelMatch || !dimMatch || !quantMatch) {
+      // First callback action: close the gap between the initial inspection
+      // and the write transaction on this same live handle. A fresh-to-owned
+      // or owned-to-empty transition is refused rather than adopted.
+      const admission = inspectEmbedAdmission(db, this.vaultRoot);
+      assertEmbedAdmission(admission);
+      if (admission.kind !== initialKind || admission.signature !== initialSignature) {
+        throw new Error("Embedding index ownership changed during admission");
+      }
+      // Canonicalize every whitelisted trigger before any backfill can fire.
+      // A same-name hostile trigger may target source_revision itself, so
+      // dropping only after INSERT ... SELECT would be too late.
+      for (const name of SOURCE_REVISION_TRIGGER_NAMES) {
+        db.exec(`DROP TRIGGER IF EXISTS ${name}`);
+      }
+      const meta = admission.kind === "owned" ? admission.meta : undefined;
+      const uninitialized = admission.kind === "empty";
+      const versionMatch = uninitialized || meta?.schema_version === String(EMBED_DB_SCHEMA_VERSION);
+      const modelMatch = uninitialized || meta?.model_alias === this.modelAlias;
+      const dimMatch = uninitialized || meta?.dim === String(this.dim);
+      // Pre-v3 indexes have no quantization key and are necessarily f32.
+      const existingQuant = meta?.quantization ?? "f32";
+      const quantMatch = uninitialized || existingQuant === this.quantization;
+
+      if (!versionMatch || !modelMatch || !dimMatch || !quantMatch) {
         const reason: string[] = [];
-        if (!versionMatch) {
-          reason.push(`schema_version ${meta.schema_version} → ${EMBED_DB_SCHEMA_VERSION}`);
-        }
-        if (!rootMatch) reason.push(`vault_root ${meta.vault_root} → ${this.vaultRoot}`);
-        if (!modelMatch) reason.push(`model ${meta.model_alias} → ${this.modelAlias}`);
-        if (!dimMatch) reason.push(`dim ${meta.dim} → ${this.dim}`);
-        if (!quantMatch) reason.push(`quantization ${existingQuant} → ${this.quantization}`);
+        if (!versionMatch) reason.push("supported schema upgrade");
+        if (!modelMatch) reason.push("model configuration changed");
+        if (!dimMatch) reason.push("vector dimension changed");
+        if (!quantMatch) reason.push("quantization changed");
         process.stderr.write(`enquire: rebuilding embed index (${reason.join("; ")})\n`);
         db.exec(`
           DROP TABLE IF EXISTS embeddings;
@@ -653,39 +1153,12 @@ export class EmbedDb {
       }
 
       db.exec(`
-        CREATE TABLE IF NOT EXISTS embeddings (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          rel_path TEXT NOT NULL,
-          chunk_index INTEGER NOT NULL,
-          line_start INTEGER NOT NULL,
-          line_end INTEGER NOT NULL,
-          text_preview TEXT NOT NULL,
-          vector BLOB NOT NULL,
-          kind TEXT NOT NULL DEFAULT 'md',
-          UNIQUE(rel_path, chunk_index)
-        );
-        CREATE INDEX IF NOT EXISTS embeddings_rel_path ON embeddings(rel_path);
-        CREATE TABLE IF NOT EXISTS source_state (
-          rel_path TEXT PRIMARY KEY,
-          mtime_ms INTEGER NOT NULL,
-          n_chunks INTEGER NOT NULL,
-          kind TEXT NOT NULL DEFAULT 'md',
-          indexed_at TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS source_quarantine (
-          rel_path TEXT NOT NULL,
-          kind TEXT NOT NULL,
-          PRIMARY KEY (rel_path, kind)
-        ) WITHOUT ROWID;
-        CREATE TABLE IF NOT EXISTS source_revision (
-          rel_path TEXT NOT NULL,
-          kind TEXT NOT NULL,
-          revision INTEGER NOT NULL CHECK (
-            typeof(revision) = 'integer'
-              AND revision BETWEEN 1 AND 9007199254740991
-          ),
-          PRIMARY KEY (rel_path, kind)
-        ) WITHOUT ROWID;
+        ${META_TABLE_SQL};
+        ${EMBEDDINGS_V2_TABLE_SQL};
+        ${EMBEDDINGS_REL_PATH_INDEX_SQL};
+        ${SOURCE_STATE_V2_TABLE_SQL};
+        ${SOURCE_QUARANTINE_TABLE_SQL};
+        ${SOURCE_REVISION_TABLE_SQL};
 
         INSERT OR IGNORE INTO source_revision (rel_path, kind, revision)
         SELECT rel_path, kind, 1
@@ -698,12 +1171,9 @@ export class EmbedDb {
 
       `);
 
-      // Canonical recreation closes the same-name no-op trigger bypass. The
-      // whole install remains inside the bootstrap transaction, so readers
-      // observe either the previous complete contract or the new one.
-      for (const name of SOURCE_REVISION_TRIGGER_NAMES) {
-        db.exec(`DROP TRIGGER IF EXISTS ${name}`);
-      }
+      // Recreate only after schema/backfill is complete. The whole install
+      // remains inside the bootstrap transaction, so readers observe either
+      // the previous complete contract or the new one.
       for (const definition of SOURCE_REVISION_TRIGGER_DEFINITIONS) {
         db.exec(definition.sql);
       }
@@ -716,15 +1186,7 @@ export class EmbedDb {
         quantization: this.quantization
       });
     });
-    txn();
-  }
-
-  private readMeta(): Record<string, string> {
-    const db = this.requireDb();
-    const rows = db.prepare("SELECT key, value FROM meta").all<{ key: string; value: string }>();
-    const out: Record<string, string> = {};
-    for (const r of rows) out[r.key] = r.value;
-    return out;
+    txn.immediate();
   }
 
   private writeMeta(kv: Record<string, string>): void {
@@ -1758,65 +2220,219 @@ export async function openEmbedReceiptReader(file: string, expectedVaultRoot: st
   }
 }
 
+const EMBED_RECOVERY_OWNERSHIP_ERROR = "Embedding index ownership could not be verified";
+
 /**
- * v3.6.1 CRIT-1 — non-destructive peek at an existing embed-db's meta row.
+ * Bounded, root-scoped discovery result for production embedding configuration.
+ * `empty` is reserved for a present SQLite file whose logical schema inventory
+ * is exactly empty; it is never used for a malformed, foreign, future, or
+ * unreadable artifact. Metadata is exposed only after full class/root admission.
  *
- * Reads `model_alias`, `dim`, `quantization`, `vault_root`, `schema_version`
- * from a SQLite file WITHOUT opening it via `EmbedDb` (which would trigger
- * `bootstrapSchema()` and DROP TABLE on any mismatch with the caller's
- * declared model). This lets a caller like `prepareServerDeps()`
- * pre-discover what model the embed-db was built with, then open it with
- * the matching model — avoiding the data-destruction class of bug the
- * external (anonymous) v3.6.0 audit caught.
- *
- * **Class-closure timeline (retroactive correction batch — see also
- * v3.7.2 audit response for the 4th drift instance: this TSDoc itself
- * previously mis-attributed the closure to v3.6.3):**
- * - v3.6.1 fixed 1 callsite (`server.ts` HNSW path) and claimed "CRIT-1
- *   closed" — overclaim; 9 callsites stayed vulnerable.
- * - v3.6.2 fixed `server.ts:254` (serve), `src/tools/search.ts:917`
- *   (hot path) plus the K-1b sibling for FtsIndex; CHANGELOG claimed
- *   "all 10 callsites" — still an overclaim; cli.ts had 5 residual.
- * - v3.6.3 was deferred to a marketing-only patch ("memory for AI
- *   agents" positioning); K-1 work was pushed to v3.6.4.
- * - v3.6.4 fixed the cli.ts residual: `cli.ts:398` (build-embeddings),
- *   `cli.ts:554` (setup step 3), `cli.ts:311` (index), `cli.ts:638`
- *   (eval). `clear-*` paths marked `// SAFE BY DESIGN`. Added
- *   `tests/k1-class-invariant.test.ts` (grep gate).
- * - v3.7.0 added `tests/k1-ast-invariant.test.ts` (TypeScript compiler
- *   API def-use trace) catching the "peek called but result discarded"
- *   bypass that grep would miss. Plus `peekEmbedDbMetaCached` for
- *   ~20× speedup on the search hot path.
- *
- * Enforced by `tests/k1-class-invariant.test.ts` (grep, 40-line window)
- * and `tests/k1-ast-invariant.test.ts` (AST def-use trace).
- *
- * Returns null if the file doesn't exist OR doesn't have a `meta` table
- * yet (fresh db). v3.11.0-rc.9 (audit re-verify) — TSDoc corrected: this NEVER
- * throws (rc.34 wrapped `new Database()` + the meta queries in a catch that maps
- * ANY failure — corrupt / unreadable / not-a-DB / directory / missing dep — to
- * null), since it runs unguarded on the search hot path + in CLI subcommands.
- *
- * The opened SQLite handle is read-only and closed before return — no
- * lock contention with a subsequent `EmbedDb.open()`.
- *
- * @param file - Absolute path to a `.embed.db` file.
- * @returns Meta dict if the file is a populated embed-db, null otherwise.
  * @example
  * ```ts
- * const meta = await peekEmbedDbMeta(embedFile);
- * if (meta?.model_alias) {
- *   const model = resolveModel(meta.model_alias); // honor what was built
+ * const discovery = await discoverEmbedDbConfig(embedFile, vault.root);
+ * if (discovery.kind === "owned") useStoredConfig(discovery.meta);
+ * if (discovery.kind === "empty" || discovery.kind === "missing") useRequestedConfig();
+ * ```
+ */
+export type EmbedDbConfigDiscovery =
+  | { readonly kind: "missing" }
+  | { readonly kind: "empty" }
+  | { readonly kind: "refused" }
+  | { readonly kind: "owned"; readonly meta: Readonly<EmbedDbOwnedMeta> };
+
+const EMBED_DISCOVERY_CHANGED_ERROR = "Embedding index configuration changed before open";
+
+function cloneEmbedDbOpenDiscovery(expected: EmbedDbConfigDiscovery | undefined): EmbedDbConfigDiscovery | null {
+  if (expected === undefined) return null;
+  try {
+    const kind = (expected as { readonly kind?: unknown }).kind;
+    if (kind === "missing") return Object.freeze({ kind: "missing" });
+    if (kind === "empty") return Object.freeze({ kind: "empty" });
+    if (kind === "refused") return Object.freeze({ kind: "refused" });
+    const candidateMeta = (expected as { readonly meta?: unknown }).meta;
+    const meta =
+      typeof candidateMeta === "object" && candidateMeta !== null
+        ? (candidateMeta as Readonly<Record<string, unknown>>)
+        : null;
+    const schemaVersion = meta?.schema_version;
+    const vaultRoot = meta?.vault_root;
+    const modelAlias = meta?.model_alias;
+    const dim = meta?.dim;
+    const quantization = meta?.quantization;
+    if (
+      kind === "owned" &&
+      typeof schemaVersion === "string" &&
+      typeof vaultRoot === "string" &&
+      typeof modelAlias === "string" &&
+      typeof dim === "string" &&
+      (quantization === undefined || quantization === "f32" || quantization === "int8")
+    ) {
+      return Object.freeze({
+        kind: "owned",
+        meta: Object.freeze({
+          schema_version: schemaVersion,
+          vault_root: vaultRoot,
+          model_alias: modelAlias,
+          dim,
+          ...(quantization === undefined ? {} : { quantization })
+        })
+      });
+    }
+  } catch {
+    // Getter-backed or malformed runtime input receives only the generic,
+    // path-free stale-discovery refusal below.
+  }
+  return Object.freeze({ kind: "refused" });
+}
+
+function assertExpectedEmbedDiscovery(
+  expected: EmbedDbConfigDiscovery | null,
+  fileExisted: boolean,
+  admission: Exclude<EmbedAdmission, { kind: "refused" }>
+): void {
+  if (expected === null) return;
+  const matches =
+    (expected.kind === "missing" && !fileExisted && admission.kind === "empty") ||
+    (expected.kind === "empty" && fileExisted && admission.kind === "empty") ||
+    (expected.kind === "owned" &&
+      admission.kind === "owned" &&
+      expected.meta.schema_version === admission.meta.schema_version &&
+      expected.meta.vault_root === admission.meta.vault_root &&
+      expected.meta.model_alias === admission.meta.model_alias &&
+      expected.meta.dim === admission.meta.dim &&
+      expected.meta.quantization === admission.meta.quantization);
+  if (!matches) throw new Error(EMBED_DISCOVERY_CHANGED_ERROR);
+}
+
+/**
+ * Discover whether an embedding database is missing, exactly schema-empty,
+ * fully owned by the expected vault, or refused. Existing files are opened
+ * through a read-only handle and inspected with the same bounded
+ * class/schema/root admission used by `EmbedDb.open()`. Open, read, dependency,
+ * and close failures collapse to `refused`; this function does not throw
+ * expected discovery errors. SQLite/VFS lock, recovery, and WAL/SHM
+ * bookkeeping remain outside this logical guarantee.
+ *
+ * This is a bounded pre-open configuration snapshot. Pass it to
+ * {@link EmbedDb.open} to bind the mutating open to that observed state; open
+ * independently repeats admission on its own live handle and again inside its
+ * immediate transaction.
+ *
+ * @param file - Absolute path to the candidate embedding database.
+ * @param expectedVaultRoot - Exact vault root allowed to own a populated file.
+ * @returns A discriminated, path-free discovery result. Only `owned` carries metadata.
+ * @example
+ * ```ts
+ * const discovery = await discoverEmbedDbConfig(embedFile, canonicalVaultRoot);
+ * switch (discovery.kind) {
+ *   case "owned":
+ *     configureFrom(discovery.meta);
+ *     break;
+ *   case "missing":
+ *   case "empty":
+ *     configureFromRequest();
+ *     break;
+ *   case "refused":
+ *     throw new Error("Embedding index configuration could not be verified");
  * }
  * ```
  */
-export async function peekEmbedDbMeta(file: string): Promise<{
+export async function discoverEmbedDbConfig(file: string, expectedVaultRoot: string): Promise<EmbedDbConfigDiscovery> {
+  try {
+    const artifact = await fs.lstat(file);
+    if (!artifact.isFile()) return { kind: "refused" };
+  } catch (error) {
+    return errnoCode(error) === "ENOENT" ? { kind: "missing" } : { kind: "refused" };
+  }
+
+  let Ctor: BetterSqliteConstructor;
+  try {
+    Ctor = await loadBetterSqlite();
+  } catch {
+    return { kind: "refused" };
+  }
+
+  let db: Db | null = null;
+  let discovery: EmbedDbConfigDiscovery = { kind: "refused" };
+  try {
+    db = new Ctor(file, { readonly: true, fileMustExist: true }) as Db;
+    const admission = inspectEmbedAdmission(db, expectedVaultRoot);
+    if (admission.kind === "empty") {
+      discovery = { kind: "empty" };
+    } else if (admission.kind === "owned") {
+      discovery = { kind: "owned", meta: { ...admission.meta } };
+    }
+  } catch {
+    discovery = { kind: "refused" };
+  } finally {
+    try {
+      db?.close();
+    } catch {
+      discovery = { kind: "refused" };
+    }
+  }
+  return discovery;
+}
+
+/**
+ * Validate a pre-existing embedding database before recovery guidance may
+ * describe or clear its associated watcher guard. A missing database is the
+ * expected stranded-guard case and succeeds. A present file must prove the
+ * exact supported EmbedDb class and requested vault root on one read-only
+ * handle; foreign, malformed, future, unreadable, and close-failing files are
+ * refused with one stable path-free error.
+ *
+ * This is a read-only guidance snapshot, not bootstrap authority. A later
+ * mutating operation must perform its own same-handle transactional admission.
+ *
+ * @param file - Absolute path to the embedding database associated with recovery.
+ * @param expectedVaultRoot - Exact vault root allowed to own a present database.
+ * @returns A promise that resolves for a missing or exact-owned supported database.
+ * @throws {Error} If a present database cannot prove recovery ownership.
+ * @example
+ * ```ts
+ * await assertEmbedDbRecoveryOwnership(embedFile, canonicalVaultRoot);
+ * ```
+ */
+export async function assertEmbedDbRecoveryOwnership(file: string, expectedVaultRoot: string): Promise<void> {
+  const discovery = await discoverEmbedDbConfig(file, expectedVaultRoot);
+  if (discovery.kind === "missing" || discovery.kind === "owned") return;
+  throw new Error(EMBED_RECOVERY_OWNERSHIP_ERROR);
+}
+
+type PeekEmbedDbMetaResult = {
   schema_version?: string;
   vault_root?: string;
   model_alias?: string;
   dim?: string;
   quantization?: string;
-} | null> {
+} | null;
+
+/**
+ * Legacy fail-soft diagnostic peek at bounded EmbedDb metadata.
+ *
+ * Production configuration decisions use {@link discoverEmbedDbConfig} (or
+ * its cached sibling), whose discriminated result distinguishes missing and
+ * exactly schema-empty files from full-class, exact-root ownership and generic
+ * refusal. This compatibility helper never authorizes an open or rebuild.
+ * Without an expected root it may expose only bounded known raw keys; with an
+ * expected root it returns metadata only after the complete readonly
+ * class/schema/root admission. Missing dependencies, unreadable/corrupt files,
+ * malformed rows and query failures collapse to `null`. A close failure never
+ * escapes; this legacy diagnostic may still return metadata already read.
+ *
+ * @param file - Absolute path to a `.embed.db` file.
+ * @param expectedVaultRoot - Optional exact root plus full-class filter for
+ *   configuration discovery. Omit only for bounded raw diagnostics.
+ * @returns Bounded metadata when readable and root-compatible, otherwise `null`.
+ * @example
+ * ```ts
+ * const meta = await peekEmbedDbMeta(embedFile, canonicalVaultRoot);
+ * console.log(meta?.schema_version); // diagnostic only
+ * ```
+ */
+export async function peekEmbedDbMeta(file: string, expectedVaultRoot?: string): Promise<PeekEmbedDbMetaResult> {
   const fsMod = await import("node:fs");
   if (!fsMod.existsSync(file)) return null;
   // Lazy-import better-sqlite3 (optionalDependency).
@@ -1829,26 +2445,57 @@ export async function peekEmbedDbMeta(file: string): Promise<{
   }
   // v3.10.0-rc.34 (post-rc.33 RCA — sibling of the peekFtsMetaSafe class fixed
   // in rc.33) — `new Database()` + the meta queries are now INSIDE the try: a
-  // corrupt / unreadable / not-a-DB / directory `.embed.db` must NOT throw out
-  // of this peek. It is called UNGUARDED on the `embeddings_search` hot path
-  // (tools/search.ts, before that function's own try) and in CLI subcommands,
-  // so a throw here would error the search / crash the CLI instead of degrading.
-  // Any failure → null (treated as "no embed-db" — the existing graceful path).
-  type PeekDb = { prepare(sql: string): { get(): unknown; all(): unknown }; close(): void };
+  // corrupt / unreadable / not-a-DB / directory `.embed.db` must NOT escape
+  // this legacy diagnostic. Any failure maps to null.
+  type PeekDb = {
+    prepare(sql: string): { get(...params: unknown[]): unknown; all(...params: unknown[]): unknown };
+    close(): void;
+  };
   let db: PeekDb | null = null;
   try {
     db = new Database(file, { readonly: true, fileMustExist: true }) as unknown as PeekDb;
+    if (expectedVaultRoot !== undefined) {
+      const admission = inspectEmbedAdmission(db as unknown as Db, expectedVaultRoot);
+      return admission.kind === "owned" ? admission.meta : null;
+    }
     // Confirm meta table exists before SELECT — avoid throwing on fresh dbs.
     const tableCheck = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='meta'").get();
     if (!tableCheck) return null;
-    const rows = db.prepare("SELECT key, value FROM meta").all() as { key: string; value: string }[];
+    const rows = db
+      .prepare(
+        `SELECT substr(key, 1, ?) AS key,
+                substr(value, 1, ?) AS value
+         FROM meta
+         LIMIT ?`
+      )
+      .all(MAX_EMBED_ADMISSION_NAME_CHARS + 1, MAX_EMBED_META_VALUE_CHARS + 1, EMBED_META_KEYS.size + 1) as {
+      key: unknown;
+      value: unknown;
+    }[];
+    if (rows.length > EMBED_META_KEYS.size) return null;
     const meta: Record<string, string> = {};
-    for (const row of rows) meta[row.key] = row.value;
+    for (const row of rows) {
+      if (
+        typeof row.key !== "string" ||
+        row.key.length > MAX_EMBED_ADMISSION_NAME_CHARS ||
+        typeof row.value !== "string" ||
+        row.value.length > MAX_EMBED_META_VALUE_CHARS ||
+        !EMBED_META_KEYS.has(row.key) ||
+        Object.hasOwn(meta, row.key)
+      ) {
+        return null;
+      }
+      meta[row.key] = row.value;
+    }
     return meta;
   } catch {
     return null;
   } finally {
-    db?.close();
+    try {
+      db?.close();
+    } catch {
+      // Fail-soft discovery includes close-time native/IO failures.
+    }
   }
 }
 
@@ -1861,9 +2508,10 @@ export async function peekEmbedDbMeta(file: string): Promise<{
  * `obsidian_search` invocation since v3.6.4's K-1 fix added the call
  * to `src/tools/search.ts:917`.
  *
- * This wrapper caches the peek result keyed by `file` path. Cache entries
- * are invalidated when the file's `mtimeMs` changes — covering the
- * `clear-embeddings` + `build-embeddings` rebuild flow without requiring
+ * This wrapper caches raw and exact-root/full-class results under distinct
+ * composite keys. Cache entries are invalidated when the file's `mtimeMs`
+ * changes — covering the `clear-embeddings` + `build-embeddings` rebuild flow
+ * without requiring
  * manual cache invalidation. On `stat` failure (file removed), the cache
  * entry is also dropped so subsequent calls return `null` (matching
  * non-cached semantics).
@@ -1876,14 +2524,86 @@ export async function peekEmbedDbMeta(file: string): Promise<{
  * @param file - Absolute path to a `.embed.db` file.
  * @returns Same shape as `peekEmbedDbMeta` (cached when file mtime unchanged).
  */
-const peekCache = new Map<string, { mtimeMs: number; meta: PeekEmbedDbMetaResult }>();
-type PeekEmbedDbMetaResult = Awaited<ReturnType<typeof peekEmbedDbMeta>>;
+const peekCache = new Map<string, { file: string; mtimeMs: number; meta: PeekEmbedDbMetaResult }>();
+const embedConfigDiscoveryCache = new Map<
+  string,
+  {
+    file: string;
+    mtimeMs: number;
+    size: number;
+    walMtimeMs: number | null;
+    walSize: number | null;
+    discovery: EmbedDbConfigDiscovery;
+  }
+>();
+
+interface EmbedConfigDiscoveryFingerprint {
+  mtimeMs: number;
+  size: number;
+  walMtimeMs: number | null;
+  walSize: number | null;
+}
+
+function peekCacheKey(file: string, expectedVaultRoot: string | undefined): string {
+  return JSON.stringify([file, expectedVaultRoot ?? null]);
+}
+
+function deletePeekCacheFile(file: string): void {
+  for (const [key, entry] of peekCache) {
+    if (entry.file === file) peekCache.delete(key);
+  }
+}
+
+function embedConfigDiscoveryCacheKey(file: string, expectedVaultRoot: string): string {
+  return JSON.stringify([file, expectedVaultRoot]);
+}
+
+function deleteEmbedConfigDiscoveryCacheFile(file: string): void {
+  for (const [key, entry] of embedConfigDiscoveryCache) {
+    if (entry.file === file) embedConfigDiscoveryCache.delete(key);
+  }
+}
+
+async function readEmbedConfigDiscoveryFingerprint(file: string): Promise<EmbedConfigDiscoveryFingerprint | null> {
+  let main: { isFile(): boolean; mtimeMs: number; size: number };
+  try {
+    main = await fs.lstat(file);
+  } catch {
+    return null;
+  }
+  if (!main.isFile()) return null;
+
+  let walMtimeMs: number | null = null;
+  let walSize: number | null = null;
+  try {
+    const wal = await fs.lstat(`${file}-wal`);
+    if (!wal.isFile()) return null;
+    walMtimeMs = wal.mtimeMs;
+    walSize = wal.size;
+  } catch (error) {
+    if (errnoCode(error) !== "ENOENT") return null;
+  }
+  return { mtimeMs: main.mtimeMs, size: main.size, walMtimeMs, walSize };
+}
+
+function cloneEmbedDbConfigDiscovery(discovery: EmbedDbConfigDiscovery): EmbedDbConfigDiscovery {
+  switch (discovery.kind) {
+    case "owned":
+      return { kind: "owned", meta: { ...discovery.meta } };
+    case "missing":
+      return { kind: "missing" };
+    case "empty":
+      return { kind: "empty" };
+    case "refused":
+      return { kind: "refused" };
+  }
+}
 
 /**
- * v3.9.0-rc.28 (external-audit M-6) — cap on `peekCache`. A long-running `serve`
- * over a vault with many distinct `.embed.db` paths would otherwise grow the
- * cache without bound (one entry per file path forever). 512 covers any
- * realistic single-vault session with comfortable headroom.
+ * v3.9.0-rc.28 (external-audit M-6) — per-cache cap for raw metadata and
+ * discriminated configuration discovery. A long-running `serve` over many
+ * distinct file/root tuples would otherwise retain entries forever. 512
+ * covers any realistic single-vault session with comfortable headroom.
  */
 export const MAX_PEEK_CACHE_ENTRIES = 512;
 
@@ -1905,8 +2625,111 @@ export function lruMapSet<K, V>(map: Map<K, V>, key: K, value: V, max: number): 
   }
 }
 
-export async function peekEmbedDbMetaCached(file: string): Promise<PeekEmbedDbMetaResult> {
+/**
+ * Read the discriminated, root-scoped embedding configuration discovery
+ * through a bounded LRU cache. Entries are isolated by exact file/root tuple
+ * and invalidated when the main file's `mtimeMs`/size or the WAL sidecar's
+ * presence/`mtimeMs`/size changes. The returned owned metadata is cloned so
+ * callers cannot mutate a cached authority snapshot. Raw peek entries and
+ * other roots never share this cache keyspace. `refused` is never cached:
+ * transient open/read/close/permission uncertainty is re-probed on every call.
+ *
+ * This remains pre-open guidance rather than bootstrap authority; every
+ * writable `EmbedDb.open()` repeats same-handle transactional admission.
+ *
+ * @param file - Absolute path to the candidate embedding database.
+ * @param expectedVaultRoot - Exact vault root allowed to own a populated file.
+ * @returns The same four-state result as {@link discoverEmbedDbConfig}.
+ * @example
+ * ```ts
+ * const discovery = await discoverEmbedDbConfigCached(embedFile, vault.root);
+ * if (discovery.kind !== "owned") return [];
+ * useStoredConfig(discovery.meta);
+ * ```
+ */
+export async function discoverEmbedDbConfigCached(
+  file: string,
+  expectedVaultRoot: string
+): Promise<EmbedDbConfigDiscovery> {
+  const cacheKey = embedConfigDiscoveryCacheKey(file, expectedVaultRoot);
+  const before = await readEmbedConfigDiscoveryFingerprint(file);
+  if (before === null) {
+    deleteEmbedConfigDiscoveryCacheFile(file);
+    return discoverEmbedDbConfig(file, expectedVaultRoot);
+  }
+
+  const cached = embedConfigDiscoveryCache.get(cacheKey);
+  if (
+    cached &&
+    cached.mtimeMs === before.mtimeMs &&
+    cached.size === before.size &&
+    cached.walMtimeMs === before.walMtimeMs &&
+    cached.walSize === before.walSize
+  ) {
+    if (cached.discovery.kind !== "refused") {
+      embedConfigDiscoveryCache.delete(cacheKey);
+      embedConfigDiscoveryCache.set(cacheKey, cached);
+      return cloneEmbedDbConfigDiscovery(cached.discovery);
+    }
+    // A refusal may come from a transient open/read/close/permission failure;
+    // never let an unchanged file fingerprint make that uncertainty sticky.
+    embedConfigDiscoveryCache.delete(cacheKey);
+  }
+
+  const discovery = await discoverEmbedDbConfig(file, expectedVaultRoot);
+  if (discovery.kind === "refused") {
+    embedConfigDiscoveryCache.delete(cacheKey);
+    return { kind: "refused" };
+  }
+  const after = await readEmbedConfigDiscoveryFingerprint(file);
+  if (after === null) {
+    deleteEmbedConfigDiscoveryCacheFile(file);
+    return discoverEmbedDbConfig(file, expectedVaultRoot);
+  }
+  if (
+    after.mtimeMs !== before.mtimeMs ||
+    after.size !== before.size ||
+    after.walMtimeMs !== before.walMtimeMs ||
+    after.walSize !== before.walSize
+  ) {
+    // Do not cache a snapshot that raced a file replacement or mutation.
+    deleteEmbedConfigDiscoveryCacheFile(file);
+    return discoverEmbedDbConfig(file, expectedVaultRoot);
+  }
+
+  lruMapSet(
+    embedConfigDiscoveryCache,
+    cacheKey,
+    {
+      file,
+      mtimeMs: after.mtimeMs,
+      size: after.size,
+      walMtimeMs: after.walMtimeMs,
+      walSize: after.walSize,
+      discovery
+    },
+    MAX_PEEK_CACHE_ENTRIES
+  );
+  return cloneEmbedDbConfigDiscovery(discovery);
+}
+
+/**
+ * Read bounded embedding metadata through the mtime-keyed cache. Raw discovery
+ * and each expected-root/full-class result use distinct composite keys, so a
+ * foreign or diagnostic lookup cannot poison a later owning-root lookup.
+ *
+ * @param file - Absolute path to a `.embed.db` file.
+ * @param expectedVaultRoot - Optional exact root plus full-class filter; omit
+ *   for raw bounded diagnostics.
+ * @returns Cached bounded metadata when class/root-compatible, null otherwise.
+ * @example
+ * ```ts
+ * const meta = await peekEmbedDbMetaCached(embedFile, canonicalVaultRoot);
+ * ```
+ */
+export async function peekEmbedDbMetaCached(file: string, expectedVaultRoot?: string): Promise<PeekEmbedDbMetaResult> {
   const fsMod = await import("node:fs/promises");
+  const cacheKey = peekCacheKey(file, expectedVaultRoot);
   let mtimeMs: number;
   try {
     const stat = await fsMod.stat(file);
@@ -1914,27 +2737,28 @@ export async function peekEmbedDbMetaCached(file: string): Promise<PeekEmbedDbMe
   } catch {
     // File missing/inaccessible — drop any stale cache and delegate to
     // the non-cached peek (which itself returns null for missing files).
-    peekCache.delete(file);
-    return peekEmbedDbMeta(file);
+    deletePeekCacheFile(file);
+    return peekEmbedDbMeta(file, expectedVaultRoot);
   }
-  const cached = peekCache.get(file);
+  const cached = peekCache.get(cacheKey);
   if (cached && cached.mtimeMs === mtimeMs) {
     // LRU recency bump: move this key to the newest slot so it isn't evicted
     // ahead of genuinely-older entries.
-    peekCache.delete(file);
-    peekCache.set(file, cached);
+    peekCache.delete(cacheKey);
+    peekCache.set(cacheKey, cached);
     return cached.meta;
   }
-  const meta = await peekEmbedDbMeta(file);
-  lruMapSet(peekCache, file, { mtimeMs, meta }, MAX_PEEK_CACHE_ENTRIES);
+  const meta = await peekEmbedDbMeta(file, expectedVaultRoot);
+  lruMapSet(peekCache, cacheKey, { file, mtimeMs, meta }, MAX_PEEK_CACHE_ENTRIES);
   return meta;
 }
 
 /**
- * v3.7.0 L-1 — test-only. Clear the module-level peek cache. Used in
- * unit tests to isolate per-test state; in production the cache lives
- * as long as the process.
+ * v3.7.0 L-1 — test-only. Clear the module-level raw-peek and discriminated
+ * discovery caches. Used in unit tests to isolate state; in production the
+ * bounded caches live as long as the process.
  */
 export function clearPeekCache(): void {
   peekCache.clear();
+  embedConfigDiscoveryCache.clear();
 }

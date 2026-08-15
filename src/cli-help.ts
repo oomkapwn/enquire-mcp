@@ -147,7 +147,7 @@ export const EMBEDDING_INDEX_HELP =
  * `i8`/`q8`/`float32`/`none` was a real omission).
  */
 export const QUANTIZE_EMBEDDINGS_HELP =
-  "v2.17.0 — vector storage encoding for the persistent embed db. `f32` (default) is identical to v2.16- behavior. `int8` cuts BLOB size ~4× (per-vector min+scale + int8 bytes) at ~1-2% recall@10 cost. Must match the mode used at `build-embeddings` time — otherwise the index auto-rebuilds on serve start. Accepts `f32`/`float32`/`none` and `int8`/`i8`/`q8`.";
+  "v2.17.0 — vector storage encoding for the persistent embed db. `f32` (default) is identical to v2.16- behavior. `int8` cuts BLOB size ~4× (per-vector min+scale + int8 bytes) at ~1-2% recall@10 cost. Serve honors an admitted stored mode; an explicit writer mode change may rebuild an exact-owned index. Accepts `f32`/`float32`/`none` and `int8`/`i8`/`q8`.";
 
 /**
  * Shared `--tier` help for configure and doctor. Both commands consume the

@@ -284,7 +284,7 @@ graph LR
 | **프라이버시 필터** | FTS5 + 임베딩 DB + 청크 리소스 경로에서 검증; 빈 허용/거부 목록에 대해 fail-closed |
 | **HTTP 전송** | Bearer 인증 (상수 시간 SHA-256 + `timingSafeEqual`), 토큰별 속도 제한, 엄격한 CORS |
 | **Frontmatter** | `js-yaml@5` `load` (YAML 1.2 코어 스키마, 기본 안전) — 코드 실행 없음 |
-| **캐시 + 인덱스 파일** | chmod 0600, 부모 디렉터리 0700 |
+| **캐시 + 인덱스 파일** | POSIX 모드가 동작하는 환경에서 Enquire는 민감한 파일에 `0600`을 최선 노력으로 다시 적용하며, Enquire가 만든 부모 디렉터리는 `0700`으로 시작하고 기존/사용자 지정 부모는 운영자가 관리 |
 | **단위 테스트 1807개 · 릴리스 필수 CI 검사 12개 · 현재 브랜치 보호 7개** | 현재 검증된 릴리스 상태이며 운영 세부사항은 아래에 고정되어 있습니다. |
 | **CI** | `release.yml`은 **릴리스 gate 12개**를 직접 나열하며 모든 PR에서 전부 실행합니다(`lint`, `test (22)`, `test (24)`, `smoke`, `audit`, `coverage`, `version-consistency`, `docs`, `oia`, `protocol-conformance`, `package-consumer`, `mcpb-basic`). 고정된 Windows hostile-filesystem job `test-windows`는 추가로 이름이 있는 check-run이며 `smoke`의 차단 전제조건으로 전이적으로 강제됩니다. 현재 브랜치 보호가 강제하는 것은 **7개**뿐이며, `docs`, `oia`, `protocol-conformance`, `package-consumer`, `mcpb-basic`는 릴리스 필수지만 보호되지 않습니다(브랜치 보호 스냅샷은 2026-07-23 실시간 확인). `test-macos`는 `continue-on-error`가 있는 유일한 권고 job입니다. `docker`는 CI workflow를 실패시킬 수 있지만 보호되지 않으며, CodeQL은 [GitHub default setup](https://docs.github.com/code-security/code-scanning/automatically-scanning-your-code-with-code-scanning/configuring-default-setup)을 통해 별도의 미보호 분석 2개를 실행합니다. npm publish 전에 `release.yml`이 태깅된 SHA에서 직접 나열한 12개 gate를 다시 확인합니다. |
 | **커버리지** | 라인 ≥86% · 구문 ≥82% · 함수 ≥75% · 브랜치 ≥74% (게이트됨) |

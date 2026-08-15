@@ -8,6 +8,7 @@ import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { EmbedDb } from "../src/embed-db.js";
 import { defaultIndexFile, FtsIndex } from "../src/fts5.js";
 import { searchHybrid } from "../src/tools/index.js";
 import {
@@ -20,7 +21,11 @@ import {
   searchHybridMulti
 } from "../src/tools/search.js";
 import { Vault } from "../src/vault.js";
-import { watcherActivationGuardPath } from "../src/watcher-activation-guard.js";
+import {
+  armWatcherActivationGuard,
+  releaseWatcherActivationGuard,
+  watcherActivationGuardPath
+} from "../src/watcher-activation-guard.js";
 
 let root: string;
 
@@ -107,6 +112,282 @@ describe("searchHybrid (v2.0 beta — RRF over available signals)", () => {
       expect(quarantined.signal_errors?.embeddings).not.toContain(missingEmbedFile);
     } finally {
       await fs.rmdir(guardPath);
+    }
+
+    // Root-filtered configuration discovery must not turn a foreign index
+    // into an explicit-model mismatch or a default-config open. A present
+    // wrong-root artifact is refused by full-class discovery before
+    // construction, so no destructive rebuild guidance is emitted.
+    let sqliteAvailable = false;
+    try {
+      const Database = (await import("better-sqlite3")).default;
+      const probe = new Database(":memory:");
+      probe.close();
+      sqliteAvailable = true;
+    } catch {
+      // Optional native dependency absent; standard CI exercises this phase.
+    }
+    if (sqliteAvailable) {
+      const Database = (await import("better-sqlite3")).default;
+      const owningVault = new Vault(root);
+      await owningVault.ensureExists();
+      const foreignRoot = path.join(owningVault.root, "foreign-owner");
+      await fs.mkdir(foreignRoot);
+      const canonicalForeignRoot = await fs.realpath(foreignRoot);
+      const foreignEmbedFile = path.join(owningVault.root, "foreign-explicit.embed.db");
+      const seed = new EmbedDb({
+        file: foreignEmbedFile,
+        vaultRoot: canonicalForeignRoot,
+        modelAlias: "multilingual",
+        dim: 2
+      });
+      await seed.open();
+      seed.upsertNote("Foreign.md", 1, [
+        {
+          chunkIndex: 0,
+          lineStart: 1,
+          lineEnd: 1,
+          textPreview: "foreign-search-marker",
+          vector: new Float32Array([1, 0])
+        }
+      ]);
+      seed.close();
+      const logicalSnapshot = () => {
+        const inspect = new Database(foreignEmbedFile, { readonly: true, fileMustExist: true });
+        try {
+          return {
+            schema: inspect
+              .prepare(
+                `SELECT type, name, sql
+                 FROM sqlite_master
+                 WHERE name NOT GLOB 'sqlite_*'
+                 ORDER BY type, name`
+              )
+              .all(),
+            meta: inspect.prepare("SELECT key, value FROM meta ORDER BY key").all(),
+            rows: inspect
+              .prepare(
+                `SELECT id, rel_path, chunk_index, line_start, line_end, text_preview,
+                        hex(vector) AS vector_hex, kind
+                 FROM embeddings
+                 ORDER BY id`
+              )
+              .all(),
+            sourceState: inspect.prepare("SELECT * FROM source_state ORDER BY rel_path, kind").all()
+          };
+        } finally {
+          inspect.close();
+        }
+      };
+      const logicalBeforeRefusal = logicalSnapshot();
+
+      let explicitForeignRefusal: unknown;
+      try {
+        await embeddingsSearch(owningVault, { query: "foreign", limit: 1, model: "bge" }, foreignEmbedFile);
+      } catch (error) {
+        explicitForeignRefusal = error;
+      }
+      expect(explicitForeignRefusal).toBeInstanceOf(Error);
+      const refusalMessage =
+        explicitForeignRefusal instanceof Error ? explicitForeignRefusal.message : String(explicitForeignRefusal);
+      expect(refusalMessage).toMatch(/configuration could not be verified/i);
+      expect(refusalMessage).not.toMatch(/does not match|clear-embeddings|requested model/i);
+      for (const sensitivePath of [owningVault.root, foreignRoot, canonicalForeignRoot, foreignEmbedFile]) {
+        expect(refusalMessage).not.toContain(sensitivePath);
+      }
+      expect(logicalSnapshot()).toEqual(logicalBeforeRefusal);
+
+      const combinedGuardPath = watcherActivationGuardPath(foreignEmbedFile);
+      const combinedGuard = await armWatcherActivationGuard(foreignEmbedFile);
+      try {
+        let combinedRefusal: unknown;
+        try {
+          await embeddingsSearch(owningVault, { query: "foreign", limit: 1, model: "bge" }, foreignEmbedFile);
+        } catch (error) {
+          combinedRefusal = error;
+        }
+        expect(combinedRefusal).toBeInstanceOf(Error);
+        const combinedMessage = combinedRefusal instanceof Error ? combinedRefusal.message : String(combinedRefusal);
+        expect(combinedMessage).toBe("Embedding index ownership could not be verified");
+        expect(combinedMessage).not.toMatch(/clear-embeddings|quarantined|requested model/i);
+        for (const sensitivePath of [owningVault.root, foreignRoot, canonicalForeignRoot, foreignEmbedFile]) {
+          expect(combinedMessage).not.toContain(sensitivePath);
+        }
+        expect(logicalSnapshot()).toEqual(logicalBeforeRefusal);
+        expect((await fs.lstat(combinedGuardPath)).isDirectory()).toBe(true);
+
+        const hybridCombined = await searchHybrid(
+          owningVault,
+          { query: "OAuth JWT tokens", limit: 1 },
+          { ftsIndex: null, embedFile: foreignEmbedFile }
+        );
+        expect(hybridCombined.signals_used).toEqual(["tfidf"]);
+        expect(hybridCombined.signal_errors?.embeddings).toBe("Embedding index ownership could not be verified");
+        expect(hybridCombined.signal_errors?.embeddings).not.toMatch(/clear-embeddings|quarantined|requested model/i);
+        for (const sensitivePath of [owningVault.root, foreignRoot, canonicalForeignRoot, foreignEmbedFile]) {
+          expect(hybridCombined.signal_errors?.embeddings).not.toContain(sensitivePath);
+        }
+        expect(logicalSnapshot()).toEqual(logicalBeforeRefusal);
+        expect((await fs.lstat(combinedGuardPath)).isDirectory()).toBe(true);
+      } finally {
+        await releaseWatcherActivationGuard(combinedGuard);
+      }
+
+      const verify = new EmbedDb({
+        file: foreignEmbedFile,
+        vaultRoot: canonicalForeignRoot,
+        modelAlias: "multilingual",
+        dim: 2
+      });
+      await verify.open();
+      try {
+        expect(verify.totalChunks()).toBe(1);
+        expect(verify.search(new Float32Array([1, 0]), 1)[0]?.text_preview).toBe("foreign-search-marker");
+      } finally {
+        verify.close();
+      }
+
+      // Matching-root wrong-class controls: expected-root discovery must
+      // validate the complete admitted metadata class, not merely vault_root.
+      // Path-like stored values stay confidential and can never be resolved,
+      // echoed, or laundered into a default configuration before open.
+      const causalEmbedFile = path.join(owningVault.root, "same-root-wrong-class.embed.db");
+      const causalSeed = new EmbedDb({
+        file: causalEmbedFile,
+        vaultRoot: owningVault.root,
+        modelAlias: "multilingual",
+        dim: 384,
+        quantization: "f32"
+      });
+      await causalSeed.open();
+      const causalVector = new Float32Array(384);
+      causalVector[0] = 1;
+      causalSeed.upsertNote("Owned.md", 1, [
+        {
+          chunkIndex: 0,
+          lineStart: 1,
+          lineEnd: 1,
+          textPreview: "same-root-class-marker",
+          vector: causalVector
+        }
+      ]);
+      causalSeed.close();
+      const causalSnapshot = () => {
+        const inspect = new Database(causalEmbedFile, { readonly: true, fileMustExist: true });
+        try {
+          return {
+            schema: inspect
+              .prepare(
+                `SELECT type, name, sql
+                 FROM sqlite_master
+                 WHERE name NOT GLOB 'sqlite_*'
+                 ORDER BY type, name`
+              )
+              .all(),
+            meta: inspect.prepare("SELECT key, value FROM meta ORDER BY key").all(),
+            rows: inspect
+              .prepare(
+                `SELECT id, rel_path, chunk_index, line_start, line_end, text_preview,
+                        hex(vector) AS vector_hex, kind
+                 FROM embeddings
+                 ORDER BY id`
+              )
+              .all(),
+            sourceState: inspect.prepare("SELECT * FROM source_state ORDER BY rel_path, kind").all()
+          };
+        } finally {
+          inspect.close();
+        }
+      };
+      const writeMetaValue = (key: string, value: string) => {
+        const mutate = new Database(causalEmbedFile);
+        try {
+          mutate.prepare("UPDATE meta SET value = ? WHERE key = ?").run(value, key);
+        } finally {
+          mutate.close();
+        }
+      };
+      const pathLikeAlias = "../../private/model-alias-secret";
+      writeMetaValue("model_alias", pathLikeAlias);
+      const aliasBeforeRefusal = causalSnapshot();
+      let aliasRefusal: unknown;
+      try {
+        await embeddingsSearch(owningVault, { query: "same-root", limit: 1 }, causalEmbedFile);
+      } catch (error) {
+        aliasRefusal = error;
+      }
+      expect(aliasRefusal).toBeInstanceOf(Error);
+      const aliasMessage = aliasRefusal instanceof Error ? aliasRefusal.message : String(aliasRefusal);
+      expect(aliasMessage).toBe("Embedding index configuration could not be verified");
+      expect(aliasMessage).not.toMatch(/clear-embeddings|does not match|requested model/i);
+      for (const sensitiveValue of [owningVault.root, causalEmbedFile, pathLikeAlias]) {
+        expect(aliasMessage).not.toContain(sensitiveValue);
+      }
+      expect(causalSnapshot()).toEqual(aliasBeforeRefusal);
+
+      writeMetaValue("model_alias", "multilingual");
+      const pathLikeQuantization = "../q8-quantization-secret";
+      writeMetaValue("quantization", pathLikeQuantization);
+      const quantizationBeforeRefusal = causalSnapshot();
+      let quantizationRefusal: unknown;
+      try {
+        await embeddingsSearch(owningVault, { query: "same-root", limit: 1 }, causalEmbedFile);
+      } catch (error) {
+        quantizationRefusal = error;
+      }
+      expect(quantizationRefusal).toBeInstanceOf(Error);
+      const quantizationMessage =
+        quantizationRefusal instanceof Error ? quantizationRefusal.message : String(quantizationRefusal);
+      expect(quantizationMessage).toBe("Embedding index configuration could not be verified");
+      expect(quantizationMessage).not.toMatch(/clear-embeddings|does not match|requested model/i);
+      for (const sensitiveValue of [owningVault.root, causalEmbedFile, pathLikeQuantization]) {
+        expect(quantizationMessage).not.toContain(sensitiveValue);
+      }
+      expect(causalSnapshot()).toEqual(quantizationBeforeRefusal);
+
+      // Historical v1/v2 metadata intentionally has no quantization key.
+      // The caller projection normalizes only those admitted versions to f32;
+      // an empty legacy index therefore reaches the supported open path rather
+      // than being falsely classified as an unknown configuration.
+      const legacyEmbedFile = path.join(owningVault.root, "legacy-v2.embed.db");
+      const legacySeed = new EmbedDb({
+        file: legacyEmbedFile,
+        vaultRoot: owningVault.root,
+        modelAlias: "multilingual",
+        dim: 384,
+        quantization: "f32"
+      });
+      await legacySeed.open();
+      legacySeed.close();
+      const legacyRaw = new Database(legacyEmbedFile);
+      try {
+        legacyRaw.prepare("UPDATE meta SET value = '2' WHERE key = 'schema_version'").run();
+        legacyRaw.prepare("DELETE FROM meta WHERE key = 'quantization'").run();
+      } finally {
+        legacyRaw.close();
+      }
+      const { peekEmbedDbMeta } = await import("../src/embed-db.js");
+      const legacyMeta = await peekEmbedDbMeta(legacyEmbedFile, owningVault.root);
+      expect(legacyMeta?.schema_version).toBe("2");
+      expect(legacyMeta?.quantization).toBeUndefined();
+      const legacyResult = await embeddingsSearch(owningVault, { query: "legacy", limit: 1 }, legacyEmbedFile);
+      expect(legacyResult.total_chunks).toBe(0);
+      expect(legacyResult.matches).toEqual([]);
+
+      // Missing and present-but-empty are distinct discovery states. Search
+      // must accept both zero-byte and schema-empty SQLite artifacts as safe
+      // initialization candidates instead of confusing them with a refused
+      // populated database and applying the generic class error.
+      const zeroByteEmbedFile = path.join(owningVault.root, "zero-byte.embed.db");
+      await fs.writeFile(zeroByteEmbedFile, "");
+      const schemaEmptyEmbedFile = path.join(owningVault.root, "schema-empty.embed.db");
+      const schemaEmpty = new Database(schemaEmptyEmbedFile);
+      schemaEmpty.close();
+      for (const emptyEmbedFile of [zeroByteEmbedFile, schemaEmptyEmbedFile]) {
+        const emptyResult = await embeddingsSearch(owningVault, { query: "empty-discovery", limit: 1 }, emptyEmbedFile);
+        expect(emptyResult.total_chunks).toBe(0);
+        expect(emptyResult.matches).toEqual([]);
+      }
     }
   });
 

@@ -142,9 +142,11 @@ export interface HnswIndex {
    * dim, size, and label→row map. Returns true on successful write.
    *
    * Caller is responsible for choosing `file` (typically alongside the
-   * embed-db with `.hnsw` suffix). We separate binary + meta files so
-   * a partial write (e.g. crash mid-flush) leaves the meta missing,
-   * which the loader treats as "no usable index" → rebuild from scratch.
+   * embed-db with `.hnsw` suffix). A missing parent is created with a
+   * best-effort `0700` mode; an existing/custom parent is not chmod'd. We
+   * separate binary + meta files so a partial write (e.g. crash mid-flush)
+   * leaves the meta missing, which the loader treats as "no usable index" →
+   * rebuild from scratch.
    */
   saveTo(
     file: string,
@@ -455,7 +457,13 @@ function wrapNativeIndex(ctor: HnswNativeIndex, dim: number, size: number): Hnsw
       // Write the binary index to <file>.bin and the JSON meta sidecar
       // to <file>.meta.json. We separate them so a partial-write (e.g.
       // crash mid-flush) leaves meta missing → loader rebuilds.
-      await fs.mkdir(path.dirname(file), { recursive: true });
+      const parentDir = path.dirname(file);
+      const parentExisted = await fs
+        .stat(parentDir)
+        .then(() => true)
+        .catch(() => false);
+      await fs.mkdir(parentDir, { recursive: true, mode: 0o700 });
+      if (!parentExisted) await fs.chmod(parentDir, 0o700).catch(() => {});
       const binFile = `${file}.bin`;
       const metaFile = `${file}.meta.json`;
       // hnswlib-node's writeIndex writes to a host filesystem path
@@ -476,14 +484,12 @@ function wrapNativeIndex(ctor: HnswNativeIndex, dim: number, size: number): Hnsw
       await fs.writeFile(metaFile, JSON.stringify(meta, null, 2), "utf8");
       // v3.6.2 (audit M-7) — defense-in-depth: persist the user-only
       // 0600 mode on both sidecars, matching the canonical pattern in
-      // src/embed-db.ts and src/fts5.ts. The parent dir is already
-      // 0700 (created by EmbedDb.open before HNSW persistence runs),
-      // but per-file invariants are what the SECURITY.md privacy
-      // guarantees require — the .meta.json carries text_preview
-      // snippets which are sensitive note content. Best-effort: on
+      // src/embed-db.ts and src/fts5.ts. The .meta.json carries
+      // text_preview snippets, so file-level protection must not rely on the
+      // parent: saveTo creates a missing parent at 0700, while an existing or
+      // custom parent remains operator-managed. Best-effort: on
       // platforms without POSIX mode bits (Windows / some FAT mounts)
-      // chmod is a no-op or throws; we swallow either way because the
-      // parent-dir guard is the real protection.
+      // chmod is a no-op or throws; we swallow either way.
       await Promise.all([fs.chmod(binFile, 0o600).catch(() => {}), fs.chmod(metaFile, 0o600).catch(() => {})]);
       return true;
     }

@@ -11,7 +11,8 @@ import {
   EMBEDDING_MODELS,
   RERANKER_MODELS,
   resolveModel,
-  resolveRerankerModel
+  resolveRerankerModel,
+  resolveStoredEmbeddingConfiguration
 } from "../src/embeddings.js";
 
 describe("EMBEDDING_MODELS catalog (v2.0 alpha)", () => {
@@ -39,6 +40,52 @@ describe("resolveModel", () => {
     const m = resolveModel("bge");
     expect(m.alias).toBe("bge");
     expect(m.dim).toBe(384);
+    expect(Object.isFrozen(m)).toBe(true);
+    expect(() => {
+      (m as { alias: string }).alias = "multilingual";
+    }).toThrow(TypeError);
+    expect(resolveModel("bge").alias).toBe("bge");
+
+    const current = resolveStoredEmbeddingConfiguration({
+      schema_version: "4",
+      model_alias: "bge",
+      dim: "384",
+      quantization: "int8"
+    });
+    expect(current).toEqual({ model: EMBEDDING_MODELS.bge, quantization: "int8" });
+    expect(Object.isFrozen(current)).toBe(true);
+    expect(() => {
+      (current as { quantization: "f32" | "int8" }).quantization = "f32";
+    }).toThrow(TypeError);
+    expect(current.quantization).toBe("int8");
+    expect(
+      resolveStoredEmbeddingConfiguration({ schema_version: "1", model_alias: "bge", dim: "384" }).quantization
+    ).toBe("f32");
+    expect(
+      resolveStoredEmbeddingConfiguration({ schema_version: "2", model_alias: "multilingual", dim: "384" }).quantization
+    ).toBe("f32");
+
+    for (const untrusted of [
+      { schema_version: "4", model_alias: "../../private/model-secret", dim: "384", quantization: "f32" },
+      { schema_version: "4", model_alias: "bge", dim: "768", quantization: "f32" },
+      { schema_version: "4", model_alias: "bge", dim: "384", quantization: "../q8-secret" },
+      { schema_version: "4", model_alias: "bge", dim: "384" },
+      { model_alias: "bge", dim: "384", quantization: "f32" }
+    ]) {
+      let refusal: unknown;
+      try {
+        resolveStoredEmbeddingConfiguration(
+          untrusted as unknown as Parameters<typeof resolveStoredEmbeddingConfiguration>[0]
+        );
+      } catch (error) {
+        refusal = error;
+      }
+      expect(refusal).toBeInstanceOf(Error);
+      expect(refusal instanceof Error ? refusal.message : String(refusal)).toBe(
+        "Embedding index configuration could not be verified"
+      );
+      expect(refusal instanceof Error ? refusal.message : String(refusal)).not.toMatch(/private|secret|\.\./i);
+    }
   });
 
   it("returns the default model when alias is undefined", () => {
@@ -114,6 +161,11 @@ describe("resolveRerankerModel", () => {
     const m = resolveRerankerModel("rerank-bge");
     expect(m.alias).toBe("rerank-bge");
     expect(m.multilingual).toBe(false);
+    expect(Object.isFrozen(m)).toBe(true);
+    expect(() => {
+      (m as { alias: string }).alias = "rerank-multilingual";
+    }).toThrow(TypeError);
+    expect(resolveRerankerModel("rerank-bge").alias).toBe("rerank-bge");
   });
 
   it("returns the default reranker when alias is undefined", () => {

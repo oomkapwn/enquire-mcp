@@ -901,12 +901,15 @@ function watcherSemanticRouteIsQuarantined(health?: Readonly<{ semanticUsable: b
  * after an incomplete startup activation.
  *
  * @param embedFile - Prepared embedding database path.
+ * @param vaultRoot - Canonical vault root that must own any present database.
  * @returns A promise that resolves only when no activation guard exists.
  */
-async function assertEmbeddingIndexNotQuarantined(embedFile: string): Promise<void> {
+async function assertEmbeddingIndexNotQuarantined(embedFile: string, vaultRoot: string): Promise<void> {
   try {
     await assertWatcherActivationGuardClear(embedFile);
   } catch (error) {
+    const { assertEmbedDbRecoveryOwnership } = await import("../embed-db.js");
+    await assertEmbedDbRecoveryOwnership(embedFile, vaultRoot);
     throw new Error(
       "Embedding index is quarantined after an incomplete watcher startup. Stop every enquire-mcp process " +
         "for this vault, then run the strict `enquire-mcp clear-embeddings --vault <your-vault>` recovery. " +
@@ -1114,7 +1117,7 @@ export async function embeddingsSearch(
       "Embedding search is quarantined after a watcher sink-commit failure. Restart the server to reconcile the derived indexes."
     );
   }
-  await assertEmbeddingIndexNotQuarantined(embedFile);
+  await assertEmbeddingIndexNotQuarantined(embedFile, vault.root);
   // v3.1.0 — pick the actual text to embed. HyDE prefers the
   // hypothetical answer when present; otherwise fall back to the query.
   const { text: embedText, usedHyde } = pickEmbedTextForHyde(args);
@@ -1122,15 +1125,16 @@ export async function embeddingsSearch(
   const minScore = args.min_score ?? 0.3;
 
   // Lazy-load embed-db + embeddings only when the tool is actually called.
-  const [{ EmbedDb, peekEmbedDbMetaCached }, { loadEmbedder, resolveModel }] = await Promise.all([
-    import("../embed-db.js"),
-    import("../embeddings.js")
-  ]);
+  const [
+    { discoverEmbedDbConfigCached, EmbedDb },
+    { loadEmbedder, resolveModel, resolveStoredEmbeddingConfiguration }
+  ] = await Promise.all([import("../embed-db.js"), import("../embeddings.js")]);
 
-  // Verify the embed db exists before doing anything heavy. This separates
-  // "user hasn't built the index yet" from "model failed to load".
-  const fsMod = await import("node:fs");
-  if (!fsMod.existsSync(embedFile)) {
+  // One bounded discovery distinguishes a genuinely missing database from a
+  // present empty, owned, or refused artifact without laundering fail-soft
+  // uncertainty into a default writer configuration.
+  const discovered = await discoverEmbedDbConfigCached(embedFile, vault.root);
+  if (discovered.kind === "missing") {
     // v3.9.0-rc.34 (deep-audit P-3) — this error propagates to the MCP client
     // (a tool-handler throw), so on bearer-auth `serve-http` it must NOT echo
     // the absolute vault path / embed-db path (filesystem fingerprinting).
@@ -1143,7 +1147,7 @@ export async function embeddingsSearch(
     );
   }
 
-  // v3.6.2 K-1a — peek the existing embed-db's model_alias BEFORE open,
+  // v3.6.2 K-1a — discover the existing embed-db's model_alias BEFORE open,
   // so bootstrapSchema() doesn't DROP TABLE when the user built embeddings
   // with `--embedding-model bge` but searches with the default
   // `multilingual` model (or vice versa). v3.6.1 CRIT-1 fix only closed
@@ -1153,12 +1157,14 @@ export async function embeddingsSearch(
   // (K-1 residual class). Honor the stored alias unless caller passes
   // `args.model` explicitly.
   //
-  // v3.7.0 L-1 — uses `peekEmbedDbMetaCached` so the SQLite open+close
-  // overhead (~5-10ms) only fires on the first search after a file-mtime
-  // change. Subsequent searches against the same embed-db hit the
-  // module-level cache (~µs). Mtime-based invalidation covers the
-  // clear-embeddings + build-embeddings rebuild flow automatically.
-  const existingMeta = await peekEmbedDbMetaCached(embedFile);
+  // v3.7.0 L-1 — cached discovery keeps the SQLite read-only admission read
+  // off the hot path after the first search for a file/root/mtime/size tuple.
+  // Invalidation covers clear-embeddings + build-embeddings rebuilds while
+  // the cache key keeps different expected roots from sharing authority.
+  if (discovered.kind === "refused") {
+    throw new Error("Embedding index configuration could not be verified");
+  }
+  const storedConfiguration = discovered.kind === "owned" ? resolveStoredEmbeddingConfiguration(discovered.meta) : null;
   // v3.7.5 CRITICAL — external-audit caught read-only-search-can-DROP
   // (K-1-class sibling that v3.6.4 cli.ts closure didn't model).
   // Read-only search MUST NOT trigger destructive rebuild. Pre-fix: if user passed
@@ -1170,19 +1176,19 @@ export async function embeddingsSearch(
   // intentionally switch models, the user must run
   // `enquire-mcp clear-embeddings` + `build-embeddings --embedding-model X`
   // explicitly (those paths are documented write/build operations).
-  if (args.model && existingMeta?.model_alias && args.model !== existingMeta.model_alias) {
+  if (args.model && storedConfiguration && args.model !== storedConfiguration.model.alias) {
     throw new Error(
-      `embeddingsSearch: requested model '${args.model}' does not match the embed-db's stored model '${existingMeta.model_alias}'. ` +
+      `embeddingsSearch: requested model '${args.model}' does not match the embed-db's stored model '${storedConfiguration.model.alias}'. ` +
         `Read-only search refuses to rebuild the index. ` +
         `To switch models, run: enquire-mcp clear-embeddings --vault <path> && enquire-mcp build-embeddings --vault <path> --embedding-model ${args.model}`
     );
   }
-  const honoredAlias = args.model ?? existingMeta?.model_alias;
-  const honoredQuant = existingMeta?.quantization as "f32" | "int8" | undefined;
+  const honoredAlias = args.model ?? storedConfiguration?.model.alias;
+  const honoredQuant = storedConfiguration?.quantization ?? "f32";
   const model = resolveModel(honoredAlias);
-  if (existingMeta?.model_alias && !args.model && existingMeta.model_alias !== resolveModel(undefined).alias) {
+  if (!args.model && storedConfiguration && storedConfiguration.model.alias !== resolveModel(undefined).alias) {
     process.stderr.write(
-      `enquire: embeddingsSearch — honoring embed-db's stored model '${existingMeta.model_alias}' (avoids DROP TABLE on schema mismatch); pass args.model to override.\n`
+      `enquire: embeddingsSearch — honoring embed-db's stored model '${storedConfiguration.model.alias}' (avoids DROP TABLE on schema mismatch); pass args.model to override.\n`
     );
   }
   const db = new EmbedDb({
@@ -1192,7 +1198,7 @@ export async function embeddingsSearch(
     dim: model.dim,
     quantization: honoredQuant
   });
-  await db.open();
+  await db.open(discovered);
   try {
     const total = db.totalChunks();
     if (total === 0) {
@@ -1206,8 +1212,8 @@ export async function embeddingsSearch(
     // v3.7.5 CRITICAL — external-audit caught embedder/db model mismatch
     // (a residual K-1-class instance the v3.6.4 cli.ts closure didn't
     // cover). Pre-fix: when user omitted `args.model` and the embed-db
-    // was built with `bge`, we opened the DB as `bge` (correct via peek-
-    // honor) but loaded the embedder as `multilingual` (the default that
+    // was built with `bge`, we opened the DB as `bge` (correct via admitted
+    // configuration discovery) but loaded the embedder as `multilingual` (the default that
     // `loadEmbedder(undefined)` resolves to). Result: query vector built
     // in `multilingual` vector space but similarity computed against
     // `bge` chunks — silent garbage output with response still reporting
@@ -2375,7 +2381,7 @@ export async function searchHybrid(
     }
   } else if (ctx.embedFile !== null) {
     try {
-      await assertEmbeddingIndexNotQuarantined(ctx.embedFile);
+      await assertEmbeddingIndexNotQuarantined(ctx.embedFile, vault.root);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       signalErrors.embeddings = msg;

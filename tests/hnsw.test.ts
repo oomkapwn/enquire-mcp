@@ -549,9 +549,9 @@ describe("HNSW persistence (v2.16.0)", () => {
 
   // v3.6.2 audit M-7 — both sidecars (.bin + .meta.json) MUST be chmod'd to
   // 0o600 after write. The .meta.json carries text_preview snippets which are
-  // sensitive note content; the parent dir is already 0700 (defense-in-depth),
-  // but the per-file invariant is what SECURITY.md guarantees. Matches the
-  // canonical pattern in src/embed-db.ts and src/fts5.ts.
+  // sensitive note content, so the per-file invariant must hold independently
+  // of an existing/custom parent directory's operator-managed mode. Matches
+  // the canonical pattern in src/embed-db.ts and src/fts5.ts.
   it("saveTo chmods both sidecars (.bin + .meta.json) to 0o600 (audit M-7)", async () => {
     if (process.platform === "win32") return; // POSIX mode bits don't apply on NTFS
     const dim = 4;
@@ -562,14 +562,23 @@ describe("HNSW persistence (v2.16.0)", () => {
     for (let i = 0; i < v.length; i++) v[i] = (v[i] ?? 0) / norm;
     const index = await buildHnsw([{ label: 0, vector: v }], { dim, maxElements: 1 });
 
-    const persistFile = path.join(dir, "chmod-check.hnsw");
+    const freshParent = path.join(dir, "chmod-check-parent");
+    const persistFile = path.join(freshParent, "chmod-check.hnsw");
     const ok = await index.saveTo(persistFile, new Map(), "chmod-sig");
     expect(ok).toBe(true);
 
+    expect((await fs.stat(freshParent)).mode & 0o777).toBe(0o700);
     const binStat = await fs.stat(`${persistFile}.bin`);
     const metaStat = await fs.stat(`${persistFile}.meta.json`);
     expect(binStat.mode & 0o777).toBe(0o600);
     expect(metaStat.mode & 0o777).toBe(0o600);
+
+    const existingParent = path.join(dir, "operator-managed-hnsw-parent");
+    await fs.mkdir(existingParent, { mode: 0o750 });
+    await fs.chmod(existingParent, 0o750);
+    const existingParentFile = path.join(existingParent, "preserve-parent.hnsw");
+    expect(await index.saveTo(existingParentFile, new Map(), "parent-mode-sig")).toBe(true);
+    expect((await fs.stat(existingParent)).mode & 0o777).toBe(0o750);
   });
 });
 

@@ -1,0 +1,506 @@
+name: Temporary AH-2 frozen identity capture
+
+on:
+  push:
+    branches:
+      - codex/ah2-foreign-index-admission-20260814
+
+permissions:
+  contents: read
+
+concurrency:
+  group: capture-ah2-frozen-identity-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CAPTURE_ARTIFACT_NAME: ah2-frozen-identity-${{ github.sha }}-${{ github.run_attempt }}
+  EXPECTED_BASE_SHA: 5ffcff398cbd826dda67898c4cdf21963164fc03
+
+jobs:
+  capture:
+    if: >-
+      github.repository == 'oomkapwn/enquire-mcp' &&
+      github.ref == 'refs/heads/codex/ah2-foreign-index-admission-20260814'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      artifact_name: ${{ steps.artifact_summary.outputs.artifact_name }}
+      artifact_id: ${{ steps.artifact_summary.outputs.artifact_id }}
+      artifact_url: ${{ steps.artifact_summary.outputs.artifact_url }}
+      artifact_digest: ${{ steps.artifact_summary.outputs.artifact_digest }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24
+
+      - name: Assert the exact capture boundary and frozen baseline
+        env:
+          EVENT_AFTER: ${{ github.event.after }}
+          EVENT_BEFORE: ${{ github.event.before }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "oomkapwn/enquire-mcp"
+          test "$GITHUB_REF" = "refs/heads/codex/ah2-foreign-index-admission-20260814"
+          test "$EVENT_BEFORE" = "$EXPECTED_BASE_SHA"
+          test "$EVENT_AFTER" = "$GITHUB_SHA"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git rev-list --parents -n 1 HEAD | awk '{ print NF }')" -eq 2
+          test "$(git rev-parse HEAD^)" = "$EXPECTED_BASE_SHA"
+          test "$(git diff --name-status --no-renames HEAD^ HEAD)" = \
+            $'A\t.github/workflows/capture-ah2-frozen-identity.yml'
+          git diff --check HEAD^ HEAD
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+
+          assert_sha256() {
+            local file="$1"
+            local expected="$2"
+            local observed
+            observed="$(sha256sum "$file" | cut -d ' ' -f 1)"
+            if [ "$observed" != "$expected" ]; then
+              echo "::error::$file SHA-256 drifted: expected $expected, found $observed"
+              return 1
+            fi
+          }
+          assert_sha256 package-lock.json \
+            455f04e7b5b77212d6dfe893db06ba89deb5e81428485a1bb4e57b904c5b2b1a
+          assert_sha256 scripts/generate-release-mutation-identity.mjs \
+            97d9d8537b55bb47845d5fc4cd6481ba024975eeaa904850a0baf6ab0c265647
+          assert_sha256 tests/fixtures/release-mutation-identity.v2.json \
+            a8d7f2f5cdf7a7265c31e06f302d7373ee48bd7225d71299935a16211e36ecca
+          assert_sha256 tests/release-integrity.test.ts \
+            2a15da915814bdfd4baacda33c87d93ce8679d89a93fb459ac97c37d3ba8763e
+          assert_sha256 docs/api.md \
+            53b06605c89877b80eceff45689344072f70e2449577c18990939881b0f429c2
+          assert_sha256 src/cli.ts \
+            f9bce96c418b15384dd305a23aaaf71f08434c8ffb07176d0d40d0073f305377
+          assert_sha256 src/cli-help.ts \
+            91e57bc63991b24a6314dbf2dbd8597d6032fd4459ad47e69752e7cbf9eaa4fc
+          assert_sha256 src/server.ts \
+            16a64c309e9e84b5e0b7eb9d282b1a8d2d5f89f6b57ebd11fa77f4ff3baaf413
+          assert_sha256 src/tools/search.ts \
+            afd6c10c6404ac4b55f9025c4776b7756d9e75da60ad1fbee88b631b35259a2c
+
+          git cat-file -e 8420e2fca3ed0dac994859a9e9a30b933d5ddf9e^{commit}
+          test "$(git show 8420e2fca3ed0dac994859a9e9a30b933d5ddf9e:tests/release-integrity.test.ts | sha256sum | cut -d ' ' -f 1)" = \
+            "3fa0b67411e2fc0f4d7c6bce6075ba91eb25edc19a210b5c2f8dd408def6e18b"
+
+          node --input-type=module <<'NODE'
+          import { readFileSync } from "node:fs";
+
+          const baselineDigest = "a8d7f2f5cdf7a7265c31e06f302d7373ee48bd7225d71299935a16211e36ecca";
+          for (const file of [
+            "tests/meta-invariant-coverage.test.ts",
+            "tests/release-mutation-identity-audit.ts"
+          ]) {
+            const source = readFileSync(file, "utf8");
+            if (source.split(baselineDigest).length - 1 !== 1) {
+              throw new Error(`${file} must contain the exact baseline fixture digest once`);
+            }
+          }
+
+          const expectedInventory = {
+            sources: 30,
+            mutations: 560,
+            first: 538,
+            all: 22,
+            roots: 536,
+            dependencyOnly: 24,
+            cases: 536,
+            primaryChecks: 536,
+            compositeChecks: 5,
+            logicalChecks: 541,
+            rawMatcherEvaluations: 546,
+            sourceEdges: 6,
+            replacementEdges: 18,
+            maxDependencyDepth: 2,
+            transactionCases: 76
+          };
+          const baseline = JSON.parse(
+            readFileSync("tests/fixtures/release-mutation-identity.v2.json", "utf8")
+          );
+          if (JSON.stringify(baseline.inventory) !== JSON.stringify(expectedInventory)) {
+            throw new Error("baseline frozen inventory drifted");
+          }
+          if (
+            baseline.sources.length !== expectedInventory.sources ||
+            baseline.mutations.length !== expectedInventory.mutations ||
+            baseline.cases.length !== expectedInventory.cases
+          ) {
+            throw new Error("baseline array census disagrees with its frozen inventory");
+          }
+          NODE
+
+      - name: Generate and guard the exact 14-leaf identity refresh
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          capture_dir="$RUNNER_TEMP/ah2-frozen-identity"
+          test ! -e "$capture_dir"
+          mkdir -m 0700 "$capture_dir"
+          work_dir="$RUNNER_TEMP/ah2-frozen-identity-work"
+          test ! -e "$work_dir"
+          mkdir -m 0700 "$work_dir"
+          current_source="$work_dir/release-integrity.current.ts"
+          historical_source="$work_dir/release-integrity.historical.ts"
+          cp tests/release-integrity.test.ts "$current_source"
+          current_sha="$(sha256sum "$current_source" | cut -d ' ' -f 1)"
+          test "$current_sha" = "2a15da915814bdfd4baacda33c87d93ce8679d89a93fb459ac97c37d3ba8763e"
+          restore_current() {
+            cp "$current_source" tests/release-integrity.test.ts
+          }
+          trap restore_current EXIT
+          git show 8420e2fca3ed0dac994859a9e9a30b933d5ddf9e:tests/release-integrity.test.ts \
+            > "$historical_source"
+          test "$(sha256sum "$historical_source" | cut -d ' ' -f 1)" = \
+            "3fa0b67411e2fc0f4d7c6bce6075ba91eb25edc19a210b5c2f8dd408def6e18b"
+          cp "$historical_source" tests/release-integrity.test.ts
+          node scripts/generate-release-mutation-identity.mjs \
+            > "$capture_dir/release-mutation-identity.v2.json"
+          test -s "$capture_dir/release-mutation-identity.v2.json"
+          restore_current
+          test "$(sha256sum tests/release-integrity.test.ts | cut -d ' ' -f 1)" = "$current_sha"
+          cmp -s "$current_source" tests/release-integrity.test.ts
+          git diff --exit-code -- tests/release-integrity.test.ts
+          trap - EXIT
+
+          node --input-type=module <<'NODE'
+          import { createHash } from "node:crypto";
+          import { readFileSync, writeFileSync } from "node:fs";
+
+          const captureDir = `${process.env.RUNNER_TEMP}/ah2-frozen-identity`;
+          const baselineText = readFileSync("tests/fixtures/release-mutation-identity.v2.json", "utf8");
+          const candidateText = readFileSync(`${captureDir}/release-mutation-identity.v2.json`, "utf8");
+          const baseline = JSON.parse(baselineText);
+          const candidate = JSON.parse(candidateText);
+          const sha256 = (text) => createHash("sha256").update(text, "utf8").digest("hex");
+          const semanticFingerprint = (value) => `sha256:${sha256(JSON.stringify(value))}`;
+          const unique = (rows, id, label) => {
+            const matches = rows.filter((row) => row.id === id);
+            if (matches.length !== 1) throw new Error(`${label} ${id} must occur exactly once`);
+            return matches[0];
+          };
+          const assertEqual = (actual, expected, label) => {
+            if (actual !== expected) throw new Error(`${label}: expected ${expected}, found ${actual}`);
+          };
+          const validateSemanticFingerprints = (manifest, label) => {
+            for (const source of manifest.sources) {
+              const sourceWithoutFingerprint = Object.fromEntries(
+                Object.entries(source).filter(([key]) => key !== "semanticFingerprint")
+              );
+              assertEqual(
+                source.semanticFingerprint,
+                semanticFingerprint({
+                  normalizer: "release-matrix-balanced-v2",
+                  source: sourceWithoutFingerprint
+                }),
+                `${label} source ${source.id} semantic fingerprint`
+              );
+            }
+            const caseByRoot = new Map(manifest.cases.map((entry) => [entry.root, entry]));
+            if (caseByRoot.size !== manifest.cases.length) {
+              throw new Error(`${label} owner-case roots must be unique`);
+            }
+            for (const mutation of manifest.mutations) {
+              const mutationWithoutFingerprint = Object.fromEntries(
+                Object.entries(mutation).filter(([key]) => key !== "semanticFingerprint")
+              );
+              const owner = caseByRoot.get(mutation.ownerRoot);
+              if (owner === undefined) {
+                throw new Error(`${label} mutation ${mutation.id} has no owner case`);
+              }
+              assertEqual(
+                mutation.semanticFingerprint,
+                semanticFingerprint({
+                  normalizer: "release-matrix-balanced-v2",
+                  mutation: mutationWithoutFingerprint,
+                  ownerCaseFingerprint: owner.semanticFingerprint
+                }),
+                `${label} mutation ${mutation.id} semantic fingerprint`
+              );
+            }
+          };
+
+          const expectedInventory = {
+            sources: 30,
+            mutations: 560,
+            first: 538,
+            all: 22,
+            roots: 536,
+            dependencyOnly: 24,
+            cases: 536,
+            primaryChecks: 536,
+            compositeChecks: 5,
+            logicalChecks: 541,
+            rawMatcherEvaluations: 546,
+            sourceEdges: 6,
+            replacementEdges: 18,
+            maxDependencyDepth: 2,
+            transactionCases: 76
+          };
+          for (const [label, manifest] of [
+            ["baseline", baseline],
+            ["candidate", candidate]
+          ]) {
+            if (JSON.stringify(manifest.inventory) !== JSON.stringify(expectedInventory)) {
+              throw new Error(`${label} frozen inventory drifted`);
+            }
+            if (
+              manifest.sources.length !== expectedInventory.sources ||
+              manifest.mutations.length !== expectedInventory.mutations ||
+              manifest.cases.length !== expectedInventory.cases
+            ) {
+              throw new Error(`${label} array census disagrees with its frozen inventory`);
+            }
+            validateSemanticFingerprints(manifest, label);
+          }
+
+          const sourceSpecs = [
+            {
+              id: "document.api",
+              path: "docs/api.md",
+              beforeContent: "9b2fe0c98e0612ea7d5ca83389c31d3eebde5f740f8eca0b799371ce6e17a37d",
+              beforeSemantic: "sha256:2a5c2e2eaef74ae0cf6e93eaf0f9133d302b0ddfa97f00f9dfad7d2a76dfd79c",
+              afterContent: "53b06605c89877b80eceff45689344072f70e2449577c18990939881b0f429c2",
+              afterSemantic: "sha256:08c700c9843180d627c4a0b64eea9c7f6bf1bbe5c6a8d4de142e33c6487fcf9b"
+            },
+            {
+              id: "source.cli",
+              path: "src/cli.ts",
+              beforeContent: "a14f1f9e9c8bfacc7663ce47824adb19d7b551cab80318b3a0d202dbe53f8965",
+              beforeSemantic: "sha256:375cfc319cbfecb239ee5a94d1bf1b155aa60b12c222621fafadfccdec56b434",
+              afterContent: "f9bce96c418b15384dd305a23aaaf71f08434c8ffb07176d0d40d0073f305377",
+              afterSemantic: "sha256:64656af6dd56c7d584deb599c386ea41d56dc4abb59ac8e341b796d55444bb76"
+            },
+            {
+              id: "source.cli-help",
+              path: "src/cli-help.ts",
+              beforeContent: "818f9346da61e94bdd6283de3c7574f0aacf4258222f2662e8c0b25e409c2dbf",
+              beforeSemantic: "sha256:a98d0fc898448d4d8b4d1165129ae2471983c5430b183dd43aa1486e02916cc4",
+              afterContent: "91e57bc63991b24a6314dbf2dbd8597d6032fd4459ad47e69752e7cbf9eaa4fc",
+              afterSemantic: "sha256:2e1c34e4e62199850bce782174f6227182975af9ee42a6435d066e1d8203f7ae"
+            },
+            {
+              id: "source.server-ts",
+              path: "src/server.ts",
+              beforeContent: "e8ab92c54e0724d998430cbe328e40e58acc406d166f7b852416082ed8df18a5",
+              beforeSemantic: "sha256:9a7b5cd6b56b4cf562d2da25efd2ec044c960bd7d1f1d431c47b9cbf317e30f3",
+              afterContent: "16a64c309e9e84b5e0b7eb9d282b1a8d2d5f89f6b57ebd11fa77f4ff3baaf413",
+              afterSemantic: "sha256:bb07cc3731fca1a21934e066ddbf89a2e4392852932ec3376d4579570af32427"
+            }
+          ];
+          const sourceReceipt = {};
+          const permittedChanges = [];
+          for (const spec of sourceSpecs) {
+            const before = unique(baseline.sources, spec.id, "baseline source");
+            const after = unique(candidate.sources, spec.id, "candidate source");
+            const observedContent = sha256(readFileSync(spec.path, "utf8"));
+            assertEqual(before.contentSha256, spec.beforeContent, `${spec.id} baseline content`);
+            assertEqual(before.semanticFingerprint, spec.beforeSemantic, `${spec.id} baseline semantic`);
+            assertEqual(observedContent, spec.afterContent, `${spec.id} checked-out content`);
+            assertEqual(after.contentSha256, spec.afterContent, `${spec.id} candidate content`);
+            assertEqual(after.semanticFingerprint, spec.afterSemantic, `${spec.id} candidate semantic`);
+            permittedChanges.push(
+              [before.contentSha256, after.contentSha256, `${spec.id}.contentSha256`],
+              [before.semanticFingerprint, after.semanticFingerprint, `${spec.id}.semanticFingerprint`]
+            );
+            sourceReceipt[spec.id] = {
+              path: spec.path,
+              before: {
+                contentSha256: before.contentSha256,
+                semanticFingerprint: before.semanticFingerprint
+              },
+              after: {
+                contentSha256: after.contentSha256,
+                semanticFingerprint: after.semanticFingerprint
+              }
+            };
+            after.contentSha256 = before.contentSha256;
+            after.semanticFingerprint = before.semanticFingerprint;
+          }
+
+          const mutationSpecs = [
+            {
+              id: "release.m467",
+              sourceId: "document.api",
+              path: "docs/api.md",
+              needle: "| `--no-prompts`",
+              replacement: "| `--prompts-hidden`",
+              beforeSource: "9b2fe0c98e0612ea7d5ca83389c31d3eebde5f740f8eca0b799371ce6e17a37d",
+              beforeMutant: "6a9da63b6678743710144724a462370fb01cd7aeabb1a57a120f6d3bef43073a",
+              beforeSemantic: "sha256:6ebf1ac894e6f5921c14321182c0471437a3d469b7784cf488c056bb05f34161",
+              afterSource: "53b06605c89877b80eceff45689344072f70e2449577c18990939881b0f429c2",
+              afterMutant: "55ea8dd8e09716b77ad76f48b4d7e597f2bb344c67e173afad4d93cf0a6abe08",
+              afterSemantic: "sha256:59977d3b35790ebe9fe8556d343ef6b6aa5227aed1547991dc18042fd3ae10b9"
+            },
+            {
+              id: "release.m469",
+              sourceId: "source.server-ts",
+              path: "src/server.ts",
+              needle: "const embeddingIndexEnabled = opts.embeddingIndex !== false",
+              replacement: "true",
+              beforeSource: "e8ab92c54e0724d998430cbe328e40e58acc406d166f7b852416082ed8df18a5",
+              beforeMutant: "32e90a7779737e61615e5d2699ba750e66bc86ebf9043a64ebff2940e0512fcb",
+              beforeSemantic: "sha256:fc52ed3590e4469cc7dd940bd4d70c94575a474bf3a9f7331a944889513e35ff",
+              afterSource: "16a64c309e9e84b5e0b7eb9d282b1a8d2d5f89f6b57ebd11fa77f4ff3baaf413",
+              afterMutant: "8af49761dd130fccfa2ef17328bd5815d8a3eb444435812c07517d2439215336",
+              afterSemantic: "sha256:3b5159141a4d7d1b9944b943363f4e4b0b79d3fc2a4e26db96dd4a16c38bbe4e"
+            }
+          ];
+          const mutationReceipt = {};
+          for (const spec of mutationSpecs) {
+            const before = unique(baseline.mutations, spec.id, "baseline mutation");
+            const after = unique(candidate.mutations, spec.id, "candidate mutation");
+            assertEqual(after.source.id, spec.sourceId, `${spec.id} source identity`);
+            assertEqual(after.expressions.needle.resolved, spec.needle, `${spec.id} needle`);
+            assertEqual(after.expressions.replacement.resolved, spec.replacement, `${spec.id} replacement`);
+            assertEqual(after.expressions.expectedOccurrences.resolved, 1, `${spec.id} occurrence contract`);
+            const sourceText = readFileSync(spec.path, "utf8");
+            if (sourceText.split(spec.needle).length - 1 !== 1) {
+              throw new Error(`${spec.id} source needle must occur exactly once`);
+            }
+            const sourceSha256 = sha256(sourceText);
+            const mutantSha256 = sha256(sourceText.replace(spec.needle, spec.replacement));
+            assertEqual(before.witness.sourceSha256, spec.beforeSource, `${spec.id} baseline source`);
+            assertEqual(before.witness.mutantSha256, spec.beforeMutant, `${spec.id} baseline mutant`);
+            assertEqual(before.semanticFingerprint, spec.beforeSemantic, `${spec.id} baseline semantic`);
+            assertEqual(sourceSha256, spec.afterSource, `${spec.id} checked-out source`);
+            assertEqual(mutantSha256, spec.afterMutant, `${spec.id} exact mutant`);
+            assertEqual(after.witness.sourceSha256, spec.afterSource, `${spec.id} candidate source`);
+            assertEqual(after.witness.mutantSha256, spec.afterMutant, `${spec.id} candidate mutant`);
+            assertEqual(after.semanticFingerprint, spec.afterSemantic, `${spec.id} candidate semantic`);
+            permittedChanges.push(
+              [before.witness.sourceSha256, after.witness.sourceSha256, `${spec.id}.witness.sourceSha256`],
+              [before.witness.mutantSha256, after.witness.mutantSha256, `${spec.id}.witness.mutantSha256`],
+              [before.semanticFingerprint, after.semanticFingerprint, `${spec.id}.semanticFingerprint`]
+            );
+            mutationReceipt[spec.id] = {
+              sourceId: spec.sourceId,
+              before: {
+                sourceSha256: before.witness.sourceSha256,
+                mutantSha256: before.witness.mutantSha256,
+                semanticFingerprint: before.semanticFingerprint
+              },
+              after: {
+                sourceSha256: after.witness.sourceSha256,
+                mutantSha256: after.witness.mutantSha256,
+                semanticFingerprint: after.semanticFingerprint
+              }
+            };
+            after.witness.sourceSha256 = before.witness.sourceSha256;
+            after.witness.mutantSha256 = before.witness.mutantSha256;
+            after.semanticFingerprint = before.semanticFingerprint;
+          }
+
+          if (permittedChanges.length !== 14) {
+            throw new Error(`exactly 14 identity leaves must be admitted; found ${permittedChanges.length}`);
+          }
+          const unchanged = permittedChanges.filter(([oldValue, newValue]) => oldValue === newValue);
+          if (unchanged.length !== 0) {
+            throw new Error(`every permitted identity leaf must advance: ${unchanged.map((entry) => entry[2]).join(", ")}`);
+          }
+          if (JSON.stringify(candidate) !== JSON.stringify(baseline)) {
+            throw new Error("candidate changed outside the exact 14 admitted identity leaves");
+          }
+
+          const baselineFixtureSha256 = sha256(baselineText);
+          assertEqual(
+            baselineFixtureSha256,
+            "a8d7f2f5cdf7a7265c31e06f302d7373ee48bd7225d71299935a16211e36ecca",
+            "baseline fixture SHA-256"
+          );
+          const expectedArtifactName =
+            `ah2-frozen-identity-${process.env.GITHUB_SHA}-${process.env.GITHUB_RUN_ATTEMPT}`;
+          assertEqual(process.env.CAPTURE_ARTIFACT_NAME, expectedArtifactName, "artifact name");
+          if (!/^[1-9][0-9]*$/u.test(process.env.GITHUB_RUN_ATTEMPT ?? "")) {
+            throw new Error("GITHUB_RUN_ATTEMPT must be a positive decimal integer");
+          }
+          const receipt = {
+            schemaVersion: 1,
+            artifactName: expectedArtifactName,
+            repository: process.env.GITHUB_REPOSITORY,
+            ref: process.env.GITHUB_REF,
+            baseSha: process.env.EXPECTED_BASE_SHA,
+            headSha: process.env.GITHUB_SHA,
+            runId: process.env.GITHUB_RUN_ID,
+            runAttempt: Number(process.env.GITHUB_RUN_ATTEMPT),
+            baselineFixtureSha256,
+            candidateFixtureSha256: sha256(candidateText),
+            admittedLeafCount: permittedChanges.length,
+            inventory: {
+              baseline: baseline.inventory,
+              candidate: candidate.inventory
+            },
+            sources: sourceReceipt,
+            mutations: mutationReceipt
+          };
+          writeFileSync(
+            `${captureDir}/fixture-receipt.json`,
+            `${JSON.stringify(receipt, null, 2)}\n`,
+            { encoding: "utf8", mode: 0o600 }
+          );
+          NODE
+
+          test -s "$capture_dir/fixture-receipt.json"
+          test "$(find "$capture_dir" -mindepth 1 -maxdepth 1 -type f | wc -l)" -eq 2
+          test -z "$(find "$capture_dir" -mindepth 1 -maxdepth 1 ! -type f -print -quit)"
+          git diff --exit-code
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          cat "$capture_dir/fixture-receipt.json"
+
+      - name: Upload bounded capture
+        id: upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ${{ env.CAPTURE_ARTIFACT_NAME }}
+          path: |
+            ${{ runner.temp }}/ah2-frozen-identity/release-mutation-identity.v2.json
+            ${{ runner.temp }}/ah2-frozen-identity/fixture-receipt.json
+          compression-level: 0
+          retention-days: 3
+          if-no-files-found: error
+
+      - name: Report immutable artifact digest
+        id: artifact_summary
+        env:
+          ARTIFACT_ID: ${{ steps.upload.outputs.artifact-id }}
+          ARTIFACT_URL: ${{ steps.upload.outputs.artifact-url }}
+          ARTIFACT_DIGEST: ${{ steps.upload.outputs.artifact-digest }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! "$ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::upload-artifact returned a malformed artifact id"
+            exit 1
+          fi
+          if [[ ! "$ARTIFACT_DIGEST" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "::error::upload-artifact returned a malformed artifact digest"
+            exit 1
+          fi
+          expected_url="https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts/$ARTIFACT_ID"
+          test "$ARTIFACT_URL" = "$expected_url"
+          echo "artifact-name=$CAPTURE_ARTIFACT_NAME"
+          echo "artifact-id=$ARTIFACT_ID"
+          echo "artifact-url=$ARTIFACT_URL"
+          echo "artifact-digest=$ARTIFACT_DIGEST"
+          {
+            echo "artifact_name=$CAPTURE_ARTIFACT_NAME"
+            echo "artifact_id=$ARTIFACT_ID"
+            echo "artifact_url=$ARTIFACT_URL"
+            echo "artifact_digest=$ARTIFACT_DIGEST"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "### AH-2 frozen identity capture"
+            echo
+            echo "- Artifact name: \`$CAPTURE_ARTIFACT_NAME\`"
+            echo "- Artifact ID: \`$ARTIFACT_ID\`"
+            echo "- Artifact URL: $ARTIFACT_URL"
+            echo "- Artifact ZIP SHA-256: \`$ARTIFACT_DIGEST\`"
+            echo "- Head SHA: \`$GITHUB_SHA\`"
+            echo "- Run attempt: \`$GITHUB_RUN_ATTEMPT\`"
+          } >> "$GITHUB_STEP_SUMMARY"

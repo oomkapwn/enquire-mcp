@@ -1869,14 +1869,6 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
       return;
     }
 
-    type PublicConsumerVariant =
-      | "positive"
-      | "legacy-fts-receipt-leak"
-      | "optional-revision"
-      | "hnsw-helper-swap"
-      | "unowned-discovery-meta"
-      | "missing-subpath";
-
     const virtualConsumerPath = path.join(repoRoot, "tests", "fixtures", "persisted-index-public-consumer.mts");
     const canonicalPath = (filePath: string): string => {
       const resolved = path.resolve(filePath);
@@ -1893,19 +1885,7 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
       types: ["node"]
     };
 
-    const publicConsumerSource = (variant: PublicConsumerVariant): string => {
-      const ftsSpecifier =
-        variant === "missing-subpath" ? "@oomkapwn/enquire-mcp/fts5-missing" : "@oomkapwn/enquire-mcp/fts5";
-      const legacyFtsReturn = variant === "legacy-fts-receipt-leak" ? "FtsReceiptSearchHit[]" : "FtsSearchHit[]";
-      const revisionType = variant === "optional-revision" ? "number | undefined" : "number";
-      const legacyHnswReturn = variant === "hnsw-helper-swap" ? "EmbedReceiptSearchHit[]" : "EmbedSearchHit[]";
-      const unsafeDiscoveryUse =
-        variant === "unowned-discovery-meta"
-          ? `declare const unownedDiscovery: EmbedDbConfigDiscovery;
-export const unownedVaultRoot: string = unownedDiscovery.meta.vault_root;`
-          : "";
-
-      return `
+    const publicConsumerSource = (): string => `
 import type {
   EmbedChunkKind,
   EmbedDb,
@@ -1924,10 +1904,10 @@ import type {
   FtsReceiptSearchHit,
   FtsSearchHit,
   TokenizeMode
-} from "${ftsSpecifier}";
+} from "@oomkapwn/enquire-mcp/fts5";
 
 type EmbedDbModule = typeof import("@oomkapwn/enquire-mcp/embed-db");
-type FtsModule = typeof import("${ftsSpecifier}");
+type FtsModule = typeof import("@oomkapwn/enquire-mcp/fts5");
 type HnswModule = typeof import("@oomkapwn/enquire-mcp/hnsw");
 type Equal<Left, Right> =
   (<Value>() => Value extends Left ? 1 : 2) extends
@@ -2028,7 +2008,7 @@ export type PersistedIndexPublicConsumerContract = [
   Assert<
     Equal<
       FtsIndex["search"],
-      (rawQuery: string, opts?: FtsSearchOptions) => ${legacyFtsReturn}
+      (rawQuery: string, opts?: FtsSearchOptions) => FtsSearchHit[]
     >
   >,
   Assert<
@@ -2053,7 +2033,7 @@ export type PersistedIndexPublicConsumerContract = [
     >
   >,
   Assert<Equal<FtsReceiptSearchHit["indexed_mtime_ms"], number>>,
-  Assert<Equal<FtsReceiptSearchHit["indexed_revision"], ${revisionType}>>,
+  Assert<Equal<FtsReceiptSearchHit["indexed_revision"], number>>,
   Assert<
     Equal<
       keyof FtsReceiptSearchHit,
@@ -2171,7 +2151,7 @@ export type PersistedIndexPublicConsumerContract = [
       (
         result: { labels: number[]; distances: number[] },
         rowByLabel: ReadonlyMap<number, LegacyHnswRow>
-      ) => ${legacyHnswReturn}
+      ) => EmbedSearchHit[]
     >
   >,
   Assert<
@@ -2184,9 +2164,20 @@ export type PersistedIndexPublicConsumerContract = [
     >
   >
 ];
-${unsafeDiscoveryUse}
 `;
-    };
+
+    // Compile all five causal controls in ONE additional TypeScript program.
+    // Each deliberately-invalid declaration stays on its own named line so the
+    // assertion below can attribute the expected diagnostic to that contract,
+    // rather than accepting the same TS code emitted by an unrelated control.
+    const negativeConsumerSource = (): string => `${publicConsumerSource()}
+type NegativeLegacyFtsReceiptLeak = Assert<Equal<FtsIndex["search"], (rawQuery: string, opts?: FtsSearchOptions) => FtsReceiptSearchHit[]>>;
+type NegativeOptionalRevision = Assert<Equal<FtsReceiptSearchHit["indexed_revision"], number | undefined>>;
+type NegativeHnswHelperSwap = Assert<Equal<HnswModule["hnswResultsToHits"], (result: { labels: number[]; distances: number[] }, rowByLabel: ReadonlyMap<number, LegacyHnswRow>) => EmbedReceiptSearchHit[]>>;
+declare const negativeUnownedDiscovery: EmbedDbConfigDiscovery;
+export const NegativeUnownedVaultRoot: string = negativeUnownedDiscovery.meta.vault_root;
+export type NegativeMissingSubpath = typeof import("@oomkapwn/enquire-mcp/fts5-missing");
+`;
 
     const createConsumerHost = (source: string): ts.CompilerHost => {
       const host = ts.createCompilerHost(compilerOptions, true);
@@ -2209,7 +2200,8 @@ ${unsafeDiscoveryUse}
       return host;
     };
 
-    const positiveHost = createConsumerHost(publicConsumerSource("positive"));
+    const positiveSource = publicConsumerSource();
+    const positiveHost = createConsumerHost(positiveSource);
     for (const [specifier, declarationPath] of publicDeclarations) {
       const resolvedModule = ts.resolveModuleName(
         specifier,
@@ -2229,8 +2221,7 @@ ${unsafeDiscoveryUse}
       "an unexported self-package subpath must remain unresolved"
     ).toBeUndefined();
 
-    const compileConsumer = (variant: PublicConsumerVariant): readonly ts.Diagnostic[] => {
-      const source = publicConsumerSource(variant);
+    const compileConsumer = (source: string): readonly ts.Diagnostic[] => {
       const program = ts.createProgram({
         rootNames: [virtualConsumerPath],
         options: compilerOptions,
@@ -2251,32 +2242,73 @@ ${unsafeDiscoveryUse}
         })
         .join("\n");
 
-    const positiveDiagnostics = compileConsumer("positive");
+    const positiveDiagnostics = compileConsumer(positiveSource);
     expect(
       positiveDiagnostics.map((diagnostic) => diagnostic.code),
       `public declaration consumer must compile cleanly:\n${formatDiagnostics(positiveDiagnostics)}`
     ).toEqual([]);
 
-    const causalVariants = [
-      ["legacy-fts-receipt-leak", 2344],
-      ["optional-revision", 2344],
-      ["hnsw-helper-swap", 2344],
-      ["unowned-discovery-meta", 2339],
-      ["missing-subpath", 2307]
-    ] as const satisfies ReadonlyArray<readonly [Exclude<PublicConsumerVariant, "positive">, number]>;
-    for (const [variant, expectedCode] of causalVariants) {
-      const diagnostics = compileConsumer(variant);
-      const consumerCodes = diagnostics
-        .filter(
-          (diagnostic) =>
-            diagnostic.file !== undefined && canonicalPath(diagnostic.file.fileName) === canonicalVirtualPath
-        )
-        .map((diagnostic) => diagnostic.code);
+    const negativeSource = negativeConsumerSource();
+    const negativeDiagnostics = compileConsumer(negativeSource);
+    const causalControls = [
+      ["NegativeLegacyFtsReceiptLeak", 2344, undefined],
+      ["NegativeOptionalRevision", 2344, undefined],
+      ["NegativeHnswHelperSwap", 2344, undefined],
+      ["NegativeUnownedVaultRoot", 2339, "Property 'meta' does not exist"],
+      ["NegativeMissingSubpath", 2307, "Cannot find module '@oomkapwn/enquire-mcp/fts5-missing'"]
+    ] as const;
+    const controlsWithLines = causalControls.map(([marker, expectedCode, expectedMessage]) => {
+      const markerIndex = negativeSource.indexOf(marker);
+      expect(markerIndex, `negative consumer marker ${marker} must be present`).toBeGreaterThanOrEqual(0);
       expect(
-        consumerCodes,
-        `${variant} must causally fail in the virtual consumer with TS${expectedCode}:\n` +
-          formatDiagnostics(diagnostics)
-      ).toContain(expectedCode);
+        negativeSource.indexOf(marker, markerIndex + marker.length),
+        `${marker} must identify exactly one line`
+      ).toBe(-1);
+      const markerLine = negativeSource.slice(0, markerIndex).split("\n").length - 1;
+      return { expectedCode, expectedMessage, marker, markerLine };
+    });
+    const causalLines = new Set(controlsWithLines.map(({ markerLine }) => markerLine));
+    expect(causalLines.size, "all five negative controls must occupy pairwise-distinct lines").toBe(
+      causalControls.length
+    );
+    expect(
+      negativeDiagnostics,
+      `negative consumer must emit exactly one diagnostic per causal control:\n` +
+        formatDiagnostics(negativeDiagnostics)
+    ).toHaveLength(causalControls.length);
+
+    const diagnosticsByLine = new Map<number, ts.Diagnostic[]>();
+    for (const diagnostic of negativeDiagnostics) {
+      if (diagnostic.file === undefined || diagnostic.start === undefined) {
+        throw new Error(`negative consumer emitted an unattributed diagnostic:\n${formatDiagnostics([diagnostic])}`);
+      }
+      expect(
+        canonicalPath(diagnostic.file.fileName),
+        `negative diagnostic must belong to the virtual consumer:\n${formatDiagnostics([diagnostic])}`
+      ).toBe(canonicalVirtualPath);
+      const diagnosticLine = diagnostic.file.getLineAndCharacterOfPosition(diagnostic.start).line;
+      expect(
+        causalLines.has(diagnosticLine),
+        `negative diagnostic escaped the five causal lines:\n${formatDiagnostics([diagnostic])}`
+      ).toBe(true);
+      const lineDiagnostics = diagnosticsByLine.get(diagnosticLine) ?? [];
+      lineDiagnostics.push(diagnostic);
+      diagnosticsByLine.set(diagnosticLine, lineDiagnostics);
+    }
+
+    for (const { expectedCode, expectedMessage, marker, markerLine } of controlsWithLines) {
+      const attributedDiagnostics = diagnosticsByLine.get(markerLine) ?? [];
+      expect(
+        attributedDiagnostics.map((diagnostic) => diagnostic.code),
+        `${marker} must causally fail on its own virtual-consumer line with TS${expectedCode}:\n` +
+          formatDiagnostics(negativeDiagnostics)
+      ).toEqual([expectedCode]);
+      if (expectedMessage !== undefined) {
+        expect(
+          ts.flattenDiagnosticMessageText(attributedDiagnostics[0]?.messageText ?? "", "\n"),
+          `${marker} must fail for the pinned causal subject`
+        ).toContain(expectedMessage);
+      }
     }
   }, 60_000);
 

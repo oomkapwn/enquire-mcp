@@ -1484,10 +1484,9 @@ describe("renameNote native case-insensitive filesystem contracts", () => {
     await vault.ensureExists();
     await renameNote(vault, { from: "src.md", to: "Dest.md", overwrite: true });
 
-    expect(
-      await pathExistsWithoutSuppressingErrors(path.join(root, "src.md")),
-      "the source path must be gone"
-    ).toBe(false);
+    expect(await pathExistsWithoutSuppressingErrors(path.join(root, "src.md")), "the source path must be gone").toBe(
+      false
+    );
     const foldedDestinations = (await fs.readdir(root)).filter((name) => name.toLowerCase() === "dest.md");
     expect(foldedDestinations, "the overwrite must leave exactly one folded destination").toHaveLength(1);
     const destination = await fs.readFile(path.join(root, foldedDestinations[0] as string), "utf8");

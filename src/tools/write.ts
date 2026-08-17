@@ -18,19 +18,30 @@ export interface WriteOperationOptions {
 
 interface NoteSnapshot {
   path: string;
-  before: string;
+  before: string | Buffer;
 }
 
 async function restoreNoteSnapshots(vault: Vault, snapshots: readonly NoteSnapshot[]): Promise<string[]> {
   const failures: string[] = [];
   for (const snapshot of [...snapshots].reverse()) {
     try {
-      await vault.writeNote(snapshot.path, snapshot.before, { overwrite: true });
+      if (Buffer.isBuffer(snapshot.before)) {
+        await vault.restoreFileBytesPublic(snapshot.path, snapshot.before);
+      } else {
+        await vault.writeNote(snapshot.path, snapshot.before, { overwrite: true });
+      }
     } catch (err) {
       failures.push(`${snapshot.path}: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
   return failures;
+}
+
+function isRenamePrecommitError(err: unknown): boolean {
+  return (
+    err instanceof Error &&
+    (err.name === "RenameDestinationChangedError" || err.name === "RenamePrecommitError")
+  );
 }
 
 function throwCancelledAfterRollback(operation: string, signal: AbortSignal | undefined, failures: string[]): never {
@@ -128,13 +139,13 @@ export async function appendToNote(
   };
 }
 
-// ─── obsidian_rename_note (v1.1 atomic rename + backlink rewrite) ────────────
+// ─── obsidian_rename_note (v1.1 rollback-aware rename + backlink rewrite) ───
 // Closes the longstanding "renaming a note breaks all backlinks" pain. Walks
 // every other note in the vault, finds wikilinks/embeds whose findBestMatch
 // resolves to the source file, rewrites only those literals (preserving
 // `|alias`, `#section`, `^block`, and the user's chosen path-qualification),
-// then atomically renames the file. dry_run returns the same plan without
-// touching the disk.
+// then commits the classified file move before backlink writes. dry_run
+// returns the same plan without touching the disk.
 
 /**
  * Per-file entry of the {@link renameNote} rewrite plan.
@@ -174,26 +185,30 @@ export interface RenameNoteResult {
 }
 
 /**
- * Atomic note rename with cross-vault backlink rewrite.
+ * Rollback-aware note rename with cross-vault backlink rewrite.
  *
  * Closes the longstanding "renaming breaks all backlinks" pain point. Walks
  * every note, finds wikilinks / embeds whose `findBestMatch` resolves to the
  * source file, rewrites only those literals (preserving `|alias`, `#section`,
- * `^block`, and the user's path-qualification convention), then atomically
- * moves the file. `dry_run` returns the same plan without touching disk.
+ * `^block`, and the user's path-qualification convention), then commits the
+ * file through Vault's classified exclusive/overwrite path. `dry_run` returns
+ * the same plan without touching disk.
  *
  * Self-references inside the renamed file are also rewritten in the same
- * pass — the file ships with no broken self-links. For a same-inode case-only
- * rename, the shared source/destination entry stays in that source rewrite
- * plan; only a distinct destination entry is excluded. v3.7.13 M1 — write
- * order is recoverable: (1) rewrite source content at OLD path → (2)
- * `fs.rename` OLD → NEW (atomic, runs FIRST so a failure here doesn't
- * leave updated backlinks pointing at a phantom target) → (3) rewrite
- * backlink-bearing files (destination already exists on disk). Every
- * failure mode is recoverable by re-running the same call (each step is
- * idempotent on re-input). Pre-v3.7.13 the order was (backlinks → source
- * → rename), which left backlinks rewritten to the NEW name pointing at
- * a phantom destination when the rename step failed.
+ * pass — the file ships with no broken self-links. For a case-only spelling
+ * of the same canonical directory entry, the shared source/destination entry
+ * stays in that source rewrite plan; only a distinct destination entry is
+ * excluded. A distinct hardlink destination fails closed because byte-level
+ * rollback cannot restore link topology. v3.7.13 M1 — write
+ * order is recoverable: (1) rewrite source content at OLD path → (2) perform
+ * the classified move before any backlink writes → (3) rewrite
+ * backlink-bearing files after the destination exists. Guaranteed precommit
+ * validation failures restore the rewritten source snapshot; later
+ * partial backlink failures retain the resumable ordering. This is not a
+ * transactional guarantee against out-of-process check/use or ABA races.
+ * Pre-v3.7.13 the order was (backlinks → source → rename), which left
+ * backlinks rewritten to the NEW name pointing at a phantom destination
+ * when the rename step failed.
  * WRITE TOOL — only registered when `--enable-write` is passed.
  *
  * @param vault - The vault. Must allow writes.
@@ -201,12 +216,16 @@ export interface RenameNoteResult {
  *   `.md`). `dry_run` defaults to false — when true, returns the plan
  *   without writing. `overwrite` defaults to false — when true, allows
  *   replacing an existing destination.
- * @param options - Optional MCP cancellation signal. Cancellation during the
- *   apply phase restores rewritten backlinks, the source path/content, and an
- *   overwritten destination before rejecting.
+ * @param options - Optional MCP cancellation signal. Under a stable
+ *   out-of-process filesystem identity, cancellation during the apply phase
+ *   restores rewritten backlinks, source path/content, and a snapshotted
+ *   overwritten destination before rejecting. The planning receipt narrows
+ *   but cannot eliminate an out-of-process check/use or ABA race.
  * @returns A {@link RenameNoteResult} with per-file rewrites and totals.
  * @throws {Error} If source doesn't exist, a distinct destination exists and
- *   `overwrite` is false, source equals destination, or destination is privacy-excluded.
+ *   `overwrite` is false, source equals destination, destination is a distinct
+ *   hardlink, destination identity is unproven or changed, or destination is
+ *   privacy-excluded.
  * @throws {VaultPathError} If either path resolves outside the vault.
  * @example
  * ```ts
@@ -251,7 +270,11 @@ export async function renameNote(
   if (lexicalRenameReason) {
     throw new Error(`Refusing to rename — destination is excluded by ${lexicalRenameReason}: ${toRelCheck}`);
   }
-  const canonicalToRel = await vault.canonicalRenameDestinationRelPublic(toAbsCheck);
+  if (fromRel === toRelCheck) {
+    throw new Error(`from and to are the same path: ${fromRel}`);
+  }
+  const renameDestination = await vault.classifyRenameDestinationPublic(fromAbs, toAbsCheck);
+  const canonicalToRel = renameDestination.canonicalRel;
   const renameReason = vault.exclusionReason(canonicalToRel);
   if (renameReason) {
     // v2.0.0-beta.2 P1 fix: distinguish allowlist-vs-denylist same as
@@ -259,48 +282,35 @@ export async function renameNote(
     // --exclude-glob even when --read-paths was the reason.
     throw new Error(`Refusing to rename — destination is excluded by ${renameReason}: ${toRelCheck}`);
   }
-  if (fromRel === toRelCheck) {
-    throw new Error(`from and to are the same path: ${fromRel}`);
+  if (renameDestination.kind === "distinct-hardlink") {
+    throw new Error(`Refusing to rename — destination is a distinct hardlink entry: ${toRelCheck}`);
   }
-  // v3.10.0-rc.61 (WRITE-3) — a case-only rename (Foo.md → foo.md) on a case-INSENSITIVE FS sees
-  // the "destination" as existing because it IS the source (same inode). Skip this tool-level
-  // existence guard for a case-only path difference and defer to `vault.renameFile`, which is the
-  // authority: on a case-insensitive FS it does the rename (its `isSameInodeCaseRename` inode
-  // check confirms same file); on a case-SENSITIVE FS where `to` is a distinct existing file it
-  // still throws EEXIST → "Destination already exists". A non-case-only existing dest is rejected here.
-  const caseOnlyRename = fromAbs !== toAbsCheck && fromAbs.toLowerCase() === toAbsCheck.toLowerCase();
-  if (!args.overwrite && !caseOnlyRename) {
-    let exists = false;
-    try {
-      await vault.stat(toAbsCheck);
-      exists = true;
-    } catch (err) {
-      if (!(err instanceof Error && "code" in err && (err as NodeJS.ErrnoException).code === "ENOENT")) throw err;
-    }
-    if (exists) {
-      throw new Error(`Destination already exists: ${toRelCheck} (pass overwrite=true to replace)`);
-    }
+  if (renameDestination.kind === "unproven") {
+    throw new Error(
+      `Refusing to rename — destination identity is unproven (${renameDestination.reason}): ${toRelCheck}`
+    );
+  }
+  if (!args.overwrite && renameDestination.kind === "distinct") {
+    throw new Error(`Destination already exists: ${toRelCheck} (pass overwrite=true to replace)`);
   }
 
+  let destinationBefore: NoteSnapshot | null = null;
+  if (args.overwrite && renameDestination.kind === "distinct") {
+    // Rollback bytes must bypass readNote's mtime-keyed LRU. The mutation-boundary
+    // receipt recheck below binds this uncached snapshot to the planned entry.
+    destinationBefore = { path: canonicalToRel, before: await vault.readBinaryFile(toAbsCheck) };
+  }
   const newBasename = stripMd(path.basename(toRelNorm));
   const newDir = path.dirname(toRelNorm).replace(/\\/g, "/");
   const entries = await vault.listMarkdown();
   const isDestinationEntry = (entry: FileEntry): boolean =>
     entry.absPath === toAbsCheck || vault.toRel(entry.absPath) === canonicalToRel;
-  let destinationBefore: NoteSnapshot | null = null;
-  if (args.overwrite && !caseOnlyRename) {
-    const destinationEntry = entries.find((entry) => entry.absPath !== fromAbs && isDestinationEntry(entry));
-    if (destinationEntry) {
-      const destination = await vault.readNote(destinationEntry.absPath, destinationEntry.mtimeMs);
-      destinationBefore = { path: destinationEntry.relPath, before: destination.content };
-    }
-  }
 
   // Build the rewrite plan. INCLUDES the source file itself so that any
   // self-references (e.g. `[[Foo]]` inside `Foo.md`) are also rewritten —
   // otherwise the renamed file would ship with a broken self-link. The source
-  // is rewritten in place at the OLD path; fs.rename then carries the new
-  // content to the new path in one atomic step.
+  // is rewritten in place at the OLD path; renameFile then commits those bytes
+  // to the new path before any backlink-bearing peer is changed.
   const plan: RenameProposal[] = [];
   let totalRewrites = 0;
   let sourcePlan: RenameProposal | null = null;
@@ -353,7 +363,7 @@ export async function renameNote(
     const proposal: RenameProposal = { path: e.relPath, rewrites: count, before: content, after: newContent };
     if (isSource) {
       // The source file's rewrite is held separately so we can write it last,
-      // immediately before fs.rename, keeping the disk in a maximally-recoverable
+      // immediately before the filesystem move, keeping the disk in a maximally-recoverable
       // state if anything between writes fails.
       sourcePlan = proposal;
     } else {
@@ -377,29 +387,25 @@ export async function renameNote(
     // Post-3.7.13 order:
     //   1. Rewrite source file content at its OLD path (self-references
     //      now use the NEW name, but the file lives at the OLD path).
-    //   2. fs.rename source: OLD → NEW (atomic — the failure-prone step,
-    //      runs FIRST so backlinks don't get touched on rename failure).
+    //   2. Commit source OLD → NEW through renameFile (the failure-prone step,
+    //      runs FIRST so backlinks don't get touched on move failure).
     //   3. Rewrite backlink-bearing files (all targets now resolve — the
     //      destination already exists on disk thanks to step 2).
     //
     // Failure modes:
-    //   • Step 1 fails → no on-disk state changed (writeNote uses atomic
-    //     rename internally for new files; for overwrite-mode it's a
-    //     direct fs.writeFile — could partially write, but write of the
-    //     SAME file just means the source has interrupted content. Re-run
-    //     resumes normally because the rewrite is idempotent on re-input.)
-    //   • Step 2 fails → source content updated at OLD path (self-links
-    //     reference NEW name but file is at OLD path). User re-runs the
-    //     same call — source's self-link rewrite is idempotent (count=0
-    //     on already-rewritten files, see line 249's `continue`), and
-    //     rename retries.
+    //   • Step 1 fails before writeNote commits → no on-disk state changed.
+    //   • Step 2 fails during guaranteed-precommit validation → the source
+    //     snapshot is restored before rejecting. A post-syscall reporting
+    //     failure can mean the move committed; it is deliberately not labelled
+    //     safe-precommit and requires inspecting both paths before retrying.
     //   • Step 3 fails partway → some backlinks updated, others not. The
     //     destination file IS at the NEW path (step 2 succeeded), so the
     //     already-updated backlinks point at a real file. User re-runs;
     //     the plan only includes files that still contain old refs, so
     //     resumes cleanly.
     //
-    // Net: every failure mode is recoverable by re-running the same call.
+    // Net: precommit validation is rollback-safe; postcommit failures retain
+    // the established resumable ordering without claiming a full transaction.
     const committedBacklinks: NoteSnapshot[] = [];
     let sourceCommitted = false;
     let renamed = false;
@@ -410,10 +416,13 @@ export async function renameNote(
         sourceCommitted = true;
         throwIfWriteAborted(options.signal);
       }
-      // Atomic file move + cache invalidation. Most likely to fail (cross-fs
+      // Filesystem move + cache invalidation. Most likely to fail (cross-fs
       // rename, race on destination, permission issue). Run FIRST so failure
       // here doesn't leave updated backlinks pointing at a phantom target.
-      await vault.renameFile(fromRel, toRelNorm, { overwrite: args.overwrite });
+      await vault.renameFile(fromRel, toRelNorm, {
+        overwrite: args.overwrite,
+        expectedDestination: renameDestination
+      });
       renamed = true;
       throwIfWriteAborted(options.signal);
       // Backlink rewrites — destination already exists on disk, so even a
@@ -427,7 +436,20 @@ export async function renameNote(
         throwIfWriteAborted(options.signal);
       }
     } catch (err) {
-      if (!options.signal?.aborted) throw err;
+      if (!options.signal?.aborted) {
+        if (isRenamePrecommitError(err) && sourcePlan && sourceCommitted) {
+          const failures = await restoreNoteSnapshots(vault, [
+            { path: sourcePlan.path, before: sourcePlan.before }
+          ]);
+          if (failures.length > 0) {
+            throw new Error(
+              `rename_note: rename failed before commit, but source rollback failed: ${failures.join("; ")}`,
+              { cause: err }
+            );
+          }
+        }
+        throw err;
+      }
       const failures = await restoreNoteSnapshots(vault, committedBacklinks);
       if (renamed) {
         try {

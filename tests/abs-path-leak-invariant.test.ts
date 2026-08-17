@@ -123,7 +123,7 @@ function mutationLeafProbeProblems(src: string): string[] {
   }
 
   const requiredCalls = new Map([
-    ["writeNote", 3],
+    ["writeNoteContent", 3],
     ["canonicalRenameDestinationRelPublic", 1],
     ["renameFile", 1]
   ]);
@@ -133,6 +133,16 @@ function mutationLeafProbeProblems(src: string): string[] {
     if (calls < minimum || body.includes("fs.lstat(")) {
       problems.push(`${name} must use the mutation leaf assertion at every required phase`);
     }
+  }
+  if (!methodBody(src, "writeNote").includes("return this.writeNoteContent(relPath, content, opts)")) {
+    problems.push("writeNote must remain a thin delegate to the shared guarded write core");
+  }
+  if (
+    !methodBody(src, "restoreFileBytesPublic").includes(
+      "return this.writeNoteContent(relPath, content, { overwrite: true })"
+    )
+  ) {
+    problems.push("binary rollback must remain a forced-overwrite delegate to the shared guarded write core");
   }
   if (!methodBody(src, "renameFile").includes("canonicalRenameDestinationRelPublic(toAbs)")) {
     problems.push("renameFile must use the operation-aware canonical destination preflight");
@@ -208,7 +218,23 @@ describe("abs-path-leak inventory invariant (rc.49)", () => {
       3
     );
     expect(mutationLeafProbeProblems(rawWriteProbe)).toContain(
-      "writeNote must use the mutation leaf assertion at every required phase"
+      "writeNoteContent must use the mutation leaf assertion at every required phase"
+    );
+    const writeDelegateBypass = replaceExactly(
+      realVault,
+      "return this.writeNoteContent(relPath, content, opts);",
+      "return this.writeNoteContent(relPath, content, { overwrite: false });"
+    );
+    expect(mutationLeafProbeProblems(writeDelegateBypass)).toContain(
+      "writeNote must remain a thin delegate to the shared guarded write core"
+    );
+    const rollbackDelegateBypass = replaceExactly(
+      realVault,
+      "return this.writeNoteContent(relPath, content, { overwrite: true });",
+      "return this.writeNoteContent(relPath, content, { overwrite: false });"
+    );
+    expect(mutationLeafProbeProblems(rollbackDelegateBypass)).toContain(
+      "binary rollback must remain a forced-overwrite delegate to the shared guarded write core"
     );
 
     const appendBody = methodBody(realVault, "appendNote");

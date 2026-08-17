@@ -8,17 +8,12 @@
 // `gh api repos/oomkapwn/enquire-mcp` and asserts the positioning + the
 // exact 20-topic positioning set.
 //
-// Skip behavior. The test runs only when:
-//   1. `gh` is on PATH and authenticated (typically: in CI via GITHUB_TOKEN,
-//      or local devs who ran `gh auth login`).
-//   2. Network is reachable.
-// Otherwise the test gracefully `it.skip`s with a one-line explanation.
-// This avoids local devs / offline CI variants failing on auth they don't
-// have. The skip is INTENTIONALLY non-failing — see the v3.6.4 method note
-// "Invariant test without negative-control" for why we wouldn't accept a
-// silent always-pass; here the skip is explicit, the assertion is real.
+// Skip behavior. Local/offline runs without a usable `gh` session return with
+// a one-line explanation. Token-bearing CI never silently skips: one cached
+// probe performs the exact metadata API operation, and any exhausted auth,
+// scope, rate-limit, network, CLI, or response failure is fail-closed.
 
-import { execSync, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 
 const REPO = "oomkapwn/enquire-mcp";
@@ -55,17 +50,15 @@ const ABOUT_LEADS_WITH = /^The #1 Obsidian MCP for AI memory\b/i;
 const ABOUT_REQUIRED_TOKENS = ["freshness-aware", "cited", "local-first", "read-only", "dataview", "bases", "pdfs"];
 const EXPECTED_HOMEPAGE = "https://oomkapwn.github.io/enquire-mcp/";
 
-// v3.11.0-rc.7 — flake hardening for the (network-y) gh auth/API calls. On
-// 2026-06-23 the CI-GUARD below flaked: `gh auth status` makes a network call to
-// validate the token, and it transiently failed on a main-push run (the identical
-// commit had PASSED on the PR run minutes earlier). That failed CI and BLOCKED the
-// v3.11.0-rc.6 release (release.yml's "assert CI green on main" guard correctly
-// refused to publish). Same flake-blocks-a-release class as the rc.20 npm-ci
-// incident (fixed there with a bounded retry). Fix: a short bounded retry around
-// the gh calls so a momentary blip doesn't fail — WITHOUT masking a genuine auth
-// failure (every attempt must fail before we conclude "unavailable").
+// v3.11.0-rc.7 introduced bounded retry for this network-backed invariant.
+// The current class fix removes the redundant `gh auth status` preflight that
+// raced the exact `gh api` call and discarded every diagnostic. The probe below
+// executes only the asserted operation, shares its snapshot, and retries only
+// failures that can recover without changing credentials or permissions.
 const GH_RETRY_ATTEMPTS = 3;
 const GH_RETRY_BACKOFF_MS = 750;
+const GH_RETRY_MAX_DELAY_MS = 15_000;
+const GH_DIAGNOSTIC_LIMIT = 400;
 
 /** Synchronous backoff — Atomics.wait sleeps the thread without busy-spinning. */
 function sleepMs(ms: number): void {
@@ -73,86 +66,302 @@ function sleepMs(ms: number): void {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
-/**
- * Retry only in a CI/token context — there a gh failure is plausibly a transient
- * GitHub-API/network blip. Pure local dev WITHOUT a token fails fast (1 attempt,
- * no backoff) so `npm test` isn't slowed on every run by a genuine "no auth".
- */
-function shouldRetryGh(): boolean {
-  return Boolean(process.env.CI || process.env.GH_TOKEN || process.env.GITHUB_TOKEN);
+/** Return true when `gh` has an explicit environment token worth retrying. */
+function hasGhToken(env: Readonly<Record<string, string | undefined>> = process.env): boolean {
+  return Boolean(env.GH_TOKEN || env.GITHUB_TOKEN);
 }
 
 /**
- * Run `attempt` up to `attempts` times, returning the FIRST result for which `ok`
- * is true. If no attempt satisfies `ok`, returns the LAST result — so a genuine
- * failure (gh truly unauthenticated: every attempt fails) is NOT masked, while a
- * transient blip (one attempt fails, a later one succeeds) recovers. `sleep` is
- * injected so the control tests below run instantly. NOT exported (biome
- * `noExportsInTest`); tested in-file via the negative/positive controls.
+ * Run `attempt` until `done` accepts a terminal success or deterministic failure.
+ * If no result is terminal within the budget, return the last recoverable failure.
+ * `sleep` is injected so the controls below run instantly. NOT exported (biome
+ * `noExportsInTest`); tested in-file via negative and positive controls.
  */
 function retryUntil<T>(
   attempt: () => T,
-  ok: (r: T) => boolean,
+  done: (result: T) => boolean,
   attempts: number,
-  backoffMs: number,
+  delayMs: (result: T) => number,
   sleep: (ms: number) => void
 ): T {
   let last = attempt();
-  for (let i = 1; i < attempts && !ok(last); i++) {
-    sleep(backoffMs);
+  for (let i = 1; i < attempts && !done(last); i++) {
+    sleep(delayMs(last));
     last = attempt();
   }
   return last;
 }
 
-/** One `gh auth status` probe — exits 0 iff authenticated. */
-function ghAuthStatusOnce(): boolean {
-  try {
-    // `gh auth status` exits 0 when authenticated, non-zero otherwise. We
-    // pipe stderr → /dev/null to keep the test output clean.
-    execSync("gh auth status", { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function ghIsAvailable(): boolean {
-  // Retry the auth probe in CI/token context so a transient blip doesn't read as
-  // "unauthenticated"; a genuine no-auth still fails (every attempt returns false).
-  return retryUntil(ghAuthStatusOnce, (b) => b, shouldRetryGh() ? GH_RETRY_ATTEMPTS : 1, GH_RETRY_BACKOFF_MS, sleepMs);
-}
-
 interface RepoMeta {
-  description: string;
-  homepage: string;
+  description: string | null;
+  homepage: string | null;
   topics: string[];
 }
 
-function fetchRepoMetaOnce(): RepoMeta | null {
-  const res = spawnSync("gh", ["api", `repos/${REPO}`, "--jq", "{description, homepage, topics}"], {
+type GhFailureKind = "auth" | "scope" | "rate-limit" | "transient" | "cli" | "malformed" | "unknown";
+
+interface IncludedResponse {
+  body: string;
+  headers: Record<string, string>;
+  httpStatus: number | null;
+}
+
+interface GhFailureEvidence {
+  detail: string;
+  errorCode: string | null;
+  exitCode: number | null;
+  headers: Record<string, string>;
+  httpStatus: number | null;
+  signal: string | null;
+}
+
+interface GhProcessResult {
+  error?: Error;
+  signal: string | null;
+  status: number | null;
+  stderr: string | null | undefined;
+  stdout: string | null | undefined;
+}
+
+type RepoMetaAttempt =
+  | { meta: RepoMeta; ok: true }
+  | ({ kind: GhFailureKind; ok: false; retryAfterMs: number | null } & Omit<GhFailureEvidence, "headers">);
+
+type RepoMetaProbe =
+  | { attempts: number; meta: RepoMeta; ok: true; recovered: boolean }
+  | ({ attempts: number; kind: GhFailureKind; ok: false; recovered: false; retryAfterMs: number | null } & Omit<
+      GhFailureEvidence,
+      "headers"
+    >);
+
+/** Parse the status, response headers, and jq-filtered body emitted by `gh api --include`. */
+function parseIncludedResponse(stdout: string): IncludedResponse {
+  const normalized = stdout.replace(/\r\n/g, "\n");
+  const statusMatches = [...normalized.matchAll(/^HTTP\/\S+\s+(\d{3})[^\n]*$/gm)];
+  const statusMatch = statusMatches.at(-1);
+  if (!statusMatch || statusMatch.index === undefined) {
+    return { body: normalized.trim(), headers: {}, httpStatus: null };
+  }
+
+  const statusText = statusMatch[1];
+  const httpStatus = statusText ? Number.parseInt(statusText, 10) : null;
+  const headerEnd = normalized.indexOf("\n\n", statusMatch.index);
+  if (headerEnd < 0) return { body: "", headers: {}, httpStatus };
+
+  const headers: Record<string, string> = {};
+  const headerBlock = normalized.slice(statusMatch.index, headerEnd);
+  for (const line of headerBlock.split("\n").slice(1)) {
+    const separator = line.indexOf(":");
+    if (separator < 1) continue;
+    const name = line.slice(0, separator).trim().toLowerCase();
+    const value = line.slice(separator + 1).trim();
+    const existing = headers[name];
+    headers[name] = existing ? `${existing}, ${value}` : value;
+  }
+  return { body: normalized.slice(headerEnd + 2).trim(), headers, httpStatus };
+}
+
+/** Redact common GitHub-token shapes, compact whitespace, and bound CI output. */
+function sanitizeGhDetail(detail: string): string {
+  const redacted = detail
+    .replace(/\b(?:github_pat_[A-Za-z0-9_]+|gh[pousr]_[A-Za-z0-9_]+)\b/g, "[REDACTED]")
+    .replace(/\b((?:GH|GITHUB)_TOKEN)\s*=\s*\S+/gi, "$1=[REDACTED]")
+    .replace(/\b(authorization:\s*(?:bearer|token))\s+\S+/gi, "$1 [REDACTED]")
+    .replace(/\s+/g, " ")
+    .trim();
+  return (redacted || "(no diagnostic output)").slice(0, GH_DIAGNOSTIC_LIMIT);
+}
+
+/** Derive a bounded server-requested retry delay from response headers. */
+function rateLimitDelayMs(headers: Readonly<Record<string, string>>, nowMs = Date.now()): number | null {
+  const retryAfterSeconds = Number(headers["retry-after"]);
+  if (Number.isFinite(retryAfterSeconds) && retryAfterSeconds >= 0) {
+    return Math.min(GH_RETRY_MAX_DELAY_MS, Math.ceil(retryAfterSeconds * 1_000));
+  }
+  const resetSeconds = Number(headers["x-ratelimit-reset"]);
+  if (Number.isFinite(resetSeconds) && resetSeconds >= 0) {
+    return Math.min(GH_RETRY_MAX_DELAY_MS, Math.max(0, Math.ceil(resetSeconds * 1_000 - nowMs)));
+  }
+  return null;
+}
+
+/** Classify only evidence that changes retry or operator action; unknown stays fail-closed. */
+function classifyGhFailure(evidence: GhFailureEvidence): GhFailureKind {
+  const detail = evidence.detail.toLowerCase();
+  const rateLimitRemaining = evidence.headers["x-ratelimit-remaining"];
+  if (
+    evidence.httpStatus === 429 ||
+    evidence.headers["retry-after"] !== undefined ||
+    rateLimitRemaining === "0" ||
+    /(?:secondary |api )?rate limit|abuse detection/.test(detail)
+  ) {
+    return "rate-limit";
+  }
+  if (
+    evidence.httpStatus === 401 ||
+    evidence.exitCode === 4 ||
+    /bad credentials|authentication required|not logged in/.test(detail)
+  ) {
+    return "auth";
+  }
+  if (
+    evidence.httpStatus === 403 ||
+    /resource not accessible|insufficient (?:permission|scope)|forbidden/.test(detail)
+  ) {
+    return "scope";
+  }
+  if (
+    evidence.httpStatus === 408 ||
+    (evidence.httpStatus !== null && evidence.httpStatus >= 500) ||
+    ["ECONNRESET", "ENETUNREACH", "ETIMEDOUT", "EAI_AGAIN"].includes(evidence.errorCode ?? "") ||
+    /timed? ?out|could not resolve|connection|network|socket|tls|unexpected eof/.test(detail) ||
+    /error connecting to api\.github\.com/.test(detail)
+  ) {
+    return "transient";
+  }
+  if (
+    evidence.signal !== null ||
+    ["EACCES", "ENOENT", "ENOEXEC"].includes(evidence.errorCode ?? "") ||
+    /unknown (?:command|flag)|not executable|unsupported flag/.test(detail)
+  ) {
+    return "cli";
+  }
+  return "unknown";
+}
+
+/** Validate the runtime shape returned by the GitHub repository endpoint. */
+function isRepoMeta(value: unknown): value is RepoMeta {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return (
+    (typeof record.description === "string" || record.description === null) &&
+    (typeof record.homepage === "string" || record.homepage === null) &&
+    Array.isArray(record.topics) &&
+    record.topics.every((topic) => typeof topic === "string")
+  );
+}
+
+/** Convert a successful transport body into metadata or a fail-closed malformed result. */
+function parseRepoMetaBody(
+  body: string,
+  evidence: Pick<GhFailureEvidence, "errorCode" | "exitCode" | "httpStatus" | "signal">
+): RepoMetaAttempt {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body) as unknown;
+  } catch {
+    parsed = undefined;
+  }
+  if (isRepoMeta(parsed)) return { meta: parsed, ok: true };
+  return {
+    detail: sanitizeGhDetail(`gh api returned malformed repository metadata: ${body}`),
+    errorCode: evidence.errorCode,
+    exitCode: evidence.exitCode,
+    httpStatus: evidence.httpStatus,
+    kind: "malformed",
+    ok: false,
+    retryAfterMs: null,
+    signal: evidence.signal
+  };
+}
+
+/** Convert one raw CLI result into the exact production retry/admission result. */
+function attemptFromGhResult(res: GhProcessResult): RepoMetaAttempt {
+  const response = parseIncludedResponse(res.stdout ?? "");
+  const errorCode =
+    res.error && "code" in res.error && typeof res.error.code === "string" ? res.error.code : null;
+  const evidence: GhFailureEvidence = {
+    detail: [res.error?.message, res.stderr, response.body].filter((part) => Boolean(part)).join(" | "),
+    errorCode,
+    exitCode: res.status,
+    headers: response.headers,
+    httpStatus: response.httpStatus,
+    signal: res.signal
+  };
+
+  if (res.status !== 0 || (response.httpStatus !== null && response.httpStatus >= 400)) {
+    const kind = classifyGhFailure(evidence);
+    return {
+      detail: sanitizeGhDetail(evidence.detail),
+      errorCode,
+      exitCode: evidence.exitCode,
+      httpStatus: evidence.httpStatus,
+      kind,
+      ok: false,
+      retryAfterMs: kind === "rate-limit" ? rateLimitDelayMs(response.headers) : null,
+      signal: evidence.signal
+    };
+  }
+  return parseRepoMetaBody(response.body, evidence);
+}
+
+/** One exact repository-metadata operation with structured, sanitized failure evidence. */
+function probeRepoMetaOnce(): RepoMetaAttempt {
+  const res = spawnSync("gh", ["api", "--include", `repos/${REPO}`, "--jq", "{description, homepage, topics}"], {
     encoding: "utf8",
     timeout: 15_000
   });
-  if (res.status !== 0) return null;
-  try {
-    return JSON.parse(res.stdout) as RepoMeta;
-  } catch {
-    return null;
-  }
+  return attemptFromGhResult(res);
 }
 
-function fetchRepoMeta(): RepoMeta | null {
-  // Same flake hardening: retry the `gh api` call on a transient null (network /
-  // rate-limit blip) in CI/token context. A persistent failure still returns null
-  // → the production About/Topics tests then fail loud (correct, not masked).
-  return retryUntil(
-    fetchRepoMetaOnce,
-    (m) => m !== null,
-    shouldRetryGh() ? GH_RETRY_ATTEMPTS : 1,
-    GH_RETRY_BACKOFF_MS,
-    sleepMs
+/** True for a successful probe or a deterministic failure that retries cannot fix. */
+function isProbeTerminal(attempt: RepoMetaAttempt): boolean {
+  return attempt.ok || (attempt.kind !== "transient" && attempt.kind !== "rate-limit");
+}
+
+/** Honor bounded server retry timing; ordinary transient failures use the short backoff. */
+function probeRetryDelayMs(attempt: RepoMetaAttempt): number {
+  return attempt.ok ? 0 : (attempt.retryAfterMs ?? GH_RETRY_BACKOFF_MS);
+}
+
+/** Run and cache one exact metadata probe; only transient/rate-limit failures retry. */
+function probeRepoMeta(
+  attempt: () => RepoMetaAttempt = probeRepoMetaOnce,
+  tokenAvailable = hasGhToken(),
+  sleep: (ms: number) => void = sleepMs
+): RepoMetaProbe {
+  let attempts = 0;
+  const finalAttempt = retryUntil(
+    () => {
+      attempts++;
+      return attempt();
+    },
+    isProbeTerminal,
+    tokenAvailable ? GH_RETRY_ATTEMPTS : 1,
+    probeRetryDelayMs,
+    sleep
   );
+  if (finalAttempt.ok) {
+    return { attempts, meta: finalAttempt.meta, ok: true, recovered: attempts > 1 };
+  }
+  return { ...finalAttempt, attempts, recovered: false };
+}
+
+/** Stable fail-closed diagnostic for token-bearing CI assertions. */
+function formatProbeFailure(probe: Extract<RepoMetaProbe, { ok: false }>): string {
+  return [
+    "exact gh api metadata probe failed",
+    `kind=${probe.kind}`,
+    `attempts=${probe.attempts}`,
+    `http=${probe.httpStatus ?? "none"}`,
+    `exit=${probe.exitCode ?? "none"}`,
+    `signal=${probe.signal ?? "none"}`,
+    `error=${probe.errorCode ?? "none"}`,
+    `detail=${probe.detail}`
+  ].join("; ");
+}
+
+/** Return the shared snapshot, fail token-bearing CI, or preserve local no-token skip semantics. */
+function repoMetaForAssertion(
+  probe: RepoMetaProbe,
+  failClosed = Boolean(process.env.CI && hasGhToken()),
+  warn: (message: string) => void = console.warn
+): RepoMeta | null {
+  if (probe.ok) return probe.meta;
+  const diagnostic = formatProbeFailure(probe);
+  if (failClosed) throw new Error(diagnostic);
+  warn(`[github-metadata] ${diagnostic}; skipping live metadata assertion`);
+  return null;
 }
 
 /**
@@ -205,47 +414,21 @@ describe("GitHub repo metadata invariant (v3.7.0 + v3.7.4 negative-control)", ()
   // Always use `it` (not `it.skip`) so the total `it()` count is constant
   // across local-with-gh-auth and CI-without-gh-auth environments. The
   // `tests/docs-consistency.test.ts` regex counts `^\s*it\(` declarations
-  // for its test-count claim; conditional `it.skip` would fluctuate the
-  // count. Instead, each test early-returns when `gh` isn't available —
-  // the test "passes" without asserting (treated as a no-op skip).
-  const available = ghIsAvailable();
+  // for its test-count claim. Local no-token failures return after a visible
+  // warning; token-bearing CI throws before any live assertion can no-op.
+  const probe = probeRepoMeta();
 
   // v3.9.0-rc.26 (rc.25-audit MED-1) — CI-GUARD tripwire. The two metadata
-  // invariants below early-return when `gh` isn't authenticated, which is correct
-  // for local dev but would let them SILENTLY no-op in CI if the `GH_TOKEN` the
-  // `test` job sets ever lost its scope or the gh CLI regressed. This tripwire
-  // hard-fails in CI WHEN A TOKEN IS PROVIDED, so a broken-auth regression on the
-  // token-bearing job surfaces. (Jobs that intentionally omit GH_TOKEN — e.g.
-  // `coverage` — are not asserted against; the `&& GH_TOKEN` gate skips them.)
-  it("CI GUARD — when CI provides GH_TOKEN, gh is actually authenticated (metadata invariants run)", () => {
-    if (!process.env.CI || !process.env.GH_TOKEN) return;
-    // Reuse the `available` computed once above (it already applied the bounded
-    // retry) — re-calling ghIsAvailable() would just repeat the retried probe.
-    // v3.11.0-rc.7: this now fails only after the retry is exhausted (a genuine
-    // broken-token regression), not on a single transient GitHub-API blip.
-    expect(
-      available,
-      "GH_TOKEN is set in CI but `gh auth status` failed across retries — the About/Topics invariants would silently no-op"
-    ).toBe(true);
+  // invariants retain local no-token behavior, but the exact shared API probe
+  // hard-fails when CI provides a token. Jobs intentionally without a token
+  // (for example coverage) do not become network-dependent release gates.
+  it("CI GUARD — when CI provides a token, the exact metadata API probe succeeds", () => {
+    if (!process.env.CI || !hasGhToken()) return;
+    expect(repoMetaForAssertion(probe)).not.toBeNull();
   });
 
   it("repo About description leads with 'The #1 Obsidian MCP for AI memory'", () => {
-    if (!available) {
-      // v3.7.13 L4 — CI now sets `GH_TOKEN: ${{ github.token }}` so this
-      // branch only fires in local dev without auth. Production CI runs
-      // assert against the live repo and would fail loud on drift.
-      console.warn("[github-metadata] `gh` not authenticated; skipping (set GH_TOKEN env or GITHUB_TOKEN for CI).");
-      return;
-    }
-    const meta = fetchRepoMeta();
-    // v3.7.13 L4 — fail loud on API failure when `gh` is available. Pre-3.7.13
-    // we no-op'd here, which let CI count this as "passed" even if rate-limit
-    // / network / token-scope blocked the fetch. If `gh` is available but the
-    // API fails, that's a real signal worth surfacing.
-    expect(
-      meta,
-      "gh api call failed despite gh being available — check rate limit / network / token scope"
-    ).not.toBeNull();
+    const meta = repoMetaForAssertion(probe);
     if (!meta) return;
     expect(meta.description ?? "").toMatch(ABOUT_LEADS_WITH);
     expect(
@@ -263,15 +446,7 @@ describe("GitHub repo metadata invariant (v3.7.0 + v3.7.4 negative-control)", ()
   });
 
   it("repo Topics exactly match the intentional 20-topic discoverability set", () => {
-    if (!available) {
-      console.warn("[github-metadata] `gh` not authenticated; skipping (set GH_TOKEN env or GITHUB_TOKEN for CI).");
-      return;
-    }
-    const meta = fetchRepoMeta();
-    expect(
-      meta,
-      "gh api call failed despite gh being available — check rate limit / network / token scope"
-    ).not.toBeNull();
+    const meta = repoMetaForAssertion(probe);
     if (!meta) return;
     const drift = findTopicDrift(meta.topics);
     expect(
@@ -359,54 +534,272 @@ describe("GitHub repo metadata invariant (v3.7.0 + v3.7.4 negative-control)", ()
       expect(findSlsaOverclaim("Supports 3 transports and L3 caching")).toBeNull();
     });
 
-    it("retryUntil recovers a transient blip but still fails a genuine no-auth (v3.11.0-rc.7 flake hardening)", () => {
+    it("classifies exact-probe failures, retries only recoverable causes, and redacts diagnostics", () => {
       const noSleep = (): void => {};
-      // NEGATIVE control — a GENUINE failure (every attempt fails) is NOT masked:
-      // returns false only AFTER exhausting all attempts (so a truly-unauthenticated
-      // gh still reads as unavailable and the CI-GUARD still fails loudly).
-      let genuineCalls = 0;
-      const genuine = retryUntil(
+      const evidence = (overrides: Partial<GhFailureEvidence> = {}): GhFailureEvidence => ({
+        detail: "",
+        errorCode: null,
+        exitCode: 1,
+        headers: {},
+        httpStatus: null,
+        signal: null,
+        ...overrides
+      });
+      const failure = (kind: GhFailureKind): RepoMetaAttempt => ({
+        detail: `synthetic ${kind}`,
+        errorCode: null,
+        exitCode: 1,
+        httpStatus: null,
+        kind,
+        ok: false,
+        retryAfterMs: null,
+        signal: null
+      });
+      const meta: RepoMeta = { description: "canonical", homepage: EXPECTED_HOMEPAGE, topics: [] };
+      const rawResult = (overrides: Partial<GhProcessResult> = {}): GhProcessResult => ({
+        signal: null,
+        status: 1,
+        stderr: "",
+        stdout: "",
+        ...overrides
+      });
+      const included = (
+        status: number,
+        headers: Readonly<Record<string, string>> = {},
+        body = "{}"
+      ): string =>
+        [
+          `HTTP/2.0 ${status} synthetic`,
+          ...Object.entries(headers).map(([name, value]) => `${name}: ${value}`),
+          "",
+          body
+        ].join("\r\n");
+      const successEvidence = { errorCode: null, exitCode: 0, httpStatus: 200, signal: null };
+
+      expect(parseRepoMetaBody(JSON.stringify(meta), successEvidence)).toEqual({ meta, ok: true });
+      expect(
+        parseRepoMetaBody(JSON.stringify({ description: null, homepage: null, topics: ["obsidian"] }), successEvidence)
+      ).toMatchObject({ ok: true });
+      const wrongShape = parseRepoMetaBody(
+        JSON.stringify({ description: "canonical", homepage: EXPECTED_HOMEPAGE, topics: [42] }),
+        successEvidence
+      );
+      expect(wrongShape.ok).toBe(false);
+      if (wrongShape.ok) throw new Error("wrong-shape control unexpectedly produced metadata");
+      expect(wrongShape.kind).toBe("malformed");
+
+      // Raw spawn-result controls traverse the same converter as production,
+      // binding stdout/headers/status/signal/error to classification and delay.
+      expect(
+        attemptFromGhResult(rawResult({ status: 0, stdout: included(200, {}, JSON.stringify(meta)) }))
+      ).toEqual({ meta, ok: true });
+      const rawAuth = attemptFromGhResult(rawResult({ stdout: included(401) }));
+      expect(rawAuth).toMatchObject({ httpStatus: 401, kind: "auth", ok: false });
+      const rawScope = attemptFromGhResult(rawResult({ stdout: included(403) }));
+      expect(rawScope).toMatchObject({ httpStatus: 403, kind: "scope", ok: false });
+      const rawRetryAfter = attemptFromGhResult(
+        rawResult({ stdout: included(200, { "retry-after": "2" }) })
+      );
+      expect(rawRetryAfter).toMatchObject({ kind: "rate-limit", ok: false, retryAfterMs: 2_000 });
+      expect(
+        attemptFromGhResult(rawResult({ stdout: included(200, { "x-ratelimit-remaining": "0" }) }))
+      ).toMatchObject({ kind: "rate-limit", ok: false });
+      expect(attemptFromGhResult(rawResult({ stdout: included(429) }))).toMatchObject({
+        kind: "rate-limit",
+        ok: false
+      });
+      expect(
+        attemptFromGhResult(rawResult({ status: null, signal: "SIGABRT" }))
+      ).toMatchObject({ kind: "cli", ok: false, signal: "SIGABRT" });
+      expect(
+        attemptFromGhResult(
+          rawResult({
+            error: Object.assign(new Error("synthetic timeout"), { code: "ETIMEDOUT" }),
+            signal: "SIGTERM",
+            status: null
+          })
+        )
+      ).toMatchObject({ errorCode: "ETIMEDOUT", kind: "transient", ok: false, signal: "SIGTERM" });
+      expect(
+        attemptFromGhResult(
+          rawResult({ error: Object.assign(new Error("missing gh"), { code: "ENOENT" }), status: null })
+        )
+      ).toMatchObject({ errorCode: "ENOENT", kind: "cli", ok: false });
+      expect(attemptFromGhResult(rawResult({ status: 0, stdout: included(200, {}, "not-json") }))).toMatchObject({
+        kind: "malformed",
+        ok: false
+      });
+
+      expect(classifyGhFailure(evidence({ httpStatus: 401 }))).toBe("auth");
+      const scopeFailure = evidence({
+        detail: "HTTP 403: Resource not accessible by integration",
+        httpStatus: 403
+      });
+      expect(classifyGhFailure(scopeFailure)).toBe("scope");
+      for (const errorCode of ["EACCES", "ENOENT", "ENOEXEC"]) {
+        expect(classifyGhFailure(evidence({ errorCode }))).toBe("cli");
+      }
+      expect(classifyGhFailure(evidence({ detail: "unknown flag: --broken" }))).toBe("cli");
+      expect(classifyGhFailure(evidence({ signal: "SIGABRT" }))).toBe("cli");
+      expect(classifyGhFailure(evidence({ errorCode: "ETIMEDOUT", signal: "SIGTERM" }))).toBe("transient");
+      expect(classifyGhFailure(evidence({ detail: "error connecting to api.github.com" }))).toBe("transient");
+      expect(classifyGhFailure(evidence({ httpStatus: 503 }))).toBe("transient");
+      expect(classifyGhFailure(evidence({ detail: "unclassified gh failure" }))).toBe("unknown");
+
+      const rateLimited = parseIncludedResponse(
+        "HTTP/2.0 403 Forbidden\r\nx-ratelimit-remaining: 0\r\nretry-after: 2\r\n\r\n{\"message\":\"rate limited\"}"
+      );
+      expect(rateLimited.httpStatus).toBe(403);
+      expect(rateLimited.headers["retry-after"]).toBe("2");
+      expect(rateLimited.body).toBe('{"message":"rate limited"}');
+      expect(rateLimitDelayMs(rateLimited.headers, 0)).toBe(2_000);
+      expect(rateLimitDelayMs({ "x-ratelimit-reset": "3" }, 1_000)).toBe(2_000);
+      expect(rateLimitDelayMs({ "retry-after": "60" }, 0)).toBe(GH_RETRY_MAX_DELAY_MS);
+
+      // Each independent signal must classify rate limiting without another
+      // branch masking its removal. A bare 403 remains a deterministic scope failure.
+      expect(classifyGhFailure(evidence({ httpStatus: 429 }))).toBe("rate-limit");
+      expect(classifyGhFailure(evidence({ headers: { "retry-after": "2" } }))).toBe("rate-limit");
+      expect(classifyGhFailure(evidence({ headers: { "x-ratelimit-remaining": "0" } }))).toBe("rate-limit");
+      expect(classifyGhFailure(evidence({ detail: "secondary rate limit" }))).toBe("rate-limit");
+      expect(classifyGhFailure(evidence({ httpStatus: 403 }))).toBe("scope");
+
+      // Deterministic causes are terminal immediately; retrying cannot repair
+      // credentials, repository permission, a missing CLI, or malformed JSON.
+      for (const kind of ["auth", "scope", "cli", "malformed", "unknown"] as const) {
+        expect(isProbeTerminal(failure(kind)), `${kind} must not retry`).toBe(true);
+      }
+      expect(isProbeTerminal(failure("transient"))).toBe(false);
+      expect(isProbeTerminal(failure("rate-limit"))).toBe(false);
+
+      let authCalls = 0;
+      const auth = retryUntil(
         () => {
-          genuineCalls++;
-          return false;
+          authCalls++;
+          return failure("auth");
         },
-        (b) => b,
+        isProbeTerminal,
         3,
-        0,
+        () => 0,
         noSleep
       );
-      expect(genuine, "a truly-unauthenticated gh must still read as unavailable").toBe(false);
-      expect(genuineCalls, "must exhaust all retries before concluding failure").toBe(3);
+      expect(auth.ok).toBe(false);
+      expect(authCalls, "auth failure must fail closed without wasted retries").toBe(1);
 
-      // POSITIVE — a TRANSIENT blip (fails attempts 1-2, succeeds on 3) recovers to true.
+      // POSITIVE — a transient blip (fails attempts 1-2, succeeds on 3)
+      // recovers, while the same failure on every attempt remains fail-closed.
       let transientCalls = 0;
       const transient = retryUntil(
-        () => {
+        (): RepoMetaAttempt => {
           transientCalls++;
-          return transientCalls >= 3;
+          return transientCalls >= 3 ? { meta, ok: true } : failure("transient");
         },
-        (b) => b,
+        isProbeTerminal,
         3,
-        0,
+        () => 0,
         noSleep
       );
-      expect(transient, "a momentary blip that recovers must read as available").toBe(true);
+      expect(transient.ok, "a recoverable blip must yield the real metadata snapshot").toBe(true);
       expect(transientCalls).toBe(3);
 
-      // POSITIVE — first-try success makes NO wasted retries (healthy gh probed once).
-      let okCalls = 0;
-      const fast = retryUntil(
+      let persistentCalls = 0;
+      const persistent = retryUntil(
         () => {
-          okCalls++;
-          return true;
+          persistentCalls++;
+          return failure("transient");
         },
-        (b) => b,
+        isProbeTerminal,
         3,
-        0,
+        () => 0,
         noSleep
       );
-      expect(fast).toBe(true);
-      expect(okCalls, "a healthy gh is probed exactly once — no backoff penalty").toBe(1);
+      expect(persistent.ok, "exhausted transient failures must not become metadata").toBe(false);
+      expect(persistentCalls).toBe(3);
+
+      expect(hasGhToken({})).toBe(false);
+      expect(hasGhToken({ GH_TOKEN: "synthetic" })).toBe(true);
+      expect(hasGhToken({ GITHUB_TOKEN: "synthetic" })).toBe(true);
+
+      const budgetSleeps: number[] = [];
+      let budgetCalls = 0;
+      const tokenProbe = probeRepoMeta(
+        () => {
+          budgetCalls++;
+          return budgetCalls >= 3 ? { meta, ok: true } : failure("transient");
+        },
+        true,
+        (ms) => budgetSleeps.push(ms)
+      );
+      expect(tokenProbe).toMatchObject({ attempts: 3, meta, ok: true, recovered: true });
+      expect(budgetSleeps).toEqual([GH_RETRY_BACKOFF_MS, GH_RETRY_BACKOFF_MS]);
+
+      let tokenlessCalls = 0;
+      const tokenlessProbe = probeRepoMeta(
+        () => {
+          tokenlessCalls++;
+          return failure("transient");
+        },
+        false,
+        noSleep
+      );
+      expect(tokenlessProbe).toMatchObject({ attempts: 1, kind: "transient", ok: false });
+      expect(tokenlessCalls).toBe(1);
+
+      const previousGhToken = process.env.GH_TOKEN;
+      process.env.GH_TOKEN = "synthetic-default-binding";
+      try {
+        let defaultBindingCalls = 0;
+        const defaultBoundProbe = probeRepoMeta(
+          () => {
+            defaultBindingCalls++;
+            return defaultBindingCalls >= 3 ? { meta, ok: true } : failure("transient");
+          },
+          undefined,
+          noSleep
+        );
+        expect(defaultBoundProbe).toMatchObject({ attempts: 3, ok: true, recovered: true });
+      } finally {
+        if (previousGhToken === undefined) delete process.env.GH_TOKEN;
+        else process.env.GH_TOKEN = previousGhToken;
+      }
+
+      const rateLimitSleeps: number[] = [];
+      let rateLimitCalls = 0;
+      const rateLimitRecovery = probeRepoMeta(
+        () => {
+          rateLimitCalls++;
+          return rateLimitCalls >= 3 ? { meta, ok: true } : rawRetryAfter;
+        },
+        true,
+        (ms) => rateLimitSleeps.push(ms)
+      );
+      expect(rateLimitRecovery).toMatchObject({ attempts: 3, meta, ok: true, recovered: true });
+      expect(rateLimitSleeps).toEqual([2_000, 2_000]);
+
+      const failedProbe: RepoMetaProbe = { ...failure("auth"), attempts: 1, recovered: false };
+      expect(repoMetaForAssertion({ attempts: 1, meta, ok: true, recovered: false }, true)).toBe(meta);
+      expect(() => repoMetaForAssertion(failedProbe, true, noSleep)).toThrow(/kind=auth; attempts=1/);
+      const warnings: string[] = [];
+      expect(repoMetaForAssertion(failedProbe, false, (warning) => warnings.push(warning))).toBeNull();
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toMatch(/skipping live metadata assertion/);
+
+      const bareToken = "ghp_baretoken0123456789";
+      const environmentToken = "opaque-environment-secret";
+      const authorizationToken = "opaque-authorization-secret";
+      const sanitized = sanitizeGhDetail(
+        [
+          bareToken,
+          `GH_TOKEN=${environmentToken}`,
+          `Authorization: Bearer ${authorizationToken}`,
+          "diagnostic ".repeat(80)
+        ].join("\n")
+      );
+      expect(sanitized).not.toContain(bareToken);
+      expect(sanitized).not.toContain(environmentToken);
+      expect(sanitized).not.toContain(authorizationToken);
+      expect(sanitized.match(/\[REDACTED\]/g)).toHaveLength(3);
+      expect(sanitized.length).toBeLessThanOrEqual(GH_DIAGNOSTIC_LIMIT);
     });
   });
 });

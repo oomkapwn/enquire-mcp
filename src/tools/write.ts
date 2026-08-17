@@ -285,8 +285,7 @@ export async function renameNote(
   const newBasename = stripMd(path.basename(toRelNorm));
   const newDir = path.dirname(toRelNorm).replace(/\\/g, "/");
   const entries = await vault.listMarkdown();
-  const isDestinationEntry = (entry: FileEntry): boolean =>
-    entry.absPath === toAbsCheck || vault.toRel(entry.absPath) === canonicalToRel;
+  const isDestinationEntry = (entry: FileEntry): boolean => entry.absPath === toAbsCheck;
   let destinationBefore: NoteSnapshot | null = null;
   if (args.overwrite && !caseOnlyRename) {
     const destinationEntry = entries.find((entry) => entry.absPath !== fromAbs && isDestinationEntry(entry));
@@ -323,7 +322,7 @@ export async function renameNote(
     // A case-only rename on a case-insensitive FS makes the source entry also
     // match the canonical destination. Keep that shared entry in the plan so
     // its self-references are rewritten before the physical rename.
-    if (isDest && !isSource) continue;
+    if (isSource || (isDest && !isSource)) continue;
     const { content, parsed } = await vault.readNote(e.absPath, e.mtimeMs);
 
     // Find every wikilink + embed whose target resolves to fromAbs. Group by

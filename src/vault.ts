@@ -1130,7 +1130,7 @@ export class Vault {
     if (fromAbs === toAbs || fromAbs.toLowerCase() !== toAbs.toLowerCase()) return false;
     try {
       const [a, b] = await Promise.all([this.statSafe(fromAbs), this.statSafe(toAbs)]);
-      return a.ino !== 0 && a.ino === b.ino;
+      return a.ino !== 0 && b.ino !== 0;
     } catch {
       return false; // toAbs absent → a genuine new destination, not a same-file case rename
     }

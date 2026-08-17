@@ -229,6 +229,16 @@ function watcherAuditsMatch(snapshot: WindowsWatcherSnapshot, expectedFiles: num
   );
 }
 
+async function pathExistsWithoutSuppressingErrors(absPath: string): Promise<boolean> {
+  try {
+    await fs.stat(absPath);
+    return true;
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") return false;
+    throw error;
+  }
+}
+
 async function enqueueWatcherEvent(
   watcher: VaultWatcher,
   absPath: string,
@@ -1419,6 +1429,71 @@ describe("VaultWatcher physical-alias convergence (S-8e)", () => {
       identitySpy.mockRestore();
       await closeWindowsWatcherFixture(fixture, [junction]);
     }
+  });
+});
+
+describe("renameNote native case-insensitive filesystem contracts", () => {
+  it("renames casing in place while rewriting the source self-link and an external backlink", async (ctx) => {
+    const sourceSentinel = "case-only-source-sentinel";
+    await fs.writeFile(path.join(root, "Foo.md"), `# Foo\n\n${sourceSentinel}\n\nSelf [[Foo]].\n`);
+    await fs.writeFile(path.join(root, "Hub.md"), "See [[Foo]].\n");
+
+    const caseInsensitive = await pathExistsWithoutSuppressingErrors(path.join(root, "foo.md"));
+    if (!caseInsensitive) {
+      if (process.platform === "win32") {
+        throw new Error("mandatory Windows case-insensitive filesystem precondition failed for Foo.md/foo.md");
+      }
+      return ctx.skip();
+    }
+
+    const vault = new Vault(root, { enableWrite: true });
+    await vault.ensureExists();
+    const renamed = await renameNote(vault, { from: "Foo.md", to: "foo.md" });
+
+    expect(renamed.total_links_rewritten).toBe(2);
+    const foldedNames = (await fs.readdir(root)).filter((name) => name.toLowerCase() === "foo.md");
+    expect(foldedNames, "the rename must leave one entry with the requested exact casing").toEqual(["foo.md"]);
+    const source = await fs.readFile(path.join(root, "foo.md"), "utf8");
+    const hub = await fs.readFile(path.join(root, "Hub.md"), "utf8");
+    expect(source).toContain(sourceSentinel);
+    expect(source).toContain("[[foo]]");
+    expect(source).not.toContain("[[Foo]]");
+    expect(hub).toContain("[[foo]]");
+    expect(hub).not.toContain("[[Foo]]");
+  });
+
+  it("preserves the source across overwrite of a case-variant destination that backlinks it", async (ctx) => {
+    const sourceSentinel = "case-variant-source-sentinel";
+    const oldDestinationSentinel = "case-variant-old-destination-sentinel";
+    const oldDestinationBacklink = "See [[src]] for details.";
+    await fs.writeFile(path.join(root, "src.md"), `# Source\n\n${sourceSentinel}\n`);
+    await fs.writeFile(
+      path.join(root, "dest.md"),
+      `# Destination\n\n${oldDestinationSentinel}\n\n${oldDestinationBacklink}\n`
+    );
+
+    const caseInsensitive = await pathExistsWithoutSuppressingErrors(path.join(root, "DEST.md"));
+    if (!caseInsensitive) {
+      if (process.platform === "win32") {
+        throw new Error("mandatory Windows case-insensitive filesystem precondition failed for dest.md/DEST.md");
+      }
+      return ctx.skip();
+    }
+
+    const vault = new Vault(root, { enableWrite: true });
+    await vault.ensureExists();
+    await renameNote(vault, { from: "src.md", to: "Dest.md", overwrite: true });
+
+    expect(
+      await pathExistsWithoutSuppressingErrors(path.join(root, "src.md")),
+      "the source path must be gone"
+    ).toBe(false);
+    const foldedDestinations = (await fs.readdir(root)).filter((name) => name.toLowerCase() === "dest.md");
+    expect(foldedDestinations, "the overwrite must leave exactly one folded destination").toHaveLength(1);
+    const destination = await fs.readFile(path.join(root, foldedDestinations[0] as string), "utf8");
+    expect(destination).toContain(sourceSentinel);
+    expect(destination).not.toContain(oldDestinationSentinel);
+    expect(destination).not.toContain(oldDestinationBacklink);
   });
 });
 

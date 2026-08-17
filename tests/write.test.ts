@@ -613,6 +613,29 @@ describe("renameNote (v1.1)", () => {
     // Both files still present.
     expect(await fs.readFile(path.join(root, "A.md"), "utf8")).toBe("a");
     expect(await fs.readFile(path.join(root, "B.md"), "utf8")).toBe("b");
+
+    // NEGATIVE control for the case-only-rename exception: on a case-SENSITIVE
+    // filesystem these spellings are distinct files, so inode identity — not
+    // lowercase equality alone — must keep the existing-destination guard armed.
+    const upperCasePath = path.join(root, "Case.md");
+    const lowerCasePath = path.join(root, "case.md");
+    await fs.writeFile(upperCasePath, "upper-case sentinel");
+    const lowerCaseAliasBefore = await fs.stat(lowerCasePath).catch((error: unknown) => {
+      if (error instanceof Error && "code" in error && error.code === "ENOENT") return null;
+      throw error;
+    });
+    if (lowerCaseAliasBefore === null) {
+      expect(
+        lowerCaseAliasBefore,
+        "lowercase spelling must not resolve before creating the distinct sibling"
+      ).toBeNull();
+      await fs.writeFile(lowerCasePath, "lower-case sentinel");
+      await expect(renameNote(v, { from: "Case.md", to: "case.md" })).rejects.toThrow(/already exists/);
+      expect(await fs.readFile(upperCasePath, "utf8")).toBe("upper-case sentinel");
+      expect(await fs.readFile(lowerCasePath, "utf8")).toBe("lower-case sentinel");
+    } else if (process.platform === "linux" && process.env.CI) {
+      throw new Error("mandatory Linux case-sensitive filesystem precondition failed for Case.md/case.md");
+    }
   });
 
   it("refuses if `from` does not exist", async () => {
@@ -650,49 +673,6 @@ describe("renameNote (v1.1)", () => {
     await fs.writeFile(path.join(root, "B.md"), "# Dest B\n\nunrelated, no link\n");
     await renameNote(v, { from: "A.md", to: "B.md", overwrite: true });
     expect(await fs.readFile(path.join(root, "B.md"), "utf8")).toContain("body A");
-  });
-
-  it("allows a case-only rename without overwrite on a case-insensitive FS (rc.61 WRITE-3)", async () => {
-    const v = new Vault(root, { enableWrite: true });
-    await v.ensureExists();
-    await fs.writeFile(path.join(root, "Foo.md"), "# Foo\n\nkeep me\n");
-    // On a case-insensitive FS (macOS/Windows) Foo.md and foo.md are the same inode; pre-rc.61
-    // this threw a misleading "Destination already exists". Detect via realpath — skip the
-    // assertion on a genuinely case-SENSITIVE FS (where this rename is just a normal move).
-    const caseInsensitive = await fs
-      .stat(path.join(root, "foo.md"))
-      .then(() => true)
-      .catch(() => false); // foo.md resolves iff the FS is case-insensitive
-    if (!caseInsensitive) return; // case-sensitive FS — not the scenario under test
-    await renameNote(v, { from: "Foo.md", to: "foo.md" });
-    const names = (await fs.readdir(root)).filter((n) => n.toLowerCase() === "foo.md");
-    expect(names).toEqual(["foo.md"]); // renamed to the new casing, content preserved
-    expect(await fs.readFile(path.join(root, "foo.md"), "utf8")).toContain("keep me");
-  });
-
-  it("overwrite:true to a CASE-VARIANT destination that backlinks the source preserves source content (v3.11.0-rc.8 pre-promotion audit, rc.60 WRITE-1 sibling)", async () => {
-    const v = new Vault(root, { enableWrite: true });
-    await v.ensureExists();
-    await fs.writeFile(path.join(root, "src.md"), "# Source\n\nMUST SURVIVE the case-variant overwrite.\n");
-    await fs.writeFile(path.join(root, "dest.md"), "# Dest\n\nSee [[src]] for details.\n");
-    // Only reproducible on a case-insensitive FS (macOS/Windows) — on a case-SENSITIVE
-    // FS `Dest.md` and `dest.md` are distinct files, so this isn't the scenario. Detect
-    // via realpath + skip otherwise (same pattern as the rc.61 case-only-rename test).
-    const caseInsensitive = await fs
-      .stat(path.join(root, "DEST.md"))
-      .then(() => true)
-      .catch(() => false);
-    if (!caseInsensitive) return;
-    // Rename src → "Dest.md" (a CASE VARIANT of the on-disk "dest.md"). Pre-rc.8 the
-    // dest-exclusion `e.absPath === toAbsCheck` was case-sensitive, so the on-disk "dest.md"
-    // (which backlinks the source) was NOT excluded from the backlink-rewrite plan, and its
-    // rewritten pre-rename content clobbered the just-moved source — reopening rc.60 WRITE-1.
-    await renameNote(v, { from: "src.md", to: "Dest.md", overwrite: true });
-    const survivor = (await fs.readdir(root)).find((n) => n.toLowerCase() === "dest.md");
-    expect(survivor, "the destination still exists after the overwrite rename").toBeDefined();
-    const dest = await fs.readFile(path.join(root, survivor as string), "utf8");
-    expect(dest, "the moved SOURCE content must survive the case-variant overwrite").toContain("MUST SURVIVE");
-    expect(dest).not.toContain("See [[src]] for details."); // dest's old content correctly gone
   });
 
   it("auto-appends .md to from/to when missing", async () => {

@@ -183,7 +183,9 @@ export interface RenameNoteResult {
  * moves the file. `dry_run` returns the same plan without touching disk.
  *
  * Self-references inside the renamed file are also rewritten in the same
- * pass — the file ships with no broken self-links. v3.7.13 M1 — write
+ * pass — the file ships with no broken self-links. For a same-inode case-only
+ * rename, the shared source/destination entry stays in that source rewrite
+ * plan; only a distinct destination entry is excluded. v3.7.13 M1 — write
  * order is recoverable: (1) rewrite source content at OLD path → (2)
  * `fs.rename` OLD → NEW (atomic, runs FIRST so a failure here doesn't
  * leave updated backlinks pointing at a phantom target) → (3) rewrite
@@ -203,8 +205,8 @@ export interface RenameNoteResult {
  *   apply phase restores rewritten backlinks, the source path/content, and an
  *   overwritten destination before rejecting.
  * @returns A {@link RenameNoteResult} with per-file rewrites and totals.
- * @throws {Error} If source doesn't exist, destination exists and `overwrite`
- *   is false, source equals destination, or destination is privacy-excluded.
+ * @throws {Error} If source doesn't exist, a distinct destination exists and
+ *   `overwrite` is false, source equals destination, or destination is privacy-excluded.
  * @throws {VaultPathError} If either path resolves outside the vault.
  * @example
  * ```ts
@@ -305,7 +307,7 @@ export async function renameNote(
   for (const e of entries) {
     throwIfWriteAborted(options.signal);
     const isSource = e.absPath === fromAbs;
-    // v3.10.0-rc.60 (WRITE-1, data-loss) — the DESTINATION must be excluded from the
+    // v3.10.0-rc.60 (WRITE-1, data-loss) — a DISTINCT DESTINATION must be excluded from the
     // backlink-rewrite plan: under overwrite=true, `renameFile` moves the SOURCE content
     // onto the destination path, so writing the destination's PRE-rename (rewritten) content
     // back afterwards would clobber the just-moved source (silent data loss when the
@@ -318,7 +320,10 @@ export async function renameNote(
     // (e.g. `Posts/Existing.md` for on-disk `posts/existing.md`) slipped the bare `===`
     // and reopened the rc.60 WRITE-1 data-loss for that destination.
     const isDest = isDestinationEntry(e);
-    if (isDest) continue;
+    // A case-only rename on a case-insensitive FS makes the source entry also
+    // match the canonical destination. Keep that shared entry in the plan so
+    // its self-references are rewritten before the physical rename.
+    if (isDest && !isSource) continue;
     const { content, parsed } = await vault.readNote(e.absPath, e.mtimeMs);
 
     // Find every wikilink + embed whose target resolves to fromAbs. Group by

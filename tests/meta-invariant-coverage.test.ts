@@ -163,8 +163,38 @@ const RAW_REPLACE_INVENTORY_FILES = [
   "helpers/exact-source-mutation.ts",
   "write-lifecycle-invariant.test.ts"
 ] as const;
+
+interface ExactMutationHelperCallIdentity {
+  readonly helper: "replaceExactly" | "replaceAllExactly" | "replaceIntegerAllExactly";
+  readonly label: string;
+  readonly needle: string;
+  readonly replacement: string;
+  readonly sourceIdentifier: string;
+}
+
+// AH-3 adds two fail-closed mutations around the shared write core. Keep their
+// exact call identities beside the census so an unrelated helper call cannot
+// compensate for deleting either delegate control while preserving the total.
+const ABS_PATH_SHARED_WRITE_DELEGATE_MUTATIONS = [
+  {
+    helper: "replaceExactly",
+    label: "writeNote shared-write-core delegate",
+    needle: "return this.writeNoteContent(relPath, content, opts);",
+    replacement: "return this.writeNoteContent(relPath, content, { overwrite: false });",
+    sourceIdentifier: "realVault"
+  },
+  {
+    helper: "replaceExactly",
+    label: "binary rollback forced-overwrite delegate",
+    needle: "return this.writeNoteContent(relPath, content, { overwrite: true });",
+    replacement: "return this.writeNoteContent(relPath, content, { overwrite: false });",
+    sourceIdentifier: "realVault"
+  }
+] as const satisfies readonly ExactMutationHelperCallIdentity[];
+
 const EXPECTED_REPOSITORY_MUTATION_HELPER_CALLS = new Map<string, number>([
-  ["abs-path-leak-invariant.test.ts", 7],
+  // Seven pre-AH-3 controls plus the two exact shared-write delegate controls above.
+  ["abs-path-leak-invariant.test.ts", 7 + ABS_PATH_SHARED_WRITE_DELEGATE_MUTATIONS.length],
   ["docs-consistency.test.ts", 30],
   ["write-lifecycle-invariant.test.ts", 19]
 ]);
@@ -353,8 +383,12 @@ function repositoryMutationOracleProblems(filename: string, source: string): str
   return problems;
 }
 
-/** Count direct calls to the reviewed exact-mutation helpers, excluding inert text and aliases. */
-function exactMutationHelperCallCount(filename: string, source: string): number {
+/** Count direct reviewed helper calls, optionally restricted to one exact call identity. */
+function exactMutationHelperCallCount(
+  filename: string,
+  source: string,
+  required?: ExactMutationHelperCallIdentity
+): number {
   const sourceFile = ts.createSourceFile(filename, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
   let count = 0;
   function visit(node: ts.Node): void {
@@ -363,7 +397,24 @@ function exactMutationHelperCallCount(filename: string, source: string): number 
       ts.isIdentifier(node.expression) &&
       EXACT_MUTATION_HELPERS.has(node.expression.text)
     ) {
-      count++;
+      const sourceArgument = node.arguments[0];
+      const needleArgument = node.arguments[1];
+      const replacementArgument = node.arguments[2];
+      if (
+        required === undefined ||
+        (node.expression.text === required.helper &&
+          sourceArgument !== undefined &&
+          ts.isIdentifier(sourceArgument) &&
+          sourceArgument.text === required.sourceIdentifier &&
+          needleArgument !== undefined &&
+          ts.isStringLiteral(needleArgument) &&
+          needleArgument.text === required.needle &&
+          replacementArgument !== undefined &&
+          ts.isStringLiteral(replacementArgument) &&
+          replacementArgument.text === required.replacement)
+      ) {
+        count++;
+      }
     }
     ts.forEachChild(node, visit);
   }
@@ -5279,6 +5330,29 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
         'replaceExactly("a", "a", "b"); replaceAllExactly("a", "a", "b"); "replaceIntegerAllExactly()";'
       )
     ).toBe(2);
+
+    const mutationCallSource = (call: ExactMutationHelperCallIdentity): string =>
+      `${call.helper}(${call.sourceIdentifier}, ${JSON.stringify(call.needle)}, ${JSON.stringify(call.replacement)});`;
+    const sameCountMissingRollback = [
+      mutationCallSource(ABS_PATH_SHARED_WRITE_DELEGATE_MUTATIONS[0]),
+      'replaceExactly(realVault, "unrelated authorized-looking target", "synthetic replacement");'
+    ].join("\n");
+    expect(exactMutationHelperCallCount("abs-path-leak-invariant.test.ts", sameCountMissingRollback)).toBe(2);
+    expect(
+      exactMutationHelperCallCount(
+        "abs-path-leak-invariant.test.ts",
+        sameCountMissingRollback,
+        ABS_PATH_SHARED_WRITE_DELEGATE_MUTATIONS[0]
+      )
+    ).toBe(1);
+    expect(
+      exactMutationHelperCallCount(
+        "abs-path-leak-invariant.test.ts",
+        sameCountMissingRollback,
+        ABS_PATH_SHARED_WRITE_DELEGATE_MUTATIONS[1]
+      )
+    ).toBe(0);
+
     const exactHelperImport =
       'import { replaceExactly } from "./helpers/exact-source-mutation.js";\n' +
       'replaceExactly("alpha", "alpha", "omega");';
@@ -5368,6 +5442,14 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       if (expectedHelperCalls !== undefined) {
         const bindingProblems = exactMutationHelperBindingProblems(filename, source);
         expect(bindingProblems, bindingProblems.join("\n")).toEqual([]);
+        if (filename === "abs-path-leak-invariant.test.ts") {
+          for (const requiredCall of ABS_PATH_SHARED_WRITE_DELEGATE_MUTATIONS) {
+            expect(
+              exactMutationHelperCallCount(filename, source, requiredCall),
+              `${filename} must retain exactly one ${requiredCall.label} exact mutation call`
+            ).toBe(1);
+          }
+        }
         expect(exactMutationHelperCallCount(filename, source), `${filename} exact mutation-helper census drifted`).toBe(
           expectedHelperCalls
         );

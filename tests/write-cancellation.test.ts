@@ -136,11 +136,7 @@ describe("rollback-safe batch write cancellation", () => {
       };
 
       await expect(
-        renameNote(
-          caseVault,
-          { from: sourceRel, to: destinationRel, overwrite: true },
-          { signal: caseAbort.signal }
-        )
+        renameNote(caseVault, { from: sourceRel, to: destinationRel, overwrite: true }, { signal: caseAbort.signal })
       ).rejects.toBeInstanceOf(WriteRequestAbortedError);
       expect(forwardAbortCount).toBe(1);
       expect(await fs.readFile(path.join(root, sourceRel), "utf8")).toBe(sourceBytes);

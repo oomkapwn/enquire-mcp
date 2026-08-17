@@ -98,21 +98,16 @@ describe("createNote", () => {
     const hardlinkAliasBefore = await statOrNullIfMissing(hardlinkDestination);
     if (hardlinkAliasBefore === null) {
       await fs.link(hardlinkSource, hardlinkDestination);
-      const [sourceStat, destinationStat] = await Promise.all([
-        fs.stat(hardlinkSource),
-        fs.stat(hardlinkDestination)
-      ]);
+      const [sourceStat, destinationStat] = await Promise.all([fs.stat(hardlinkSource), fs.stat(hardlinkDestination)]);
       expect(`${sourceStat.dev}:${sourceStat.ino}`).toBe(`${destinationStat.dev}:${destinationStat.ino}`);
       expect(await fs.realpath(hardlinkSource)).not.toBe(await fs.realpath(hardlinkDestination));
 
       const hardlinkVault = new Vault(hardlinkRoot, { enableWrite: true });
       await hardlinkVault.ensureExists();
-      await expect(hardlinkVault.renameFile("Hardlink.md", "hardlink.md")).rejects.toThrow(
+      await expect(hardlinkVault.renameFile("Hardlink.md", "hardlink.md")).rejects.toThrow(/distinct hardlink entry/);
+      await expect(hardlinkVault.renameFile("Hardlink.md", "hardlink.md", { overwrite: true })).rejects.toThrow(
         /distinct hardlink entry/
       );
-      await expect(
-        hardlinkVault.renameFile("Hardlink.md", "hardlink.md", { overwrite: true })
-      ).rejects.toThrow(/distinct hardlink entry/);
       await expect(
         renameNote(hardlinkVault, {
           dry_run: true,
@@ -123,15 +118,13 @@ describe("createNote", () => {
       ).rejects.toThrow(/distinct hardlink entry/);
       const unrelatedHardlinkDestination = path.join(hardlinkRoot, "Unrelated-alias.md");
       await fs.link(hardlinkSource, unrelatedHardlinkDestination);
-      await expect(
-        hardlinkVault.renameFile("Hardlink.md", "Unrelated-alias.md", { overwrite: true })
-      ).rejects.toThrow(/distinct hardlink entry/);
+      await expect(hardlinkVault.renameFile("Hardlink.md", "Unrelated-alias.md", { overwrite: true })).rejects.toThrow(
+        /distinct hardlink entry/
+      );
       expect(await fs.readFile(hardlinkSource, "utf8")).toBe("shared hardlink sentinel");
       expect(await fs.readFile(hardlinkDestination, "utf8")).toBe("shared hardlink sentinel");
       expect(await fs.readFile(unrelatedHardlinkDestination, "utf8")).toBe("shared hardlink sentinel");
-      expect(
-        (await fs.readdir(hardlinkRoot)).filter((name) => name.toLowerCase() === "hardlink.md")
-      ).toHaveLength(2);
+      expect((await fs.readdir(hardlinkRoot)).filter((name) => name.toLowerCase() === "hardlink.md")).toHaveLength(2);
 
       // Receipt recheck: a destination that changes after classification must
       // not inherit the earlier overwrite authority at the mutation boundary.
@@ -146,10 +139,7 @@ describe("createNote", () => {
       await fs.writeFile(receiptDestination, plannedDestinationBytes);
       const receiptVault = new Vault(receiptRoot, { enableWrite: true });
       await receiptVault.ensureExists();
-      const expectedDestination = await receiptVault.classifyRenameDestinationPublic(
-        receiptSource,
-        receiptDestination
-      );
+      const expectedDestination = await receiptVault.classifyRenameDestinationPublic(receiptSource, receiptDestination);
       expect(expectedDestination.kind).toBe("distinct");
       if (expectedDestination.kind !== "distinct") {
         throw new Error("receipt fixture must classify one distinct destination entry");
@@ -255,11 +245,7 @@ describe("createNote", () => {
       const renameFile = boundVault.renameFile.bind(boundVault);
       let destinationReplacementCount = 0;
       boundVault.renameFile = async (...args: Parameters<Vault["renameFile"]>) => {
-        if (
-          destinationReplacementCount === 0 &&
-          args[0] === boundSourceRel &&
-          args[1] === boundDestinationRel
-        ) {
+        if (destinationReplacementCount === 0 && args[0] === boundSourceRel && args[1] === boundDestinationRel) {
           destinationReplacementCount++;
           await fs.writeFile(path.join(boundRoot, boundDestinationRel), boundReplacementDestinationBytes);
         }
@@ -309,13 +295,9 @@ describe("createNote", () => {
       ).rejects.toThrow(/destination changed after planning/);
       expect(racedDestinationCount).toBe(1);
       expect(await fs.readFile(path.join(missingRoot, missingSourceRel), "utf8")).toBe(missingSourceBytes);
-      expect(await fs.readFile(path.join(missingRoot, missingDestinationRel), "utf8")).toBe(
-        racedDestinationBytes
-      );
+      expect(await fs.readFile(path.join(missingRoot, missingDestinationRel), "utf8")).toBe(racedDestinationBytes);
     } else if (process.platform === "linux" && process.env.CI) {
-      throw new Error(
-        "mandatory Linux case-sensitive filesystem precondition failed for Hardlink.md/hardlink.md"
-      );
+      throw new Error("mandatory Linux case-sensitive filesystem precondition failed for Hardlink.md/hardlink.md");
     }
     // Cleanup
     await fs.rm(raceRoot, { recursive: true, force: true });

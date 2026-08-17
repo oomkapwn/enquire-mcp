@@ -38,10 +38,7 @@ async function restoreNoteSnapshots(vault: Vault, snapshots: readonly NoteSnapsh
 }
 
 function isRenamePrecommitError(err: unknown): boolean {
-  return (
-    err instanceof Error &&
-    (err.name === "RenameDestinationChangedError" || err.name === "RenamePrecommitError")
-  );
+  return err instanceof Error && (err.name === "RenameDestinationChangedError" || err.name === "RenamePrecommitError");
 }
 
 function throwCancelledAfterRollback(operation: string, signal: AbortSignal | undefined, failures: string[]): never {
@@ -438,9 +435,7 @@ export async function renameNote(
     } catch (err) {
       if (!options.signal?.aborted) {
         if (isRenamePrecommitError(err) && sourcePlan && sourceCommitted) {
-          const failures = await restoreNoteSnapshots(vault, [
-            { path: sourcePlan.path, before: sourcePlan.before }
-          ]);
+          const failures = await restoreNoteSnapshots(vault, [{ path: sourcePlan.path, before: sourcePlan.before }]);
           if (failures.length > 0) {
             throw new Error(
               `rename_note: rename failed before commit, but source rollback failed: ${failures.join("; ")}`,

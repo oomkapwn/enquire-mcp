@@ -268,8 +268,7 @@ function parseRepoMetaBody(
 /** Convert one raw CLI result into the exact production retry/admission result. */
 function attemptFromGhResult(res: GhProcessResult): RepoMetaAttempt {
   const response = parseIncludedResponse(res.stdout ?? "");
-  const errorCode =
-    res.error && "code" in res.error && typeof res.error.code === "string" ? res.error.code : null;
+  const errorCode = res.error && "code" in res.error && typeof res.error.code === "string" ? res.error.code : null;
   const evidence: GhFailureEvidence = {
     detail: [res.error?.message, res.stderr, response.body].filter((part) => Boolean(part)).join(" | "),
     errorCode,
@@ -563,11 +562,7 @@ describe("GitHub repo metadata invariant (v3.7.0 + v3.7.4 negative-control)", ()
         stdout: "",
         ...overrides
       });
-      const included = (
-        status: number,
-        headers: Readonly<Record<string, string>> = {},
-        body = "{}"
-      ): string =>
+      const included = (status: number, headers: Readonly<Record<string, string>> = {}, body = "{}"): string =>
         [
           `HTTP/2.0 ${status} synthetic`,
           ...Object.entries(headers).map(([name, value]) => `${name}: ${value}`),
@@ -590,27 +585,28 @@ describe("GitHub repo metadata invariant (v3.7.0 + v3.7.4 negative-control)", ()
 
       // Raw spawn-result controls traverse the same converter as production,
       // binding stdout/headers/status/signal/error to classification and delay.
-      expect(
-        attemptFromGhResult(rawResult({ status: 0, stdout: included(200, {}, JSON.stringify(meta)) }))
-      ).toEqual({ meta, ok: true });
+      expect(attemptFromGhResult(rawResult({ status: 0, stdout: included(200, {}, JSON.stringify(meta)) }))).toEqual({
+        meta,
+        ok: true
+      });
       const rawAuth = attemptFromGhResult(rawResult({ stdout: included(401) }));
       expect(rawAuth).toMatchObject({ httpStatus: 401, kind: "auth", ok: false });
       const rawScope = attemptFromGhResult(rawResult({ stdout: included(403) }));
       expect(rawScope).toMatchObject({ httpStatus: 403, kind: "scope", ok: false });
-      const rawRetryAfter = attemptFromGhResult(
-        rawResult({ stdout: included(200, { "retry-after": "2" }) })
-      );
+      const rawRetryAfter = attemptFromGhResult(rawResult({ stdout: included(200, { "retry-after": "2" }) }));
       expect(rawRetryAfter).toMatchObject({ kind: "rate-limit", ok: false, retryAfterMs: 2_000 });
-      expect(
-        attemptFromGhResult(rawResult({ stdout: included(200, { "x-ratelimit-remaining": "0" }) }))
-      ).toMatchObject({ kind: "rate-limit", ok: false });
+      expect(attemptFromGhResult(rawResult({ stdout: included(200, { "x-ratelimit-remaining": "0" }) }))).toMatchObject(
+        { kind: "rate-limit", ok: false }
+      );
       expect(attemptFromGhResult(rawResult({ stdout: included(429) }))).toMatchObject({
         kind: "rate-limit",
         ok: false
       });
-      expect(
-        attemptFromGhResult(rawResult({ status: null, signal: "SIGABRT" }))
-      ).toMatchObject({ kind: "cli", ok: false, signal: "SIGABRT" });
+      expect(attemptFromGhResult(rawResult({ status: null, signal: "SIGABRT" }))).toMatchObject({
+        kind: "cli",
+        ok: false,
+        signal: "SIGABRT"
+      });
       expect(
         attemptFromGhResult(
           rawResult({
@@ -647,7 +643,7 @@ describe("GitHub repo metadata invariant (v3.7.0 + v3.7.4 negative-control)", ()
       expect(classifyGhFailure(evidence({ detail: "unclassified gh failure" }))).toBe("unknown");
 
       const rateLimited = parseIncludedResponse(
-        "HTTP/2.0 403 Forbidden\r\nx-ratelimit-remaining: 0\r\nretry-after: 2\r\n\r\n{\"message\":\"rate limited\"}"
+        'HTTP/2.0 403 Forbidden\r\nx-ratelimit-remaining: 0\r\nretry-after: 2\r\n\r\n{"message":"rate limited"}'
       );
       expect(rateLimited.httpStatus).toBe(403);
       expect(rateLimited.headers["retry-after"]).toBe("2");

@@ -1202,10 +1202,7 @@ export class Vault {
    * ```
    * @internal
    */
-  async classifyRenameDestinationPublic(
-    fromAbs: string,
-    toAbs: string
-  ): Promise<RenameDestinationClassification> {
+  async classifyRenameDestinationPublic(fromAbs: string, toAbs: string): Promise<RenameDestinationClassification> {
     const resolvedFrom = await this.resolveSafePath(fromAbs);
     const resolvedTo = this.resolveInside(toAbs);
     const lexicalRel = vaultRelative(this.root, resolvedTo);
@@ -1346,7 +1343,7 @@ export class Vault {
    * reclassified after the final mutation path guards and immediately before
    * the filesystem syscall. It narrows but cannot eliminate an out-of-process
    * check/use or ABA race. Exact-same-path direct calls retain their legacy
-   * overwrite/no-op behavior; {@link renameNote} rejects that request.
+   * overwrite/no-op behavior; `renameNote` rejects that request.
    *
    * @param fromRel - Existing vault-relative source path.
    * @param toRel - Requested vault-relative destination path.
@@ -1401,9 +1398,7 @@ export class Vault {
       await this.assertMutationPathPublic(fromAbs, "rename", "source");
       await this.assertMutationPathPublic(toAbs, "rename", "destination");
       exactSamePath = fromAbs === toAbs;
-      currentDestination = exactSamePath
-        ? null
-        : await this.classifyRenameDestination(fromAbs, toAbs, toRelForFilter);
+      currentDestination = exactSamePath ? null : await this.classifyRenameDestination(fromAbs, toAbs, toRelForFilter);
       if (
         currentDestination &&
         opts.expectedDestination &&
@@ -1477,11 +1472,7 @@ export class Vault {
           try {
             await this.copyFileSafe(fromAbs, toAbs, fsConstants.COPYFILE_EXCL);
           } catch (copyErr) {
-            if (
-              copyErr instanceof Error &&
-              "code" in copyErr &&
-              (copyErr as NodeJS.ErrnoException).code === "EEXIST"
-            ) {
+            if (copyErr instanceof Error && "code" in copyErr && (copyErr as NodeJS.ErrnoException).code === "EEXIST") {
               if (destinationWasPlannedMissing) throw new RenameDestinationChangedError(toRelNorm);
               if (opts.overwrite) {
                 throw new Error(`Destination appeared during rename: ${toRelNorm} (retry to replace)`);

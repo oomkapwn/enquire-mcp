@@ -570,10 +570,7 @@ describe("Vault — write-tool privacy boundary (v2.0.0-beta.2)", () => {
       /hidden or reserved vault path/
     );
     await expect(
-      v.classifyRenameDestinationPublic(
-        v.resolveInside("Personal/diary.md"),
-        v.resolveInside("Public/diary.md")
-      )
+      v.classifyRenameDestinationPublic(v.resolveInside("Personal/diary.md"), v.resolveInside("Public/diary.md"))
     ).rejects.toThrow(/excluded/);
     expect(await fs.readFile(path.join(wroot, ".source.md"), "utf8")).toBe("hidden source");
     await expect(fs.stat(path.join(wroot, "Public", "source.md"))).rejects.toMatchObject({ code: "ENOENT" });

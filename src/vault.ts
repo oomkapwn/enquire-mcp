@@ -1210,12 +1210,12 @@ export class Vault {
     const resolvedTo = this.resolveInside(toAbs);
     const lexicalRel = vaultRelative(this.root, resolvedTo);
     const lexicalExclusion = this.exclusionReason(lexicalRel);
-    if (lexicalExclusion && !lexicalRel.endsWith(".md")) {
+    if (lexicalExclusion) {
       throw new Error(`Path is excluded by ${lexicalExclusion}: ${lexicalRel}`);
     }
     const canonicalRel = await this.canonicalRenameDestinationRelPublic(resolvedTo);
     const physicalExclusion = this.exclusionReason(canonicalRel);
-    if (physicalExclusion && !canonicalRel.endsWith(".md")) {
+    if (physicalExclusion) {
       throw new Error(`Path is excluded by ${physicalExclusion}: ${canonicalRel}`);
     }
     return this.classifyRenameDestination(resolvedFrom, resolvedTo, canonicalRel);
@@ -1454,8 +1454,6 @@ export class Vault {
       if (!opts.overwrite) {
         throw new Error(`Destination already exists: ${toRelNorm} (pass overwrite=true to replace)`);
       }
-      await this.renameSafe(fromAbs, toAbs);
-    } else if (opts.overwrite) {
       await this.renameSafe(fromAbs, toAbs);
     } else {
       needsExclusiveMove = true;

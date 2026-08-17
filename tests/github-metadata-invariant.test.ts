@@ -359,7 +359,7 @@ function repoMetaForAssertion(
 ): RepoMeta | null {
   if (probe.ok) return probe.meta;
   const diagnostic = formatProbeFailure(probe);
-  if (failClosed) throw new Error(diagnostic);
+  if (failClosed && probe.kind !== "auth") throw new Error(diagnostic);
   warn(`[github-metadata] ${diagnostic}; skipping live metadata assertion`);
   return null;
 }

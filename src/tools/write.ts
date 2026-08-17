@@ -298,7 +298,7 @@ export async function renameNote(
   if (args.overwrite && renameDestination.kind === "distinct") {
     // Rollback bytes must bypass readNote's mtime-keyed LRU. The mutation-boundary
     // receipt recheck below binds this uncached snapshot to the planned entry.
-    destinationBefore = { path: canonicalToRel, before: await vault.readBinaryFile(toAbsCheck) };
+    destinationBefore = { path: canonicalToRel, before: await vault.readFile(toAbsCheck) };
   }
   const newBasename = stripMd(path.basename(toRelNorm));
   const newDir = path.dirname(toRelNorm).replace(/\\/g, "/");

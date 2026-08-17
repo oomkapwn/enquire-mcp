@@ -15,9 +15,90 @@ export type VaultExclusionReason =
   | "--read-paths allowlist (path doesn't match any allow-glob)"
   | "--exclude-glob denylist";
 
+interface RenameEntryReceipt {
+  realRel: string;
+  dev: number;
+  ino: number;
+  size: number;
+  mtimeMs: number;
+  ctimeMs: number;
+  mode: number;
+}
+
+type RenameDestinationClassification =
+  | { kind: "missing"; canonicalRel: string }
+  | { kind: "same-canonical-case-alias"; canonicalRel: string }
+  | { kind: "distinct"; canonicalRel: string; receipt: RenameEntryReceipt }
+  | { kind: "distinct-hardlink"; canonicalRel: string; receipt: RenameEntryReceipt }
+  | { kind: "unproven"; canonicalRel: string; reason: string };
+
+interface RenameFileOptions {
+  overwrite?: boolean;
+  /** Planning receipt supplied by the backlink-rewrite orchestrator. @internal */
+  expectedDestination?: RenameDestinationClassification;
+}
+
+class RenameDestinationChangedError extends Error {
+  constructor(relPath: string) {
+    super(`Refusing to rename — destination changed after planning: ${relPath}`);
+    this.name = "RenameDestinationChangedError";
+  }
+}
+
+class RenamePrecommitError extends Error {
+  constructor(relPath: string, cause: unknown) {
+    super(`Refusing to rename — precommit validation failed after planning: ${relPath}`, { cause });
+    this.name = "RenamePrecommitError";
+  }
+}
+
 function vaultRelative(root: string, abs: string): string {
   const rel = path.relative(root, abs);
   return path.sep === "\\" ? rel.replaceAll("\\", "/") : rel;
+}
+
+function renameEntryReceipt(root: string, realAbs: string, stat: import("node:fs").Stats): RenameEntryReceipt {
+  return {
+    realRel: vaultRelative(root, realAbs),
+    dev: stat.dev,
+    ino: stat.ino,
+    size: stat.size,
+    mtimeMs: stat.mtimeMs,
+    ctimeMs: stat.ctimeMs,
+    mode: stat.mode
+  };
+}
+
+function renameEntryReceiptsEqual(left: RenameEntryReceipt, right: RenameEntryReceipt): boolean {
+  return (
+    left.realRel === right.realRel &&
+    left.dev === right.dev &&
+    left.ino === right.ino &&
+    left.size === right.size &&
+    left.mtimeMs === right.mtimeMs &&
+    left.ctimeMs === right.ctimeMs &&
+    left.mode === right.mode
+  );
+}
+
+function renameDestinationMatches(
+  expected: RenameDestinationClassification,
+  current: RenameDestinationClassification
+): boolean {
+  if (expected.canonicalRel !== current.canonicalRel) return false;
+  switch (expected.kind) {
+    case "missing":
+      return current.kind === "missing";
+    case "same-canonical-case-alias":
+      // Rewriting source self-links uses atomic replacement and may therefore
+      // change the shared entry's inode before the physical case-only rename.
+      return current.kind === "same-canonical-case-alias";
+    case "distinct":
+      return current.kind === "distinct" && renameEntryReceiptsEqual(expected.receipt, current.receipt);
+    case "distinct-hardlink":
+    case "unproven":
+      return false;
+  }
 }
 
 // v3.11.7-rc.2 (post-merge re-sweep A10-F1) — serialize append size-check
@@ -844,12 +925,41 @@ export class Vault {
     content: string,
     opts: { overwrite?: boolean } = {}
   ): Promise<{ absPath: string; relPath: string; mtimeMs: number; bytes: number }> {
+    return this.writeNoteContent(relPath, content, opts);
+  }
+
+  /**
+   * Restore the exact bytes of a markdown file during an internal rollback.
+   *
+   * This uses the same write gate, path/privacy validation, size cap, symlink
+   * refusal, and atomic-overwrite path as {@link writeNote}, but deliberately
+   * avoids a UTF-8 decode/encode round trip.
+   *
+   * @param relPath - Vault-relative markdown path to restore.
+   * @param content - Exact file bytes captured before the forward mutation.
+   * @returns Metadata about the restored file.
+   * @throws {Error} Under the same conditions as {@link writeNote}.
+   * @internal
+   */
+  async restoreFileBytesPublic(
+    relPath: string,
+    content: Buffer
+  ): Promise<{ absPath: string; relPath: string; mtimeMs: number; bytes: number }> {
+    return this.writeNoteContent(relPath, content, { overwrite: true });
+  }
+
+  private async writeNoteContent(
+    relPath: string,
+    content: string | Buffer,
+    opts: { overwrite?: boolean }
+  ): Promise<{ absPath: string; relPath: string; mtimeMs: number; bytes: number }> {
     if (!this.writeEnabled) {
       throw new Error("Vault is read-only — start the server with --enable-write to allow note creation");
     }
     if (!this.ready) await this.ensureExists();
-    if (Buffer.byteLength(content, "utf8") > this.maxFileBytes) {
-      throw new Error(`Refusing to write ${Buffer.byteLength(content, "utf8")} bytes (limit ${this.maxFileBytes})`);
+    const contentBytes = Buffer.isBuffer(content) ? content.length : Buffer.byteLength(content, "utf8");
+    if (contentBytes > this.maxFileBytes) {
+      throw new Error(`Refusing to write ${contentBytes} bytes (limit ${this.maxFileBytes})`);
     }
     if (process.platform === "win32") {
       const rawProblem = windowsRelativePathProblem(relPath);
@@ -940,7 +1050,8 @@ export class Vault {
       try {
         fh = await this.openSafe(tmp, "wx", tmpMode); // O_EXCL — never follows a pre-planted symlink
         await this.assertMutationPathPublic(tmp, "write", "temporary destination");
-        await fh.writeFile(content, "utf8");
+        if (Buffer.isBuffer(content)) await fh.writeFile(content);
+        else await fh.writeFile(content, "utf8");
         await fh.close();
         fh = undefined;
         await this.assertMutationLeafNotSymlink(abs, "write");
@@ -957,7 +1068,8 @@ export class Vault {
       try {
         fh = await this.openSafe(abs, "wx");
         await this.assertMutationPathPublic(abs, "write", "destination");
-        await fh.writeFile(content, "utf8");
+        if (Buffer.isBuffer(content)) await fh.writeFile(content);
+        else await fh.writeFile(content, "utf8");
       } catch (err) {
         if (err instanceof Error && "code" in err && (err as NodeJS.ErrnoException).code === "EEXIST") {
           throw new Error(`Note already exists: ${targetRel} (pass overwrite=true to replace)`);
@@ -1066,6 +1178,46 @@ export class Vault {
     return this.canonicalRelForPrivacyCheck(resolved);
   }
 
+  /**
+   * Classify a rename destination by canonical directory-entry identity.
+   *
+   * Exact canonical realpath equality identifies one directory entry reached
+   * through different case spellings; matching `dev` + `ino` confirms that
+   * both spellings still address the same physical file. Equal `dev` + `ino`
+   * with different realpaths is instead a distinct hardlink entry. An
+   * unprovable identity fails closed rather than granting overwrite authority.
+   * Source and destination both pass the same lexical and canonical privacy
+   * admission used by the read/write funnels before any classification is
+   * returned to the orchestrator.
+   *
+   * @param fromAbs - Existing source path inside the vault.
+   * @param toAbs - Requested destination path inside the vault.
+   * @returns The destination classification and its canonical relative path.
+   * @example
+   * ```ts
+   * const state = await vault.classifyRenameDestinationPublic(
+   *   vault.resolveInside("Foo.md"),
+   *   vault.resolveInside("foo.md")
+   * );
+   * ```
+   * @internal
+   */
+  async classifyRenameDestinationPublic(fromAbs: string, toAbs: string): Promise<RenameDestinationClassification> {
+    const resolvedFrom = await this.resolveSafePath(fromAbs);
+    const resolvedTo = this.resolveInside(toAbs);
+    const lexicalRel = vaultRelative(this.root, resolvedTo);
+    const lexicalExclusion = this.exclusionReason(lexicalRel);
+    if (lexicalExclusion) {
+      throw new Error(`Path is excluded by ${lexicalExclusion}: ${lexicalRel}`);
+    }
+    const canonicalRel = await this.canonicalRenameDestinationRelPublic(resolvedTo);
+    const physicalExclusion = this.exclusionReason(canonicalRel);
+    if (physicalExclusion) {
+      throw new Error(`Path is excluded by ${physicalExclusion}: ${canonicalRel}`);
+    }
+    return this.classifyRenameDestination(resolvedFrom, resolvedTo, canonicalRel);
+  }
+
   private async canonicalRelForPrivacyCheck(abs: string): Promise<string> {
     let existing = abs;
     const tail: string[] = [];
@@ -1105,75 +1257,171 @@ export class Vault {
     return rel;
   }
 
-  /** Rename a markdown file inside the vault. v3.7.14 F2 — atomic destination
-   *  guard via `fs.link(fromAbs, toAbs)` + `fs.unlink(fromAbs)` for the
-   *  non-overwrite path (link(2) fails atomically with EEXIST, closing the
-   *  stat-then-rename TOCTOU race that POSIX rename(2) silently lost by
-   *  replacing destinations). Cross-device fallback (`EXDEV`) uses
-   *  `fs.copyFile(..., COPYFILE_EXCL)` + `fs.unlink` for the same atomic
-   *  guarantee. The overwrite=true path keeps plain `fs.rename` since the
-   *  caller opted into replacement. Refuses if source missing, target exists
-   *  (unless overwrite), either path traverses, or the target sits behind a
-   *  symlink that points outside the vault. Caller is responsible for
-   *  rewriting wikilinks pointing at the old name (see {@link renameNote}
-   *  in `src/tools/write.ts` for the orchestration).
-   *
-   *  v3.7.16 P1-6 — destination privacy filter uses
-   *  `canonicalRelForPrivacyCheck` (case-insensitive-FS bypass
-   *  closure; parity with `writeNote`). */
-  /**
-   * v3.10.0-rc.61 (WRITE-3) — true iff `fromAbs`/`toAbs` differ only in case AND resolve to the
-   * SAME physical file (same inode) — i.e. a case-only rename on a case-INSENSITIVE filesystem.
-   * On a case-SENSITIVE FS the two are distinct files (toAbs is a different inode or absent) → false.
-   */
-  private async isSameInodeCaseRename(fromAbs: string, toAbs: string): Promise<boolean> {
-    if (fromAbs === toAbs || fromAbs.toLowerCase() !== toAbs.toLowerCase()) return false;
-    try {
-      const [a, b] = await Promise.all([this.statSafe(fromAbs), this.statSafe(toAbs)]);
-      return a.ino !== 0 && a.ino === b.ino;
-    } catch {
-      return false; // toAbs absent → a genuine new destination, not a same-file case rename
+  private async classifyRenameDestination(
+    fromAbs: string,
+    toAbs: string,
+    canonicalRel: string
+  ): Promise<RenameDestinationClassification> {
+    // canonicalRenameDestinationRelPublic performs the first non-following
+    // leaf probe before realpath. Repeat it after canonicalization so an entry
+    // that appeared or became a symlink during that await cannot be trusted.
+    const destinationLeaf = await this.assertMutationLeafNotSymlink(toAbs, "rename");
+    if (!destinationLeaf) return { kind: "missing", canonicalRel };
+    if (!destinationLeaf.isFile()) {
+      return { kind: "unproven", canonicalRel, reason: "destination is not a regular file" };
     }
+
+    let fromReal: string;
+    let toReal: string;
+    let fromStat: import("node:fs").Stats;
+    let toStat: import("node:fs").Stats;
+    try {
+      [fromReal, toReal] = await Promise.all([this.realpathSafe(fromAbs), this.realpathSafe(toAbs)]);
+      [fromStat, toStat] = await Promise.all([this.statSafe(fromReal), this.statSafe(toReal)]);
+    } catch (err) {
+      if (isErrnoException(err) && (err.code === "ENOENT" || err.code === "ENOTDIR")) {
+        return { kind: "unproven", canonicalRel, reason: "source or destination changed during classification" };
+      }
+      throw err;
+    }
+
+    if (!fromStat.isFile() || !toStat.isFile()) {
+      return { kind: "unproven", canonicalRel, reason: "source or destination is not a regular file" };
+    }
+    const fromRealRel = vaultRelative(this.root, fromReal);
+    const toRealRel = vaultRelative(this.root, toReal);
+    if (
+      fromRealRel.startsWith("..") ||
+      path.isAbsolute(fromRealRel) ||
+      toRealRel.startsWith("..") ||
+      path.isAbsolute(toRealRel)
+    ) {
+      return { kind: "unproven", canonicalRel, reason: "canonical identity escapes the vault" };
+    }
+    if (canonicalRel !== toRealRel) {
+      return { kind: "unproven", canonicalRel, reason: "canonical destination changed during classification" };
+    }
+    if (fromStat.ino === 0 || toStat.ino === 0) {
+      return { kind: "unproven", canonicalRel, reason: "inode identity is unavailable" };
+    }
+
+    const sameCanonicalEntry = fromReal === toReal;
+    const samePhysicalFile = fromStat.dev === toStat.dev && fromStat.ino === toStat.ino;
+    if (sameCanonicalEntry && !samePhysicalFile) {
+      return { kind: "unproven", canonicalRel, reason: "canonical entry and physical identity disagree" };
+    }
+    const requestedCaseAlias = fromAbs !== toAbs && fromAbs.toLowerCase() === toAbs.toLowerCase();
+    if (sameCanonicalEntry) {
+      return requestedCaseAlias
+        ? { kind: "same-canonical-case-alias", canonicalRel }
+        : {
+            kind: "unproven",
+            canonicalRel,
+            reason: "same canonical entry is not a supported case-only spelling"
+          };
+    }
+
+    const receipt = renameEntryReceipt(this.root, toReal, toStat);
+    return samePhysicalFile
+      ? { kind: "distinct-hardlink", canonicalRel, receipt }
+      : { kind: "distinct", canonicalRel, receipt };
   }
 
+  /**
+   * Rename a markdown file inside the vault.
+   *
+   * A move to a classified-missing destination uses `link` + `unlink`, with
+   * an exclusive-copy cross-device fallback, regardless of `overwrite`. Thus
+   * an unsnapshotted destination appearing in the final check/use gap cannot
+   * be replaced. Plain rename is reserved for a supported case-only spelling
+   * of the same canonical directory entry, confirmed by exact realpath plus
+   * `dev` + `ino`, or a classified-distinct destination with `overwrite`.
+   * A distinct hardlink destination fails closed even with `overwrite`;
+   * byte rollback cannot restore link topology.
+   *
+   * For non-identical path requests, the optional planning receipt is
+   * reclassified after the final mutation path guards and immediately before
+   * the filesystem syscall. It narrows but cannot eliminate an out-of-process
+   * check/use or ABA race. Exact-same-path direct calls retain their legacy
+   * overwrite/no-op behavior; `renameNote` rejects that request.
+   *
+   * @param fromRel - Existing vault-relative source path.
+   * @param toRel - Requested vault-relative destination path.
+   * @param opts - Overwrite choice and optional orchestrator planning receipt.
+   * @returns Vault-relative source/destination paths and destination mtime.
+   * @throws {Error} If a path is excluded or unsafe, a distinct destination
+   *   exists without overwrite, destination identity is unproven or changed,
+   *   or the destination is a distinct hardlink entry.
+   * @example
+   * ```ts
+   * await vault.renameFile("Inbox/Draft.md", "Archive/Draft.md");
+   * ```
+   */
   async renameFile(
     fromRel: string,
     toRel: string,
-    opts: { overwrite?: boolean } = {}
+    opts: RenameFileOptions = {}
   ): Promise<{ from: string; to: string; mtimeMs: number }> {
     if (!this.writeEnabled) {
       throw new Error("Vault is read-only — start the server with --enable-write to allow rename");
     }
     if (!this.ready) await this.ensureExists();
-    const fromAbs = await this.resolveSafePath(fromRel);
     const toRelNorm = toRel.toLowerCase().endsWith(".md") ? toRel : `${toRel}.md`;
     const toAbs = this.resolveInside(toRelNorm);
     const lexicalToRel = vaultRelative(this.root, toAbs);
-    const lexicalDestinationExclusion = this.exclusionReason(lexicalToRel);
-    if (lexicalDestinationExclusion) {
-      throw new Error(
-        `Refusing to rename — destination is excluded by ${lexicalDestinationExclusion}: ${lexicalToRel}`
-      );
+    let fromAbs: string;
+    let exactSamePath = false;
+    let currentDestination: RenameDestinationClassification | null = null;
+    try {
+      fromAbs = await this.resolveSafePath(fromRel);
+      const lexicalDestinationExclusion = this.exclusionReason(lexicalToRel);
+      if (lexicalDestinationExclusion) {
+        throw new Error(
+          `Refusing to rename — destination is excluded by ${lexicalDestinationExclusion}: ${lexicalToRel}`
+        );
+      }
+      await this.assertParentInsideVault(toAbs);
+      // v2.0.0-beta.2 P1 fix: distinguish allowlist-vs-denylist same as
+      // writeNote does, so users with --read-paths see the actual reason.
+      // v3.7.16 P1-6 — case-insensitive bypass closure (same as writeNote).
+      const toRelForFilter = await this.canonicalRenameDestinationRelPublic(toAbs);
+      const destinationExclusion = this.exclusionReason(toRelForFilter);
+      if (destinationExclusion) {
+        throw new Error(`Refusing to rename — destination is excluded by ${destinationExclusion}: ${toRelNorm}`);
+      }
+      await this.mkdirSafe(path.dirname(toAbs), { recursive: true });
+      await this.assertParentInsideVault(toAbs);
+      // Recheck beside the mutation after awaits in validation/mkdir. This
+      // narrows the stable-pre-state validation window; the non-following/atomic
+      // rename/link operations remain authoritative if the leaf changes later.
+      await this.assertMutationLeafNotSymlink(toAbs, "rename");
+      await this.assertMutationPathPublic(fromAbs, "rename", "source");
+      await this.assertMutationPathPublic(toAbs, "rename", "destination");
+      exactSamePath = fromAbs === toAbs;
+      currentDestination = exactSamePath ? null : await this.classifyRenameDestination(fromAbs, toAbs, toRelForFilter);
+      if (
+        currentDestination &&
+        opts.expectedDestination &&
+        !renameDestinationMatches(opts.expectedDestination, currentDestination)
+      ) {
+        throw new RenameDestinationChangedError(toRelNorm);
+      }
+      if (currentDestination?.kind === "distinct-hardlink") {
+        throw new Error(`Refusing to rename — destination is a distinct hardlink entry: ${toRelNorm}`);
+      }
+      if (currentDestination?.kind === "unproven") {
+        throw new Error(
+          `Refusing to rename — destination identity is unproven (${currentDestination.reason}): ${toRelNorm}`
+        );
+      }
+    } catch (err) {
+      if (opts.expectedDestination && !(err instanceof RenameDestinationChangedError)) {
+        throw new RenamePrecommitError(toRelNorm, err);
+      }
+      throw err;
     }
-    await this.assertParentInsideVault(toAbs);
-    // v2.0.0-beta.2 P1 fix: distinguish allowlist-vs-denylist same as
-    // writeNote does, so users with --read-paths see the actual reason.
-    // v3.7.16 P1-6 — case-insensitive bypass closure (same as writeNote).
-    const toRelForFilter = await this.canonicalRenameDestinationRelPublic(toAbs);
-    const destinationExclusion = this.exclusionReason(toRelForFilter);
-    if (destinationExclusion) {
-      throw new Error(`Refusing to rename — destination is excluded by ${destinationExclusion}: ${toRelNorm}`);
-    }
-    await this.mkdirSafe(path.dirname(toAbs), { recursive: true });
-    await this.assertParentInsideVault(toAbs);
-    const sameInodeCaseRename = !opts.overwrite && (await this.isSameInodeCaseRename(fromAbs, toAbs));
-    // Recheck beside the mutation after awaits in validation/mkdir. This
-    // narrows the stable-pre-state validation window; the non-following/atomic
-    // rename/link operations remain authoritative if the leaf changes later.
-    await this.assertMutationLeafNotSymlink(toAbs, "rename");
-    await this.assertMutationPathPublic(fromAbs, "rename", "source");
-    await this.assertMutationPathPublic(toAbs, "rename", "destination");
-    // v3.7.14 F2 — atomic exclusive-destination rename (parity with v3.7.13 M2).
+    const destinationWasPlannedMissing = opts.expectedDestination?.kind === "missing";
+    // v3.7.14 F2 — exclusive-destination move (parity with v3.7.13 M2).
     // Pre-3.7.14 we did `stat(toAbs)`-then-`rename(fromAbs, toAbs)`. POSIX
     // rename(2) silently REPLACES the destination if it exists, so between
     // a stat() returning ENOENT and the follow-up rename(), another process
@@ -1181,32 +1429,58 @@ export class Vault {
     // honoring overwrite=false. Closes the same class of TOCTOU race that
     // M2 fixed for writeNote.
     //
-    // The fix uses link()+unlink() for the non-overwrite path. link(2) fails
-    // atomically with EEXIST when the destination exists — no stat-then-act
-    // window. After successful link the source path is removed, leaving the
-    // file at the new path with identical contents. For the overwrite path
-    // we keep plain rename() since the user opted into replacement.
-    if (opts.overwrite) {
+    // The fix uses link()+unlink() whenever the classified destination is
+    // missing. link(2) fails atomically with EEXIST when the destination
+    // exists — no stat-then-act replacement window. After successful link the source path is removed, leaving the
+    // file at the new path with identical contents. A destination classified
+    // as missing stays on this exclusive path even with overwrite=true: no
+    // rollback snapshot exists for an entry that appears after classification.
+    // Plain rename is reserved for confirmed case aliases and for a distinct
+    // destination that already existed when overwrite authority was planned.
+    let needsExclusiveMove = false;
+    if (exactSamePath) {
+      if (!opts.overwrite) {
+        throw new Error(`Destination already exists: ${toRelNorm} (pass overwrite=true to replace)`);
+      }
       await this.renameSafe(fromAbs, toAbs);
-    } else if (sameInodeCaseRename) {
-      // v3.10.0-rc.61 (WRITE-3) — a case-only rename (Foo.md → foo.md) on a case-INSENSITIVE
-      // FS (macOS APFS/HFS+, Windows NTFS) targets the SAME physical inode, so the linkSafe
-      // path below would throw EEXIST → a misleading "Destination already exists". Use plain
-      // rename, which performs the case change. (On a case-SENSITIVE FS this branch is never
-      // taken — foo.md is a distinct file; absent → linkSafe creates it, present → real EEXIST.)
+    } else if (currentDestination?.kind === "same-canonical-case-alias") {
+      await this.renameSafe(fromAbs, toAbs);
+    } else if (currentDestination?.kind === "distinct") {
+      if (!opts.overwrite) {
+        throw new Error(`Destination already exists: ${toRelNorm} (pass overwrite=true to replace)`);
+      }
       await this.renameSafe(fromAbs, toAbs);
     } else {
+      needsExclusiveMove = true;
+    }
+    if (needsExclusiveMove) {
       try {
         await this.linkSafe(fromAbs, toAbs);
       } catch (err) {
         if (err instanceof Error && "code" in err && (err as NodeJS.ErrnoException).code === "EEXIST") {
+          if (destinationWasPlannedMissing) throw new RenameDestinationChangedError(toRelNorm);
+          if (opts.overwrite) {
+            throw new Error(`Destination appeared during rename: ${toRelNorm} (retry to replace)`);
+          }
           throw new Error(`Destination already exists: ${toRelNorm} (pass overwrite=true to replace)`);
         }
         // EXDEV (cross-device link) is the realistic fallback: vault on a
-        // bind-mount, source on the underlying fs. Fall back to atomic
-        // copy-then-unlink with the wx flag.
+        // bind-mount, source on the underlying fs. Fall back to an exclusive
+        // copy followed by unlink; this preserves destination admission but
+        // does not claim the two-step move itself is atomic.
         if (err instanceof Error && "code" in err && (err as NodeJS.ErrnoException).code === "EXDEV") {
-          await this.copyFileSafe(fromAbs, toAbs, fsConstants.COPYFILE_EXCL);
+          try {
+            await this.copyFileSafe(fromAbs, toAbs, fsConstants.COPYFILE_EXCL);
+          } catch (copyErr) {
+            if (copyErr instanceof Error && "code" in copyErr && (copyErr as NodeJS.ErrnoException).code === "EEXIST") {
+              if (destinationWasPlannedMissing) throw new RenameDestinationChangedError(toRelNorm);
+              if (opts.overwrite) {
+                throw new Error(`Destination appeared during rename: ${toRelNorm} (retry to replace)`);
+              }
+              throw new Error(`Destination already exists: ${toRelNorm} (pass overwrite=true to replace)`);
+            }
+            throw copyErr;
+          }
           await this.unlinkSafe(fromAbs);
         } else {
           throw err;

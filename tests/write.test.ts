@@ -9,6 +9,15 @@ import { Vault } from "../src/vault.js";
 
 let root: string;
 
+async function statOrNullIfMissing(absPath: string): Promise<import("node:fs").Stats | null> {
+  try {
+    return await fs.stat(absPath);
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") return null;
+    throw error;
+  }
+}
+
 beforeEach(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), "obsidian-mcp-write-"));
 });
@@ -54,13 +63,13 @@ describe("createNote", () => {
     await expect(createNote(v, { path: "Twice.md", content: "second" })).rejects.toThrow(/already exists/);
   });
 
-  // v3.7.14 F2 — renameFile non-overwrite is atomic via link()+unlink().
+  // v3.7.14 F2 — renameFile has kernel-exclusive destination admission via link().
   // Pre-3.7.14 vault.renameFile had the same stat-then-rename race as
   // v3.7.13 M2 fixed for writeNote. POSIX rename(2) silently replaces the
   // destination; between a stat() returning ENOENT and the rename(), a
   // parallel writer could create the destination and our rename would
   // clobber it. Now link()+unlink() — link() fails atomically on EEXIST.
-  it("renameFile overwrite=false is atomic (parallel renames can't both succeed)", async () => {
+  it("renameFile uses exclusive admission and refuses distinct destination entries", async () => {
     const raceRoot = path.join(root, "F2-race-root");
     await fs.mkdir(raceRoot, { recursive: true });
     const v = new Vault(raceRoot, { enableWrite: true });
@@ -77,6 +86,219 @@ describe("createNote", () => {
     expect(succeeded.length).toBe(1);
     expect(rejected.length).toBe(1);
     expect(((rejected[0] as PromiseRejectedResult).reason as Error).message).toMatch(/already exists/);
+
+    // A same-inode hardlink at a lowercase-equivalent spelling is still a
+    // distinct directory entry on a case-sensitive filesystem. POSIX rename
+    // would otherwise report success without removing either name.
+    const hardlinkRoot = path.join(root, "F2-hardlink-root");
+    await fs.mkdir(hardlinkRoot, { recursive: true });
+    const hardlinkSource = path.join(hardlinkRoot, "Hardlink.md");
+    const hardlinkDestination = path.join(hardlinkRoot, "hardlink.md");
+    await fs.writeFile(hardlinkSource, "shared hardlink sentinel");
+    const hardlinkAliasBefore = await statOrNullIfMissing(hardlinkDestination);
+    if (hardlinkAliasBefore === null) {
+      await fs.link(hardlinkSource, hardlinkDestination);
+      const [sourceStat, destinationStat] = await Promise.all([fs.stat(hardlinkSource), fs.stat(hardlinkDestination)]);
+      expect(`${sourceStat.dev}:${sourceStat.ino}`).toBe(`${destinationStat.dev}:${destinationStat.ino}`);
+      expect(await fs.realpath(hardlinkSource)).not.toBe(await fs.realpath(hardlinkDestination));
+
+      const hardlinkVault = new Vault(hardlinkRoot, { enableWrite: true });
+      await hardlinkVault.ensureExists();
+      await expect(hardlinkVault.renameFile("Hardlink.md", "hardlink.md")).rejects.toThrow(/distinct hardlink entry/);
+      await expect(hardlinkVault.renameFile("Hardlink.md", "hardlink.md", { overwrite: true })).rejects.toThrow(
+        /distinct hardlink entry/
+      );
+      await expect(
+        renameNote(hardlinkVault, {
+          dry_run: true,
+          from: "Hardlink.md",
+          overwrite: true,
+          to: "hardlink.md"
+        })
+      ).rejects.toThrow(/distinct hardlink entry/);
+      const unrelatedHardlinkDestination = path.join(hardlinkRoot, "Unrelated-alias.md");
+      await fs.link(hardlinkSource, unrelatedHardlinkDestination);
+      await expect(hardlinkVault.renameFile("Hardlink.md", "Unrelated-alias.md", { overwrite: true })).rejects.toThrow(
+        /distinct hardlink entry/
+      );
+      expect(await fs.readFile(hardlinkSource, "utf8")).toBe("shared hardlink sentinel");
+      expect(await fs.readFile(hardlinkDestination, "utf8")).toBe("shared hardlink sentinel");
+      expect(await fs.readFile(unrelatedHardlinkDestination, "utf8")).toBe("shared hardlink sentinel");
+      expect((await fs.readdir(hardlinkRoot)).filter((name) => name.toLowerCase() === "hardlink.md")).toHaveLength(2);
+
+      // Receipt recheck: a destination that changes after classification must
+      // not inherit the earlier overwrite authority at the mutation boundary.
+      const receiptRoot = path.join(root, "F2-receipt-root");
+      await fs.mkdir(receiptRoot, { recursive: true });
+      const receiptSource = path.join(receiptRoot, "Receipt.md");
+      const receiptDestination = path.join(receiptRoot, "receipt.md");
+      const receiptSourceBytes = "receipt source sentinel";
+      const plannedDestinationBytes = "planned destination sentinel";
+      const replacementDestinationBytes = "replacement destination sentinel with changed size";
+      await fs.writeFile(receiptSource, receiptSourceBytes);
+      await fs.writeFile(receiptDestination, plannedDestinationBytes);
+      const receiptVault = new Vault(receiptRoot, { enableWrite: true });
+      await receiptVault.ensureExists();
+      const expectedDestination = await receiptVault.classifyRenameDestinationPublic(receiptSource, receiptDestination);
+      expect(expectedDestination.kind).toBe("distinct");
+      if (expectedDestination.kind !== "distinct") {
+        throw new Error("receipt fixture must classify one distinct destination entry");
+      }
+
+      // Every receipt component is independently causal. If equality drops
+      // even one field, that mutation inherits overwrite authority and this
+      // otherwise unchanged fixture is destructively renamed.
+      const receiptMutations: ReadonlyArray<{
+        label: string;
+        expected: typeof expectedDestination;
+      }> = [
+        {
+          label: "canonicalRel",
+          expected: { ...expectedDestination, canonicalRel: `changed/${expectedDestination.canonicalRel}` }
+        },
+        {
+          label: "realRel",
+          expected: {
+            ...expectedDestination,
+            receipt: { ...expectedDestination.receipt, realRel: `changed/${expectedDestination.receipt.realRel}` }
+          }
+        },
+        {
+          label: "dev",
+          expected: {
+            ...expectedDestination,
+            receipt: { ...expectedDestination.receipt, dev: expectedDestination.receipt.dev + 1 }
+          }
+        },
+        {
+          label: "ino",
+          expected: {
+            ...expectedDestination,
+            receipt: { ...expectedDestination.receipt, ino: expectedDestination.receipt.ino + 1 }
+          }
+        },
+        {
+          label: "size",
+          expected: {
+            ...expectedDestination,
+            receipt: { ...expectedDestination.receipt, size: expectedDestination.receipt.size + 1 }
+          }
+        },
+        {
+          label: "mtimeMs",
+          expected: {
+            ...expectedDestination,
+            receipt: { ...expectedDestination.receipt, mtimeMs: expectedDestination.receipt.mtimeMs + 1 }
+          }
+        },
+        {
+          label: "ctimeMs",
+          expected: {
+            ...expectedDestination,
+            receipt: { ...expectedDestination.receipt, ctimeMs: expectedDestination.receipt.ctimeMs + 1 }
+          }
+        },
+        {
+          label: "mode",
+          expected: {
+            ...expectedDestination,
+            receipt: { ...expectedDestination.receipt, mode: expectedDestination.receipt.mode ^ 0o100 }
+          }
+        }
+      ];
+      for (const mutation of receiptMutations) {
+        await expect(
+          receiptVault.renameFile("Receipt.md", "receipt.md", {
+            overwrite: true,
+            expectedDestination: mutation.expected
+          }),
+          `receipt field ${mutation.label} must bind overwrite authority`
+        ).rejects.toThrow(/destination changed after planning/);
+      }
+      expect(await fs.readFile(receiptSource, "utf8")).toBe(receiptSourceBytes);
+      expect(await fs.readFile(receiptDestination, "utf8")).toBe(plannedDestinationBytes);
+
+      await fs.writeFile(receiptDestination, replacementDestinationBytes);
+      await expect(
+        receiptVault.renameFile("Receipt.md", "receipt.md", {
+          overwrite: true,
+          expectedDestination
+        })
+      ).rejects.toThrow(/destination changed after planning/);
+      expect(await fs.readFile(receiptSource, "utf8")).toBe(receiptSourceBytes);
+      expect(await fs.readFile(receiptDestination, "utf8")).toBe(replacementDestinationBytes);
+
+      // Orchestrator binding: change the destination only after renameNote has
+      // snapshotted it and rewritten the source self-link. The bound receipt
+      // must refuse the move, and the ordinary-error path must restore source.
+      const boundRoot = path.join(root, "F2-bound-receipt-root");
+      await fs.mkdir(boundRoot, { recursive: true });
+      const boundSourceRel = "Bound.md";
+      const boundDestinationRel = "bound.md";
+      const boundSourceBytes = "bound source sentinel\n\nSelf [[Bound]].\n";
+      const boundPlannedDestinationBytes = "bound planned destination sentinel";
+      const boundReplacementDestinationBytes = "bound replacement destination sentinel with changed size";
+      await fs.writeFile(path.join(boundRoot, boundSourceRel), boundSourceBytes);
+      await fs.writeFile(path.join(boundRoot, boundDestinationRel), boundPlannedDestinationBytes);
+      const boundVault = new Vault(boundRoot, { enableWrite: true });
+      await boundVault.ensureExists();
+      const renameFile = boundVault.renameFile.bind(boundVault);
+      let destinationReplacementCount = 0;
+      boundVault.renameFile = async (...args: Parameters<Vault["renameFile"]>) => {
+        if (destinationReplacementCount === 0 && args[0] === boundSourceRel && args[1] === boundDestinationRel) {
+          destinationReplacementCount++;
+          await fs.writeFile(path.join(boundRoot, boundDestinationRel), boundReplacementDestinationBytes);
+        }
+        return renameFile(...args);
+      };
+      await expect(
+        renameNote(boundVault, {
+          from: boundSourceRel,
+          overwrite: true,
+          to: boundDestinationRel
+        })
+      ).rejects.toThrow(/destination changed after planning/);
+      expect(destinationReplacementCount).toBe(1);
+      expect(await fs.readFile(path.join(boundRoot, boundSourceRel), "utf8")).toBe(boundSourceBytes);
+      expect(await fs.readFile(path.join(boundRoot, boundDestinationRel), "utf8")).toBe(
+        boundReplacementDestinationBytes
+      );
+
+      // Final check/use boundary: even overwrite=true must use the exclusive
+      // move when planning and the final classification both saw `missing`,
+      // because there are no rollback bytes for a destination born afterward.
+      const missingRoot = path.join(root, "F2-missing-receipt-root");
+      await fs.mkdir(missingRoot, { recursive: true });
+      const missingSourceRel = "MissingSource.md";
+      const missingDestinationRel = "MissingDestination.md";
+      const missingSourceBytes = "missing source sentinel\n\nSelf [[MissingSource]].\n";
+      const racedDestinationBytes = "destination created at the exclusive syscall boundary";
+      await fs.writeFile(path.join(missingRoot, missingSourceRel), missingSourceBytes);
+      const missingVault = new Vault(missingRoot, { enableWrite: true });
+      await missingVault.ensureExists();
+      const missingInternals = missingVault as unknown as {
+        linkSafe(source: string, destination: string): Promise<void>;
+      };
+      const linkSafe = missingInternals.linkSafe.bind(missingVault);
+      let racedDestinationCount = 0;
+      missingInternals.linkSafe = async (source: string, destination: string): Promise<void> => {
+        racedDestinationCount++;
+        await fs.writeFile(destination, racedDestinationBytes);
+        await linkSafe(source, destination);
+      };
+      await expect(
+        renameNote(missingVault, {
+          from: missingSourceRel,
+          overwrite: true,
+          to: missingDestinationRel
+        })
+      ).rejects.toThrow(/destination changed after planning/);
+      expect(racedDestinationCount).toBe(1);
+      expect(await fs.readFile(path.join(missingRoot, missingSourceRel), "utf8")).toBe(missingSourceBytes);
+      expect(await fs.readFile(path.join(missingRoot, missingDestinationRel), "utf8")).toBe(racedDestinationBytes);
+    } else if (process.platform === "linux" && process.env.CI) {
+      throw new Error("mandatory Linux case-sensitive filesystem precondition failed for Hardlink.md/hardlink.md");
+    }
     // Cleanup
     await fs.rm(raceRoot, { recursive: true, force: true });
   });
@@ -614,27 +836,36 @@ describe("renameNote (v1.1)", () => {
     expect(await fs.readFile(path.join(root, "A.md"), "utf8")).toBe("a");
     expect(await fs.readFile(path.join(root, "B.md"), "utf8")).toBe("b");
 
-    // NEGATIVE control for the case-only-rename exception: on a case-SENSITIVE
-    // filesystem these spellings are distinct files, so inode identity — not
-    // lowercase equality alone — must keep the existing-destination guard armed.
-    const upperCasePath = path.join(root, "Case.md");
-    const lowerCasePath = path.join(root, "case.md");
-    await fs.writeFile(upperCasePath, "upper-case sentinel");
-    const lowerCaseAliasBefore = await fs.stat(lowerCasePath).catch((error: unknown) => {
-      if (error instanceof Error && "code" in error && error.code === "ENOENT") return null;
-      throw error;
-    });
+    // Case-sensitive negative control: lowercase-equivalent nested paths are
+    // distinct entries. The path-qualified self-link makes source resolution
+    // deterministic, so a late EEXIST cannot hide a pre-rename source rewrite.
+    const upperCaseDir = path.join(root, "CaseScope");
+    const lowerCaseDir = path.join(root, "casescope");
+    await fs.mkdir(upperCaseDir, { recursive: true });
+    const lowerCaseAliasBefore = await statOrNullIfMissing(lowerCaseDir);
     if (lowerCaseAliasBefore === null) {
-      expect(
-        lowerCaseAliasBefore,
-        "lowercase spelling must not resolve before creating the distinct sibling"
-      ).toBeNull();
-      await fs.writeFile(lowerCasePath, "lower-case sentinel");
-      await expect(renameNote(v, { from: "Case.md", to: "case.md" })).rejects.toThrow(/already exists/);
-      expect(await fs.readFile(upperCasePath, "utf8")).toBe("upper-case sentinel");
-      expect(await fs.readFile(lowerCasePath, "utf8")).toBe("lower-case sentinel");
+      await fs.mkdir(lowerCaseDir, { recursive: true });
+      const sourceRel = "CaseScope/Note.md";
+      const destinationRel = "casescope/note.md";
+      const sourcePath = path.join(root, sourceRel);
+      const destinationPath = path.join(root, destinationRel);
+      const sourceBytes = "# Case source\n\nsource-case sentinel\n\nSelf [[CaseScope/Note]].\n";
+      const destinationBytes = "# Case destination\n\ndestination-case sentinel\n";
+      await fs.writeFile(sourcePath, sourceBytes);
+      await fs.writeFile(destinationPath, destinationBytes);
+      const expectCaseFixtureUnchanged = async (): Promise<void> => {
+        expect(await fs.readFile(sourcePath, "utf8")).toBe(sourceBytes);
+        expect(await fs.readFile(destinationPath, "utf8")).toBe(destinationBytes);
+      };
+
+      await expect(renameNote(v, { from: sourceRel, to: destinationRel })).rejects.toThrow(/already exists/);
+      await expectCaseFixtureUnchanged();
+      await expect(renameNote(v, { from: sourceRel, to: destinationRel, dry_run: true })).rejects.toThrow(
+        /already exists/
+      );
+      await expectCaseFixtureUnchanged();
     } else if (process.platform === "linux" && process.env.CI) {
-      throw new Error("mandatory Linux case-sensitive filesystem precondition failed for Case.md/case.md");
+      throw new Error("mandatory Linux case-sensitive filesystem precondition failed for CaseScope/casescope");
     }
   });
 

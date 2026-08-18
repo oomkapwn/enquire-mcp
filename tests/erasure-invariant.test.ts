@@ -46,7 +46,7 @@ import {
   sensitiveArtifactFinalBasename
 } from "../src/sensitive-artifact.js";
 import { Vault } from "../src/vault.js";
-import { replaceExactly } from "./helpers/exact-source-mutation.js";
+import { replaceAllExactly, replaceExactly } from "./helpers/exact-source-mutation.js";
 
 const repoRoot = path.resolve(__dirname, "..");
 
@@ -384,6 +384,7 @@ const SENSITIVE_PUBLISHER_INVENTORY: readonly SensitivePublisherInventoryEntry[]
         needles: [
           "private async clearDiskCacheOnce(file: string, invocationEpoch: number)",
           "preflightSensitiveArtifactTemps(file)",
+          // biome-ignore lint/suspicious/noTemplateCurlyInString: literal template-source needle
           "`${file}.tmp`",
           "removeSensitiveArtifactTemps(file)",
           "this.cacheEpoch === invocationEpoch"
@@ -560,10 +561,10 @@ function sqliteNativeOpenProblems(overrides: ReadonlyMap<string, string> = new M
     const firstPreflight = body.indexOf(preflightNeedle);
     const loader = body.indexOf(route.loaderNeedle);
     const lastPreflight = body.lastIndexOf(preflightNeedle);
-    const constructor = body.indexOf(route.constructorNeedle);
+    const constructorOffset = body.indexOf(route.constructorNeedle);
     if (preflightCount !== 2) problems.push(`${route.id}: expected two family preflights, found ${preflightCount}`);
     if (constructorCount !== 1) problems.push(`${route.id}: expected one disk constructor, found ${constructorCount}`);
-    if (!(firstPreflight >= 0 && firstPreflight < loader && loader < lastPreflight && lastPreflight < constructor)) {
+    if (!(firstPreflight >= 0 && firstPreflight < loader && loader < lastPreflight && lastPreflight < constructorOffset)) {
       problems.push(`${route.id}: preflight/load/preflight/open order is not exact`);
     }
 
@@ -618,11 +619,11 @@ function sqliteNativeOpenProblems(overrides: ReadonlyMap<string, string> = new M
     const sourceFile = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
     const visit = (node: ts.Node): void => {
       if (ts.isNewExpression(node)) {
-        const constructor = node.expression.getText(sourceFile);
+        const constructorText = node.expression.getText(sourceFile);
         const firstArgument = node.arguments?.[0]?.getText(sourceFile);
-        if (constructor === "ctor" && firstArgument === '":memory:"') memoryProbes += 1;
+        if (constructorText === "ctor" && firstArgument === '":memory:"') memoryProbes += 1;
         if (
-          (constructor === "Ctor" || constructor === "Database") &&
+          (constructorText === "Ctor" || constructorText === "Database") &&
           (firstArgument === "file" || firstArgument === "this.file")
         ) {
           diskConstructors += 1;
@@ -786,7 +787,7 @@ describe("erasure-completeness invariant (rc.36, P-2 class)", () => {
 
   beforeEach(async () => {
     root = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-erasure-vault-"));
-    cacheDir = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-erasure-cache-"));
+    cacheDir = await fs.mkdtemp(path.join(process.platform === "win32" ? os.tmpdir() : "/tmp", "enq-e-"));
     cacheFile = path.join(cacheDir, "cache.json");
     await fs.writeFile(path.join(root, "Secret.md"), "---\ntags: [secret]\n---\n\nSENSITIVE_VAULT_BODY_XYZ\n");
   });
@@ -1735,8 +1736,16 @@ describe("erasure-completeness invariant (rc.36, P-2 class)", () => {
       "inventory rejects $id when its $role route $file#$member is removed",
       ({ id, role, file, member, needle }) => {
         const source = readFileSync(path.join(repoRoot, file), "utf8");
-        const replacement = needle.replace(/[A-Za-z_$][A-Za-z0-9_$]*/, (name) => `disabled_${name}`);
-        const mutated = replaceExactly(source, needle, replacement);
+        const bodies = runtimeMemberBodies(source, file, member);
+        expect(bodies).toHaveLength(1);
+        const body = bodies[0] ?? "";
+        const replacement = needle.replace(
+          /[A-Za-z_$][A-Za-z0-9_$]*(?=[^A-Za-z0-9_$]*$)/,
+          "__erasure_mutant__"
+        );
+        const mutantBody = replaceAllExactly(body, needle, replacement, needle === "`${file}.tmp`" ? 2 : 1);
+        expect(mutantBody).not.toContain(needle);
+        const mutated = replaceExactly(source, body, mutantBody);
         expect(publisherInventoryProblems(new Map([[file, mutated]]))).toContain(
           `${id}:${role}:${file}#${member} missing ${needle}`
         );

@@ -43,10 +43,11 @@ describe("watcher activation guard", () => {
   );
 
   it.each(["preflight", "clear"])(
-    "%s refuses and preserves a recovery child whose .active name has a trailing newline",
+    "%s refuses and preserves a recovery child whose .active name has a trailing line terminator",
     async (route) => {
       const token = "b".repeat(64);
-      const malformedChild = path.join(guardPath, `${token}.active\n`);
+      const terminator = process.platform === "win32" ? "\u2028" : "\n";
+      const malformedChild = path.join(guardPath, `${token}.active${terminator}`);
       const payload = `${JSON.stringify({ version: 1, token })}\n`;
       await fs.mkdir(guardPath, { mode: 0o700 });
       await fs.writeFile(malformedChild, payload, { mode: 0o600 });
@@ -388,7 +389,7 @@ describe("watcher activation guard", () => {
     // the interlock, so the next startup remains quarantined.
     await armWatcherActivationGuard(embedDbFile);
     await fs.mkdir(embedDbFile);
-    await expect(db.clearOnDisk()).rejects.toThrow(/Unable to remove embedding-index artifact/i);
+    await expect(db.clearOnDisk()).rejects.toThrow(/Refusing to clear an unsafe embedding-index artifact/i);
     await expect(assertWatcherActivationGuardClear(embedDbFile)).rejects.toThrow(/guard exists/i);
     expect((await fs.lstat(embedDbFile)).isDirectory()).toBe(true);
     expect((await fs.lstat(guardPath)).isDirectory()).toBe(true);

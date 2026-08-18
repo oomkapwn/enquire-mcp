@@ -610,9 +610,7 @@ describe("HNSW persistence (v2.16.0)", () => {
       const index = await buildHnsw([{ label: 601, vector }], { dim: 4, maxElements: 1, seed: 601 });
       const realRename = fs.rename.bind(fs);
       const renameTargets: string[] = [];
-      const byteLengthSpy = vi
-        .spyOn(Buffer, "byteLength")
-        .mockImplementationOnce(() => 256 * 1024 * 1024 + 1);
+      const byteLengthSpy = vi.spyOn(Buffer, "byteLength").mockImplementationOnce(() => 256 * 1024 * 1024 + 1);
       const renameSpy = vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
         renameTargets.push(String(to));
         await realRename(from, to);
@@ -852,34 +850,29 @@ describe("HNSW persistence (v2.16.0)", () => {
   it.each(["resolved false", "threw"] as const)("returns null when native readIndex %s", async (outcome) => {
     const persistFile = path.join(dir, `read-index-${outcome.replace(" ", "-")}.hnsw`);
     await persistMinimalGeneration(persistFile, "native-read-signature");
-    const imported = (await import("hnswlib-node")) as unknown as {
-      default?: unknown;
-      HierarchicalNSW?: unknown;
-    };
-    const namespace = [imported.default, imported].find(
-      (candidate) =>
-        typeof candidate === "object" &&
-        candidate !== null &&
-        typeof (candidate as { HierarchicalNSW?: unknown }).HierarchicalNSW === "function"
-    );
-    const nativeConstructor = (namespace as { HierarchicalNSW?: unknown } | undefined)?.HierarchicalNSW;
-    if (typeof nativeConstructor !== "function") throw new Error("test setup: missing native HNSW constructor");
-    const prototype = (
-      nativeConstructor as unknown as {
-        prototype: { readIndex(filename: string, allowReplaceDeleted?: boolean): Promise<boolean> };
-      }
-    ).prototype;
-    const originalReadIndex = prototype.readIndex;
     let readCalls = 0;
-    prototype.readIndex = async () => {
-      readCalls += 1;
-      if (outcome === "threw") throw new Error("synthetic native read failure");
-      return false;
-    };
+    vi.resetModules();
+    vi.doMock("../src/optional-dep.js", () => ({
+      importOptionalDependency: async (specifier: string) => {
+        if (specifier !== "hnswlib-node") throw new Error(`unexpected optional dependency ${specifier}`);
+        return {
+          HierarchicalNSW: class {
+            async readIndex(): Promise<boolean> {
+              readCalls += 1;
+              if (outcome === "threw") throw new Error("synthetic native read failure");
+              return false;
+            }
+          }
+        };
+      },
+      optionalDepDetail: () => "error code: synthetic"
+    }));
     try {
-      await expect(loadHnswFromDisk(persistFile, "native-read-signature")).resolves.toBeNull();
+      const isolated = await import("../src/hnsw.js");
+      await expect(isolated.loadHnswFromDisk(persistFile, "native-read-signature")).resolves.toBeNull();
     } finally {
-      prototype.readIndex = originalReadIndex;
+      vi.doUnmock("../src/optional-dep.js");
+      vi.resetModules();
     }
     expect(readCalls).toBe(1);
   });

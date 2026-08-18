@@ -20,8 +20,8 @@ import { optionalDepDetail } from "./optional-dep.js";
 import { assertFtsIndexFilePath } from "./persistence-path.js";
 import { FTS_SCHEMA_VERSION } from "./schema-contract.js";
 import {
-  preflightSqliteArtifactFamily,
   preflightSensitiveArtifactTempEntry,
+  preflightSqliteArtifactFamily,
   sameCanonicalDirectoryEntry,
   sensitiveArtifactFinalBasename
 } from "./sensitive-artifact.js";

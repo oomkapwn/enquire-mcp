@@ -247,21 +247,21 @@ describe("runDoctor — tiers and readiness", () => {
   it.each([
     {
       family: "custom embed path",
-      option: { embedFile: path.join(root, "unadmitted-embed-index") },
+      options: () => ({ embedFile: path.join(root, "unadmitted-embed-index") }),
       error: "Embedding index file must end exactly in '.embed.db'"
     },
     {
       family: "custom FTS path",
-      option: { indexFile: path.join(root, "unadmitted-fts-index") },
+      options: () => ({ indexFile: path.join(root, "unadmitted-fts-index") }),
       error: "FTS index file must end exactly in '.fts5.db'"
     }
-  ])("rejects an invalid $family before dependency or Vault work", async ({ option, error }) => {
+  ])("rejects an invalid $family before dependency or Vault work", async ({ options, error }) => {
     const dependencyProbe = vi.fn(async () => true);
     await expect(
       runDoctor({
         vault: path.join(root, "unread-vault"),
         tier: "hybrid",
-        ...option,
+        ...options(),
         dependencyProbe
       })
     ).rejects.toThrowError(new TypeError(error));

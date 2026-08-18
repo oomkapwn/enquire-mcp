@@ -256,16 +256,12 @@ describe("FtsIndex — exact namespace admission and bounded erasure", () => {
       route: "diagnostic peek",
       invoke: async (file: string) => peekFtsMetaSafe(file, "/v")
     }
-  ].flatMap(({ route, invoke }) =>
-    invalidNames.map(([shape, basename]) => ({ route, invoke, shape, basename }))
-  );
+  ].flatMap(({ route, invoke }) => invalidNames.map(([shape, basename]) => ({ route, invoke, shape, basename })));
 
   it.each(invalidAdmissionCases)("$route rejects $shape before filesystem work", async ({ invoke, basename }) => {
     const absentParent = path.join(dbDir, `invalid-${Buffer.from(basename).toString("hex")}`);
     const candidate = path.join(absentParent, basename);
-    await expect(invoke(candidate)).rejects.toThrow(
-      new TypeError("FTS index file must end exactly in '.fts5.db'")
-    );
+    await expect(invoke(candidate)).rejects.toThrow(new TypeError("FTS index file must end exactly in '.fts5.db'"));
     await expect(fs.lstat(absentParent)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
@@ -2179,8 +2175,7 @@ describe("FtsIndex — PDF chunks (v2.8.0)", () => {
       ...(version >= 4 ? ["kind UNINDEXED"] : [])
     ];
     for (let version = 1; version < FTS_SCHEMA_VERSION; version++) {
-      const legacyFile =
-        version === FTS_SCHEMA_VERSION - 1 ? dbFile : path.join(dbDir, `legacy-v${version}.fts5.db`);
+      const legacyFile = version === FTS_SCHEMA_VERSION - 1 ? dbFile : path.join(dbDir, `legacy-v${version}.fts5.db`);
       const legacy = new Database(legacyFile);
       legacy.exec(`
         CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);

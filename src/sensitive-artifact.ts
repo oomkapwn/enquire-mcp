@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
-import { constants as fsConstants, promises as fs } from "node:fs";
+import { promises as fs, constants as fsConstants } from "node:fs";
 import * as path from "node:path";
 
 const TOKEN_BYTES = 24;
@@ -329,10 +329,7 @@ async function inspectSensitiveArtifactTempEntry(entryPath: string): Promise<Ins
   if (child) {
     const childPath = path.join(entryPath, child);
     const expectedChildPath = path.join(entryPath, STAGED_ARTIFACT_BASENAME);
-    if (
-      child !== STAGED_ARTIFACT_BASENAME &&
-      !(await sameCanonicalDirectoryEntry(childPath, expectedChildPath))
-    ) {
+    if (child !== STAGED_ARTIFACT_BASENAME && !(await sameCanonicalDirectoryEntry(childPath, expectedChildPath))) {
       throw new Error("Refusing to erase a sensitive-artifact stage with an ambiguous child entry");
     }
     const childStat = await fs.lstat(childPath);
@@ -492,9 +489,7 @@ async function openRegularNoFollow(file: string): Promise<import("node:fs/promis
   if (before.isSymbolicLink() || !before.isFile()) {
     throw new Error("Refusing to open a non-regular sensitive artifact");
   }
-  const flags =
-    fsConstants.O_RDONLY |
-    (process.platform === "win32" ? 0 : fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK);
+  const flags = fsConstants.O_RDONLY | (process.platform === "win32" ? 0 : fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK);
   const handle = await fs.open(file, flags);
   try {
     const descriptor = await handle.stat({ bigint: true });
@@ -502,10 +497,7 @@ async function openRegularNoFollow(file: string): Promise<import("node:fs/promis
     // identity surfaces for the same file. The caller's ownership proof is
     // therefore compared fstat-to-fstat; POSIX additionally binds the lstat
     // leaf to the descriptor opened with O_NOFOLLOW.
-    if (
-      !descriptor.isFile() ||
-      (process.platform !== "win32" && !sameFileIdentity(before, descriptor))
-    ) {
+    if (!descriptor.isFile() || (process.platform !== "win32" && !sameFileIdentity(before, descriptor))) {
       throw new Error("Sensitive artifact changed while being opened");
     }
     return handle;

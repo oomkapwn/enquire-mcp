@@ -489,9 +489,7 @@ export async function main(invocation?: ConfigInput["invocation"]): Promise<void
 
   program
     .command("clear-index")
-    .description(
-      "Delete the FTS5 search-index files (.fts5.db + WAL/SHM/rollback-journal sidecars) for a given vault"
-    )
+    .description("Delete the FTS5 search-index files (.fts5.db + WAL/SHM/rollback-journal sidecars) for a given vault")
     .requiredOption("--vault <path>", "Vault whose index to delete")
     .option("--index-file <path>", INDEX_FILE_HELP)
     .action(async (opts: { vault: string; indexFile?: string }) => {

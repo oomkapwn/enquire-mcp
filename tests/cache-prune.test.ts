@@ -101,9 +101,7 @@ describe("planCachePrune (rc.14 — Issue 8 cache GC)", () => {
     if (accepted) {
       expect(planCachePrune([`${OTHER}.json`, `${KEEP}.json`], keepHash)).toEqual([`${OTHER}.json`]);
     } else {
-      expect(() => planCachePrune([`${OTHER}.json`], keepHash)).toThrow(
-        /exactly 12 lowercase hexadecimal characters/
-      );
+      expect(() => planCachePrune([`${OTHER}.json`], keepHash)).toThrow(/exactly 12 lowercase hexadecimal characters/);
     }
   });
 

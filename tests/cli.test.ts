@@ -529,15 +529,11 @@ describe("CLI subcommands E2E (against built dist/)", () => {
     if (!distExists()) return ctx.skip();
     const missingVault = path.join(tmpdir, `doctor-empty-${flag.slice(2)}-vault`);
     const cache = path.join(tmpdir, `doctor-empty-${flag.slice(2)}-cache`);
-    const res = spawnSync(
-      process.execPath,
-      [distEntry, "doctor", "--vault", missingVault, flag, "", "--json"],
-      {
-        encoding: "utf8",
-        timeout: 15000,
-        env: { ...process.env, XDG_CACHE_HOME: cache }
-      }
-    );
+    const res = spawnSync(process.execPath, [distEntry, "doctor", "--vault", missingVault, flag, "", "--json"], {
+      encoding: "utf8",
+      timeout: 15000,
+      env: { ...process.env, XDG_CACHE_HOME: cache }
+    });
     const output = `${res.stdout ?? ""}${res.stderr ?? ""}`;
     expect(res.status).not.toBe(0);
     expect(output).toMatch(expected);

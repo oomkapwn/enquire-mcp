@@ -18,14 +18,7 @@ function assertPortableWindowsPersistencePath(file: string, label: string): void
   }
   const normalized = file.replace(/\//gu, "\\");
   const withoutDrive = driveColon === 1 ? normalized.slice(2) : normalized;
-  const rootPrefixLength =
-    driveColon === 1
-      ? 1
-      : withoutDrive.startsWith("\\\\")
-        ? 2
-        : withoutDrive.startsWith("\\")
-          ? 1
-          : 0;
+  const rootPrefixLength = driveColon === 1 ? 1 : withoutDrive.startsWith("\\\\") ? 2 : withoutDrive.startsWith("\\") ? 1 : 0;
   const components = withoutDrive.slice(rootPrefixLength).split("\\");
   for (const component of components) {
     if (component === "." || component === "..") continue;

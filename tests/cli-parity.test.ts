@@ -108,17 +108,13 @@ describe("CLI parity — serve and serve-http accept the same retrieval flags (v
     for (const flag of REQUIRED_RETRIEVAL_FLAGS) {
       expect(helperFlags.has(flag), `addAdvancedRetrievalOptions missing ${flag}`).toBe(true);
     }
-    const noPersistHelp = /\.option\(\s*"--no-hnsw-persist"\s*,\s*([A-Z][A-Z0-9_]*|"[^"]*")\s*\)/.exec(
-      helperBody
-    );
+    const noPersistHelp = /\.option\(\s*"--no-hnsw-persist"\s*,\s*([A-Z][A-Z0-9_]*|"[^"]*")\s*\)/.exec(helperBody);
     expect(noPersistHelp?.[1], "shared HNSW persistence help must use its cli-help constant").toBe(
       "NO_HNSW_PERSIST_HELP"
     );
     const inlineHelpMutation = helperBody.replace("NO_HNSW_PERSIST_HELP", '"inline transport-shared help"');
     expect(
-      /\.option\(\s*"--no-hnsw-persist"\s*,\s*([A-Z][A-Z0-9_]*|"[^"]*")\s*\)/.exec(
-        inlineHelpMutation
-      )?.[1]
+      /\.option\(\s*"--no-hnsw-persist"\s*,\s*([A-Z][A-Z0-9_]*|"[^"]*")\s*\)/.exec(inlineHelpMutation)?.[1]
     ).not.toBe("NO_HNSW_PERSIST_HELP");
     // Sanity: helper should not have stray extra flags beyond the documented set.
     // (Catches accidental scope creep — if helper grows beyond retrieval flags,

@@ -430,10 +430,7 @@ function ftsNamespaceAdmissionViolations(sources: { fts: string; doctor: string 
   const routes = [
     {
       label: "FtsIndex constructor",
-      body: after(
-        sources.fts,
-        "  constructor(opts: { file: string; vaultRoot: string; tokenize?: TokenizeMode })"
-      ),
+      body: after(sources.fts, "  constructor(opts: { file: string; vaultRoot: string; tokenize?: TokenizeMode })"),
       admission: "assertFtsIndexFilePath(opts.file);",
       boundaries: ["this.file = opts.file;"]
     },
@@ -827,10 +824,7 @@ describe("enforcement-guarantee → code-guard invariant (rc.3, overclaim #15/#1
       },
       {
         ...writerSources,
-        fts: fts.replace(
-          "await fs.mkdir(parentDir",
-          "const parentExisted = true;\n      await fs.mkdir(parentDir"
-        )
+        fts: fts.replace("await fs.mkdir(parentDir", "const parentExisted = true;\n      await fs.mkdir(parentDir")
       },
       {
         ...writerSources,

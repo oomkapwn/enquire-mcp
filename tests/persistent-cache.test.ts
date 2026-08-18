@@ -201,11 +201,7 @@ describe("persistent cache", () => {
 
     expect(finalRenameCount).toBe(2);
     const data = JSON.parse(await fs.readFile(cacheFile, "utf8"));
-    expect(data.entries.map((e: { relPath: string }) => e.relPath).sort()).toEqual([
-      "Hello.md",
-      "Late.md",
-      "World.md"
-    ]);
+    expect(data.entries.map((e: { relPath: string }) => e.relPath).sort()).toEqual(["Hello.md", "Late.md", "World.md"]);
   });
 
   it.each(["retarget while the snapshot is blocked"])(
@@ -332,60 +328,57 @@ describe("persistent cache", () => {
     }
   );
 
-  it.each(["cached LRU hit during clear preflight"])(
-    "clears the prior memory generation after a %s",
-    async () => {
-      const v = new Vault(root, { persistentCache: true, cacheFile });
-      await v.ensureExists();
-      const hello = await fs.realpath(path.join(root, "Hello.md"));
-      await v.readNote(hello);
-      await v.saveDiskCache();
-      const internals = v as unknown as { cache: Map<string, unknown>; cacheDirty: boolean };
-      expect(internals.cache.size).toBe(1);
-      expect(internals.cacheDirty).toBe(false);
+  it.each(["cached LRU hit during clear preflight"])("clears the prior memory generation after a %s", async () => {
+    const v = new Vault(root, { persistentCache: true, cacheFile });
+    await v.ensureExists();
+    const hello = await fs.realpath(path.join(root, "Hello.md"));
+    await v.readNote(hello);
+    await v.saveDiskCache();
+    const internals = v as unknown as { cache: Map<string, unknown>; cacheDirty: boolean };
+    expect(internals.cache.size).toBe(1);
+    expect(internals.cacheDirty).toBe(false);
 
-      const realLstat = fs.lstat.bind(fs);
-      let releasePreflight = (): void => {};
-      let observePreflight = (): void => {};
-      const preflightGate = new Promise<void>((resolve) => {
-        releasePreflight = resolve;
-      });
-      const preflightObserved = new Promise<void>((resolve) => {
-        observePreflight = resolve;
-      });
-      let blocked = false;
-      const lstatSpy = vi.spyOn(fs, "lstat").mockImplementation(async (candidate) => {
-        if (!blocked && String(candidate) === cacheFile) {
-          blocked = true;
-          observePreflight();
-          await preflightGate;
-        }
-        return realLstat(candidate);
-      });
-      let removed = false;
-      try {
-        const clear = v.clearDiskCache();
-        await preflightObserved;
-        await v.readNote(hello);
-        releasePreflight();
-        removed = await clear;
-      } finally {
-        releasePreflight();
-        lstatSpy.mockRestore();
+    const realLstat = fs.lstat.bind(fs);
+    let releasePreflight = (): void => {};
+    let observePreflight = (): void => {};
+    const preflightGate = new Promise<void>((resolve) => {
+      releasePreflight = resolve;
+    });
+    const preflightObserved = new Promise<void>((resolve) => {
+      observePreflight = resolve;
+    });
+    let blocked = false;
+    const lstatSpy = vi.spyOn(fs, "lstat").mockImplementation(async (candidate) => {
+      if (!blocked && String(candidate) === cacheFile) {
+        blocked = true;
+        observePreflight();
+        await preflightGate;
       }
-
-      expect(removed).toBe(true);
-      expect(internals.cache.size).toBe(0);
-      expect(internals.cacheDirty).toBe(false);
-      await expect(fs.lstat(cacheFile)).rejects.toMatchObject({ code: "ENOENT" });
-
+      return realLstat(candidate);
+    });
+    let removed = false;
+    try {
+      const clear = v.clearDiskCache();
+      await preflightObserved;
       await v.readNote(hello);
-      expect(internals.cacheDirty).toBe(true);
-      await v.saveDiskCache();
-      const republished = JSON.parse(await fs.readFile(cacheFile, "utf8"));
-      expect(republished.entries.map((entry: { relPath: string }) => entry.relPath)).toEqual(["Hello.md"]);
+      releasePreflight();
+      removed = await clear;
+    } finally {
+      releasePreflight();
+      lstatSpy.mockRestore();
     }
-  );
+
+    expect(removed).toBe(true);
+    expect(internals.cache.size).toBe(0);
+    expect(internals.cacheDirty).toBe(false);
+    await expect(fs.lstat(cacheFile)).rejects.toMatchObject({ code: "ENOENT" });
+
+    await v.readNote(hello);
+    expect(internals.cacheDirty).toBe(true);
+    await v.saveDiskCache();
+    const republished = JSON.parse(await fs.readFile(cacheFile, "utf8"));
+    expect(republished.entries.map((entry: { relPath: string }) => entry.relPath)).toEqual(["Hello.md"]);
+  });
 
   it.each(["same exact path"])("does not create a cache generation when the setter receives the %s", async () => {
     const v = new Vault(root, { persistentCache: true, cacheFile });

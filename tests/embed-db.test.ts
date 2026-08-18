@@ -572,7 +572,7 @@ describe("EmbedDb", () => {
       }
       expect(symlinkError).toBeInstanceOf(Error);
       const symlinkMessage = symlinkError instanceof Error ? symlinkError.message : String(symlinkError);
-      expect(symlinkMessage).toBe("Embedding index could not be inspected");
+      expect(symlinkMessage).toBe("Embedding index artifact family could not be admitted");
       expect(symlinkMessage).not.toContain(danglingLink);
       expect(symlinkMessage).not.toContain(danglingTarget);
       await expect(fs.stat(danglingTarget)).rejects.toMatchObject({ code: "ENOENT" });
@@ -3132,7 +3132,18 @@ describe("peekEmbedDbMeta is fail-soft after exact namespace admission (v3.10.0-
       expect(await discoverEmbedDbConfig(d, "/v")).toEqual({ kind: "refused" });
       expect(await discoverEmbedDbConfigCached(d, "/v")).toEqual({ kind: "refused" });
       const directoryDb = new EmbedDb({ file: d, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
-      await expect(directoryDb.open()).rejects.toThrow("Embedding index could not be inspected");
+      let openError: unknown;
+      try {
+        await directoryDb.open();
+      } catch (error) {
+        openError = error;
+      } finally {
+        directoryDb.close();
+      }
+      expect(openError).toBeInstanceOf(Error);
+      const openMessage = openError instanceof Error ? openError.message : String(openError);
+      expect(openMessage).toBe("Embedding index artifact family could not be admitted");
+      expect(openMessage).not.toContain(d);
       expect((await fs.stat(d)).mode & 0o777).toBe(modeBefore);
       await expectPathFreeRecoveryOwnershipRefusal(d, "/v");
     } finally {

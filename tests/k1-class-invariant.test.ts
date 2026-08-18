@@ -1955,9 +1955,7 @@ function freshParentPreparationProblems(ftsSource: string, embedSource: string):
     );
     const openMethod = exactClassMethod(sourceFile, entry.className, "open");
     const openStatements = openMethod?.body?.statements ?? [];
-    const preflights = openMethod?.body
-      ? statementsWithExactText(openMethod.body, sourceFile, familyPreflight)
-      : [];
+    const preflights = openMethod?.body ? statementsWithExactText(openMethod.body, sourceFile, familyPreflight) : [];
     const initialPreflight = preflights[0];
     const initialTry = initialPreflight ? directTryStatement(initialPreflight) : null;
     const loadStatements = openStatements.filter(

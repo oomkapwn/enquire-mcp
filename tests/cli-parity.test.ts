@@ -108,6 +108,18 @@ describe("CLI parity — serve and serve-http accept the same retrieval flags (v
     for (const flag of REQUIRED_RETRIEVAL_FLAGS) {
       expect(helperFlags.has(flag), `addAdvancedRetrievalOptions missing ${flag}`).toBe(true);
     }
+    const noPersistHelp = /\.option\(\s*"--no-hnsw-persist"\s*,\s*([A-Z][A-Z0-9_]*|"[^"]*")\s*\)/.exec(
+      helperBody
+    );
+    expect(noPersistHelp?.[1], "shared HNSW persistence help must use its cli-help constant").toBe(
+      "NO_HNSW_PERSIST_HELP"
+    );
+    const inlineHelpMutation = helperBody.replace("NO_HNSW_PERSIST_HELP", '"inline transport-shared help"');
+    expect(
+      /\.option\(\s*"--no-hnsw-persist"\s*,\s*([A-Z][A-Z0-9_]*|"[^"]*")\s*\)/.exec(
+        inlineHelpMutation
+      )?.[1]
+    ).not.toBe("NO_HNSW_PERSIST_HELP");
     // Sanity: helper should not have stray extra flags beyond the documented set.
     // (Catches accidental scope creep — if helper grows beyond retrieval flags,
     // explicit rename / refactor is required.)
@@ -374,5 +386,39 @@ describe("CLI parity — serve and serve-http both forward the NORMALIZED quanti
     // thrown away (not `const x =` / `= ` / `return `). That is exactly what forwarded the raw string.
     const discarded = src.split("\n").filter((l) => /^\s*parseQuantizationMode\(/.test(l));
     expect(discarded, `discarded parseQuantizationMode() call(s): ${discarded.join(" | ")}`).toEqual([]);
+  });
+});
+
+describe("CLI persistence-path help is exact and shared", () => {
+  it.each([
+    {
+      flag: "--cache-file",
+      constant: "CACHE_FILE_HELP",
+      registrations: 3,
+      claim: "must end exactly in the case-sensitive .json suffix"
+    },
+    {
+      flag: "--index-file",
+      constant: "INDEX_FILE_HELP",
+      registrations: 6,
+      claim: "must end exactly in the case-sensitive .fts5.db suffix"
+    },
+    {
+      flag: "--embed-file",
+      constant: "EMBED_FILE_HELP",
+      registrations: 3,
+      claim: "must end exactly in the case-sensitive .embed.db suffix"
+    }
+  ] as const)("$flag uses $constant at every registration", async ({ flag, constant, registrations, claim }) => {
+    const [cliSrc, helpSrc] = await Promise.all([
+      readCli(),
+      fs.readFile(path.join(repoRoot, "src", "cli-help.ts"), "utf8")
+    ]);
+    const route = `.option("${flag} <path>", ${constant})`;
+    expect(cliSrc.split(route).length - 1).toBe(registrations);
+    expect(helpSrc).toContain(claim);
+
+    const mutant = cliSrc.replace(route, `.option("${flag} <path>", "inline stale help")`);
+    expect(mutant.split(route).length - 1).toBe(registrations - 1);
   });
 });

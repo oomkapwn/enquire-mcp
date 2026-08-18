@@ -1392,11 +1392,15 @@ describe("VaultWatcher HNSW disk persistence (v3.9.0-rc.6)", () => {
 
   it("flushHnswToDisk skips a clean index and every generation with an uncertain live graph", async () => {
     const { w, embedDb, index, persistFile, v, fts } = await setup(true);
+    const { isHnswGenerationBasename } = await import("../src/hnsw.js");
+    const generationNames = async () =>
+      (await fs.readdir(path.dirname(persistFile))).filter((entry) => isHnswGenerationBasename(persistFile, entry));
     try {
       const flushed = await w.flushHnswToDisk();
       expect(flushed).toBe(false);
-      // No sidecar should be written.
-      await expect(fs.access(`${persistFile}.bin`)).rejects.toMatchObject({ code: "ENOENT" });
+      // Neither the stable pointer nor an immutable generation may be written.
+      await expect(fs.access(`${persistFile}.meta.json`)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(await generationNames()).toEqual([]);
 
       const watcherInternals = w as unknown as {
         hnswPersistUnsafe: boolean;
@@ -1466,8 +1470,8 @@ describe("VaultWatcher HNSW disk persistence (v3.9.0-rc.6)", () => {
       expect(w.searchHealth.semanticUsable).toBe(false);
 
       await expect(w.flushHnswToDisk()).resolves.toBe(false);
-      await expect(fs.access(`${persistFile}.bin`)).rejects.toMatchObject({ code: "ENOENT" });
       await expect(fs.access(`${persistFile}.meta.json`)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(await generationNames()).toEqual([]);
     } finally {
       await w.close();
       embedDb.close();
@@ -1494,7 +1498,7 @@ describe("VaultWatcher HNSW disk persistence (v3.9.0-rc.6)", () => {
 
   it("close() flushes the live-updated index to a loadable sidecar with matching signature", async () => {
     const { w, embedDb, persistFile, fts } = await setup(true);
-    const { loadHnswFromDisk } = await import("../src/hnsw.js");
+    const { isHnswGenerationBasename, loadHnswFromDisk } = await import("../src/hnsw.js");
     await w.start();
     try {
       // chokidar FSEvents warm-up (W-FLAKE-2 pattern).
@@ -1511,12 +1515,10 @@ describe("VaultWatcher HNSW disk persistence (v3.9.0-rc.6)", () => {
       // close() triggers flushHnswToDisk.
       await w.close();
     }
-    // Sidecar must now exist + load back with the post-edit signature.
-    const binExists = await fs
-      .access(`${persistFile}.bin`)
-      .then(() => true)
-      .catch(() => false);
-    expect(binExists, "close() should have persisted the live-updated HNSW sidecar").toBe(true);
+    // Stable metadata must point to one strict immutable generation that exists.
+    const meta = JSON.parse(await fs.readFile(`${persistFile}.meta.json`, "utf8")) as { binFile: string };
+    expect(isHnswGenerationBasename(persistFile, meta.binFile)).toBe(true);
+    await expect(fs.access(path.join(path.dirname(persistFile), meta.binFile))).resolves.toBeUndefined();
     const signature = embedDb.computeSignature();
     const loaded = await loadHnswFromDisk(persistFile, signature);
     expect(loaded, "persisted sidecar should load with the post-edit signature").not.toBeNull();

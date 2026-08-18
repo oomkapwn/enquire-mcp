@@ -2,6 +2,7 @@ import * as path from "node:path";
 import type { EmbedReceiptReader, EmbedReceiptSearchHit, EmbedSourceReceipt } from "../embed-db.js";
 import type { FtsIndex, FtsSearchHit, FtsSourceReceipt } from "../fts5.js";
 import { foldName, foldTag, lookupFoldedKey, nfcLower } from "../name-fold.js";
+import { assertEmbedDbFilePath } from "../persistence-path.js";
 import { computeStaleness, recencyScore } from "../staleness.js";
 import type { FileEntry, Vault } from "../vault.js";
 import { assertWatcherActivationGuardClear } from "../watcher-activation-guard.js";
@@ -1064,6 +1065,8 @@ export function pickEmbedTextForHyde(args: { query: string; hypothetical_answer?
  *   semantic route rejects instead of returning a stale post-failure index.
  * @returns An {@link EmbedSearchResponse} with chunk-level matches and a
  *   `hyde: true` marker iff HyDE actually fired.
+ * @throws {TypeError} If a non-null `embedFile` does not end exactly in
+ *   `.embed.db`; admission runs before vault or index filesystem I/O.
  * @throws {Error} If `query` is empty, the embed db doesn't exist, the
  *   embedder fails to load, or returns no vectors for the query.
  * @example
@@ -1104,6 +1107,7 @@ export async function embeddingsSearch(
   hnsw?: HnswSearchContext | null,
   watcherHealth?: Readonly<{ semanticUsable: boolean }> | null
 ): Promise<EmbedSearchResponse> {
+  if (embedFile !== null) assertEmbedDbFilePath(embedFile);
   await vault.ensureExists();
   if (!args.query.trim()) throw new Error("query must not be empty");
   if (embedFile === null) {
@@ -1657,6 +1661,8 @@ async function filterCurrentHybridHits(
  *   accelerated k-NN.
  * @returns A {@link SearchHybridResponse} with sorted `matches`, observability
  *   in `signals_used` / `signal_errors`, and per-hit `per_signal` breakdown.
+ * @throws {TypeError} If a non-null `ctx.embedFile` does not end exactly in
+ *   `.embed.db`; admission runs before vault or index filesystem I/O.
  * @throws {Error} If `query` is empty / whitespace-only.
  * @example
  * ```ts
@@ -2095,6 +2101,7 @@ export async function searchHybrid(
     feedback?: { weight: number; scores: ReadonlyMap<string, number> };
   }
 ): Promise<SearchHybridResponse> {
+  if (ctx.embedFile !== null) assertEmbedDbFilePath(ctx.embedFile);
   await vault.ensureExists();
   if (!args.query.trim()) throw new Error("query must not be empty");
   const limit = args.limit ?? 10;
@@ -3022,12 +3029,19 @@ type SearchHybridCtx = Parameters<typeof searchHybrid>[2];
  * so `granularity: "block"` degrades to note-level in the fused result — one
  * hit per note, not per chunk (`chunk_index` reflects the best sub-hit and may
  * be absent). Use single-query mode when per-chunk hits matter.
+ *
+ * @param vault - Admitted vault used by every sub-query.
+ * @param args - Base hybrid arguments plus bounded query phrasings.
+ * @param ctx - Shared retrieval/persistence context.
+ * @returns One note-level RRF-fused response.
+ * @throws {TypeError} If a non-null `ctx.embedFile` is outside the exact `.embed.db` namespace.
  */
 export async function searchHybridMulti(
   vault: Vault,
   args: SearchHybridArgs & { queries: string[] },
   ctx: SearchHybridCtx
 ): Promise<SearchHybridResponse> {
+  if (ctx.embedFile !== null) assertEmbedDbFilePath(ctx.embedFile);
   const { reciprocalRankFusion, toRanked, RRF_K } = await import("../rrf.js");
   // S-5 — `explain` is a single-query diagnostic: each sub-query's per-stage
   // ranks refer to ITS own fusion, not this outer re-fusion, so a per-hit

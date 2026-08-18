@@ -16,11 +16,13 @@ import {
   discoverEmbedDbConfigCached,
   EmbedDb,
   encodeInt8Vector,
+  hnswPersistBase,
   openEmbedReceiptReader,
   peekEmbedDbMeta,
   peekEmbedDbMetaCached
 } from "../src/embed-db.js";
 import { EMBED_DB_SCHEMA_VERSION } from "../src/schema-contract.js";
+import { watcherActivationGuardPath } from "../src/watcher-activation-guard.js";
 
 let dir: string;
 
@@ -130,6 +132,109 @@ const DROP_EMBED_REVISION_TRIGGERS_SQL = `
 `;
 
 describe("EmbedDb", () => {
+  const synchronousAdmissionRoutes: ReadonlyArray<readonly [string, (file: string) => unknown]> = [
+    ["EmbedDb constructor", (file) => new EmbedDb({ file, vaultRoot: "/v", modelAlias: "m", dim: 4 })],
+    ["HNSW base derivation", (file) => hnswPersistBase(file)],
+    ["watcher guard derivation", (file) => watcherActivationGuardPath(file)]
+  ];
+  const asynchronousAdmissionRoutes: ReadonlyArray<readonly [string, (file: string) => Promise<unknown>]> = [
+    ["openEmbedReceiptReader", (file) => openEmbedReceiptReader(file, "/v")],
+    ["discoverEmbedDbConfig", (file) => discoverEmbedDbConfig(file, "/v")],
+    ["peekEmbedDbMeta", (file) => peekEmbedDbMeta(file, "/v")],
+    ["discoverEmbedDbConfigCached", (file) => discoverEmbedDbConfigCached(file, "/v")],
+    ["peekEmbedDbMetaCached", (file) => peekEmbedDbMetaCached(file, "/v")]
+  ];
+
+  it.each(synchronousAdmissionRoutes)(
+    "rejects an unadmitted embedding namespace in %s before derived-artifact mutation",
+    async (label, invoke) => {
+      const invalidParent = path.join(dir, `uncreated-${label.replaceAll(" ", "-")}`);
+      const file = path.join(invalidParent, "index");
+      expect(() => invoke(file)).toThrowError(new TypeError("Embedding index file must end exactly in '.embed.db'"));
+      await expect(fs.lstat(invalidParent)).rejects.toMatchObject({ code: "ENOENT" });
+    }
+  );
+
+  it.each(asynchronousAdmissionRoutes)(
+    "rejects an unadmitted embedding namespace in %s instead of laundering it as fail-soft",
+    async (label, invoke) => {
+      const invalidParent = path.join(dir, `uncreated-${label}`);
+      const file = path.join(invalidParent, "index");
+      await expect(invoke(file)).rejects.toThrowError(
+        new TypeError("Embedding index file must end exactly in '.embed.db'")
+      );
+      await expect(fs.lstat(invalidParent)).rejects.toMatchObject({ code: "ENOENT" });
+    }
+  );
+
+  it.for([
+    {
+      route: "mutating open",
+      verify: async (file: string) => {
+        const db = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "m", dim: 4 });
+        try {
+          await expect(db.open()).rejects.toThrow("Embedding index artifact family could not be admitted");
+        } finally {
+          db.close();
+        }
+      }
+    },
+    {
+      route: "configuration discovery",
+      verify: async (file: string) => {
+        await expect(discoverEmbedDbConfig(file, "/v")).resolves.toEqual({ kind: "refused" });
+      }
+    },
+    {
+      route: "diagnostic peek",
+      verify: async (file: string) => {
+        await expect(peekEmbedDbMeta(file, "/v")).resolves.toBeNull();
+      }
+    },
+    {
+      route: "receipt reader",
+      verify: async (file: string) => {
+        await expect(openEmbedReceiptReader(file, "/v")).rejects.toThrow(
+          "Embedding receipt reader requires an existing compatible index for the expected vault"
+        );
+      }
+    }
+  ])(
+    "$route refuses a symlink SQLite sidecar without changing either sentinel",
+    async ({ route, verify }, { skip }) => {
+      const file = path.join(dir, `unsafe-open-${route.replaceAll(" ", "-")}.embed.db`);
+      const unsafeJournal = `${file}-journal`;
+      const external = `${file}.external`;
+      const mainSentinel = Buffer.from(`EMBED_MAIN_SENTINEL_${route}`);
+      const externalSentinel = Buffer.from(`EMBED_EXTERNAL_SENTINEL_${route}`);
+      await fs.writeFile(file, mainSentinel);
+      await fs.writeFile(external, externalSentinel);
+      try {
+        await fs.symlink(external, unsafeJournal, "file");
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code === "EPERM" || code === "EACCES" || code === "ENOSYS") {
+          skip(`filesystem cannot create the Embed sidecar symlink control (${code})`);
+          return;
+        }
+        throw error;
+      }
+
+      await verify(file);
+
+      expect(await fs.readFile(file)).toEqual(mainSentinel);
+      expect(await fs.readFile(external)).toEqual(externalSentinel);
+      expect((await fs.lstat(unsafeJournal)).isSymbolicLink()).toBe(true);
+    }
+  );
+
+  it.each(["index.EMBED.DB", "index.embed.db\n", "index.embed.db\u2028"])(
+    "rejects non-exact embedding suffix spelling %j",
+    (basename) => {
+      expect(() => hnswPersistBase(path.join(dir, basename))).toThrow(TypeError);
+    }
+  );
+
   it("opens, closes, and reopens cleanly with the same meta", async () => {
     const file = path.join(dir, "test.embed.db");
     const db1 = new EmbedDb({ file, vaultRoot: "/v1", modelAlias: "multilingual", dim: 4 });
@@ -1568,6 +1673,8 @@ describe("EmbedDb", () => {
       { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "x", vector: l2([1, 0, 0, 0]) }
     ]);
     db.close();
+    const rollbackJournal = `${file}-journal`;
+    await fs.writeFile(rollbackJournal, "ROLLBACK_JOURNAL_SENTINEL");
 
     expect(
       await fs
@@ -1582,15 +1689,37 @@ describe("EmbedDb", () => {
         .then(() => true)
         .catch(() => false)
     ).toBe(false);
+    await expect(fs.lstat(rollbackJournal)).rejects.toMatchObject({ code: "ENOENT" });
     // Idempotent — second call returns false but doesn't throw.
     expect(await db.clearOnDisk()).toBe(false);
   });
 
-  // v3.9.0-rc.34 (deep-audit P-2) — clearOnDisk must ALSO remove the HNSW
-  // persistence sidecars (`<base>.hnsw.bin` + `<base>.hnsw.meta.json`), since
-  // the .meta.json carries `text_preview` (raw chunk text). Previously these
-  // survived `clear-embeddings`, a right-to-erasure gap for `--use-hnsw` users.
-  it("clearOnDisk also removes the HNSW sidecars (P-2 erasure)", async () => {
+  it.each(["rollback-journal directory"])(
+    "clearOnDisk preflights the complete SQLite family before an unsafe %s",
+    async () => {
+      const file = path.join(dir, "unsafe-journal.embed.db");
+      const wal = `${file}-wal`;
+      const shm = `${file}-shm`;
+      const journal = `${file}-journal`;
+      await fs.writeFile(file, "MAIN_SENTINEL");
+      await fs.writeFile(wal, "WAL_SENTINEL");
+      await fs.writeFile(shm, "SHM_SENTINEL");
+      await fs.mkdir(journal);
+      const db = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
+
+      await expect(db.clearOnDisk()).rejects.toThrow("Refusing to clear an unsafe embedding-index artifact");
+      expect(await fs.readFile(file, "utf8")).toBe("MAIN_SENTINEL");
+      expect(await fs.readFile(wal, "utf8")).toBe("WAL_SENTINEL");
+      expect(await fs.readFile(shm, "utf8")).toBe("SHM_SENTINEL");
+      expect((await fs.lstat(journal)).isDirectory()).toBe(true);
+    }
+  );
+
+  // clearOnDisk owns the complete HNSW family: legacy fixed binary, stable
+  // metadata pointer, immutable binary generations, and recognized crash
+  // temps/stages. Metadata carries raw text_preview, so every member is part
+  // of the same right-to-erasure boundary.
+  it("clearOnDisk removes legacy, generated, and crash-leftover HNSW artifacts", async () => {
     const file = path.join(dir, "vaultx.embed.db");
     const db = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
     await db.open();
@@ -1600,15 +1729,21 @@ describe("EmbedDb", () => {
     db.close();
     // Simulate the HNSW persist sidecars next to the embed-db (same base the
     // server derives: strip `.embed.db`, append `.hnsw`).
-    const base = `${file.replace(/\.embed\.db$/, "")}.hnsw`;
+    const base = hnswPersistBase(file);
     const binFile = `${base}.bin`;
     const metaFile = `${base}.meta.json`;
+    const generationFile = `${base}.${"a".repeat(48)}.bin`;
+    const generatedTmp = `${metaFile}.enquire-tmp-${"b".repeat(48)}`;
+    const generatedStage = `${generationFile}.enquire-stage-${"c".repeat(48)}`;
     await fs.writeFile(binFile, Buffer.from([1, 2, 3, 4]));
     await fs.writeFile(metaFile, JSON.stringify({ text_preview: "secret note text" }));
+    await fs.writeFile(generationFile, Buffer.from([5, 6, 7, 8]));
+    await fs.writeFile(generatedTmp, "secret note text");
+    await fs.mkdir(generatedStage, { mode: 0o700 });
+    await fs.writeFile(path.join(generatedStage, "artifact"), "secret note text", { mode: 0o600 });
 
     expect(await db.clearOnDisk()).toBe(true);
-    // Both the embed-db AND both HNSW sidecars must be gone.
-    for (const p of [file, binFile, metaFile]) {
+    for (const p of [file, binFile, metaFile, generationFile, generatedTmp, generatedStage]) {
       expect(
         await fs
           .stat(p)
@@ -2974,7 +3109,7 @@ describe("EmbedDb upsertNote + deleteNote return ids (v3.9.0-rc.2)", () => {
   });
 });
 
-describe("peekEmbedDbMeta is truly safe — never throws (v3.10.0-rc.34, RCA sibling of peekFtsMetaSafe)", () => {
+describe("peekEmbedDbMeta is fail-soft after exact namespace admission (v3.10.0-rc.34)", () => {
   // Pass trivially when better-sqlite3 is absent (the peek returns null at the
   // dep-load catch before reaching `new Database`); when present (CI + dev) the
   // directory/corrupt cases exercise the rc.34 fix — pre-fix `new Database()`
@@ -2987,8 +3122,10 @@ describe("peekEmbedDbMeta is truly safe — never throws (v3.10.0-rc.34, RCA sib
     await expect(assertEmbedDbRecoveryOwnership(missing, "/v")).resolves.toBeUndefined();
   });
 
-  it("returns null (not throw) when the path is a DIRECTORY", async () => {
-    const d = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-embed-dir-"));
+  it("returns null (not throw) when an admitted .embed.db path is a DIRECTORY", async () => {
+    const parent = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-embed-dir-"));
+    const d = path.join(parent, "directory.embed.db");
+    await fs.mkdir(d);
     try {
       const modeBefore = (await fs.stat(d)).mode & 0o777;
       expect(await peekEmbedDbMeta(d)).toBeNull();
@@ -2999,7 +3136,7 @@ describe("peekEmbedDbMeta is truly safe — never throws (v3.10.0-rc.34, RCA sib
       expect((await fs.stat(d)).mode & 0o777).toBe(modeBefore);
       await expectPathFreeRecoveryOwnershipRefusal(d, "/v");
     } finally {
-      await fs.rm(d, { recursive: true, force: true });
+      await fs.rm(parent, { recursive: true, force: true });
     }
   });
 

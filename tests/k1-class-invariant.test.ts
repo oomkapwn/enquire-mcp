@@ -1730,6 +1730,11 @@ function admissionOrderProblems(source: string, spec: AdmissionOrderSpec): strin
       : [];
     const expectedAssertions = statementsWithExactText(openMethod.body, sourceFile, spec.expectedAssert);
     const bootstraps = statementsWithExactText(openMethod.body, sourceFile, spec.bootstrapCall);
+    const familyPreflights = statementsWithExactText(
+      openMethod.body,
+      sourceFile,
+      "fileExisted = await preflightSqliteArtifactFamily(this.file);"
+    );
     if (handles.length !== 1) {
       problems.push(`${spec.label} open: exact AST live-handle assignment is not unique`);
     }
@@ -1755,6 +1760,9 @@ function admissionOrderProblems(source: string, spec: AdmissionOrderSpec): strin
       }
     }
     const handleTry = handle ? directTryStatement(handle) : null;
+    const finalPreflight = familyPreflights.find(
+      (statement) => handleTry !== null && directTryStatement(statement) === handleTry
+    );
     const admissionTry = firstGuard ? directTryStatement(firstGuard) : null;
     const openStatements = openMethod.body.statements;
     const handleTryAt = handleTry ? openStatements.indexOf(handleTry) : -1;
@@ -1769,13 +1777,13 @@ function admissionOrderProblems(source: string, spec: AdmissionOrderSpec): strin
       (statement, index) => statement !== undefined && admissionTry?.tryBlock.statements[index] === statement
     );
     if (
-      handleTry?.tryBlock.statements.length !== 1 ||
-      handleTry.tryBlock.statements[0] !== handle ||
-      !admissionTry ||
-      handleTryAt < 0 ||
-      admissionTryAt !== handleTryAt + 1 ||
-      !guardedSequenceIsExact
+      handleTry?.tryBlock.statements.length !== 2 ||
+      handleTry.tryBlock.statements[0] !== finalPreflight ||
+      handleTry.tryBlock.statements[1] !== handle
     ) {
+      problems.push(`${spec.label} open: final SQLite family preflight is not immediately before live handle`);
+    }
+    if (!admissionTry || handleTryAt < 0 || admissionTryAt !== handleTryAt + 1 || !guardedSequenceIsExact) {
       problems.push(`${spec.label} open: exact guarded admission sequence changed`);
     }
   }
@@ -1868,7 +1876,7 @@ const FTS_ADMISSION_ORDER: AdmissionOrderSpec = {
   label: "FTS",
   className: "FtsIndex",
   openStart: "  async open(expectedDiscovery?: FtsIndexDiscovery): Promise<void> {",
-  openEnd: "  /** Remove the index file",
+  openEnd: "  /**\n   * Remove the index file",
   openParameterType: "FtsIndexDiscovery",
   handle: "this.db = new Ctor(this.file) as Db;",
   firstGuard: "const initialAdmission = this.inspectAdmission();",
@@ -1908,6 +1916,7 @@ const EMBED_ADMISSION_ORDER: AdmissionOrderSpec = {
 
 function freshParentPreparationProblems(ftsSource: string, embedSource: string): string[] {
   const problems: string[] = [];
+  const familyPreflight = "fileExisted = await preflightSqliteArtifactFamily(this.file);";
   const ftsOpen = sectionBetween(
     ftsSource,
     "FTS open",
@@ -1922,29 +1931,83 @@ function freshParentPreparationProblems(ftsSource: string, embedSource: string):
   ).text;
 
   for (const entry of [
-    { label: "FTS", open: ftsOpen, handle: FTS_ADMISSION_ORDER.handle },
-    { label: "Embed", open: embedOpen, handle: EMBED_ADMISSION_ORDER.handle }
+    {
+      label: "FTS",
+      source: ftsSource,
+      className: FTS_ADMISSION_ORDER.className,
+      open: ftsOpen,
+      handle: FTS_ADMISSION_ORDER.handle
+    },
+    {
+      label: "Embed",
+      source: embedSource,
+      className: EMBED_ADMISSION_ORDER.className,
+      open: embedOpen,
+      handle: EMBED_ADMISSION_ORDER.handle
+    }
   ]) {
-    const targetProof = entry.open.indexOf("await fs.lstat(this.file);");
-    const freshGuard = entry.open.indexOf("if (!fileExisted) {");
-    const handleAt = entry.open.indexOf(entry.handle);
+    const sourceFile = ts.createSourceFile(
+      `${entry.className}.ts`,
+      entry.source,
+      ts.ScriptTarget.Latest,
+      true,
+      ts.ScriptKind.TS
+    );
+    const openMethod = exactClassMethod(sourceFile, entry.className, "open");
+    const openStatements = openMethod?.body?.statements ?? [];
+    const preflights = openMethod?.body
+      ? statementsWithExactText(openMethod.body, sourceFile, familyPreflight)
+      : [];
+    const initialPreflight = preflights[0];
+    const initialTry = initialPreflight ? directTryStatement(initialPreflight) : null;
+    const loadStatements = openStatements.filter(
+      (statement) => statement.getText(sourceFile) === "const Ctor = await loadBetterSqlite();"
+    );
+    const freshBranches = openStatements.filter(
+      (statement): statement is ts.IfStatement =>
+        ts.isIfStatement(statement) && statement.expression.getText(sourceFile) === "!fileExisted"
+    );
+    const loadStatement = loadStatements[0];
+    const freshBranch = freshBranches[0];
+    const initialTryAt = initialTry ? openStatements.indexOf(initialTry) : -1;
+    const loadAt = loadStatement ? openStatements.indexOf(loadStatement) : -1;
+    const freshGuardAt = freshBranch ? openStatements.indexOf(freshBranch) : -1;
     const freshBlock = sectionBetween(
       entry.open,
       `${entry.label} fresh-parent block`,
       "if (!fileExisted) {",
-      "\n    try {\n      this.db = new Ctor"
+      "\n    try {\n      fileExisted = await preflightSqliteArtifactFamily(this.file);"
     ).text;
-    if (!(targetProof >= 0 && targetProof < freshGuard && freshGuard < handleAt)) {
-      problems.push(`${entry.label} open: fresh-parent preparation lacks a pre-handle target existence proof`);
+    if (preflights.length !== 2) {
+      problems.push(`${entry.label} open: expected exactly two SQLite family preflights`);
     }
-    if (!freshBlock.includes("await fs.mkdir(parentDir") || !freshBlock.includes("if (!parentExisted) {")) {
-      problems.push(`${entry.label} open: parent creation is not contained by the fresh-file branch`);
+    if (
+      initialTry?.tryBlock.statements.length !== 1 ||
+      initialTry.tryBlock.statements[0] !== initialPreflight ||
+      loadStatements.length !== 1 ||
+      freshBranches.length !== 1 ||
+      initialTryAt < 0 ||
+      !(initialTryAt < loadAt && loadAt < freshGuardAt)
+    ) {
+      problems.push(
+        `${entry.label} open: initial SQLite family preflight must precede dependency load and fresh branch`
+      );
     }
-    if (!freshBlock.includes("await fs.chmod(parentDir, 0o700)")) {
-      problems.push(`${entry.label} open: parent chmod is not limited to a newly-created fresh-file parent`);
+    if (!freshBlock.includes("await fs.mkdir(parentDir, { recursive: true, mode: 0o700 });")) {
+      problems.push(`${entry.label} open: mode-0700 mkdir is not contained by the fresh-file branch`);
     }
-    if (countLiteral(entry.open, "fs.chmod(parentDir") !== 1) {
-      problems.push(`${entry.label} open: parent chmod escaped its single fresh-file exception`);
+    if (
+      freshBlock.includes("parentExisted") ||
+      freshBlock.includes("fs.stat(parentDir") ||
+      freshBlock.includes("fs.lstat(parentDir")
+    ) {
+      problems.push(`${entry.label} open: parent ownership is inferred from a racy path stat`);
+    }
+    if (entry.open.includes("fs.chmod(parentDir")) {
+      problems.push(`${entry.label} open: path chmod can mutate an existing/custom parent`);
+    }
+    if (countLiteral(entry.open, "fs.mkdir(parentDir, { recursive: true, mode: 0o700 })") !== 1) {
+      problems.push(`${entry.label} open: fresh parent must have one bounded recursive mode-0700 mkdir`);
     }
   }
   return problems;
@@ -3006,11 +3069,11 @@ describe("K-1 class invariant (v3.6.3 methodological guard; recursive scan since
 
     const ftsFreshGuardRemoved = replaceExactly(ftsSource, "if (!fileExisted) {", "if (true) {");
     expect(freshParentPreparationProblems(ftsFreshGuardRemoved, embedSource)).toContain(
-      "FTS open: fresh-parent preparation lacks a pre-handle target existence proof"
+      "FTS open: initial SQLite family preflight must precede dependency load and fresh branch"
     );
     const embedFreshGuardRemoved = replaceExactly(embedSource, "if (!fileExisted) {", "if (true) {");
     expect(freshParentPreparationProblems(ftsSource, embedFreshGuardRemoved)).toContain(
-      "Embed open: fresh-parent preparation lacks a pre-handle target existence proof"
+      "Embed open: initial SQLite family preflight must precede dependency load and fresh branch"
     );
 
     const ftsContinuityDropped = replaceExactly(
@@ -3029,6 +3092,61 @@ describe("K-1 class invariant (v3.6.3 methodological guard; recursive scan since
     expect(admissionOrderProblems(embedContinuityDropped, EMBED_ADMISSION_ORDER)).toContain(
       "Embed bootstrap: guard continuity comparison is missing"
     );
+  });
+
+  it.for([
+    { store: "FTS" as const, phase: "initial" as const, mutation: "missing" as const },
+    { store: "FTS" as const, phase: "initial" as const, mutation: "reordered" as const },
+    { store: "FTS" as const, phase: "final" as const, mutation: "missing" as const },
+    { store: "FTS" as const, phase: "final" as const, mutation: "reordered" as const },
+    { store: "Embed" as const, phase: "initial" as const, mutation: "missing" as const },
+    { store: "Embed" as const, phase: "initial" as const, mutation: "reordered" as const },
+    { store: "Embed" as const, phase: "final" as const, mutation: "missing" as const },
+    { store: "Embed" as const, phase: "final" as const, mutation: "reordered" as const }
+  ])("rejects a $store $phase family-preflight that is $mutation", async ({ store, phase, mutation }) => {
+    const ftsSource = await fs.readFile(path.resolve(process.cwd(), "src", "fts5.ts"), "utf8");
+    const embedSource = await fs.readFile(path.resolve(process.cwd(), "src", "embed-db.ts"), "utf8");
+    const source = store === "FTS" ? ftsSource : embedSource;
+    const admissionSpec = store === "FTS" ? FTS_ADMISSION_ORDER : EMBED_ADMISSION_ORDER;
+    const admissionError =
+      store === "FTS"
+        ? "FTS index artifact family could not be admitted"
+        : "Embedding index artifact family could not be admitted";
+    const handle = store === "FTS" ? "this.db = new Ctor(this.file) as Db;" : admissionSpec.handle;
+    const preflight = "      fileExisted = await preflightSqliteArtifactFamily(this.file);";
+    const initialTry =
+      "    try {\n" +
+      `${preflight}\n` +
+      "    } catch {\n" +
+      `      throw new Error("${admissionError}");\n` +
+      "    }\n";
+    const dependencyLoad = "    const Ctor = await loadBetterSqlite();\n";
+    const finalPair = `${preflight}\n      ${handle}`;
+
+    let mutant: string;
+    if (phase === "initial" && mutation === "missing") {
+      mutant = replaceExactly(source, preflight, "      fileExisted = false;", 2);
+    } else if (phase === "initial") {
+      mutant = replaceExactly(source, `${initialTry}${dependencyLoad}`, `${dependencyLoad}${initialTry}`);
+    } else if (mutation === "missing") {
+      mutant = replaceExactly(source, finalPair, `      ${handle}`);
+    } else {
+      mutant = replaceExactly(source, finalPair, `      ${handle}\n${preflight}`);
+    }
+
+    const ftsCandidate = store === "FTS" ? mutant : ftsSource;
+    const embedCandidate = store === "Embed" ? mutant : embedSource;
+    if (phase === "initial") {
+      expect(freshParentPreparationProblems(ftsCandidate, embedCandidate)).toContain(
+        mutation === "missing"
+          ? `${store} open: expected exactly two SQLite family preflights`
+          : `${store} open: initial SQLite family preflight must precede dependency load and fresh branch`
+      );
+    } else {
+      expect(admissionOrderProblems(mutant, admissionSpec)).toContain(
+        `${store} open: final SQLite family preflight is not immediately before live handle`
+      );
+    }
   });
 
   it("at least 6 EmbedDb/FtsIndex sites are tracked (sanity — invariant has scope)", async () => {

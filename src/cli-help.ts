@@ -101,6 +101,15 @@ export const TOKENIZE_HELP =
 export const MAX_FILE_BYTES_HELP = "Max bytes for any single file read/write (default 5MB)";
 
 /**
+ * `--no-hnsw-persist` flag help. The option is installed by the shared
+ * advanced-retrieval helper used by both `serve` and `serve-http`; keeping the
+ * generation/pointer protocol here prevents transport-specific documentation
+ * drift when that persistence layout changes.
+ */
+export const NO_HNSW_PERSIST_HELP =
+  "v2.16.0 — disable HNSW index persistence. By default (with --use-hnsw), the index is saved as an immutable `.hnsw.<nonce>.bin` generation plus a meta-last `.hnsw.meta.json` pointer next to `.embed.db`, then re-loaded when its digest and embed-db signature match. Skipping persistence means a fresh rebuild every serve start. Pass this flag if you can't write to the cache dir or want diagnostic-fresh builds.";
+
+/**
  * `--cache-size` flag help (v3.8.0-rc.11 M-1 defensive lift). Identical
  * between serve and serve-http pre-rc.11.
  */
@@ -116,19 +125,22 @@ export const PERSISTENT_CACHE_HELP = "Persist parsed-note cache to disk so cold 
  * `--cache-file` flag help (v3.8.0-rc.11 M-1 defensive lift). Identical
  * between serve, serve-http, and other subcommands pre-rc.11.
  */
-export const CACHE_FILE_HELP = "Override the persistent-cache file location";
+export const CACHE_FILE_HELP =
+  "Override the persistent-cache file location (must end exactly in the case-sensitive .json suffix and not the reserved .feedback.json or .hnsw.meta.json subclasses)";
 
 /**
  * `--index-file` flag help (v3.8.0-rc.11 M-1 defensive lift). Identical
  * between serve, serve-http, and other subcommands pre-rc.11.
  */
-export const INDEX_FILE_HELP = "Override the FTS5 index file location";
+export const INDEX_FILE_HELP =
+  "Override the FTS5 index file location (must end exactly in the case-sensitive .fts5.db suffix)";
 
 /**
  * `--embed-file` flag help. Shared across every command that reads, builds,
  * diagnoses or removes the persistent embedding index.
  */
-export const EMBED_FILE_HELP = "Override the embedding-index (.embed.db) file location";
+export const EMBED_FILE_HELP =
+  "Override the embedding-index file location (must end exactly in the case-sensitive .embed.db suffix)";
 
 /**
  * `--no-embedding-index` shared runtime-isolation help. This is primarily for

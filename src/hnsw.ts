@@ -8,8 +8,14 @@
 //
 // Architecture: in-memory rebuild on serve start.
 //
-// Persistence: SHIPPED in v2.16.0 — sidecar `.hnsw.bin` + `.hnsw.meta.json`
-// next to `.embed.db`. Staleness check via `EmbedDb.computeSignature`.
+// Persistence: SHIPPED in v2.16.0. Current storage uses immutable
+// `.hnsw.<nonce>.bin` generations + a meta-last `.hnsw.meta.json` pointer next
+// to `.embed.db`. Staleness check via `EmbedDb.computeSignature`.
+// Persisted pointer bytes and every pointer read are capped at 256 MiB. Writer
+// peak memory still remains proportional to the already in-memory metadata
+// snapshot during serialization; the cap is not a constant-memory save claim.
+// An oversize snapshot stays usable in memory but is rebuilt rather than
+// persisted/reloaded through an unbounded read allocation.
 // Default on for `--use-hnsw`; opt out with `--no-hnsw-persist`.
 // See `loadHnswFromDisk` + `saveTo` below for the WAL-style consistency
 // handling. The in-memory-only fallback path is still here (when the
@@ -33,8 +39,27 @@
 // Users tuning for recall can pass `--hnsw-ef-search` to widen the search
 // beam (default 100; higher is generally more accurate and slower).
 
+import { randomBytes } from "node:crypto";
+import { promises as fs } from "node:fs";
+import * as path from "node:path";
 import type { EmbedReceiptSearchHit, EmbedSearchHit } from "./embed-db.js";
 import { importOptionalDependency, optionalDepDetail } from "./optional-dep.js";
+import { assertHnswFilePath } from "./persistence-path.js";
+import {
+  preflightSensitiveArtifactTempEntry,
+  publishSensitiveArtifact,
+  readSensitiveArtifactText,
+  removeSensitiveArtifactTempEntry,
+  sameCanonicalDirectoryEntry,
+  sensitiveArtifactFinalBasename,
+  sha256SensitiveArtifact
+} from "./sensitive-artifact.js";
+
+const HNSW_META_FORMAT_VERSION = 2;
+const HNSW_GENERATION_TOKEN_BYTES = 24;
+const MAX_HNSW_META_BYTES = 256 * 1024 * 1024;
+const HNSW_GENERATION_TOKEN_PATTERN = /^[0-9a-f]{48}(?![\s\S])/;
+const SHA256_PATTERN = /^[0-9a-f]{64}(?![\s\S])/;
 
 /** A single labeled vector — used to populate the index. */
 export interface LabeledVector {
@@ -45,15 +70,13 @@ export interface LabeledVector {
 }
 
 /**
- * v2.16.0 — sidecar metadata persisted alongside the .hnsw.bin index. Used
- * for staleness detection on boot: if `signature` matches the current
- * embed-db's signature (computed by `EmbedDb.computeSignature()`), the
- * pre-built HNSW is loaded; otherwise it's rebuilt from scratch.
+ * Public legacy v1 metadata shape retained for source compatibility. Current
+ * production persistence writes an internal v2 immutable-generation pointer;
+ * an on-disk v1 fixed-bin record is explicitly rebuilt on first load.
  *
- * Stored as JSON next to the binary index (`<file>.meta.json`). Keep this
- * format stable — bumping `formatVersion` invalidates all on-disk
- * indexes for users on the new version (they'll rebuild on next boot,
- * which is harmless but visible).
+ * Historical v1 records were stored at `<file>.meta.json` next to
+ * `<file>.bin`. Consumers may continue using this exported type, but it is not
+ * the internal v2 disk-write authority.
  */
 export interface HnswPersistedMeta {
   formatVersion: 1;
@@ -88,6 +111,15 @@ export interface HnswPersistedMeta {
   >;
   /** ISO timestamp of the write — informational. */
   writtenAt: string;
+}
+
+/** Internal on-disk pointer format. The exported v1 interface remains stable. */
+interface HnswPersistedMetaV2 extends Omit<HnswPersistedMeta, "formatVersion"> {
+  formatVersion: typeof HNSW_META_FORMAT_VERSION;
+  /** Strict same-directory basename of the immutable binary generation. */
+  binFile: string;
+  /** SHA-256 of `binFile`; binds this metadata to exactly one graph generation. */
+  binSha256: string;
 }
 
 /** Build-time HNSW parameters. Defaults tuned for 384-dim cosine on PKM data. */
@@ -137,16 +169,30 @@ export interface HnswIndex {
   searchKnn(queryVec: Float32Array, k: number, opts?: HnswQueryOptions): { labels: number[]; distances: number[] };
   /**
    * v2.16.0 — persist the index to disk for fast reload on next serve
-   * start. Writes the binary index to `<file>.bin` and a JSON meta
-   * sidecar to `<file>.meta.json` containing the embed-db signature,
-   * dim, size, and label→row map. Returns true on successful write.
+   * start. Writes an immutable `<file>.<nonce>.bin` generation, then
+   * atomically publishes `<file>.meta.json` last as its basename + SHA-256
+   * pointer. Returns true once that pointer commits; prior-generation cleanup
+   * is best-effort and cannot turn a committed save into a reported failure.
    *
-   * Caller is responsible for choosing `file` (typically alongside the
-   * embed-db with `.hnsw` suffix). A missing parent is created with a
-   * best-effort `0700` mode; an existing/custom parent is not chmod'd. We
-   * separate binary + meta files so a partial write (e.g. crash mid-flush)
-   * leaves the meta missing, which the loader treats as "no usable index" →
-   * rebuild from scratch.
+   * `file` must use the exact lowercase `.hnsw` suffix so separate configured
+   * bases cannot collide with one another's generated artifacts. A missing
+   * parent is requested via recursive
+   * mode-`0700` mkdir subject to a more-restrictive umask; an existing/custom
+   * parent is never path-chmod'd. Saves
+   * on one wrapped index serialize in invocation order. A queued save whose
+   * graph epoch changed before it starts rejects without publishing; live
+   * native mutation is mutually excluded while `writeIndex` is in flight.
+   * Metadata larger than 256 MiB is refused before pointer publication; the
+   * already-built in-memory graph remains usable. Precommit orphan cleanup is
+   * best-effort: a failed cleanup may leave a strict generated residue that
+   * explicit clear/prune covers.
+   *
+   * @param file - Exact lowercase `.hnsw` persistence base.
+   * @param rowsByLabel - Metadata snapshot keyed by native labels.
+   * @param signature - Embed-database generation signature bound into the pointer.
+   * @returns `true` after the meta-last pointer commits.
+   * @throws {TypeError} If `file` is outside the exact HNSW namespace.
+   * @throws {Error} If the graph changes before snapshot, overlaps mutation, or publication fails.
    */
   saveTo(
     file: string,
@@ -183,7 +229,9 @@ export interface HnswIndex {
    * `applyDiff` does not wrap them in a transaction. A throw mid-loop
    * leaves the index in a partial-update state (some labels removed,
    * some new points added, others not). Callers MUST treat throws as
-   * "rebuild required" — there's no rollback path in hnswlib.
+   * "rebuild required" — there's no rollback path in hnswlib. The method also
+   * throws before its first native mutation if a persistence snapshot is in
+   * flight, so `writeIndex` can never race C++ graph mutation.
    *
    * @returns the number of labels removed + the number of points added
    *   (for logging / instrumentation). Sum should equal
@@ -197,7 +245,8 @@ export interface HnswIndex {
    * v3.9.0-rc.2 — grow the index to at least `newMaxElements`. No-op if
    * already large enough. Used by the watcher before `applyDiff` when
    * the live-update would push us past current capacity. Native call
-   * is synchronous (in-place re-allocation).
+   * is synchronous (in-place re-allocation). Throws before resizing if a
+   * persistence snapshot is in flight.
    */
   resize(newMaxElements: number): void;
   /**
@@ -361,6 +410,9 @@ function wrapNativeIndex(ctor: HnswNativeIndex, dim: number, size: number): Hnsw
     typeof ctor.getCurrentCount === "function" &&
     typeof ctor.getMaxElements === "function" &&
     typeof ctor.resizeIndex === "function";
+  let mutationEpoch = 0;
+  let persistInFlight = false;
+  let persistChain: Promise<void> = Promise.resolve();
   return {
     dim,
     get size(): number {
@@ -378,6 +430,9 @@ function wrapNativeIndex(ctor: HnswNativeIndex, dim: number, size: number): Hnsw
       return { labels: result.neighbors, distances: result.distances };
     },
     applyDiff(removeLabels, addPoints): { removed: number; added: number } {
+      if (persistInFlight) {
+        throw new Error("HnswIndex.applyDiff: persistence snapshot is in flight; refusing an overlapping mutation");
+      }
       if (!hasLiveUpdate) {
         throw new Error(
           "HnswIndex.applyDiff: hnswlib-node native binding does not expose markDelete/addPoint/resizeIndex — " +
@@ -399,6 +454,10 @@ function wrapNativeIndex(ctor: HnswNativeIndex, dim: number, size: number): Hnsw
           );
         }
       }
+      // From the first native mutation onward, any throw may leave a partial
+      // graph. Advance conservatively before touching C++ so no later save can
+      // mistake that graph for the previously admitted generation.
+      mutationEpoch += 1;
       let removed = 0;
       for (const label of removeLabels) {
         try {
@@ -432,10 +491,14 @@ function wrapNativeIndex(ctor: HnswNativeIndex, dim: number, size: number): Hnsw
       return { removed, added };
     },
     resize(newMaxElements: number): void {
+      if (persistInFlight) {
+        throw new Error("HnswIndex.resize: persistence snapshot is in flight; refusing an overlapping mutation");
+      }
       if (!hasLiveUpdate) {
         throw new Error("HnswIndex.resize: hnswlib-node native binding does not expose resizeIndex");
       }
       if (newMaxElements > ctor.getMaxElements()) {
+        mutationEpoch += 1;
         ctor.resizeIndex(newMaxElements);
       }
     },
@@ -452,54 +515,286 @@ function wrapNativeIndex(ctor: HnswNativeIndex, dim: number, size: number): Hnsw
       return { currentCount: ctor.getCurrentCount(), maxElements: ctor.getMaxElements() };
     },
     async saveTo(file, rowsByLabel, signature): Promise<boolean> {
-      const fs = await import("node:fs/promises");
-      const path = await import("node:path");
-      // Write the binary index to <file>.bin and the JSON meta sidecar
-      // to <file>.meta.json. We separate them so a partial-write (e.g.
-      // crash mid-flush) leaves meta missing → loader rebuilds.
-      const parentDir = path.dirname(file);
-      const parentExisted = await fs
-        .stat(parentDir)
-        .then(() => true)
-        .catch(() => false);
-      await fs.mkdir(parentDir, { recursive: true, mode: 0o700 });
-      if (!parentExisted) await fs.chmod(parentDir, 0o700).catch(() => {});
-      const binFile = `${file}.bin`;
-      const metaFile = `${file}.meta.json`;
-      // hnswlib-node's writeIndex writes to a host filesystem path
-      // directly — much simpler than the WASM Emscripten FS plumbing.
-      await ctor.writeIndex(binFile);
-      const meta: HnswPersistedMeta = {
-        formatVersion: 1,
-        dim,
-        // v3.9.0-rc.11 (audit M1) — persist the LIVE element count after any
-        // applyDiff, not the stale build-time `size` closure. After watcher
-        // live updates the closure `size` is wrong; the live count comes from
-        // the native getCurrentCount() (same source the `size` getter uses).
-        size: hasLiveUpdate ? ctor.getCurrentCount() : size,
-        signature,
-        rowsByLabel: Object.fromEntries(rowsByLabel),
-        writtenAt: new Date().toISOString()
-      };
-      await fs.writeFile(metaFile, JSON.stringify(meta, null, 2), "utf8");
-      // v3.6.2 (audit M-7) — defense-in-depth: persist the user-only
-      // 0600 mode on both sidecars, matching the canonical pattern in
-      // src/embed-db.ts and src/fts5.ts. The .meta.json carries
-      // text_preview snippets, so file-level protection must not rely on the
-      // parent: saveTo creates a missing parent at 0700, while an existing or
-      // custom parent remains operator-managed. Best-effort: on
-      // platforms without POSIX mode bits (Windows / some FAT mounts)
-      // chmod is a no-op or throws; we swallow either way.
-      await Promise.all([fs.chmod(binFile, 0o600).catch(() => {}), fs.chmod(metaFile, 0o600).catch(() => {})]);
-      return true;
+      assertHnswFilePath(file);
+      // Snapshot caller-owned metadata at invocation, then serialize native
+      // writes for this wrapped index. This prevents an older invocation from
+      // publishing its pointer after a newer invocation on the same instance.
+      const rowsSnapshot = Object.fromEntries(
+        [...rowsByLabel].map(([label, row]) => [label, { ...row }])
+      ) as HnswPersistedMeta["rowsByLabel"];
+      const invocationEpoch = mutationEpoch;
+      const sizeSnapshot = hasLiveUpdate ? ctor.getCurrentCount() : size;
+      const save = persistChain.then(async () => {
+        if (mutationEpoch !== invocationEpoch) {
+          throw new Error("HNSW changed before its queued persistence snapshot could start");
+        }
+        persistInFlight = true;
+        try {
+          const parentDir = path.dirname(file);
+          // Create missing parents with no group/world grants (subject to a
+          // more-restrictive umask), but never path-chmod an existing/custom
+          // parent based on a racy pre-stat ownership guess.
+          await fs.mkdir(parentDir, { recursive: true, mode: 0o700 });
+
+          const metaFile = `${file}.meta.json`;
+          const previous = await readHnswMetaPointer(metaFile, file);
+          const generationBasename = hnswGenerationBasename(file);
+          const generationFile = path.join(parentDir, generationBasename);
+          let generationPublished = false;
+          let metaPublished = false;
+          try {
+            // hnswlib-node accepts only a host path. The common publisher gives
+            // it a pre-created mode-0600 file inside an owned unpredictable 0700
+            // staging directory, validates the held inode, then promotes it as
+            // an immutable generation.
+            const binary = await publishSensitiveArtifact(generationFile, async (stagedPath) => {
+              const written = await ctor.writeIndex(stagedPath);
+              if (!written) throw new Error("hnswlib-node reported an unsuccessful index write");
+            });
+            generationPublished = true;
+            const meta: HnswPersistedMetaV2 = {
+              formatVersion: HNSW_META_FORMAT_VERSION,
+              binFile: generationBasename,
+              binSha256: binary.sha256,
+              dim,
+              // Persist the LIVE element count after any applyDiff, not the stale
+              // build-time closure.
+              size: sizeSnapshot,
+              signature,
+              rowsByLabel: rowsSnapshot,
+              writtenAt: new Date().toISOString()
+            };
+            // Meta is the sole generation pointer and is published LAST. A crash
+            // before this rename leaves the previous pointer authoritative.
+            const serializedMeta = JSON.stringify(meta, null, 2);
+            if (Buffer.byteLength(serializedMeta, "utf8") > MAX_HNSW_META_BYTES) {
+              throw new Error("HNSW metadata exceeds the persistence read limit");
+            }
+            await publishSensitiveArtifact(metaFile, serializedMeta);
+            metaPublished = true;
+
+            // Pointer commit is the success boundary. Generation GC is
+            // best-effort and must never turn a committed save into a reported
+            // failure that callers might retry as if nothing landed.
+            try {
+              const current = await readHnswMetaPointer(metaFile, file);
+              if (current && current.binFile === generationBasename && current.binSha256 === binary.sha256) {
+                if (previous && previous.binFile !== generationBasename) {
+                  await unlinkHnswGeneration(path.join(parentDir, previous.binFile));
+                }
+                // Explicit migration cleanup for the pre-format-2 fixed binary.
+                await unlinkHnswGeneration(`${file}.bin`);
+              } else if (current) {
+                // A concurrent publisher won the meta pointer. This invocation
+                // may erase only its own now-unreferenced generation.
+                await unlinkHnswGeneration(generationFile);
+              }
+            } catch {
+              // Strict generation names are covered by explicit clear/prune;
+              // an orphan is safer than rejecting after the pointer committed.
+            }
+            return true;
+          } catch (err) {
+            // Before the meta pointer commits, this generation is provably
+            // unreferenced and owned by this invocation.
+            if (generationPublished && !metaPublished) await unlinkHnswGeneration(generationFile).catch(() => {});
+            throw err;
+          }
+        } finally {
+          persistInFlight = false;
+        }
+      });
+      persistChain = save.then(
+        () => {},
+        () => {}
+      );
+      return save;
     }
   };
+}
+
+interface HnswMetaPointer {
+  binFile: string;
+  binSha256: string;
+}
+
+function hnswGenerationBasename(file: string): string {
+  return `${path.basename(file)}.${randomBytes(HNSW_GENERATION_TOKEN_BYTES).toString("hex")}.bin`;
+}
+
+/**
+ * Test whether a basename is in the immutable-generation namespace reserved for `file`.
+ *
+ * @param file - Stable HNSW persistence base.
+ * @param entryBasename - Candidate same-directory basename.
+ * @returns `true` only for `<base>.<48-hex>.bin`.
+ * @throws {TypeError} If `file` is outside the exact `.hnsw` namespace.
+ * @example
+ * isHnswGenerationBasename("/tmp/a.hnsw", "a.hnsw.000000000000000000000000000000000000000000000000.bin");
+ * @internal
+ */
+export function isHnswGenerationBasename(file: string, entryBasename: string): boolean {
+  assertHnswFilePath(file);
+  const prefix = `${path.basename(file)}.`;
+  const candidatePrefix = entryBasename.slice(0, prefix.length);
+  if (candidatePrefix !== prefix || !entryBasename.endsWith(".bin")) return false;
+  const token = entryBasename.slice(prefix.length, -".bin".length);
+  return HNSW_GENERATION_TOKEN_PATTERN.test(token);
+}
+
+interface HnswEraseEntry {
+  entryPath: string;
+  generatedTemp: boolean;
+}
+
+/**
+ * Validate the complete HNSW erasure family before any member is deleted.
+ *
+ * @param file - Stable HNSW persistence base passed to `saveTo`.
+ * @returns `true` when at least one recognized artifact exists.
+ * @throws {TypeError} If `file` is outside the exact `.hnsw` namespace.
+ * @throws {Error} If a reserved-shape entry is malformed or its path spelling is ambiguous.
+ * @example
+ * await preflightHnswPersistedArtifacts("/tmp/vault.hnsw");
+ * @internal
+ */
+export async function preflightHnswPersistedArtifacts(file: string): Promise<boolean> {
+  assertHnswFilePath(file);
+  return (await planHnswErasure(file)).length > 0;
+}
+
+/**
+ * Erase the complete HNSW artifact family, including legacy fixed binaries,
+ * immutable generations, the stable meta pointer, and recognized crash temps.
+ *
+ * @param file - Stable HNSW persistence base passed to `saveTo`.
+ * @returns `true` when at least one artifact was removed.
+ * @throws {TypeError} If `file` is outside the exact `.hnsw` namespace.
+ * @throws {Error} If a recognized generated entry has an unsafe shape or cannot be removed.
+ * @example
+ * await clearHnswPersistedArtifacts("/tmp/vault.hnsw");
+ * @internal
+ */
+export async function clearHnswPersistedArtifacts(file: string): Promise<boolean> {
+  assertHnswFilePath(file);
+  // Re-run the complete preflight immediately before deletion. No malformed
+  // generated entry can make erasure stop after only part of the family.
+  const plan = await planHnswErasure(file);
+  let removed = false;
+  for (const entry of plan) {
+    if (entry.generatedTemp) {
+      removed = (await removeSensitiveArtifactTempEntry(entry.entryPath)) || removed;
+      continue;
+    }
+    try {
+      await fs.unlink(entry.entryPath);
+      removed = true;
+    } catch (err) {
+      if (errnoCode(err) !== "ENOENT") throw err;
+    }
+  }
+  return removed;
+}
+
+async function planHnswErasure(file: string): Promise<HnswEraseEntry[]> {
+  const parent = path.dirname(file);
+  const legacyBin = `${path.basename(file)}.bin`;
+  const meta = `${path.basename(file)}.meta.json`;
+  let entries: string[];
+  try {
+    entries = await fs.readdir(parent);
+  } catch (err) {
+    if (errnoCode(err) === "ENOENT") return [];
+    throw err;
+  }
+
+  const plan: HnswEraseEntry[] = [];
+  for (const entry of entries) {
+    const generatedFinal = sensitiveArtifactFinalBasename(entry);
+    const ownedFinal = generatedFinal ?? entry;
+    const expectedFinal = expectedHnswBasename(file, ownedFinal, legacyBin, meta);
+    if (!expectedFinal) continue;
+    const entryPath = path.join(parent, entry);
+    const expectedEntry = generatedFinal
+      ? `${expectedFinal}${entry.slice(generatedFinal.length).toLowerCase()}`
+      : expectedFinal;
+    if (entry !== expectedEntry) {
+      if (!(await sameCanonicalDirectoryEntry(entryPath, path.join(parent, expectedEntry)))) {
+        if (normalizedHnswEntrySpelling(entry) === normalizedHnswEntrySpelling(expectedEntry)) {
+          throw new Error("Refusing HNSW erasure: a reserved-shape artifact has ambiguous path spelling");
+        }
+        continue;
+      }
+    }
+    if (generatedFinal) {
+      await preflightSensitiveArtifactTempEntry(entryPath);
+      plan.push({ entryPath, generatedTemp: true });
+      continue;
+    }
+    const entryStat = await fs.lstat(entryPath);
+    if (!entryStat.isFile() && !entryStat.isSymbolicLink()) {
+      throw new Error("Refusing HNSW erasure: an artifact is not a regular file or symlink leaf");
+    }
+    plan.push({ entryPath, generatedTemp: false });
+  }
+  return plan;
+}
+
+function expectedHnswBasename(file: string, candidate: string, legacyBin: string, meta: string): string | null {
+  if (candidate === legacyBin || candidate === meta || isHnswGenerationBasename(file, candidate)) return candidate;
+  if (/^.+\.meta\.json(?![\s\S])/is.test(candidate)) return meta;
+  if (!/^.+\.bin(?![\s\S])/is.test(candidate)) return null;
+  const generation = /^.+\.([0-9a-f]{48})\.bin(?![\s\S])/is.exec(candidate);
+  const token = generation?.[1]?.toLowerCase();
+  return token ? `${path.basename(file)}.${token}.bin` : legacyBin;
+}
+
+function normalizedHnswEntrySpelling(value: string): string {
+  return value.normalize("NFC").toLowerCase();
+}
+
+async function readHnswMetaPointer(metaFile: string, file: string): Promise<HnswMetaPointer | null> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(await readSensitiveArtifactText(metaFile, MAX_HNSW_META_BYTES)) as unknown;
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return null;
+  const record = parsed as Record<string, unknown>;
+  if (
+    record.formatVersion !== HNSW_META_FORMAT_VERSION ||
+    typeof record.binFile !== "string" ||
+    !isHnswGenerationBasename(file, record.binFile) ||
+    typeof record.binSha256 !== "string" ||
+    !SHA256_PATTERN.test(record.binSha256)
+  ) {
+    return null;
+  }
+  return { binFile: record.binFile, binSha256: record.binSha256 };
+}
+
+async function unlinkHnswGeneration(file: string): Promise<void> {
+  let entry: import("node:fs").Stats;
+  try {
+    entry = await fs.lstat(file);
+  } catch (err) {
+    if (errnoCode(err) === "ENOENT") return;
+    throw err;
+  }
+  if (!entry.isFile() && !entry.isSymbolicLink()) {
+    throw new Error("Refusing to remove an unsafe HNSW generation leaf");
+  }
+  await fs.unlink(file);
 }
 
 /**
  * v2.16.0 — load a previously-persisted HNSW index from disk. Returns
  * `null` (with a stderr warning) if:
- *   • Either the .bin or .meta.json file is missing
+ *   • The meta pointer or its immutable generation is missing
+ *   • The meta pointer exceeds the bounded 256 MiB persistence fast-path
+ *   • A legacy fixed-bin meta lacks the format-2 pointer/digest
+ *   • The generation digest or pre/post-load generation receipt differs
  *   • The meta's `signature` doesn't match the caller's current signature
  *   • The meta's `formatVersion` doesn't match
  *   • The meta's `dim` is not a positive integer (v3.8.0-rc.10 P3-27)
@@ -510,35 +805,58 @@ function wrapNativeIndex(ctor: HnswNativeIndex, dim: number, size: number): Hnsw
  * On success returns `{ index, rowsByLabel }` so the caller can wire
  * both into `searchHybrid`'s `hnsw` context without rebuilding from
  * scratch. The actual boot-time win depends on index size and storage.
+ *
+ * @param file - Exact lowercase `.hnsw` persistence base.
+ * @param expectedSignature - Current embed-database generation signature.
+ * @returns A digest/signature-validated graph and metadata map, or `null` for fail-soft rebuild.
+ * @throws {TypeError} If `file` is outside the exact HNSW namespace.
  */
 export async function loadHnswFromDisk(
   file: string,
   expectedSignature: string
 ): Promise<{ index: HnswIndex; rowsByLabel: Map<number, HnswPersistedMeta["rowsByLabel"][string]> } | null> {
-  const fs = await import("node:fs/promises");
-  const binFile = `${file}.bin`;
+  assertHnswFilePath(file);
   const metaFile = `${file}.meta.json`;
-  let metaRaw: string;
+  let metaRawBefore: string;
   try {
-    metaRaw = await fs.readFile(metaFile, "utf8");
+    metaRawBefore = await readSensitiveArtifactText(metaFile, MAX_HNSW_META_BYTES);
   } catch {
     return null; // No meta → no persisted index (or partial write).
   }
-  let meta: HnswPersistedMeta;
+  let parsedMeta: unknown;
   try {
-    meta = JSON.parse(metaRaw) as HnswPersistedMeta;
+    parsedMeta = JSON.parse(metaRawBefore) as unknown;
   } catch (err) {
     process.stderr.write(
       `enquire: HNSW meta at ${metaFile} is malformed; rebuilding — ${err instanceof Error ? err.message : String(err)}\n`
     );
     return null;
   }
-  if (meta.formatVersion !== 1) {
+  if (typeof parsedMeta !== "object" || parsedMeta === null || Array.isArray(parsedMeta)) {
+    process.stderr.write(`enquire: HNSW meta at ${metaFile} is not an object; rebuilding\n`);
+    return null;
+  }
+  const meta = parsedMeta as HnswPersistedMetaV2;
+  const storedFormatVersion = (parsedMeta as { formatVersion?: unknown }).formatVersion;
+  if (storedFormatVersion !== HNSW_META_FORMAT_VERSION) {
+    const legacy = storedFormatVersion === 1;
     process.stderr.write(
-      `enquire: HNSW meta format ${meta.formatVersion} ≠ expected 1; rebuilding (this happens on enquire-mcp upgrade)\n`
+      legacy
+        ? "enquire: legacy HNSW fixed-bin metadata has no immutable generation digest; rebuilding\n"
+        : `enquire: HNSW meta format ${String(storedFormatVersion)} ≠ expected ${HNSW_META_FORMAT_VERSION}; rebuilding (this happens on enquire-mcp upgrade)\n`
     );
     return null;
   }
+  if (
+    typeof meta.binFile !== "string" ||
+    !isHnswGenerationBasename(file, meta.binFile) ||
+    typeof meta.binSha256 !== "string" ||
+    !SHA256_PATTERN.test(meta.binSha256)
+  ) {
+    process.stderr.write("enquire: HNSW meta has an invalid generation pointer or digest; rebuilding\n");
+    return null;
+  }
+  const binFile = path.join(path.dirname(file), meta.binFile);
   if (meta.signature !== expectedSignature) {
     process.stderr.write(
       `enquire: HNSW persisted index is stale (signature mismatch — embed-db changed since last write); rebuilding\n`
@@ -561,22 +879,50 @@ export async function loadHnswFromDisk(
     process.stderr.write(`enquire: HNSW meta at ${metaFile} has invalid rowsByLabel; rebuilding\n`);
     return null;
   }
-  // Bin file present?
+  let digestBefore: string;
   try {
-    await fs.access(binFile);
-  } catch {
-    process.stderr.write(`enquire: HNSW meta exists but ${binFile} is missing; rebuilding\n`);
+    digestBefore = await sha256SensitiveArtifact(binFile);
+  } catch (err) {
+    process.stderr.write(
+      `enquire: HNSW generation is missing or unsafe; rebuilding — ${err instanceof Error ? err.message : String(err)}\n`
+    );
+    return null;
+  }
+  if (digestBefore !== meta.binSha256) {
+    process.stderr.write("enquire: HNSW generation digest does not match metadata; rebuilding\n");
     return null;
   }
   // Load the native binary.
   const lib = await loadHnswlib();
   const ctor = new lib.HierarchicalNSW("cosine", meta.dim);
   try {
-    await ctor.readIndex(binFile);
+    const loaded = await ctor.readIndex(binFile);
+    if (!loaded) {
+      process.stderr.write("enquire: hnswlib-node reported an unsuccessful index load; rebuilding\n");
+      return null;
+    }
   } catch (err) {
     process.stderr.write(
       `enquire: HNSW readIndex failed at ${binFile}; rebuilding — ${err instanceof Error ? err.message : String(err)}\n`
     );
+    return null;
+  }
+  // A different publisher may commit while native readIndex is in flight.
+  // Re-hash the path and re-read the pointer; only an unchanged meta+binary
+  // pair may authorize the in-memory row mapping.
+  let digestAfter: string;
+  let metaRawAfter: string;
+  try {
+    [digestAfter, metaRawAfter] = await Promise.all([
+      sha256SensitiveArtifact(binFile),
+      readSensitiveArtifactText(metaFile, MAX_HNSW_META_BYTES)
+    ]);
+  } catch {
+    process.stderr.write("enquire: HNSW generation changed during load; rebuilding\n");
+    return null;
+  }
+  if (digestAfter !== digestBefore || digestAfter !== meta.binSha256 || metaRawAfter !== metaRawBefore) {
+    process.stderr.write("enquire: HNSW meta/generation changed during load; rebuilding\n");
     return null;
   }
   const index = wrapNativeIndex(ctor, meta.dim, meta.size);
@@ -680,4 +1026,10 @@ export function hnswResultsToReceiptHits(
     });
   }
   return hits;
+}
+
+function errnoCode(err: unknown): string | undefined {
+  if (typeof err !== "object" || err === null || !("code" in err)) return undefined;
+  const code = (err as { code?: unknown }).code;
+  return typeof code === "string" ? code : undefined;
 }

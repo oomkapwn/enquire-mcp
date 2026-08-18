@@ -17,7 +17,14 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { lookupFoldedKey } from "./name-fold.js";
 import { optionalDepDetail } from "./optional-dep.js";
+import { assertFtsIndexFilePath } from "./persistence-path.js";
 import { FTS_SCHEMA_VERSION } from "./schema-contract.js";
+import {
+  preflightSqliteArtifactFamily,
+  preflightSensitiveArtifactTempEntry,
+  sameCanonicalDirectoryEntry,
+  sensitiveArtifactFinalBasename
+} from "./sensitive-artifact.js";
 import { iterateContentLines } from "./structure.js";
 import type { Vault } from "./vault.js";
 import { countLineBreaks, stripTrailingSlashes } from "./wildcard-match.js";
@@ -892,7 +899,13 @@ export class FtsIndex {
   private readonly tokenize: TokenizeMode;
   private readonly vaultRoot: string;
 
+  /**
+   * @param opts - Exact `.fts5.db` file, owning vault root, and optional tokenizer.
+   * @throws {TypeError} If `opts.file` is outside the exact FTS namespace.
+   * @throws {Error} If the tokenizer is not exactly `unicode61` or `trigram`.
+   */
   constructor(opts: { file: string; vaultRoot: string; tokenize?: TokenizeMode }) {
+    assertFtsIndexFilePath(opts.file);
     this.file = opts.file;
     this.vaultRoot = opts.vaultRoot;
     this.tokenize = assertTokenizeMode(opts.tokenize === undefined ? "unicode61" : opts.tokenize);
@@ -904,7 +917,10 @@ export class FtsIndex {
    * tighten file perms to 0o600 on the db + sidecars. A populated foreign, malformed,
    * or newer-schema database is refused before Enquire issues persistent
    * PRAGMA, DDL, DML, or chmod operations. SQLite itself may still take locks
-   * or perform recovery while the live handle reads ownership metadata.
+   * or perform recovery while the live handle reads ownership metadata. Before
+   * dependency loading and again immediately before native open, the main,
+   * WAL, SHM, and rollback-journal leaves must be wholly absent or every
+   * present leaf must be a singly linked regular file; orphan sidecars refuse.
    * Idempotent — a second `open()` call is a no-op.
    *
    * @param expectedDiscovery - Optional readonly preflight result to bind this
@@ -920,29 +936,22 @@ export class FtsIndex {
     // retain and mutate its object; that must not widen later bootstrap
     // authority while this open is waiting on filesystem/native work.
     const expected = cloneFtsIndexDiscovery(expectedDiscovery);
+    let fileExisted: boolean;
+    try {
+      fileExisted = await preflightSqliteArtifactFamily(this.file);
+    } catch {
+      throw new Error("FTS index artifact family could not be admitted");
+    }
     const Ctor = await loadBetterSqlite();
-    let fileExisted = true;
-    try {
-      const indexStat = await fs.lstat(this.file);
-      if (!indexStat.isFile()) throw new Error("non-regular FTS index path");
-    } catch (err) {
-      if (errnoCode(err) === "ENOENT") fileExisted = false;
-      else throw new Error("FTS index could not be inspected");
-    }
     if (!fileExisted) {
-      // Parent creation/chmod is the narrow fresh-file exception. Existing
-      // paths reach live-handle admission without any filesystem preparation.
+      // Parent creation is the narrow fresh-file exception. Recursive mkdir
+      // applies 0700 subject only to a more-restrictive umask and never chmods
+      // an existing/custom parent after a racy ownership probe.
       const parentDir = path.dirname(this.file);
-      const parentExisted = await fs
-        .stat(parentDir)
-        .then(() => true)
-        .catch(() => false);
       await fs.mkdir(parentDir, { recursive: true, mode: 0o700 });
-      if (!parentExisted) {
-        await fs.chmod(parentDir, 0o700).catch(() => {});
-      }
     }
     try {
+      fileExisted = await preflightSqliteArtifactFamily(this.file);
       this.db = new Ctor(this.file) as Db;
     } catch {
       throw new Error("FTS index could not be opened");
@@ -982,16 +991,38 @@ export class FtsIndex {
     );
   }
 
-  /** Remove the index file + WAL/SHM sidecar files. Idempotent. */
+  /**
+   * Remove the index file + WAL/SHM/rollback-journal sidecars after validating
+   * every present leaf. Missing files are idempotent; directories, special
+   * objects, and non-ENOENT inspection/deletion failures refuse the operation.
+   *
+   * @returns `true` when at least one artifact was removed.
+   * @throws {Error} If any main/WAL/SHM/rollback-journal leaf is unsafe or a non-ENOENT operation fails.
+   */
   async clearOnDisk(): Promise<boolean> {
     this.close();
-    let removed = false;
-    for (const p of [this.file, `${this.file}-wal`, `${this.file}-shm`]) {
+    const targets = [this.file, `${this.file}-wal`, `${this.file}-shm`, `${this.file}-journal`];
+    for (const target of targets) {
+      let entry: import("node:fs").Stats;
       try {
-        await fs.unlink(p);
+        entry = await fs.lstat(target);
+      } catch (err) {
+        if (errnoCode(err) === "ENOENT") continue;
+        throw new Error("Unable to inspect FTS index artifacts before clearing", { cause: err });
+      }
+      if (!entry.isFile() && !entry.isSymbolicLink()) {
+        throw new Error("Refusing to clear an unsafe FTS index artifact");
+      }
+    }
+    let removed = false;
+    for (const target of targets) {
+      try {
+        await fs.unlink(target);
         removed = true;
-      } catch {
-        // missing files are fine
+      } catch (err) {
+        if (errnoCode(err) !== "ENOENT") {
+          throw new Error("Unable to remove FTS index artifact", { cause: err });
+        }
       }
     }
     return removed;
@@ -1305,7 +1336,7 @@ export class FtsIndex {
     } catch {
       throw new Error("Refusing to open an FTS index with an unsupported stored tokenizer");
     }
-    if (!/^[1-9]\d*$/.test(storedVersion)) {
+    if (!/^[1-9]\d*(?![\s\S])/.test(storedVersion)) {
       throw new Error("Refusing to open an FTS index with malformed ownership metadata");
     }
     const numericVersion = Number(storedVersion);
@@ -2653,7 +2684,9 @@ function splitWithLines(text: string, separator: RegExp, baseLine = 1): ContentC
 /**
  * Default location for the FTS5 index file — `~/.cache/enquire/<hash>.fts5.db`
  * (or `$XDG_CACHE_HOME` on Linux). The hash is the first 12 chars of
- * sha1(vaultRoot) so each vault gets its own database.
+ * sha1(vaultRoot), retained as a legacy routing key. Non-colliding roots get
+ * distinct default paths; the truncated key is not collision-proof vault
+ * identity. Collision handling and a root-bound migration are deferred to AH-9e.
  *
  * @param vaultRoot - Absolute path to the vault root.
  * @returns Absolute path to the index file.
@@ -2667,49 +2700,132 @@ export function defaultIndexFile(vaultRoot: string): string {
 }
 
 /**
- * Strict filename pattern for enquire's own per-vault cache artifacts:
- * `<12-hex-sha1>.{json,fts5.db,embed.db,hnsw.bin,hnsw.meta.json}` plus the SQLite
- * `-wal`/`-shm` sidecars and the `.tmp` atomic-write leftover. Anchored +
- * exhaustively enumerated so a prune can NEVER select a file enquire didn't
- * create (a user note, another app's cache sharing the dir, etc.) — the safety
- * property of `planCachePrune`.
+ * Strict reserved filename namespace for legacy routing-key-scoped cache artifacts:
+ * `<12-hex-sha1>.{json,fts5.db,embed.db,hnsw.meta.json}` plus legacy/fixed and
+ * immutable HNSW binaries, SQLite sidecars, and recognized publisher temps.
+ * Anchored +
+ * exhaustively enumerated so prune cannot select a name outside these families
+ * (for example `notes.md`). This is filename recognition, not creation
+ * provenance: a same-account writer that deliberately impersonates an exact
+ * reserved name is inside the local-filesystem trust boundary.
  *
  * v3.10.0-rc.37 (audit #3 — right-to-erasure) — the `json` family is the
  * `defaultCacheFile` parse cache (`<hash>.json`, written by `saveDiskCache`),
  * which holds the FULL raw body of every note in its vault. It was missing here,
- * so a cross-vault `prune` deleted a decommissioned vault's `.fts5.db`/`.embed.db`/
+ * so a cross-stem `prune` deleted a non-colliding decommissioned root's `.fts5.db`/`.embed.db`/
  * HNSW sidecars but LEFT its `<hash>.json` (+ any `<hash>.json.tmp`) full-text
  * cache on disk forever. Now covered (writers ⊆ erasers — the erasure invariant
  * pins this so a future writer family can't silently escape prune again).
  *
  * v3.11.0 — the `feedback\.json` family is the closed-loop feedback store
  * (`<hash>.feedback.json`, written by `FeedbackStore`; relative note paths +
- * usefulness counts). Listed so a cross-vault `prune` erases a decommissioned
- * vault's feedback (right-to-erasure), like every other per-vault artifact.
+ * usefulness counts). Listed so a cross-stem `prune` recognizes a non-colliding
+ * decommissioned root's feedback, like every other routing-key-scoped artifact.
  * (`feedback\.json` is listed before `json` for readability; ordering is NOT
  * load-bearing — the alternation is anchored right after the `\.` following the
  * 12-hex hash, so for `<hash>.feedback.json` the `json` alternative is tried at
  * the `f` and can't match the `json` tail; either order matches correctly.)
  */
 const ENQUIRE_CACHE_ARTIFACT =
-  /^[0-9a-f]{12}\.(feedback\.json|json|fts5\.db|embed\.db|hnsw\.bin|hnsw\.meta\.json)(-wal|-shm|\.tmp)?$/;
+  /^[0-9a-f]{12}\.(?:(?:feedback\.json|json)(?:\.tmp)?|(?:fts5|embed)\.db(?:-wal|-shm|-journal)?|hnsw\.bin|hnsw\.meta\.json|hnsw\.[0-9a-f]{48}\.bin)(?![\s\S])/;
+const VAULT_ROUTING_KEY = /^[0-9a-f]{12}(?![\s\S])/;
+
+function canonicalCacheArtifactBasename(entry: string): string | null {
+  const ownedFinal = sensitiveArtifactFinalBasename(entry) ?? entry;
+  if (!ENQUIRE_CACHE_ARTIFACT.test(ownedFinal.toLowerCase())) return null;
+  return entry.toLowerCase();
+}
 
 /**
  * Plan a cache prune: given the filenames present in enquire's cache directory
- * and the 12-hex hash of the vault to KEEP, return the subset safe to delete —
- * enquire-owned artifacts belonging to OTHER vaults. Pure and side-effect-free,
+ * and the 12-hex legacy routing key to KEEP, return the canonically spelled
+ * reserved-name subset under OTHER routing keys. Pure and side-effect-free,
  * so the destructive `prune` CLI can preview before touching disk and the
- * safety invariant (never selects a non-enquire file, never the kept vault) is
- * unit-testable.
+ * safety invariant (never selects outside the reserved namespace or the kept
+ * routing key) is unit-testable. It does not prove who created a matching entry
+ * or distinguish roots that collide on the truncated key.
  *
  * @param entries Filenames (basenames) present in the cache directory.
- * @param keepHash The 12-hex vault hash to preserve (from `defaultIndexFile`).
- * @returns Basenames safe to remove — strictly enquire artifacts, never `keepHash`.
+ * @param keepHash The 12-hex legacy routing key to preserve (from `defaultIndexFile`).
+ * @returns Recognized reserved basenames eligible for removal, never `keepHash`.
+ * @throws {TypeError} If `keepHash` is not exactly 12 lowercase hexadecimal characters.
  * @example planCachePrune(["aaaaaaaaaaaa.fts5.db", "bbbbbbbbbbbb.fts5.db", "notes.md"], "aaaaaaaaaaaa")
  *   // → ["bbbbbbbbbbbb.fts5.db"]   (keeps aaaa…, ignores notes.md)
  */
 export function planCachePrune(entries: readonly string[], keepHash: string): string[] {
-  return entries.filter((e) => ENQUIRE_CACHE_ARTIFACT.test(e) && !e.startsWith(`${keepHash}.`));
+  if (!VAULT_ROUTING_KEY.test(keepHash)) {
+    throw new TypeError("Cache prune keep key must be exactly 12 lowercase hexadecimal characters");
+  }
+  return entries.filter((entry) => {
+    // Random publisher temps/stages encode their exact final basename. Unwrap
+    // one layer, then apply the same strict artifact whitelist; this admits
+    // crash leftovers without broadening prune to arbitrary random names.
+    const ownedFinal = sensitiveArtifactFinalBasename(entry) ?? entry;
+    return (
+      entry === canonicalCacheArtifactBasename(entry) &&
+      ENQUIRE_CACHE_ARTIFACT.test(ownedFinal) &&
+      !ownedFinal.startsWith(`${keepHash}.`)
+    );
+  });
+}
+
+/**
+ * Plan an on-disk prune while distinguishing a native spelling alias from a
+ * distinct folded-looking entry on a case-sensitive filesystem.
+ *
+ * Canonically spelled reserved-namespace entries come from {@link planCachePrune}.
+ * A non-canonical spelling is admitted only when a canonical-parent directory
+ * snapshot contains at most one supplied spelling and BigInt device/inode
+ * identity proves that spelling names the expected entry. A folded but distinct
+ * entry refuses the whole plan instead of becoming deletion authority.
+ * This binds the observed directory snapshot, not an active post-plan ABA;
+ * callers must keep the parent stable through deletion.
+ *
+ * @param cacheDir - Existing cache directory containing `entries`.
+ * @param entries - Exact basenames returned by `readdir(cacheDir)`.
+ * @param keepHash - Lowercase 12-hex legacy routing key to preserve.
+ * @returns Basenames safe to remove from this exact directory snapshot.
+ * @throws {TypeError} If `keepHash` is not exactly 12 lowercase hexadecimal characters.
+ * @example
+ * await planCachePruneOnDisk("/tmp/enquire", ["bbbbbbbbbbbb.json"], "aaaaaaaaaaaa");
+ * @internal
+ */
+export async function planCachePruneOnDisk(
+  cacheDir: string,
+  entries: readonly string[],
+  keepHash: string
+): Promise<string[]> {
+  const exact = new Set(planCachePrune(entries, keepHash));
+  const plan = [...exact];
+  for (const entry of entries) {
+    if (exact.has(entry)) continue;
+    const canonicalEntry = canonicalCacheArtifactBasename(entry);
+    if (!canonicalEntry || canonicalEntry === entry) continue;
+    const canonicalFinal = sensitiveArtifactFinalBasename(canonicalEntry) ?? canonicalEntry;
+    if (canonicalFinal.startsWith(`${keepHash}.`)) continue;
+    if (await sameCanonicalDirectoryEntry(path.join(cacheDir, entry), path.join(cacheDir, canonicalEntry))) {
+      plan.push(entry);
+      continue;
+    }
+    throw new Error("Refusing cache prune: a reserved artifact has ambiguous path spelling");
+  }
+  for (const entry of plan) {
+    const entryPath = path.join(cacheDir, entry);
+    if (sensitiveArtifactFinalBasename(entry)) {
+      await preflightSensitiveArtifactTempEntry(entryPath);
+      continue;
+    }
+    let stat: import("node:fs").Stats;
+    try {
+      stat = await fs.lstat(entryPath);
+    } catch (err) {
+      throw new Error("Refusing cache prune: an artifact changed after the directory snapshot", { cause: err });
+    }
+    if (!stat.isFile() && !stat.isSymbolicLink()) {
+      throw new Error("Refusing cache prune: an artifact is not a regular file or symlink leaf");
+    }
+  }
+  return plan;
 }
 
 /**
@@ -2717,11 +2833,15 @@ export function planCachePrune(entries: readonly string[], keepHash: string): st
  * by {@link FtsIndex.open}, but on one readonly handle and without Enquire
  * bootstrap, persistent PRAGMA mutation, DDL, DML, or chmod. SQLite/VFS lock,
  * recovery, and WAL/SHM bookkeeping remain outside this logical guarantee.
+ * The main/WAL/SHM/rollback-journal family is checked before dependency load
+ * and again immediately before native open; unsafe, hardlinked, or orphaned
+ * leaves collapse to `refused` under the stable-parent boundary.
  *
  * @param file - Configured `.fts5.db` path.
  * @param expectedVaultRoot - Exact canonical vault root expected to own it.
  * @returns `missing` or genuinely schema-`empty` when caller defaults are safe,
  *   `owned` with the physically proven stored tokenizer, or generic `refused`.
+ * @throws {TypeError} If `file` is outside the exact `.fts5.db` namespace.
  * @example
  * ```ts
  * const discovery = await discoverFtsIndexConfig(indexFile, vaultRoot);
@@ -2731,12 +2851,14 @@ export function planCachePrune(entries: readonly string[], keepHash: string): st
  * ```
  */
 export async function discoverFtsIndexConfig(file: string, expectedVaultRoot: string): Promise<FtsIndexDiscovery> {
+  assertFtsIndexFilePath(file);
+  let fileExisted: boolean;
   try {
-    const indexStat = await fs.lstat(file);
-    if (!indexStat.isFile()) return { kind: "refused" };
-  } catch (error) {
-    return errnoCode(error) === "ENOENT" ? { kind: "missing" } : { kind: "refused" };
+    fileExisted = await preflightSqliteArtifactFamily(file);
+  } catch {
+    return { kind: "refused" };
   }
+  if (!fileExisted) return { kind: "missing" };
 
   let Database: typeof import("better-sqlite3");
   try {
@@ -2748,6 +2870,7 @@ export async function discoverFtsIndexConfig(file: string, expectedVaultRoot: st
   let db: Db | null = null;
   let discovery: FtsIndexDiscovery = { kind: "refused" };
   try {
+    if (!(await preflightSqliteArtifactFamily(file))) return { kind: "missing" };
     db = new Database(file, { readonly: true, fileMustExist: true }) as unknown as Db;
     const inspector = new ReadonlyFtsAdmissionInspector({
       file,
@@ -2778,13 +2901,17 @@ export async function discoverFtsIndexConfig(file: string, expectedVaultRoot: st
  * helper never authorizes an open or rebuild. Missing dependencies,
  * unreadable/corrupt files, malformed rows, unsupported tokenizer values, and
  * query failures collapse to `null`. A close failure never escapes; this
- * legacy diagnostic may still return metadata already read.
+ * legacy diagnostic may still return metadata already read. The complete
+ * main/WAL/SHM/rollback-journal family receives the same two-stage singly
+ * linked regular-file preflight as production discovery; an unsafe or orphaned
+ * leaf returns `null` before native open.
  *
  * @param file - Absolute path to a `.fts5.db` file.
  * @param expectedVaultRoot - When supplied, return metadata only when its
  *   exact stored owner matches this vault root.
  * @returns Bounded metadata when readable and root-compatible, otherwise
  *   `null`. This is not a substitute for {@link FtsIndex.open}'s admission.
+ * @throws {TypeError} If `file` is outside the exact `.fts5.db` namespace.
  * @example
  * ```ts
  * const meta = await peekFtsMetaSafe(indexFile, vaultRoot);
@@ -2799,8 +2926,12 @@ export async function peekFtsMetaSafe(
   vault_root?: string;
   tokenize_mode?: TokenizeMode;
 } | null> {
-  const fsMod = await import("node:fs");
-  if (!fsMod.existsSync(file)) return null;
+  assertFtsIndexFilePath(file);
+  try {
+    if (!(await preflightSqliteArtifactFamily(file))) return null;
+  } catch {
+    return null;
+  }
   let Database: typeof import("better-sqlite3");
   try {
     Database = (await import("better-sqlite3")).default as unknown as typeof import("better-sqlite3");
@@ -2813,6 +2944,7 @@ export async function peekFtsMetaSafe(
   // escape this legacy diagnostic. Any failure maps to null.
   let db: Db | null = null;
   try {
+    if (!(await preflightSqliteArtifactFamily(file))) return null;
     db = new Database(file, { readonly: true, fileMustExist: true }) as unknown as Db;
     const tableCheck = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='meta'").get();
     if (!tableCheck) return null;

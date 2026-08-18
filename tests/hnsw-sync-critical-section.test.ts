@@ -23,6 +23,7 @@
 
 import { readFileSync } from "node:fs";
 import * as path from "node:path";
+import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
 const repoRoot = path.resolve(__dirname, "..");
@@ -56,9 +57,39 @@ function containsAwait(slice: string): boolean {
   return /\bawait\b/.test(slice);
 }
 
+function classMethodSource(source: string, className: string, methodName: string): string {
+  const sourceFile = ts.createSourceFile("critical-section.ts", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const matches: string[] = [];
+  const visit = (node: ts.Node): void => {
+    if (ts.isClassDeclaration(node) && node.name?.text === className) {
+      for (const member of node.members) {
+        if (ts.isMethodDeclaration(member) && member.name.getText(sourceFile) === methodName) {
+          matches.push(member.getText(sourceFile));
+        }
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  if (matches.length !== 1) {
+    throw new Error(`expected exactly one ${className}.${methodName} method, found ${matches.length}`);
+  }
+  return matches[0] ?? "";
+}
+
+function drainsAcceptedFilesBeforeHnswFlush(source: string): boolean {
+  const close = classMethodSource(source, "VaultWatcher", "close");
+  const drain = "await Promise.allSettled([...this.fileQueues.values()]);";
+  const flush = "await this.flushHnswToDisk();";
+  const drainAt = close.indexOf(drain);
+  const flushAt = close.indexOf(flush);
+  return drainAt >= 0 && flushAt > drainAt;
+}
+
 describe("HNSW shared-state critical section is synchronous (rc.9, T-MED-1)", () => {
   const hnswSrc = stripLineComments(readFileSync(path.join(repoRoot, "src/hnsw.ts"), "utf8"));
-  const watcherSrc = stripLineComments(readFileSync(path.join(repoRoot, "src/watcher.ts"), "utf8"));
+  const watcherRaw = readFileSync(path.join(repoRoot, "src/watcher.ts"), "utf8");
+  const watcherSrc = stripLineComments(watcherRaw);
 
   it("HnswIndex.applyDiff has NO await between markDelete and addPoint (POSITIVE — the class gate)", () => {
     // markDelete loop → resize → addPoint loop → return. Any await here would let
@@ -87,6 +118,22 @@ describe("HNSW shared-state critical section is synchronous (rc.9, T-MED-1)", ()
       expect(containsAwait(commit), `${name} must remain synchronous`).toBe(false);
       expect(watcherSrc).not.toMatch(new RegExp(`private\\s+async\\s+${name}\\b`));
     }
+  });
+
+  it.each(["live watcher close"])("%s drains accepted file queues before HNSW publication", () => {
+    expect(drainsAcceptedFilesBeforeHnswFlush(watcherRaw)).toBe(true);
+  });
+
+  it.each(["flush-before-drain mutant"])("close-order detector rejects a %s", () => {
+    const mutant = [
+      "class VaultWatcher {",
+      "  async close(): Promise<void> {",
+      "    await this.flushHnswToDisk();",
+      "    await Promise.allSettled([...this.fileQueues.values()]);",
+      "  }",
+      "}"
+    ].join("\n");
+    expect(drainsAcceptedFilesBeforeHnswFlush(mutant)).toBe(false);
   });
 
   it("detector fires on an await inside the critical section so the gate is not vacuous (NEGATIVE control)", () => {

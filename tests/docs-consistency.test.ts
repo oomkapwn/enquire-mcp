@@ -1905,6 +1905,7 @@ import type {
   FtsSearchHit,
   TokenizeMode
 } from "@oomkapwn/enquire-mcp/fts5";
+import type { HnswPersistedMeta } from "@oomkapwn/enquire-mcp/hnsw";
 
 type EmbedDbModule = typeof import("@oomkapwn/enquire-mcp/embed-db");
 type FtsModule = typeof import("@oomkapwn/enquire-mcp/fts5");
@@ -1964,6 +1965,14 @@ type LegacyHnswRow = {
   line_end: number;
   text_preview: string;
   kind: EmbedChunkKind;
+};
+type ExpectedHnswPersistedMetaV1 = {
+  formatVersion: 1;
+  dim: number;
+  size: number;
+  signature: string;
+  rowsByLabel: Record<string, LegacyHnswRow>;
+  writtenAt: string;
 };
 
 export type PersistedIndexPublicConsumerContract = [
@@ -2139,6 +2148,7 @@ export type PersistedIndexPublicConsumerContract = [
   >,
   Assert<Equal<EmbedReceiptSearchHit["indexed_mtime_ms"], number>>,
   Assert<Equal<EmbedReceiptSearchHit["indexed_revision"], number>>,
+  Assert<Equal<HnswPersistedMeta, ExpectedHnswPersistedMetaV1>>,
   Assert<
     Equal<
       keyof EmbedReceiptSearchHit,
@@ -2166,7 +2176,7 @@ export type PersistedIndexPublicConsumerContract = [
 ];
 `;
 
-    // Compile all five causal controls in ONE additional TypeScript program.
+    // Compile all six causal controls in ONE additional TypeScript program.
     // Each deliberately-invalid declaration stays on its own named line so the
     // assertion below can attribute the expected diagnostic to that contract,
     // rather than accepting the same TS code emitted by an unrelated control.
@@ -2174,6 +2184,7 @@ export type PersistedIndexPublicConsumerContract = [
 type NegativeLegacyFtsReceiptLeak = Assert<Equal<FtsIndex["search"], (rawQuery: string, opts?: FtsSearchOptions) => FtsReceiptSearchHit[]>>;
 type NegativeOptionalRevision = Assert<Equal<FtsReceiptSearchHit["indexed_revision"], number | undefined>>;
 type NegativeHnswHelperSwap = Assert<Equal<HnswModule["hnswResultsToHits"], (result: { labels: number[]; distances: number[] }, rowByLabel: ReadonlyMap<number, LegacyHnswRow>) => EmbedReceiptSearchHit[]>>;
+type NegativeHnswPersistedMetaV2 = Assert<Equal<HnswPersistedMeta, Omit<ExpectedHnswPersistedMetaV1, "formatVersion"> & { formatVersion: 2; binFile: string; binSha256: string }>>;
 declare const negativeUnownedDiscovery: EmbedDbConfigDiscovery;
 export const NegativeUnownedVaultRoot: string = negativeUnownedDiscovery.meta.vault_root;
 export type NegativeMissingSubpath = typeof import("@oomkapwn/enquire-mcp/fts5-missing");
@@ -2254,6 +2265,7 @@ export type NegativeMissingSubpath = typeof import("@oomkapwn/enquire-mcp/fts5-m
       ["NegativeLegacyFtsReceiptLeak", 2344, undefined],
       ["NegativeOptionalRevision", 2344, undefined],
       ["NegativeHnswHelperSwap", 2344, undefined],
+      ["NegativeHnswPersistedMetaV2", 2344, undefined],
       ["NegativeUnownedVaultRoot", 2339, "Property 'meta' does not exist"],
       ["NegativeMissingSubpath", 2307, "Cannot find module '@oomkapwn/enquire-mcp/fts5-missing'"]
     ] as const;
@@ -2268,7 +2280,7 @@ export type NegativeMissingSubpath = typeof import("@oomkapwn/enquire-mcp/fts5-m
       return { expectedCode, expectedMessage, marker, markerLine };
     });
     const causalLines = new Set(controlsWithLines.map(({ markerLine }) => markerLine));
-    expect(causalLines.size, "all five negative controls must occupy pairwise-distinct lines").toBe(
+    expect(causalLines.size, "all six negative controls must occupy pairwise-distinct lines").toBe(
       causalControls.length
     );
     expect(
@@ -2289,7 +2301,7 @@ export type NegativeMissingSubpath = typeof import("@oomkapwn/enquire-mcp/fts5-m
       const diagnosticLine = diagnostic.file.getLineAndCharacterOfPosition(diagnostic.start).line;
       expect(
         causalLines.has(diagnosticLine),
-        `negative diagnostic escaped the five causal lines:\n${formatDiagnostics([diagnostic])}`
+        `negative diagnostic escaped the six causal lines:\n${formatDiagnostics([diagnostic])}`
       ).toBe(true);
       const lineDiagnostics = diagnosticsByLine.get(diagnosticLine) ?? [];
       lineDiagnostics.push(diagnostic);

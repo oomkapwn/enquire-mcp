@@ -67,11 +67,15 @@ export interface ServeOptions {
   cacheSize?: string;
   /** Persist the parse cache across server restarts. */
   persistentCache?: boolean;
-  /** Override the persistent cache file location. */
+  /**
+   * Override the persistent cache file location. Must end exactly in the
+   * case-sensitive `.json` suffix and must not occupy the reserved
+   * `.feedback.json` or `.hnsw.meta.json` subclasses.
+   */
   cacheFile?: string;
   /** Enable the persistent FTS5 index (requires `better-sqlite3`). */
   persistentIndex?: boolean;
-  /** Override the FTS5 index file location. */
+  /** Override the FTS5 index file location; must end exactly in case-sensitive `.fts5.db`. */
   indexFile?: string;
   /** FTS5 tokenizer mode. */
   tokenize?: "unicode61" | "trigram";
@@ -192,7 +196,9 @@ export interface ServerDeps {
    * With `--watch`, `null` means no EmbedDb existed at preparation time, so
    * search remains lexical until restart even if another process builds a DB
    * later. `undefined` preserves historical dynamic discovery for non-watcher
-   * and backward-compatible caller-constructed dependencies.
+   * and backward-compatible caller-constructed dependencies. Every non-null
+   * path must end in the exact case-sensitive `.embed.db` suffix so its SQLite
+   * sidecars, watcher guard, and HNSW namespace remain injective.
    */
   embedDbFile?: string | null;
   /**
@@ -712,16 +718,18 @@ export async function prepareServerDeps(opts: ServeOptions): Promise<ServerDeps>
             if (rows.length === 0) {
               process.stderr.write(`enquire: --use-hnsw passed but embed-db is empty; skipping HNSW build.\n`);
               // v3.10.0-rc.37 (audit #8 — right-to-erasure) — an emptied embed-db
-              // leaves a stale `<persistFile>.bin` + `.meta.json` on disk, and the
-              // `.meta.json` sidecar carries deleted notes' raw `text_preview`. With
+              // leaves stale immutable generations + `.meta.json` on disk, and the
+              // metadata carries deleted notes' raw `text_preview`. With
               // no index built there is no `saveTo` to overwrite them, so erase the
               // sidecars now (best-effort) when persistence is on — mirrors the
               // EmbedDb.clearOnDisk sidecar-erase, minus deleting the (valid) db.
               if (opts.hnswPersist !== false) {
-                const { unlink } = await import("node:fs/promises");
-                for (const sidecar of [`${persistFile}.bin`, `${persistFile}.meta.json`]) {
-                  await unlink(sidecar).catch(() => {});
-                }
+                const { clearHnswPersistedArtifacts } = await import("./hnsw.js");
+                await clearHnswPersistedArtifacts(persistFile).catch((err) => {
+                  process.stderr.write(
+                    `enquire: unable to erase stale HNSW artifacts for an empty index — ${err instanceof Error ? err.message : String(err)}\n`
+                  );
+                });
               }
             } else {
               const { buildHnsw } = await import("./hnsw.js");
@@ -764,7 +772,9 @@ export async function prepareServerDeps(opts: ServeOptions): Promise<ServerDeps>
               if (opts.hnswPersist !== false) {
                 try {
                   await index.saveTo(persistFile, rowByLabel, signature);
-                  process.stderr.write(`enquire: HNSW index persisted to ${persistFile}.bin (+ .meta.json)\n`);
+                  process.stderr.write(
+                    `enquire: HNSW immutable generation + meta pointer persisted at ${persistFile}\n`
+                  );
                 } catch (err) {
                   // Non-fatal — persistence is an optimization. Log + continue.
                   process.stderr.write(

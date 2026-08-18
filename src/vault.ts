@@ -5,6 +5,13 @@ import * as path from "node:path";
 import { foldName } from "./name-fold.js";
 import { type ParsedNote, parseNote } from "./parser.js";
 import { loadPeriodicConfig, type PeriodicConfig } from "./periodic.js";
+import { assertCacheFilePath } from "./persistence-path.js";
+import {
+  preflightSensitiveArtifactTemps,
+  publishSensitiveArtifact,
+  readSensitiveArtifactText,
+  removeSensitiveArtifactTemps
+} from "./sensitive-artifact.js";
 import { type RestrictedVaultPathReason, restrictedVaultPathReason } from "./vault-path-policy.js";
 import { compileGlobTokens, matchWildcardTokens } from "./wildcard-match.js";
 import { windowsRelativePathProblem } from "./windows-path.js";
@@ -188,7 +195,9 @@ export interface VaultOptions {
   enableWrite?: boolean;
   /** Persist the parse cache across server restarts. Default false. */
   persistentCache?: boolean;
-  /** Override the cache file location. Default: ~/.cache/enquire/<vault-hash>.json. */
+  /** Override with an exact `.json` cache-file path outside the reserved
+   * `.feedback.json` / `.hnsw.meta.json` subclasses. Default:
+   * ~/.cache/enquire/<vault-hash>.json. */
   cacheFile?: string;
   /** Refuse to read/write a cache file larger than this (default 50 MB). */
   maxDiskCacheBytes?: number;
@@ -215,6 +224,10 @@ export interface VaultOptions {
  * Methods are async because filesystem IO; the in-memory cache makes
  * repeated reads of the same note ~free.
  *
+ * @param root - Configured vault root.
+ * @param opts - Optional visibility, mutation, size, and persistence settings.
+ * @throws {TypeError} If `opts.cacheFile` is outside the exact parse-cache namespace.
+ * @throws {Error} If supplied visibility patterns are empty after normalization.
  * @example
  * ```ts
  * const vault = new Vault("/home/me/Vault", { enableWrite: false });
@@ -235,9 +248,11 @@ export class Vault {
   readonly readPaths: readonly string[];
   private excludeMatchers: Array<{ test(path: string): boolean }>;
   private readPathMatchers: Array<{ test(path: string): boolean }>;
-  cacheFile: string | null;
+  private cacheFileValue: string | null;
   private cache = new Map<string, CachedNote>();
   private cacheDirty = false;
+  private cacheEpoch = 0;
+  private cachePublishChain: Promise<void> = Promise.resolve();
   private ready = false;
   /** Lazily loaded periodic-notes config (.obsidian/daily-notes.json + Periodic
    *  Notes plugin). Cached forever after first read — users restart the server
@@ -245,6 +260,7 @@ export class Vault {
   private periodicConfig: PeriodicConfig | null = null;
 
   constructor(root: string, opts: VaultOptions = {}) {
+    if (opts.cacheFile !== undefined) assertCacheFilePath(opts.cacheFile);
     this.root = path.resolve(root);
     this.configuredRoot = this.root;
     this.maxFileBytes = opts.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES;
@@ -252,7 +268,7 @@ export class Vault {
     this.writeEnabled = opts.enableWrite ?? false;
     this.persistentCacheEnabled = opts.persistentCache ?? false;
     this.maxDiskCacheBytes = opts.maxDiskCacheBytes ?? DEFAULT_MAX_DISK_CACHE_BYTES;
-    this.cacheFile = opts.cacheFile ?? null;
+    this.cacheFileValue = opts.cacheFile ?? null;
     // v2.0.0-beta.2 P1 sec DiD: refuse to start if the user passed exclusion
     // flags that, after stripping empty / whitespace-only entries, produced
     // 0 working patterns. Pre-fix, e.g. `--read-paths ""` (empty after shell
@@ -278,6 +294,26 @@ export class Vault {
     this.excludeMatchers = this.excludeGlobs.map(compileGlob);
     this.readPaths = Object.freeze([...cleanReadPaths]);
     this.readPathMatchers = this.readPaths.map(compileGlob);
+  }
+
+  /** Exact `.json` path of the configured persistent cache, or `null` before default resolution. */
+  get cacheFile(): string | null {
+    return this.cacheFileValue;
+  }
+
+  /** Retarget future cache operations to an exact admitted path.
+   * @param file - Exact `.json` main outside reserved feedback/HNSW-meta subclasses, or `null`.
+   * @throws {TypeError} If a non-null path is outside the exact parse-cache namespace. */
+  set cacheFile(file: string | null) {
+    if (file !== null) assertCacheFilePath(file);
+    if (file === this.cacheFileValue) return;
+    this.cacheFileValue = file;
+    // `cacheFile` is a historical writable programmatic surface. Retargeting
+    // must create a new persistence generation: an older in-flight save may
+    // finish at its invocation-bound path, but it must not clear the dirty bit
+    // and make the next save to this new path a no-op.
+    this.cacheEpoch += 1;
+    this.cacheDirty = true;
   }
 
   /** Return why a path is outside the public vault surface, or `null` when admitted. */
@@ -329,7 +365,7 @@ export class Vault {
     }
     this.root = await this.realpathSafe(this.root);
     if (this.persistentCacheEnabled && !this.cacheFile) {
-      this.cacheFile = defaultCacheFile(this.root);
+      this.cacheFileValue = defaultCacheFile(this.root);
     }
     this.ready = true;
     if (this.persistentCacheEnabled) {
@@ -358,12 +394,13 @@ export class Vault {
    *           cache is enabled.
    */
   async loadDiskCache(): Promise<number> {
-    if (!this.cacheFile) return 0;
+    const file = this.cacheFile;
+    if (!file) return 0;
     try {
-      const stat = await this.statSafe(this.cacheFile);
+      const stat = await this.statSafe(file);
       if (stat.size > this.maxDiskCacheBytes) {
         process.stderr.write(
-          `enquire: ignoring cache file (${stat.size} bytes > limit ${this.maxDiskCacheBytes}): ${this.cacheFile}\n`
+          `enquire: ignoring cache file (${stat.size} bytes > limit ${this.maxDiskCacheBytes}): ${file}\n`
         );
         return 0;
       }
@@ -372,7 +409,7 @@ export class Vault {
     }
     let raw: string;
     try {
-      raw = await this.readFileSafe(this.cacheFile, "utf8");
+      raw = await readSensitiveArtifactText(file, this.maxDiskCacheBytes);
     } catch {
       return 0;
     }
@@ -466,13 +503,14 @@ export class Vault {
         parsed: result.entry.parsed,
         mtimeMs: result.entry.mtimeMs
       });
+      this.cacheEpoch += 1;
       loaded += 1;
     }
     // If we silently dropped any persisted entries (deleted, oversized,
     // mtime-stale, private) or accepted a legacy identity for migration, mark
     // the cache dirty so the next save rewrites only canonical admitted hits.
     // Closes both deleted-note retention and case-variant privacy rehydration.
-    if (dropped > 0 || migrationNeeded) this.cacheDirty = true;
+    if (dropped > 0 || migrationNeeded) this.markCacheDirty();
     // v3.7.16 P1-4 — when entries were dropped specifically because a new
     // privacy filter excluded them, surface that to stderr so operators
     // see the privacy-boundary correction (e.g., adding --exclude-glob
@@ -492,17 +530,34 @@ export class Vault {
    * Delete the on-disk parse cache file and reset the in-memory cache.
    * No-op when persistent cache wasn't configured.
    *
-   * @returns `true` if a cache file was removed, `false` if no file existed.
+   * @returns `true` if any stable, legacy-temp, or generated cache artifact was removed.
    */
   async clearDiskCache(): Promise<boolean> {
-    if (!this.cacheFile) return false;
+    const file = this.cacheFile;
+    if (!file) return false;
+    const invocationEpoch = this.cacheEpoch;
+    const clear = this.cachePublishChain.then(() => this.clearDiskCacheOnce(file, invocationEpoch));
+    this.cachePublishChain = clear.then(
+      () => {},
+      () => {}
+    );
+    return clear;
+  }
+
+  private async clearDiskCacheOnce(file: string, invocationEpoch: number): Promise<boolean> {
     // rc.36 F-2 (P-2 erasure-completeness sibling) — erase BOTH the cache file
     // AND any leftover atomic-write temp. A crash between `saveDiskCache`'s
     // `writeFile(tmp)` and `rename` (or an EXDEV cross-device rename) leaves
     // `${cacheFile}.tmp` holding full note bodies on disk; clearing only the
     // main file would leave raw vault text behind — a right-to-erasure gap,
     // the parse-cache analogue of the rc.34 HNSW `.meta.json` sidecar fix.
-    const file = this.cacheFile;
+    await preflightSensitiveArtifactTemps(file);
+    for (const target of [file, `${file}.tmp`]) {
+      const entry = await this.lstatIfExistsSafe(target);
+      if (entry && !entry.isFile() && !entry.isSymbolicLink()) {
+        throw new Error("Refusing to clear an unsafe persistent-cache artifact");
+      }
+    }
     let removed = false;
     for (const target of [file, `${file}.tmp`]) {
       try {
@@ -512,39 +567,62 @@ export class Vault {
         if (!(isErrnoException(err) && err.code === "ENOENT")) throw err;
       }
     }
-    this.cache.clear();
-    this.cacheDirty = false;
+    removed = (await removeSensitiveArtifactTemps(file)) > 0 || removed;
+    // The public cacheFile setter may retarget future operations while this
+    // clear waits behind an older publication. Delete only the path captured
+    // by this invocation; reset shared memory/dirty state only if that path is
+    // still the active target when the queued clear executes.
+    if (this.cacheFile === file && this.cacheEpoch === invocationEpoch) {
+      this.cache.clear();
+      this.cacheEpoch += 1;
+      this.cacheDirty = false;
+    }
     return removed;
   }
 
   /**
-   * Flush the in-memory parse cache to disk. Writes to a temp file then
-   * atomically renames over the target so a crash mid-flush can't
-   * corrupt the cache. Best-effort reasserts mode 0o600 on the cache file;
-   * a parent created by Enquire starts at 0o700, while an existing/custom
-   * parent remains operator-managed.
+   * Flush the in-memory parse cache to disk. Serializes into an unpredictable
+   * exclusive same-parent sibling, applies mode `0600` and fsyncs its held
+   * descriptor before rename publication. The published leaf is never chmod'd;
+   * a missing parent is requested via recursive mode-`0700` mkdir (subject to
+   * a more-restrictive umask), while an existing/custom parent is never path-
+   * chmod'd. The parent directory is not fsync'd, so
+   * this is atomic leaf replacement rather than a power-loss durability claim.
    *
    * No-op when persistent cache wasn't configured or the cache hasn't
    * been modified since the last save (`cacheDirty` flag).
    */
   async saveDiskCache(): Promise<void> {
-    if (!this.persistentCacheEnabled || !this.cacheFile || !this.cacheDirty) return;
+    const file = this.cacheFile;
+    if (!this.persistentCacheEnabled || !file || !this.cacheDirty) return;
+    const write = this.cachePublishChain.then(() => this.saveDiskCacheOnce(file));
+    this.cachePublishChain = write.catch(() => {});
+    return write;
+  }
+
+  private async saveDiskCacheOnce(file: string): Promise<void> {
+    if (!this.persistentCacheEnabled || !this.cacheDirty) return;
+    // Capture before the first traversal await. A mutation after an entry has
+    // been copied into `entries` must prevent this older snapshot from clearing
+    // dirty, even if the traversal later observes the new epoch.
+    const publishedEpoch = this.cacheEpoch;
+    const cacheSnapshot = [...this.cache];
     const entries: DiskCacheEntry[] = [];
-    for (const [abs, cached] of this.cache) {
+    for (const [abs, cached] of cacheSnapshot) {
       const relPath = vaultRelative(this.root, abs);
       if (this.isExcluded(relPath)) {
-        this.cache.delete(abs);
+        this.deleteCacheEntry(abs);
         continue;
       }
       try {
         const liveAbs = await this.resolveSafePath(abs);
         const liveStat = await this.statSafe(liveAbs);
         if (!liveStat.isFile() || liveStat.mtimeMs !== cached.mtimeMs) {
-          this.cache.delete(abs);
+          this.deleteCacheEntry(abs);
           continue;
         }
       } catch {
-        this.cache.delete(abs);
+        this.deleteCacheEntry(abs);
         continue;
       }
       entries.push({
@@ -563,33 +641,21 @@ export class Vault {
     const serialized = JSON.stringify(payload);
     if (Buffer.byteLength(serialized, "utf8") > this.maxDiskCacheBytes) {
       process.stderr.write(
-        `enquire: refusing to write cache (${Buffer.byteLength(serialized, "utf8")} bytes > limit ${this.maxDiskCacheBytes}): ${this.cacheFile}\n`
+        `enquire: refusing to write cache (${Buffer.byteLength(serialized, "utf8")} bytes > limit ${this.maxDiskCacheBytes}): ${file}\n`
       );
       return;
     }
-    const cacheDir = path.dirname(this.cacheFile);
-    // v3.7.13 M9 — only chmod the cache dir to 0700 if we CREATED it.
-    // Pre-3.7.13 we always chmod'd, which clobbered perms on a custom
-    // `--cache-file` parent (e.g. ~/.local/share/, a shared Dropbox folder,
-    // an NFS mount with group-readable defaults). FtsIndex / EmbedDb
-    // already use this `parentExisted` gate (src/fts5.ts, src/embed-db.ts);
-    // applying the same pattern here closes the inconsistency.
-    const parentExisted = await fs
-      .stat(cacheDir)
-      .then(() => true)
-      .catch(() => false);
+    const cacheDir = path.dirname(file);
+    // Recursive mkdir applies 0700 (subject only to a more-restrictive umask)
+    // to directories this call creates and leaves an existing/custom parent
+    // untouched. Never infer ownership from a pre-stat and then path-chmod:
+    // another creator can legitimately win between those two operations.
     await this.mkdirSafe(cacheDir, { recursive: true, mode: 0o700 });
-    if (!parentExisted) {
-      // Directory didn't exist before this call — we own it, lock perms.
-      await fs.chmod(cacheDir, 0o700).catch(() => {});
-    }
-    const tmp = `${this.cacheFile}.tmp`;
-    // mode 0o600 — full note bodies live here, treat as private to the user account.
-    await this.writeFileSafe(tmp, serialized, { encoding: "utf8", mode: 0o600 });
-    await this.renameSafe(tmp, this.cacheFile);
-    // Defensive: rename preserves original mode if file existed; chmod ensures 0o600 either way.
-    await fs.chmod(this.cacheFile, 0o600).catch(() => {});
-    this.cacheDirty = false;
+    // The shared publisher owns an unpredictable exclusive mode-0600 sibling
+    // and promotes it by rename. A final symlink leaf is replaced, never
+    // followed; there is no post-publish chmod(final) race.
+    await publishSensitiveArtifact(file, serialized);
+    if (this.cacheFile === file && this.cacheEpoch === publishedEpoch) this.cacheDirty = false;
   }
 
   /**
@@ -771,13 +837,6 @@ export class Vault {
   private async mkdirSafe(p: string, opts: Parameters<typeof fs.mkdir>[1]): Promise<void> {
     try {
       await fs.mkdir(p, opts);
-    } catch (err) {
-      throw this.sanitizeFsError(err);
-    }
-  }
-  private async writeFileSafe(p: string, data: string, opts: Parameters<typeof fs.writeFile>[2]): Promise<void> {
-    try {
-      await fs.writeFile(p, data, opts);
     } catch (err) {
       throw this.sanitizeFsError(err);
     }
@@ -1079,7 +1138,7 @@ export class Vault {
         await fh?.close().catch(() => {});
       }
     }
-    this.cache.delete(abs);
+    this.deleteCacheEntry(abs);
     const stat = await this.statSafe(abs);
     return {
       absPath: abs,
@@ -1496,8 +1555,8 @@ export class Vault {
         // Best-effort cleanup; toAbs is the canonical truth.
       });
     }
-    this.cache.delete(fromAbs);
-    this.cache.delete(toAbs);
+    this.deleteCacheEntry(fromAbs);
+    this.deleteCacheEntry(toAbs);
     const stat = await this.statSafe(toAbs);
     return {
       from: vaultRelative(this.root, fromAbs),
@@ -1613,7 +1672,7 @@ export class Vault {
       } finally {
         await handle.close();
       }
-      this.cache.delete(abs);
+      this.deleteCacheEntry(abs);
       return {
         absPath: abs,
         relPath: vaultRelative(this.root, abs),
@@ -1627,13 +1686,15 @@ export class Vault {
    *  changes (e.g. a full vault rebuild). Does NOT delete the on-disk
    *  cache file — call {@link clearDiskCache} for that. */
   invalidateCache(): void {
+    if (this.cache.size === 0) return;
     this.cache.clear();
+    this.markCacheDirty();
   }
 
   /** Drop a single cached note by absolute path. Used by the watcher when one
    *  file changes — full-cache clear would be wasteful for a 5k-note vault. */
   invalidateOne(absPath: string): void {
-    this.cache.delete(absPath);
+    this.deleteCacheEntry(absPath);
   }
 
   /**
@@ -1783,6 +1844,15 @@ export class Vault {
       if (oldest !== undefined) this.cache.delete(oldest);
     }
     this.cache.set(key, value);
+    this.markCacheDirty();
+  }
+
+  private deleteCacheEntry(key: string): void {
+    if (this.cache.delete(key)) this.markCacheDirty();
+  }
+
+  private markCacheDirty(): void {
+    this.cacheEpoch += 1;
     this.cacheDirty = true;
   }
 }

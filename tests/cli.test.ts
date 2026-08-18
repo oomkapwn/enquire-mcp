@@ -522,6 +522,34 @@ describe("CLI subcommands E2E (against built dist/)", () => {
     ).toBe(false);
   });
 
+  it.for([
+    { flag: "--index-file", expected: /FTS index file must end exactly in '\.fts5\.db'/ },
+    { flag: "--embed-file", expected: /Embedding index file must end exactly in '\.embed\.db'/ }
+  ])("`doctor $flag ''` preserves the invalid empty value through CLI admission", async ({ flag, expected }, ctx) => {
+    if (!distExists()) return ctx.skip();
+    const missingVault = path.join(tmpdir, `doctor-empty-${flag.slice(2)}-vault`);
+    const cache = path.join(tmpdir, `doctor-empty-${flag.slice(2)}-cache`);
+    const res = spawnSync(
+      process.execPath,
+      [distEntry, "doctor", "--vault", missingVault, flag, "", "--json"],
+      {
+        encoding: "utf8",
+        timeout: 15000,
+        env: { ...process.env, XDG_CACHE_HOME: cache }
+      }
+    );
+    const output = `${res.stdout ?? ""}${res.stderr ?? ""}`;
+    expect(res.status).not.toBe(0);
+    expect(output).toMatch(expected);
+    expect(output).not.toMatch(/Vault not found/);
+    expect(
+      await fs
+        .stat(cache)
+        .then(() => true)
+        .catch(() => false)
+    ).toBe(false);
+  });
+
   it("`doctor --help` documents all tiers and the hybrid default", (ctx) => {
     if (!distExists()) return ctx.skip();
     const out = execFileSync(process.execPath, [distEntry, "doctor", "--help"], { encoding: "utf8" });
@@ -574,6 +602,106 @@ describe("CLI subcommands E2E (against built dist/)", () => {
     expect(res.status).toBe(0);
     expect(res.stdout).toMatch(/DRY RUN|already clean/);
     expect(res.stdout).not.toMatch(/enquire prune: removed/);
+  });
+
+  it.for(["nonempty generated stage"])("`prune --yes` safely removes a %s", async (_fixture, { skip }) => {
+    if (!distExists()) {
+      skip("dist not built");
+      return;
+    }
+    const cacheRoot = path.join(tmpdir, "prune-cache-root");
+    const enquireDir = path.join(cacheRoot, "enquire");
+    await fs.mkdir(enquireDir, { recursive: true });
+    const keepHash = path.basename(defaultIndexFile(await fs.realpath(vault))).slice(0, 12);
+    const otherHash = keepHash === "bbbbbbbbbbbb" ? "cccccccccccc" : "bbbbbbbbbbbb";
+    const stage = path.join(enquireDir, `${otherHash}.json.enquire-stage-${"a".repeat(48)}`);
+    const sentinel = path.join(cacheRoot, "outside-prune-sentinel.txt");
+    await fs.mkdir(stage, { mode: 0o700 });
+    await fs.writeFile(path.join(stage, "artifact"), "SENSITIVE_PARSE_CACHE_BYTES", { mode: 0o600 });
+    await fs.writeFile(sentinel, "OUTSIDE_SENTINEL");
+
+    const res = spawnSync(process.execPath, [distEntry, "prune", "--vault", vault, "--yes"], {
+      encoding: "utf8",
+      timeout: 20000,
+      env: { ...process.env, XDG_CACHE_HOME: cacheRoot }
+    });
+    expect(res.status, `${res.stdout ?? ""}${res.stderr ?? ""}`).toBe(0);
+    await expect(fs.lstat(stage)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await fs.readFile(sentinel, "utf8")).toBe("OUTSIDE_SENTINEL");
+  });
+
+  it.for(["reserved directory"])(
+    "`prune --yes` refuses an exact %s before deleting any sibling",
+    async (_fixture, { skip }) => {
+      if (!distExists()) {
+        skip("dist not built");
+        return;
+      }
+      const cacheRoot = path.join(tmpdir, "prune-unsafe-shape-root");
+      const enquireDir = path.join(cacheRoot, "enquire");
+      await fs.mkdir(enquireDir, { recursive: true });
+      const keepHash = path.basename(defaultIndexFile(await fs.realpath(vault))).slice(0, 12);
+      const otherHash = keepHash === "bbbbbbbbbbbb" ? "cccccccccccc" : "bbbbbbbbbbbb";
+      const firstSibling = path.join(enquireDir, `${otherHash}.json`);
+      const unsafeDirectory = path.join(enquireDir, `${otherHash}.fts5.db`);
+      await fs.writeFile(firstSibling, "PARSE_CACHE_SENTINEL");
+      await fs.mkdir(unsafeDirectory);
+
+      const res = spawnSync(process.execPath, [distEntry, "prune", "--vault", vault, "--yes"], {
+        encoding: "utf8",
+        timeout: 20000,
+        env: { ...process.env, XDG_CACHE_HOME: cacheRoot }
+      });
+      expect(res.status).not.toBe(0);
+      expect(`${res.stdout ?? ""}${res.stderr ?? ""}`).toMatch(/not a regular file or symlink leaf/i);
+      expect(await fs.readFile(firstSibling, "utf8")).toBe("PARSE_CACHE_SENTINEL");
+      expect((await fs.lstat(unsafeDirectory)).isDirectory()).toBe(true);
+    }
+  );
+
+  it.for(["non-ENOENT unlink failure"])("`prune --yes` exits nonzero on a %s", async (_fixture, { skip }) => {
+    if (!distExists()) {
+      skip("dist not built");
+      return;
+    }
+    if (process.platform === "win32") {
+      skip("POSIX directory write-mode control");
+      return;
+    }
+    const cacheRoot = path.join(tmpdir, "prune-unlink-failure-root");
+    const enquireDir = path.join(cacheRoot, "enquire");
+    await fs.mkdir(enquireDir, { recursive: true });
+    const keepHash = path.basename(defaultIndexFile(await fs.realpath(vault))).slice(0, 12);
+    const otherHash = keepHash === "bbbbbbbbbbbb" ? "cccccccccccc" : "bbbbbbbbbbbb";
+    const artifact = path.join(enquireDir, `${otherHash}.json`);
+    await fs.writeFile(artifact, "UNLINK_FAILURE_SENTINEL");
+    await fs.chmod(enquireDir, 0o500);
+    const capabilityProbe = path.join(enquireDir, "write-capability-probe");
+    try {
+      await fs.writeFile(capabilityProbe, "probe", { flag: "wx" });
+      await fs.unlink(capabilityProbe);
+      await fs.chmod(enquireDir, 0o700);
+      skip("filesystem identity can still write through a mode-0500 directory");
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "EACCES" && code !== "EPERM") {
+        await fs.chmod(enquireDir, 0o700);
+        throw error;
+      }
+    }
+    try {
+      const res = spawnSync(process.execPath, [distEntry, "prune", "--vault", vault, "--yes"], {
+        encoding: "utf8",
+        timeout: 20000,
+        env: { ...process.env, XDG_CACHE_HOME: cacheRoot }
+      });
+      expect(res.status).not.toBe(0);
+      expect(`${res.stdout ?? ""}${res.stderr ?? ""}`).toMatch(/Unable to remove a preflighted cache artifact/);
+      expect(await fs.readFile(artifact, "utf8")).toBe("UNLINK_FAILURE_SENTINEL");
+    } finally {
+      await fs.chmod(enquireDir, 0o700);
+    }
   });
 
   // v3.9.0-rc.9 audit — the bearer min-length check now fires in the CLI
@@ -704,7 +832,7 @@ describe("CLI subcommands E2E (against built dist/)", () => {
     }
   });
 
-  it("`enquire-mcp clear-index` removes db + WAL/SHM after a build", async (ctx) => {
+  it("`enquire-mcp clear-index` removes db + WAL/SHM/rollback journal after a build", async (ctx) => {
     if (!distExists()) return ctx.skip();
     if (!canRunFts5) return ctx.skip();
     const indexFile = path.join(tmpdir, "purge.fts5.db");
@@ -716,6 +844,8 @@ describe("CLI subcommands E2E (against built dist/)", () => {
       .then(() => true)
       .catch(() => false);
     expect(dbExisted).toBe(true);
+    const rollbackJournal = `${indexFile}-journal`;
+    await fs.writeFile(rollbackJournal, "ROLLBACK_JOURNAL_SENTINEL");
 
     const out = execFileSync(
       process.execPath,
@@ -729,6 +859,7 @@ describe("CLI subcommands E2E (against built dist/)", () => {
       .then(() => true)
       .catch(() => false);
     expect(dbStillThere).toBe(false);
+    await expect(fs.lstat(rollbackJournal)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("`enquire-mcp index` then second call reports unchanged=N (incremental skips unchanged files)", (ctx) => {

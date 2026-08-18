@@ -34,6 +34,19 @@ describe("FeedbackStore (v3.11.0 closed-loop feedback)", () => {
     await fs.rm(dir, { recursive: true, force: true });
   });
 
+  it.each([
+    ["generic JSON", "feedback.json"],
+    ["uppercase suffix", "feedback.FEEDBACK.JSON"],
+    ["trailing LF", "feedback.feedback.json\n"],
+    ["trailing U+2028", "feedback.feedback.json\u2028"]
+  ] as const)("rejects %s before filesystem work", async (_shape, basename) => {
+    const absentParent = path.join(dir, `invalid-${Buffer.from(basename).toString("hex")}`);
+    await expect(FeedbackStore.open(path.join(absentParent, basename))).rejects.toThrow(
+      new TypeError("Feedback store file must end exactly in '.feedback.json'")
+    );
+    await expect(fs.lstat(absentParent)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("open() on a missing file yields an empty store (fail-soft)", async () => {
     const store = await FeedbackStore.open(file);
     expect(store.size()).toBe(0);
@@ -141,6 +154,37 @@ describe("FeedbackStore (v3.11.0 closed-loop feedback)", () => {
     void store;
   });
 
+  it.for([{ overflowPath: "OVERFLOW.md" }])(
+    "reopen caps a crafted cap+1 generation instead of retaining $overflowPath",
+    async ({ overflowPath }) => {
+      const entries: Record<string, unknown> = {};
+      for (let i = 0; i < MAX_FEEDBACK_ENTRIES; i++) {
+        entries[`n${i}.md`] = { useful: 1, notUseful: 0, lastMarked: NOW };
+      }
+      entries[overflowPath] = { useful: 1, notUseful: 0, lastMarked: NOW };
+      await fs.writeFile(file, JSON.stringify({ version: 1, entries }));
+
+      const capped = await FeedbackStore.open(file);
+      expect(capped.size()).toBe(MAX_FEEDBACK_ENTRIES);
+      expect(capped.scores().has(`n${MAX_FEEDBACK_ENTRIES - 1}.md`)).toBe(true);
+      expect(capped.scores().has(overflowPath)).toBe(false);
+    }
+  );
+
+  it.for([{ afterInspectionLimit: "AFTER_LIMIT.md" }])(
+    "reopen inspects at most the raw property cap before $afterInspectionLimit",
+    async ({ afterInspectionLimit }) => {
+      const entries: Record<string, unknown> = {};
+      for (let i = 0; i < MAX_FEEDBACK_ENTRIES; i++) entries[`invalid${i}`] = null;
+      entries[afterInspectionLimit] = { useful: 1, notUseful: 0, lastMarked: NOW };
+      await fs.writeFile(file, JSON.stringify({ version: 1, entries }));
+
+      const bounded = await FeedbackStore.open(file);
+      expect(bounded.size()).toBe(0);
+      expect(bounded.scores().has(afterInspectionLimit)).toBe(false);
+    }
+  );
+
   it("defaultFeedbackFile shares the cache dir + 12-hex vault hash with defaultIndexFile (so prune erases it)", () => {
     const vaultRoot = "/Users/alex/Vault";
     const fb = defaultFeedbackFile(vaultRoot);
@@ -170,42 +214,158 @@ describe("FeedbackStore (v3.11.0 closed-loop feedback)", () => {
   // v3.11.0-rc.1 audit response (MED): persist() must create the cache dir 0700
   // (every sibling cache writer does), so SECURITY.md's Enquire-created-parent
   // 0700 posture holds when feedback is the FIRST writer to materialize it.
-  it("persist creates the cache dir 0700 (not 0755) and the file 0600", async () => {
+  it("persist requests a private fresh parent, preserves an existing 0750 parent, and publishes 0600", async () => {
     // A parent that does NOT exist yet, so writeOnce's mkdir is the creator.
     const freshFile = path.join(dir, "nested", "enquire", "abc123def456.feedback.json");
     const store = await FeedbackStore.open(freshFile);
-    await store.record(["A.md"], true, NOW); // first persist → mkdir + chmod
-    expect((await fs.stat(path.dirname(freshFile))).mode & 0o777).toBe(0o700); // no group/world access
+    await store.record(["A.md"], true, NOW); // first persist → recursive mode-0700 mkdir
+    expect((await fs.stat(path.dirname(freshFile))).mode & 0o077).toBe(0); // umask may tighten 0700
     expect((await fs.stat(freshFile)).mode & 0o777).toBe(0o600);
+
+    const existingParent = path.join(dir, "operator-managed-feedback-parent");
+    await fs.mkdir(existingParent, { mode: 0o750 });
+    await fs.chmod(existingParent, 0o750);
+    const existingStore = await FeedbackStore.open(path.join(existingParent, "abc123def456.feedback.json"));
+    await existingStore.record(["B.md"], true, NOW);
+    expect((await fs.stat(existingParent)).mode & 0o777).toBe(0o750);
   });
 
-  // v3.11.0-rc.1 audit response (MED): the store is shared across serve-http
-  // sessions and the SDK dispatches tool calls concurrently — persist()s must be
-  // serialized so they never interleave into a torn file (which the fail-soft
-  // open() would silently discard, losing ALL feedback).
-  it("concurrent record() calls serialize persists — no tmp-rename collision (DISCRIMINATES the persistChain)", async () => {
-    // The naive non-serialized version (writeOnce called directly from persist())
-    // lets two concurrent writes stream into the SAME <file>.tmp; the first rename
-    // consumes it, the rest hit ENOENT — which writeOnce logs as "feedback persist
-    // failed". The shared in-memory map means the file still ends coherent either
-    // way, so asserting JSON/tally alone is VACUOUS (it passed even without the
-    // fix — the rc.4 audit finding). The ENOENT stderr line is the only signal
-    // that actually distinguishes serialized from racing writes, so we assert on it.
+  it.for([
+    { boundary: "exact read limit", reportedBytes: MAX_FEEDBACK_FILE_BYTES, publishes: true },
+    { boundary: "one byte over read limit", reportedBytes: MAX_FEEDBACK_FILE_BYTES + 1, publishes: false }
+  ])("writer treats a $boundary snapshot as publishes=$publishes", async ({ reportedBytes, publishes }) => {
     const store = await FeedbackStore.open(file);
-    const spy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    await store.record(["Prior.md"], true, NOW);
+    const priorBytes = await fs.readFile(file);
+    const internals = store as unknown as {
+      data: {
+        entries: Record<string, { useful: number; notUseful: number; lastMarked: string }>;
+      };
+      writeOnce(): Promise<void>;
+    };
+    internals.data.entries["Next.md"] = { useful: 1, notUseful: 0, lastMarked: NOW };
+
+    const byteLengthSpy = vi.spyOn(Buffer, "byteLength").mockImplementationOnce(() => reportedBytes);
+    const openSpy = vi.spyOn(fs, "open");
+    const renameSpy = vi.spyOn(fs, "rename");
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    let stderr = "";
+    try {
+      await expect(internals.writeOnce()).resolves.toBeUndefined();
+      stderr = stderrSpy.mock.calls.map((call) => String(call[0])).join("");
+      if (publishes) {
+        expect(openSpy).toHaveBeenCalled();
+        expect(renameSpy.mock.calls.some((call) => String(call[1]) === file)).toBe(true);
+      } else {
+        expect(openSpy).not.toHaveBeenCalled();
+        expect(renameSpy).not.toHaveBeenCalled();
+      }
+    } finally {
+      byteLengthSpy.mockRestore();
+      openSpy.mockRestore();
+      renameSpy.mockRestore();
+      stderrSpy.mockRestore();
+    }
+
+    if (publishes) {
+      const parsed = JSON.parse(await fs.readFile(file, "utf8")) as { entries: Record<string, unknown> };
+      expect(parsed.entries["Next.md"]).toBeDefined();
+      expect(stderr).not.toMatch(/feedback persist failed/);
+    } else {
+      expect(await fs.readFile(file)).toEqual(priorBytes);
+      expect(stderr).toMatch(/feedback persist failed.*exceeds the persistent read limit/is);
+    }
+  });
+
+  // The store is shared across serve-http sessions and the SDK dispatches tool
+  // calls concurrently. Random exclusive temps prevent torn writes, but do NOT
+  // provide generation order by themselves: an older delayed publication could
+  // still rename after a newer one and lose the newest mark.
+  it.for([{ family: "legacy deterministic temp" }])(
+    "record() never follows a planted $family symlink",
+    async (_fixture, { skip }) => {
+      const store = await FeedbackStore.open(file);
+      const sentinel = path.join(dir, "attacker-owned-feedback-sentinel.txt");
+      await fs.writeFile(sentinel, "ATTACKER_FEEDBACK_SENTINEL");
+      let plantedLegacyTempSymlink = false;
+      try {
+        await fs.symlink(sentinel, `${file}.tmp`, "file");
+        plantedLegacyTempSymlink = true;
+      } catch (err) {
+        const code = (err as NodeJS.ErrnoException).code;
+        if (code === "EPERM" || code === "EACCES" || code === "ENOSYS") {
+          skip(`filesystem cannot create the symlink control (${code})`);
+          return;
+        }
+        throw err;
+      }
+
+      await store.record(["Safe.md"], true, NOW);
+      expect((await FeedbackStore.open(file)).scores().get("Safe.md")).toBeGreaterThan(0);
+      if (plantedLegacyTempSymlink) {
+        expect(await fs.readFile(sentinel, "utf8")).toBe("ATTACKER_FEEDBACK_SENTINEL");
+        expect((await fs.lstat(file)).isSymbolicLink()).toBe(false);
+      }
+    }
+  );
+
+  it("concurrent record() publishes whole generations in order", async () => {
+    const store = await FeedbackStore.open(file);
+
+    const realRename = fs.rename.bind(fs);
+    let releaseFirstRename = (): void => {};
+    let observeFirstRename = (): void => {};
+    const firstRenameGate = new Promise<void>((resolve) => {
+      releaseFirstRename = resolve;
+    });
+    const firstRenameObserved = new Promise<void>((resolve) => {
+      observeFirstRename = resolve;
+    });
+    let finalRenameCount = 0;
+    const renameSpy = vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+      if (String(to) === file) {
+        finalRenameCount += 1;
+        if (finalRenameCount === 1) {
+          observeFirstRename();
+          await firstRenameGate;
+        }
+      }
+      await realRename(from, to);
+    });
+    const internals = store as unknown as { writeOnce(): Promise<void> };
+    const realWriteOnce = internals.writeOnce.bind(store);
+    let writeOnceStarts = 0;
+    const writeOnceSpy = vi.spyOn(internals, "writeOnce").mockImplementation(async () => {
+      writeOnceStarts += 1;
+      await realWriteOnce();
+    });
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     let errs: string[] = [];
     try {
-      await Promise.all(Array.from({ length: 25 }, () => store.record(["Hot.md"], true, NOW)));
-      errs = spy.mock.calls.map((c) => String(c[0]));
+      const older = store.record(["Older.md"], true, NOW);
+      await firstRenameObserved;
+      const newer = store.record(["Newer.md"], true, NOW);
+      await Promise.resolve();
+      expect(writeOnceStarts, "the newer feedback generation must wait behind the blocked older rename").toBe(1);
+      releaseFirstRename();
+      await Promise.all([older, newer]);
+      errs = stderrSpy.mock.calls.map((c) => String(c[0]));
     } finally {
-      spy.mockRestore();
+      releaseFirstRename();
+      renameSpy.mockRestore();
+      writeOnceSpy.mockRestore();
+      stderrSpy.mockRestore();
     }
-    // Zero persist failures ⇒ the persistChain prevented every tmp-rename collision.
+
+    expect(finalRenameCount).toBe(2);
     expect(errs.filter((l) => /feedback persist failed/.test(l))).toEqual([]);
-    const parsed = JSON.parse(await fs.readFile(file, "utf8")); // and the file is coherent
-    expect(parsed.entries["Hot.md"].useful).toBe(25);
-    // a fresh open sees the full tally → proves no corrupt-file fail-soft discard
-    expect((await FeedbackStore.open(file)).scores().get("Hot.md")).toBeGreaterThan(0);
+    const parsed = JSON.parse(await fs.readFile(file, "utf8"));
+    expect(Object.keys(parsed.entries).sort()).toEqual(["Newer.md", "Older.md"]);
+    expect(parsed.entries["Older.md"].useful).toBe(1);
+    expect(parsed.entries["Newer.md"].useful).toBe(1);
+    const reopened = await FeedbackStore.open(file);
+    expect(reopened.scores().get("Older.md")).toBeGreaterThan(0);
+    expect(reopened.scores().get("Newer.md")).toBeGreaterThan(0);
   });
 });
 
@@ -267,7 +427,7 @@ describe("FeedbackStore.open file-size guard (rc.24 — external rc.21 audit, Go
   });
 
   it("a valid under-cap file still loads its entries (POSITIVE — guard doesn't break the happy path)", async () => {
-    const file = path.join(dir, "fb.json");
+    const file = path.join(dir, "fb.feedback.json");
     await fs.writeFile(
       file,
       JSON.stringify({ version: 1, entries: { "a.md": { useful: 3, notUseful: 1, lastMarked: "x" } } })
@@ -278,7 +438,7 @@ describe("FeedbackStore.open file-size guard (rc.24 — external rc.21 audit, Go
   });
 
   it("an over-MAX_FEEDBACK_FILE_BYTES file fail-softs to an EMPTY store (NEGATIVE control)", async () => {
-    const file = path.join(dir, "huge.json");
+    const file = path.join(dir, "huge.feedback.json");
     // A sparse file: stat.size exceeds the cap, but no disk is actually written — proves the
     // guard rejects on SIZE before readFile+JSON.parse (a real 64 MB write is unnecessary).
     const fh = await fs.open(file, "w");

@@ -105,7 +105,7 @@ const PRODUCTION_FILE_PINS: Readonly<Record<string, ProductionFilePin>> = {
       "./tool-registry.js|parseQuantizationMode|parseQuantizationMode"
     ],
     k1Opens: 6,
-    sha256: "f9bce96c418b15384dd305a23aaaf71f08434c8ffb07176d0d40d0073f305377"
+    sha256: "c729828d331028ec84ed0860793043d192d2d7f7803c1df158b3a5f8e1cb59c7"
   },
   "src/server.ts": {
     constructors: { EmbedDb: 2, FtsIndex: 1 },
@@ -124,7 +124,7 @@ const PRODUCTION_FILE_PINS: Readonly<Record<string, ProductionFilePin>> = {
       "./fts5.js|discoverFtsIndexConfig|discoverFtsIndexConfig"
     ],
     k1Opens: 3,
-    sha256: "16a64c309e9e84b5e0b7eb9d282b1a8d2d5f89f6b57ebd11fa77f4ff3baaf413"
+    sha256: "e0d6ac190ca01243f441dd1c586d6b519f900914d8ed39c436fb54aaa2c790a4"
   },
   "src/tools/search.ts": {
     constructors: { EmbedDb: 1, FtsIndex: 0 },
@@ -140,7 +140,7 @@ const PRODUCTION_FILE_PINS: Readonly<Record<string, ProductionFilePin>> = {
       "../embeddings.js|resolveStoredEmbeddingConfiguration|resolveStoredEmbeddingConfiguration"
     ],
     k1Opens: 1,
-    sha256: "afd6c10c6404ac4b55f9025c4776b7756d9e75da60ad1fbee88b631b35259a2c"
+    sha256: "a4cf7412186f5ef9c045cffe6b562a12bc6c15401673c2ffeda2b8ea9405d43f"
   }
 };
 

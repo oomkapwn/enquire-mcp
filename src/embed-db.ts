@@ -21,8 +21,11 @@
 import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
+import { clearHnswPersistedArtifacts, preflightHnswPersistedArtifacts } from "./hnsw.js";
 import { optionalDepDetail } from "./optional-dep.js";
+import { assertEmbedDbFilePath, embedDbFileStem } from "./persistence-path.js";
 import { EMBED_DB_SCHEMA_VERSION } from "./schema-contract.js";
+import { preflightSqliteArtifactFamily } from "./sensitive-artifact.js";
 import { clearWatcherActivationGuard, preflightWatcherActivationGuardRecovery } from "./watcher-activation-guard.js";
 import { stripTrailingSlashes } from "./wildcard-match.js";
 
@@ -836,7 +839,7 @@ function vectorNormSquared(vector: Float32Array): number {
 }
 
 export interface EmbedDbOptions {
-  /** Absolute path to the .embed.db file. */
+  /** Absolute path whose basename ends exactly in `.embed.db`. */
   file: string;
   /** Vault root for cross-vault contamination guard. */
   vaultRoot: string;
@@ -953,13 +956,15 @@ export class EmbedDb {
    * Create a lazy embedding-index handle after validating all runtime options.
    *
    * @param opts - Database path plus exact vault/model/vector authority tuple.
-   * @throws {TypeError} If a string or quantization option is invalid.
+   * @throws {TypeError} If a string or quantization option is invalid, including
+   *   a file without the exact `.embed.db` suffix.
    * @throws {RangeError} If `dim` is not a positive safe integer.
    */
   constructor(opts: EmbedDbOptions) {
     if (typeof opts.file !== "string" || opts.file.length === 0) {
       throw new TypeError("Embedding index file must be a non-empty string");
     }
+    assertEmbedDbFilePath(opts.file);
     if (typeof opts.vaultRoot !== "string" || opts.vaultRoot.length === 0) {
       throw new TypeError("Embedding index vault root must be a non-empty string");
     }
@@ -987,7 +992,10 @@ export class EmbedDb {
    * Refusal preserves logical schema and cell/BLOB values. SQLite itself may
    * still take locks, recover/checkpoint an existing journal, or touch physical
    * container/sidecar bytes while opening and closing; this API does not claim
-   * byte-identical DB/WAL/SHM or directory state. Idempotent after success.
+   * byte-identical DB/WAL/SHM or directory state. Before dependency loading and
+   * again immediately before native open, the main, WAL, SHM, and rollback-
+   * journal leaves must be wholly absent or every present leaf must be a singly
+   * linked regular file; orphan sidecars refuse. Idempotent after success.
    *
    * @param expectedDiscovery - Optional readonly preflight result to bind this
    *   mutating open to. No argument preserves the low-level intentional-rebuild
@@ -1001,29 +1009,22 @@ export class EmbedDb {
     // Snapshot before the first await so retained/mutable caller objects cannot
     // change authority while lstat/native loading is in flight.
     const expected = cloneEmbedDbOpenDiscovery(expectedDiscovery);
-    let fileExisted = true;
+    let fileExisted: boolean;
     try {
-      const artifact = await fs.lstat(this.file);
-      if (!artifact.isFile()) throw new Error("not a regular file");
-    } catch (err) {
-      if (errnoCode(err) === "ENOENT") fileExisted = false;
-      else throw new Error("Embedding index could not be inspected");
+      fileExisted = await preflightSqliteArtifactFamily(this.file);
+    } catch {
+      throw new Error("Embedding index artifact family could not be admitted");
     }
     const Ctor = await loadBetterSqlite();
     if (!fileExisted) {
       // Directory preparation is needed only for a new, schema-empty index.
-      // Existing paths reach same-handle admission without any chmod/mkdir.
+      // Recursive mkdir applies 0700 subject only to a more-restrictive umask
+      // and never chmods an existing/custom parent after a racy ownership probe.
       const parentDir = path.dirname(this.file);
-      const parentExisted = await fs
-        .stat(parentDir)
-        .then(() => true)
-        .catch(() => false);
       await fs.mkdir(parentDir, { recursive: true, mode: 0o700 });
-      if (!parentExisted) {
-        await fs.chmod(parentDir, 0o700).catch(() => {});
-      }
     }
     try {
+      fileExisted = await preflightSqliteArtifactFamily(this.file);
       this.db = new Ctor(this.file) as Db;
     } catch {
       throw new Error("Embedding index could not be opened");
@@ -1056,7 +1057,7 @@ export class EmbedDb {
   }
 
   /**
-   * Remove the embed db + WAL/SHM sidecars, HNSW persistence sidecars, and the
+   * Remove the embed db + WAL/SHM/rollback-journal sidecars, HNSW persistence sidecars, and the
    * process-restart watcher interlock (`<embed-db>.watcher-activation.guard`).
    * The guard contains no vault content, but `clear-embeddings` is the explicit
    * recovery operation after a failed startup and therefore owns its removal.
@@ -1078,11 +1079,23 @@ export class EmbedDb {
     // partial erase. The guard is validated again and removed last below.
     await preflightWatcherActivationGuardRecovery(this.file);
     // v3.10.0-rc.20 (audit M7) — derive the HNSW persist base via the SHARED
-    // `hnswPersistBase` helper (same one server.ts's writer uses), so the eraser
-    // and the writer can never drift. The index writes `<base>.bin` + the
-    // metadata writes `<base>.meta.json` (sidecars carry raw text_preview).
+    // `hnswPersistBase` helper (same one server.ts's writer uses), then delegate
+    // the complete legacy/generation/temp family to the HNSW eraser.
     const hnswBase = hnswPersistBase(this.file);
-    const targets = [this.file, `${this.file}-wal`, `${this.file}-shm`, `${hnswBase}.bin`, `${hnswBase}.meta.json`];
+    await preflightHnswPersistedArtifacts(hnswBase);
+    const targets = [this.file, `${this.file}-wal`, `${this.file}-shm`, `${this.file}-journal`];
+    for (const target of targets) {
+      let entry: import("node:fs").Stats;
+      try {
+        entry = await fs.lstat(target);
+      } catch (err) {
+        if (errnoCode(err) === "ENOENT") continue;
+        throw new Error("Unable to inspect embedding-index artifacts before clearing", { cause: err });
+      }
+      if (!entry.isFile() && !entry.isSymbolicLink()) {
+        throw new Error("Refusing to clear an unsafe embedding-index artifact");
+      }
+    }
     for (const p of targets) {
       try {
         await fs.unlink(p);
@@ -1095,6 +1108,7 @@ export class EmbedDb {
         }
       }
     }
+    removed = (await clearHnswPersistedArtifacts(hnswBase)) || removed;
     // Remove the guard LAST. If any derived artifact could not be removed, the
     // still-present guard keeps the next serve fail-closed. The helper accepts
     // only its narrow directory shape and never recursively deletes content.
@@ -2041,8 +2055,8 @@ export function defaultEmbedDbFile(vaultHashPrefix: string): string {
 
 /**
  * v3.10.0-rc.20 (audit M7) — derive the HNSW persistence base for an embed-db
- * file. `<dir>/<x>.embed.db` → `<dir>/<x>.hnsw`; the index writes `<base>.bin`
- * and the metadata writes `<base>.meta.json` (see `src/hnsw.ts`).
+ * file. `<dir>/<x>.embed.db` → `<dir>/<x>.hnsw`; the index writes immutable
+ * `<base>.<nonce>.bin` generations and a stable `<base>.meta.json` pointer.
  *
  * SINGLE SOURCE OF TRUTH for the base so the WRITER (server.ts `persistFile`,
  * passed to `saveTo`/`loadHnswFromDisk`) and the ERASER ({@link EmbedDb.clearOnDisk})
@@ -2051,9 +2065,15 @@ export function defaultEmbedDbFile(vaultHashPrefix: string): string {
  * sidecars on disk — and `.hnsw.meta.json` carries raw `text_preview`, so that's
  * a right-to-erasure (GDPR) gap (the rc.34 P-2 class). The erasure-completeness
  * invariant asserts both call sites route through this helper.
+ *
+ * @param embedDbFile - Configured embedding-database path.
+ * @returns Same-directory HNSW persistence base for that exact path.
+ * @throws {TypeError} If the configured path does not end exactly in `.embed.db`.
+ * @example
+ * hnswPersistBase("/tmp/aaaaaaaaaaaa.embed.db"); // "/tmp/aaaaaaaaaaaa.hnsw"
  */
 export function hnswPersistBase(embedDbFile: string): string {
-  return `${embedDbFile.replace(/\.embed\.db$/, "")}.hnsw`;
+  return `${embedDbFileStem(embedDbFile)}.hnsw`;
 }
 
 /**
@@ -2119,11 +2139,16 @@ export interface EmbedReceiptReader {
 /**
  * Open an existing embedding database strictly read-only for final receipt
  * validation. This function never bootstraps, rebuilds, migrates, or writes:
- * missing files and legacy/incompatible authority schemas are rejected.
+ * missing files and legacy/incompatible authority schemas are rejected. Its
+ * main/WAL/SHM/rollback-journal family is checked before dependency loading and
+ * again immediately before native open; every present leaf must be a singly
+ * linked regular file and the main must exist.
  *
  * @param file Absolute path to an existing `.embed.db` file.
  * @param expectedVaultRoot Exact vault root the database must declare.
  * @returns A synchronous receipt validator backed by a read-only SQLite handle.
+ * @throws {TypeError} If `file` is outside the exact `.embed.db` namespace;
+ *   this is checked before dependency loading or filesystem I/O.
  * @throws {Error} If the file is absent, belongs to another vault, or lacks the current revision ledger contract.
  * @example
  * ```ts
@@ -2136,9 +2161,12 @@ export interface EmbedReceiptReader {
  * ```
  */
 export async function openEmbedReceiptReader(file: string, expectedVaultRoot: string): Promise<EmbedReceiptReader> {
-  const Ctor = await loadBetterSqlite();
+  assertEmbedDbFilePath(file);
   let db: Db | null = null;
   try {
+    if (!(await preflightSqliteArtifactFamily(file))) throw new Error("missing embedding receipt database");
+    const Ctor = await loadBetterSqlite();
+    if (!(await preflightSqliteArtifactFamily(file))) throw new Error("missing embedding receipt database");
     db = new Ctor(file, { readonly: true, fileMustExist: true }) as Db;
     const metaRows = db
       .prepare("SELECT key, value FROM meta WHERE key IN ('schema_version', 'vault_root')")
@@ -2312,7 +2340,10 @@ function assertExpectedEmbedDiscovery(
  * class/schema/root admission used by `EmbedDb.open()`. Open, read, dependency,
  * and close failures collapse to `refused`; this function does not throw
  * expected discovery errors. SQLite/VFS lock, recovery, and WAL/SHM
- * bookkeeping remain outside this logical guarantee.
+ * bookkeeping remain outside this logical guarantee. The complete main/WAL/
+ * SHM/rollback-journal family is checked before dependency loading and again
+ * immediately before native open; unsafe, hardlinked, or orphaned leaves
+ * collapse to `refused` under the stable-parent boundary.
  *
  * This is a bounded pre-open configuration snapshot. Pass it to
  * {@link EmbedDb.open} to bind the mutating open to that observed state; open
@@ -2322,6 +2353,8 @@ function assertExpectedEmbedDiscovery(
  * @param file - Absolute path to the candidate embedding database.
  * @param expectedVaultRoot - Exact vault root allowed to own a populated file.
  * @returns A discriminated, path-free discovery result. Only `owned` carries metadata.
+ * @throws {TypeError} If `file` does not end exactly in `.embed.db`; expected
+ *   discovery failures are fail-soft only after this pure namespace admission.
  * @example
  * ```ts
  * const discovery = await discoverEmbedDbConfig(embedFile, canonicalVaultRoot);
@@ -2339,12 +2372,14 @@ function assertExpectedEmbedDiscovery(
  * ```
  */
 export async function discoverEmbedDbConfig(file: string, expectedVaultRoot: string): Promise<EmbedDbConfigDiscovery> {
+  assertEmbedDbFilePath(file);
+  let fileExisted: boolean;
   try {
-    const artifact = await fs.lstat(file);
-    if (!artifact.isFile()) return { kind: "refused" };
-  } catch (error) {
-    return errnoCode(error) === "ENOENT" ? { kind: "missing" } : { kind: "refused" };
+    fileExisted = await preflightSqliteArtifactFamily(file);
+  } catch {
+    return { kind: "refused" };
   }
+  if (!fileExisted) return { kind: "missing" };
 
   let Ctor: BetterSqliteConstructor;
   try {
@@ -2356,6 +2391,7 @@ export async function discoverEmbedDbConfig(file: string, expectedVaultRoot: str
   let db: Db | null = null;
   let discovery: EmbedDbConfigDiscovery = { kind: "refused" };
   try {
+    if (!(await preflightSqliteArtifactFamily(file))) return { kind: "missing" };
     db = new Ctor(file, { readonly: true, fileMustExist: true }) as Db;
     const admission = inspectEmbedAdmission(db, expectedVaultRoot);
     if (admission.kind === "empty") {
@@ -2389,6 +2425,7 @@ export async function discoverEmbedDbConfig(file: string, expectedVaultRoot: str
  * @param file - Absolute path to the embedding database associated with recovery.
  * @param expectedVaultRoot - Exact vault root allowed to own a present database.
  * @returns A promise that resolves for a missing or exact-owned supported database.
+ * @throws {TypeError} If `file` does not end exactly in `.embed.db`.
  * @throws {Error} If a present database cannot prove recovery ownership.
  * @example
  * ```ts
@@ -2419,13 +2456,18 @@ type PeekEmbedDbMetaResult = {
  * Without an expected root it may expose only bounded known raw keys; with an
  * expected root it returns metadata only after the complete readonly
  * class/schema/root admission. Missing dependencies, unreadable/corrupt files,
- * malformed rows and query failures collapse to `null`. A close failure never
- * escapes; this legacy diagnostic may still return metadata already read.
+ * malformed rows and query failures collapse to `null` after exact namespace
+ * admission. An invalid suffix throws before I/O. A close failure never escapes;
+ * this legacy diagnostic may still return metadata already read. The complete
+ * main/WAL/SHM/rollback-journal family receives the same two-stage singly
+ * linked regular-file preflight as production discovery; an unsafe or orphaned
+ * leaf returns `null` before native open.
  *
  * @param file - Absolute path to a `.embed.db` file.
  * @param expectedVaultRoot - Optional exact root plus full-class filter for
  *   configuration discovery. Omit only for bounded raw diagnostics.
  * @returns Bounded metadata when readable and root-compatible, otherwise `null`.
+ * @throws {TypeError} If `file` does not end exactly in `.embed.db`.
  * @example
  * ```ts
  * const meta = await peekEmbedDbMeta(embedFile, canonicalVaultRoot);
@@ -2433,8 +2475,12 @@ type PeekEmbedDbMetaResult = {
  * ```
  */
 export async function peekEmbedDbMeta(file: string, expectedVaultRoot?: string): Promise<PeekEmbedDbMetaResult> {
-  const fsMod = await import("node:fs");
-  if (!fsMod.existsSync(file)) return null;
+  assertEmbedDbFilePath(file);
+  try {
+    if (!(await preflightSqliteArtifactFamily(file))) return null;
+  } catch {
+    return null;
+  }
   // Lazy-import better-sqlite3 (optionalDependency).
   let Database: typeof import("better-sqlite3");
   try {
@@ -2453,6 +2499,7 @@ export async function peekEmbedDbMeta(file: string, expectedVaultRoot?: string):
   };
   let db: PeekDb | null = null;
   try {
+    if (!(await preflightSqliteArtifactFamily(file))) return null;
     db = new Database(file, { readonly: true, fileMustExist: true }) as unknown as PeekDb;
     if (expectedVaultRoot !== undefined) {
       const admission = inspectEmbedAdmission(db as unknown as Db, expectedVaultRoot);
@@ -2640,6 +2687,7 @@ export function lruMapSet<K, V>(map: Map<K, V>, key: K, value: V, max: number): 
  * @param file - Absolute path to the candidate embedding database.
  * @param expectedVaultRoot - Exact vault root allowed to own a populated file.
  * @returns The same four-state result as {@link discoverEmbedDbConfig}.
+ * @throws {TypeError} If `file` does not end exactly in `.embed.db`.
  * @example
  * ```ts
  * const discovery = await discoverEmbedDbConfigCached(embedFile, vault.root);
@@ -2651,6 +2699,7 @@ export async function discoverEmbedDbConfigCached(
   file: string,
   expectedVaultRoot: string
 ): Promise<EmbedDbConfigDiscovery> {
+  assertEmbedDbFilePath(file);
   const cacheKey = embedConfigDiscoveryCacheKey(file, expectedVaultRoot);
   const before = await readEmbedConfigDiscoveryFingerprint(file);
   if (before === null) {
@@ -2722,12 +2771,14 @@ export async function discoverEmbedDbConfigCached(
  * @param expectedVaultRoot - Optional exact root plus full-class filter; omit
  *   for raw bounded diagnostics.
  * @returns Cached bounded metadata when class/root-compatible, null otherwise.
+ * @throws {TypeError} If `file` does not end exactly in `.embed.db`.
  * @example
  * ```ts
  * const meta = await peekEmbedDbMetaCached(embedFile, canonicalVaultRoot);
  * ```
  */
 export async function peekEmbedDbMetaCached(file: string, expectedVaultRoot?: string): Promise<PeekEmbedDbMetaResult> {
+  assertEmbedDbFilePath(file);
   const fsMod = await import("node:fs/promises");
   const cacheKey = peekCacheKey(file, expectedVaultRoot);
   let mtimeMs: number;

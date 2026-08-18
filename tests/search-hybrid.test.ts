@@ -57,6 +57,29 @@ afterAll(async () => {
 });
 
 describe("searchHybrid (v2.0 beta — RRF over available signals)", () => {
+  it.each(["embeddingsSearch", "searchHybrid"])(
+    "%s rejects an invalid embedding namespace before vault.ensureExists",
+    async (route) => {
+      let ensureCalls = 0;
+      const v = {
+        root,
+        ensureExists: async () => {
+          ensureCalls += 1;
+        }
+      } as unknown as Vault;
+      const invalidEmbedFile = path.join(root, "unadmitted-index");
+      const operation =
+        route === "embeddingsSearch"
+          ? embeddingsSearch(v, { query: "namespace admission" }, invalidEmbedFile)
+          : searchHybrid(v, { query: "namespace admission" }, { ftsIndex: null, embedFile: invalidEmbedFile });
+
+      await expect(operation).rejects.toThrowError(
+        new TypeError("Embedding index file must end exactly in '.embed.db'")
+      );
+      expect(ensureCalls).toBe(0);
+    }
+  );
+
   it("TF-IDF-only path: no FTS5, no embeddings → returns TF-IDF-style ranking", async () => {
     const v = new Vault(root);
     const missingEmbedFile = path.join(root, "nonexistent.embed.db");
@@ -1112,6 +1135,25 @@ describe("searchHybrid — opt-in frontmatter filter (v3.10 rc.10)", () => {
 
 describe("searchHybridMulti — multi-query fan-out (v3.11.6-rc.7 C-4)", () => {
   const noEmbed = () => ({ ftsIndex: null, embedFile: path.join(root, "nonexistent.embed.db") });
+
+  it.each(["empty fan-out"])("rejects an invalid embedding namespace before the %s import path", async () => {
+    let ensureCalls = 0;
+    const v = {
+      root,
+      ensureExists: async () => {
+        ensureCalls += 1;
+      }
+    } as unknown as Vault;
+    await expect(
+      searchHybridMulti(
+        v,
+        { query: "", queries: [] },
+        { ftsIndex: null, embedFile: path.join(root, "unadmitted-index") }
+      )
+    ).rejects.toThrowError(new TypeError("Embedding index file must end exactly in '.embed.db'"));
+    expect(ensureCalls).toBe(0);
+  });
+
   const syntheticTfidfScenario = (size: number) => {
     let snapshot = 1;
     let corpusReads = 0;

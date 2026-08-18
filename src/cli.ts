@@ -18,6 +18,7 @@ import {
   ENABLED_TOOLS_HELP,
   INDEX_FILE_HELP,
   MAX_FILE_BYTES_HELP,
+  NO_HNSW_PERSIST_HELP,
   PERSISTENT_CACHE_HELP,
   PERSISTENT_INDEX_HELP,
   PROMPTS_HELP,
@@ -45,7 +46,7 @@ import {
   defaultIndexFile,
   discoverFtsIndexConfig,
   FtsIndex,
-  planCachePrune,
+  planCachePruneOnDisk,
   type TokenizeMode
 } from "./fts5.js";
 import { VERSION } from "./index.js";
@@ -65,6 +66,7 @@ import {
 } from "./mcp-config.js";
 import { ocrLangIsInstalled, resolveTessdataDir } from "./ocr.js";
 import { validateServeHttpRetrievalOpts } from "./retrieval-opts.js";
+import { removeSensitiveArtifactTempEntry, sensitiveArtifactFinalBasename } from "./sensitive-artifact.js";
 import {
   type ServeOptions,
   startServer,
@@ -206,10 +208,7 @@ function addAdvancedRetrievalOptions(cmd: Command): Command {
       "--late-chunk-context <chars>",
       "v2.15.0 — late-chunking-style context windowing on embeddings. When > 0, prepends doc title + heading breadcrumb + tails of neighboring chunks (this many chars from each side) before sending to the embedder. Typical +2-5 NDCG@10 retrieval boost at zero new dep cost. Default 0 (off; matches v2.1.0+ breadcrumb-only behavior). Applies during `build-embeddings` and, with `serve --watch`, to subsequently refreshed chunks; it does not rebuild existing rows at serve start."
     )
-    .option(
-      "--no-hnsw-persist",
-      "v2.16.0 — disable HNSW index persistence. By default (with --use-hnsw), the index is saved to a sidecar `.hnsw.bin` + `.meta.json` next to `.embed.db` after the first build, then re-loaded on subsequent serve starts when the embed-db signature matches. Skipping persistence means a fresh rebuild every serve start. Pass this flag if you can't write to the cache dir or want diagnostic-fresh builds."
-    )
+    .option("--no-hnsw-persist", NO_HNSW_PERSIST_HELP)
     .option(
       "--ocr-pdfs",
       "v3.9.0-rc.1 — when used with --watch + --include-pdfs, run Tesseract OCR on image-only / scanned PDFs that pdfjs can't read text from, so the watcher's embed-db sync keeps OCR'd PDFs in sync with edits during a long serve session. Without this flag, image-only PDF events drop the embed-db rows (FTS5 still reindexes from empty pages). OCR is slow (~1-2s per page on M1 CPU; bounded by --ocr-max-pages, default 200). Requires `tesseract.js` + `@napi-rs/canvas` optional dependencies + the language pack pre-installed via `enquire-mcp install-ocr-lang <code>` (the explicit, opt-in download). serve itself makes NO outbound network call — a missing pack throws fail-closed before the worker starts (v3.9.0-rc.10 offline enforcement). See SECURITY.md \"OCR network posture\"."
@@ -232,7 +231,7 @@ function addAdvancedRetrievalOptions(cmd: Command): Command {
     )
     .option(
       "--feedback-weight <w>",
-      "v3.11.0 — OPT-IN closed-loop feedback re-ranking for `obsidian_search`, and the gate for the `obsidian_mark_useful` tool. A number in [0, 1]; default 0 (OFF — no feedback tool, no boost; ranking stays purely relevance-driven). When > 0, registers `obsidian_mark_useful` (agents record which recalled notes actually helped a query) and re-sorts the fused order by `(1 - w) * relevanceRank + w * feedbackScore`, where feedbackScore = useful/(useful+notUseful+1) per note. 0.15-0.3 gently favors notes marked useful; 1.0 sorts almost purely by recorded usefulness. State persists per-vault in a cache sidecar containing the canonical absolute vault root plus relative path keys, counts, and ISO timestamps — no note content, snippets, or query text; erased by `enquire-mcp prune`."
+      "v3.11.0 — OPT-IN closed-loop feedback re-ranking for `obsidian_search`, and the gate for the `obsidian_mark_useful` tool. A number in [0, 1]; default 0 (OFF — no feedback tool, no boost; ranking stays purely relevance-driven). When > 0, registers `obsidian_mark_useful` (agents record which recalled notes actually helped a query) and re-sorts the fused order by `(1 - w) * relevanceRank + w * feedbackScore`, where feedbackScore = useful/(useful+notUseful+1) per note. 0.15-0.3 gently favors notes marked useful; 1.0 sorts almost purely by recorded usefulness. State persists in a root-checked, legacy-routing-key-scoped cache sidecar containing the canonical absolute vault root plus relative path keys, counts, and ISO timestamps — no note content, snippets, or query text. `prune` recognizes other stems; the SHA1-12 stem is not collision-proof vault identity."
     );
 }
 
@@ -490,7 +489,9 @@ export async function main(invocation?: ConfigInput["invocation"]): Promise<void
 
   program
     .command("clear-index")
-    .description("Delete the FTS5 search-index files (.fts5.db + WAL/SHM sidecar) for a given vault")
+    .description(
+      "Delete the FTS5 search-index files (.fts5.db + WAL/SHM/rollback-journal sidecars) for a given vault"
+    )
     .requiredOption("--vault <path>", "Vault whose index to delete")
     .option("--index-file <path>", INDEX_FILE_HELP)
     .action(async (opts: { vault: string; indexFile?: string }) => {
@@ -566,16 +567,21 @@ export async function main(invocation?: ConfigInput["invocation"]): Promise<void
 
   // v3.10.0-rc.14 (bug-report Issue 8) — GC the per-vault index clutter that
   // accumulates in the cache dir over time (one index set per vault path/config
-  // hash). `clear-cache`/`clear-index` only target the CURRENT vault; `prune`
-  // removes all OTHER vaults' enquire artifacts, keeping the one you name.
-  // Dry-run by DEFAULT (destructive → opt in with --yes). Only ever touches
-  // files matching enquire's strict artifact pattern (see `planCachePrune`).
+  // hash). `clear-cache`/`clear-index` target the named vault's configured/default
+  // paths; `prune` removes recognized artifacts under OTHER legacy hash stems and
+  // keeps the one you name. The 12-hex stem is a routing hint, not collision-proof
+  // vault identity. Dry-run by DEFAULT (destructive → opt in with --yes). It touches
+  // only the strict reserved filename namespace (see `planCachePrune`); filename
+  // recognition is not proof of which same-account process created an entry.
   program
     .command("prune")
     .description(
-      "Delete cached index artifacts for OTHER vaults, keeping only the named vault's — GCs the per-vault clutter that builds up in the cache dir. Dry-run by default; pass --yes to actually delete. Only ever removes enquire's own `<hash>.{json,fts5.db,embed.db,hnsw.bin,hnsw.meta.json,feedback.json}` files (incl. the `.json` parse cache that holds full note bodies, the `.feedback.json` usefulness tally, and `.tmp`/WAL sidecars)."
+      "Delete recognized cache artifacts under hash stems OTHER than the named vault's legacy first-12-hex SHA-1 routing stem. The stem is not collision-proof vault identity. Dry-run by default; inspect it before passing --yes. Selection is limited to the reserved `<hash>.{json,fts5.db,embed.db,hnsw.bin,hnsw.meta.json,feedback.json}` namespace, immutable HNSW generation names, and strictly-shaped temp/WAL/SHM/rollback-journal sidecars; matching names are recognized, not creation-provenanced. Watcher startup interlocks are excluded and remain exact-vault clear-embeddings recovery only."
     )
-    .requiredOption("--vault <path>", "Vault whose index to KEEP (all OTHER enquire cache artifacts are removed)")
+    .requiredOption(
+      "--vault <path>",
+      "Vault whose legacy hash stem to KEEP (recognized artifacts under OTHER stems are removed)"
+    )
     .option("--yes", "Actually delete (without this, prune only PREVIEWS what would be removed)")
     .action(async (opts: { vault: string; yes?: boolean }) => {
       const v = new Vault(opts.vault);
@@ -586,11 +592,14 @@ export async function main(invocation?: ConfigInput["invocation"]): Promise<void
       let entries: string[];
       try {
         entries = await fs.readdir(cacheDir);
-      } catch {
-        process.stdout.write(`enquire prune: no cache directory at ${cacheDir} — nothing to prune\n`);
-        return;
+      } catch (err) {
+        if (typeof err === "object" && err !== null && "code" in err && err.code === "ENOENT") {
+          process.stdout.write(`enquire prune: no cache directory at ${cacheDir} — nothing to prune\n`);
+          return;
+        }
+        throw new Error("Unable to inspect the cache directory for prune", { cause: err });
       }
-      const removable = planCachePrune(entries, keepHash);
+      const removable = await planCachePruneOnDisk(cacheDir, entries, keepHash);
       if (removable.length === 0) {
         process.stdout.write(
           `enquire prune: cache already clean (kept ${keepHash}.*; 0 other artifacts in ${cacheDir})\n`
@@ -601,7 +610,7 @@ export async function main(invocation?: ConfigInput["invocation"]): Promise<void
       let bytes = 0;
       for (const name of removable) {
         try {
-          bytes += (await fs.stat(path.join(cacheDir, name))).size;
+          bytes += (await fs.lstat(path.join(cacheDir, name))).size;
         } catch {
           /* unreadable — skip in the tally */
         }
@@ -618,10 +627,16 @@ export async function main(invocation?: ConfigInput["invocation"]): Promise<void
       let removed = 0;
       for (const name of removable) {
         try {
-          await fs.rm(path.join(cacheDir, name), { force: true });
+          const target = path.join(cacheDir, name);
+          if (sensitiveArtifactFinalBasename(name)) {
+            const removedGenerated = await removeSensitiveArtifactTempEntry(target);
+            if (!removedGenerated) throw new Error("artifact changed after prune preflight");
+          } else {
+            await fs.unlink(target);
+          }
           removed++;
-        } catch {
-          /* skip unremovable entries; report the rest */
+        } catch (err) {
+          throw new Error("Unable to remove a preflighted cache artifact", { cause: err });
         }
       }
       process.stdout.write(
@@ -924,7 +939,7 @@ export async function main(invocation?: ConfigInput["invocation"]): Promise<void
   program
     .command("clear-embeddings")
     .description(
-      "Delete the embedding index files (.embed.db + WAL/SHM, HNSW sidecars, and any stranded watcher-startup interlock) for a given vault"
+      "Delete the embedding index files (.embed.db + WAL/SHM/rollback-journal, HNSW sidecars, and any stranded watcher-startup interlock) for a given vault"
     )
     .requiredOption("--vault <path>", "Vault whose embedding index to delete")
     .option("--embed-file <path>", EMBED_FILE_HELP)
@@ -985,8 +1000,8 @@ export async function main(invocation?: ConfigInput["invocation"]): Promise<void
         const result = await runDoctor({
           vault: opts.vault,
           tier,
-          ...(opts.indexFile ? { indexFile: opts.indexFile } : {}),
-          ...(opts.embedFile ? { embedFile: opts.embedFile } : {}),
+          ...(opts.indexFile !== undefined ? { indexFile: opts.indexFile } : {}),
+          ...(opts.embedFile !== undefined ? { embedFile: opts.embedFile } : {}),
           repairCommandPrefix: invocationPrefix,
           repairCommandPlatform: process.platform,
           ...(opts.excludeGlob ? { excludeGlobs: opts.excludeGlob } : {}),

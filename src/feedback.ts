@@ -4,13 +4,14 @@
 // boost in `obsidian_search` (`--feedback-weight`, default 0 = provable no-op,
 // mirroring the v3.10.0-rc.5 recency boost).
 //
-// PRIVACY (data-at-rest): state lives in a single per-vault JSON sidecar in the
-// cache dir (`<hash>.feedback.json`) holding the canonical absolute vault root
+// PRIVACY (data-at-rest): state lives in a single routing-key-scoped JSON sidecar
+// in the cache dir (`<hash>.feedback.json`) holding the canonical absolute vault root
 // plus relative note-path keys, integer counts, and an ISO timestamp per entry
 // — NO note content, snippets, or query text. It is lower-sensitivity than the
 // content indexes, and it matches the `ENQUIRE_CACHE_ARTIFACT` pattern so a
-// cross-vault `prune` erases it (right-to-erasure on vault decommission) exactly
-// like the parse cache / FTS index / embed-db sidecars. The erasure-invariant
+// cross-stem `prune` erases it alongside the parse cache / FTS index / embed-db
+// sidecars for non-colliding roots. The legacy SHA1-12 stem is routing, not exact
+// root identity; the erasure-invariant
 // (`tests/erasure-invariant.test.ts`) pins that prune coverage. It is preserved
 // across `clear-cache` (it is user-generated signal, not regenerable cache).
 
@@ -18,6 +19,8 @@ import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { assertFeedbackFilePath } from "./persistence-path.js";
+import { publishSensitiveArtifact, readSensitiveArtifactText } from "./sensitive-artifact.js";
 
 /** Per-note usefulness tally. `lastMarked` is an ISO-8601 timestamp (or "" if a
  *  loaded legacy/partial entry lacked one). */
@@ -30,10 +33,11 @@ export interface FeedbackEntry {
 interface FeedbackData {
   version: 1;
   /**
-   * v3.11.6-rc.8 (RFC-surfaced latent bug) — the canonical vault root this store
-   * belongs to. Persisted + verified on open so a sidecar cannot be mis-attributed
-   * to the wrong vault (mirrors the `data.root !== this.root` guard fts5/embed-db
-   * already have). Optional so pre-rc.8 sidecars (no `vault_root`) still load.
+   * v3.11.6-rc.8 (RFC-surfaced latent bug) — the canonical vault root recorded by
+   * this store. It is verified on open so mismatched entries are not admitted
+   * (mirrors the `data.root !== this.root` guard fts5/embed-db already have), but
+   * does not make a shared SHA1-12 path collision-proof. Optional so pre-rc.8
+   * sidecars (no `vault_root`) still load.
    */
   vault_root?: string;
   entries: Record<string, FeedbackEntry>;
@@ -51,11 +55,12 @@ export const MAX_FEEDBACK_ENTRIES = 100_000;
 export const MAX_FEEDBACK_FILE_BYTES = 64 * 1024 * 1024;
 
 /**
- * Cache-dir location of the per-vault feedback sidecar. MIRRORS `defaultIndexFile`
+ * Cache-dir location of the routing-key-scoped feedback sidecar. MIRRORS `defaultIndexFile`
  * (fts5.ts): same `enquire` cache dir (honoring `$XDG_CACHE_HOME`) under the same
- * first-12-hex sha1(vaultRoot) hash, so the file sits beside the other per-vault
- * artifacts and `prune`'s `ENQUIRE_CACHE_ARTIFACT` pattern erases it. The dir+hash
- * parity with `defaultIndexFile` is pinned by `tests/feedback.test.ts`.
+ * first-12-hex sha1(vaultRoot) key, so the file sits beside the other stem-scoped
+ * artifacts and `prune`'s `ENQUIRE_CACHE_ARTIFACT` pattern recognizes it. The
+ * truncated key is not collision-proof root identity; the dir+key parity with
+ * `defaultIndexFile` is pinned by `tests/feedback.test.ts`.
  *
  * @param vaultRoot Absolute path to the vault root.
  * @returns Absolute path to `<cacheDir>/<hash>.feedback.json`.
@@ -80,14 +85,15 @@ export function feedbackScore(e: FeedbackEntry): number {
 }
 
 /**
- * Per-vault feedback store. Holds the tally in memory (so a `mark_useful` during
- * a `serve` session immediately influences the next `obsidian_search` boost — the
- * closed loop) and persists each change atomically (tmp + rename).
+ * Root-checked feedback store at one admitted path. Holds the tally in memory,
+ * so a `mark_useful` during a `serve` session immediately influences the next
+ * `obsidian_search` boost, and attempts each persisted generation atomically.
  *
  * Concurrency: `record` mutates the in-memory map synchronously (no `await`
  * between read and write of a given entry), so concurrent marks never interleave
- * the tally; the on-disk write is last-write-wins, which is acceptable for a
- * soft ranking signal.
+ * the tally. Each on-disk attempt is whole-generation and last-write-wins,
+ * while an I/O or size-cap failure remains in memory and is reported to stderr
+ * because feedback is a fail-soft ranking signal.
  */
 export class FeedbackStore {
   private constructor(
@@ -96,12 +102,18 @@ export class FeedbackStore {
   ) {}
 
   /**
-   * Open (or initialize) the store. FAIL-SOFT: a missing / unreadable / malformed
-   * sidecar yields an EMPTY store (the boost simply has no signal) — never throws,
-   * so a corrupt file can't break `serve` boot. Loaded entries are sanitized
-   * (non-finite / negative counts → 0; non-string `lastMarked` → "").
+   * Open (or initialize) an admitted `.feedback.json` store. After namespace
+   * admission, a missing / unreadable / malformed sidecar yields an EMPTY store
+   * (the boost simply has no signal), so corrupt contents cannot break boot.
+   * Loaded entries are sanitized (non-finite / negative counts → 0;
+   * non-string `lastMarked` → ""). Reopen inspects at most
+   * {@link MAX_FEEDBACK_ENTRIES} own enumerable properties and retains the
+   * valid entries among that bounded ECMAScript enumeration prefix.
+   *
+   * @throws {TypeError} If `file` is outside the exact feedback namespace.
    */
   static async open(file: string, vaultRoot?: string): Promise<FeedbackStore> {
+    assertFeedbackFilePath(file);
     // v3.11.0-rc.8 (pre-promotion audit MED) — `entries` is a NULL-PROTOTYPE map.
     // record() writes agent-supplied path strings directly as keys; on a normal
     // object an agent calling obsidian_mark_useful with `paths:["__proto__"]` would
@@ -122,7 +134,7 @@ export class FeedbackStore {
       // fail-softs to an empty store instead of being parsed into memory.
       const stat = await fs.stat(file);
       if (stat.size > MAX_FEEDBACK_FILE_BYTES) return new FeedbackStore(file, data);
-      const raw = await fs.readFile(file, "utf8");
+      const raw = await readSensitiveArtifactText(file, MAX_FEEDBACK_FILE_BYTES);
       const parsed = JSON.parse(raw) as unknown;
       // v3.11.6-rc.8 — foreign-vault guard: if the on-disk sidecar records a
       // vault_root that disagrees with the one we were opened for, do NOT load
@@ -131,8 +143,8 @@ export class FeedbackStore {
       // boosting one vault's search with another's feedback. A sidecar with no
       // vault_root (pre-rc.8) is adopted as-is. Note (rc.12): the empty store
       // keeps the SAME file path, so the first record() OVERWRITES the foreign
-      // sidecar — acceptable: reachable only via a sha1-12 collision or a
-      // relocated vault, where the old entries are orphaned data anyway.
+      // sidecar. That legacy sha1-12 collision/relocation residual is not an
+      // ownership guarantee; root-bound migration is tracked separately in AH-9e.
       const storedRoot =
         parsed && typeof parsed === "object" ? (parsed as { vault_root?: unknown }).vault_root : undefined;
       if (vaultRoot && typeof storedRoot === "string" && storedRoot.length > 0 && storedRoot !== vaultRoot) {
@@ -141,7 +153,12 @@ export class FeedbackStore {
       const rawEntries = parsed && typeof parsed === "object" ? (parsed as { entries?: unknown }).entries : undefined;
       if (rawEntries && typeof rawEntries === "object") {
         const entries: Record<string, FeedbackEntry> = Object.create(null);
-        for (const [k, v] of Object.entries(rawEntries as Record<string, unknown>)) {
+        let inspectedEntryCount = 0;
+        for (const k in rawEntries as Record<string, unknown>) {
+          if (!Object.hasOwn(rawEntries, k)) continue;
+          if (inspectedEntryCount >= MAX_FEEDBACK_ENTRIES) break;
+          inspectedEntryCount += 1;
+          const v = (rawEntries as Record<string, unknown>)[k];
           if (v && typeof v === "object") {
             const e = v as Partial<FeedbackEntry>;
             const u = Number(e.useful);
@@ -164,8 +181,8 @@ export class FeedbackStore {
   /**
    * Record a usefulness mark for each DISTINCT relative note path. Updates the
    * in-memory tally (so the same-session search boost sees it immediately) and
-   * atomically persists. `nowIso` is injected so the module is Date-free and the
-   * write is deterministic under test.
+   * attempts a whole-generation fail-soft persist. `nowIso` is injected so the
+   * module is Date-free and the write is deterministic under test.
    *
    * @returns the count of distinct paths recorded (paths skipped at the entry cap
    *   are still counted if they refer to an EXISTING entry).
@@ -217,10 +234,8 @@ export class FeedbackStore {
    * Serializes persists behind a per-store promise chain. The store is a SINGLE
    * instance shared across all serve-http sessions and the MCP SDK dispatches tool
    * calls concurrently, so two `record()` calls can both reach `persist()` before
-   * either finishes. Without serialization both `writeOnce()` calls would stream
-   * into the SAME `<file>.tmp` and `fs.rename` would promote a torn file — which,
-   * if invalid JSON, the fail-soft `open()` silently discards on next boot (losing
-   * ALL feedback). Chaining makes every write atomic AND sequential.
+   * either finishes. Chaining preserves invocation order as well as per-write
+   * atomicity: an older snapshot can never publish after a newer one.
    */
   private persistChain: Promise<void> = Promise.resolve();
 
@@ -233,36 +248,24 @@ export class FeedbackStore {
   }
 
   private async writeOnce(): Promise<void> {
-    const tmp = `${this.file}.tmp`;
     const dir = path.dirname(this.file);
     try {
-      // Mirror the sibling per-vault cache writers (fts5.ts / embed-db.ts /
-      // vault.ts): create the cache dir 0700 and chmod it when WE created it, so
-      // the SECURITY.md Enquire-created-parent 0700 posture holds when the
-      // feedback store is the FIRST writer to materialize <cache>/enquire (e.g.
-      // `serve --feedback-weight 0.2` with no --persistent-index / embeddings).
-      const dirExisted = await fs
-        .stat(dir)
-        .then(() => true)
-        .catch(() => false);
+      // A recursive 0700 mkdir (subject only to a more-restrictive umask)
+      // creates a private cache parent without path-chmodding a directory that
+      // another process or the operator already owns.
       await fs.mkdir(dir, { recursive: true, mode: 0o700 });
-      if (!dirExisted) await fs.chmod(dir, 0o700).catch(() => {});
-      await fs.writeFile(tmp, JSON.stringify(this.data), { mode: 0o600 });
-      await fs.rename(tmp, this.file);
-      // Defense-in-depth, matching the fts5.ts / embed-db.ts every-write posture:
-      // best-effort re-assert 0600 on the landed file, rather than relying only
-      // on writeFile's create-time mode (which
-      // a 'w'-truncate over a pre-existing looser-mode <file> would not re-apply).
-      await fs.chmod(this.file, 0o600).catch(() => {});
+      // The common publisher creates an unpredictable exclusive mode-0600
+      // sibling and renames it over the final leaf. It cannot follow a
+      // deterministic temp symlink, and it never chmods the published path.
+      const serialized = JSON.stringify(this.data);
+      if (Buffer.byteLength(serialized, "utf8") > MAX_FEEDBACK_FILE_BYTES) {
+        throw new Error("feedback snapshot exceeds the persistent read limit");
+      }
+      await publishSensitiveArtifact(this.file, serialized);
     } catch (err) {
       // Best-effort persistence: a write failure leaves the in-memory tally
       // intact (the session still benefits). Surface to STDERR for the operator
       // (operator-side; never returned to an MCP client — no path-leak class).
-      try {
-        await fs.unlink(tmp);
-      } catch {
-        /* tmp may not exist */
-      }
       process.stderr.write(
         `obsidian_mark_useful: feedback persist failed — ${err instanceof Error ? err.message : String(err)}\n`
       );

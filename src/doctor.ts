@@ -26,6 +26,7 @@ import {
 } from "./embeddings.js";
 import { defaultIndexFile, type TokenizeMode } from "./fts5.js";
 import { buildPrivacyArgs, CONFIG_TIERS, type ConfigTier, isConfigTier, shellQuote } from "./mcp-config.js";
+import { assertEmbedDbFilePath, assertFtsIndexFilePath } from "./persistence-path.js";
 import { EMBED_DB_SCHEMA_VERSION, FTS_SCHEMA_VERSION } from "./schema-contract.js";
 import { Vault } from "./vault.js";
 import { watcherActivationGuardPath } from "./watcher-activation-guard.js";
@@ -898,9 +899,9 @@ export interface RunDoctorOptions {
   tier?: DoctorTier;
   /** Override default cache root (mostly for tests). */
   modelCacheRoot?: string;
-  /** Override default embed-db location. */
+  /** Override with a path ending exactly in `.embed.db`. */
   embedFile?: string;
-  /** Override default FTS5 index location. */
+  /** Override with a path ending exactly in `.fts5.db`. */
   indexFile?: string;
   /** Default model alias to check for (matches DEFAULT_MODEL_ALIAS). */
   modelAlias?: string;
@@ -938,6 +939,11 @@ export interface RunDoctorOptions {
 /**
  * Run all the diagnostic checks. Pure data — caller decides how to
  * render (CLI banner, JSON, MCP tool response).
+ *
+ * @param opts - Diagnostic tier, vault, exact optional index paths, and probe overrides.
+ * @returns Structured readiness checks and limitations.
+ * @throws {TypeError} If `embedFile` or `indexFile` is outside its exact persistence namespace.
+ * @throws {Error} If the requested tier is unknown.
  */
 export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
   const checks: DoctorCheck[] = [];
@@ -945,6 +951,8 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
   if (!isConfigTier(requestedTier)) {
     throw new Error(`Unknown doctor tier '${requestedTier}'. Use ${CONFIG_TIERS.join(" | ")}.`);
   }
+  if (opts.embedFile !== undefined) assertEmbedDbFilePath(opts.embedFile);
+  if (opts.indexFile !== undefined) assertFtsIndexFilePath(opts.indexFile);
   const tier = requestedTier;
   const repairPrefix = opts.repairCommandPrefix ?? "<same-enquire-package-invocation>";
   const dependencyProbe = opts.dependencyProbe ?? probeOptionalDep;

@@ -244,6 +244,30 @@ describe("runDoctor — tiers and readiness", () => {
     );
   });
 
+  it.each([
+    {
+      family: "custom embed path",
+      option: { embedFile: path.join(root, "unadmitted-embed-index") },
+      error: "Embedding index file must end exactly in '.embed.db'"
+    },
+    {
+      family: "custom FTS path",
+      option: { indexFile: path.join(root, "unadmitted-fts-index") },
+      error: "FTS index file must end exactly in '.fts5.db'"
+    }
+  ])("rejects an invalid $family before dependency or Vault work", async ({ option, error }) => {
+    const dependencyProbe = vi.fn(async () => true);
+    await expect(
+      runDoctor({
+        vault: path.join(root, "unread-vault"),
+        tier: "hybrid",
+        ...option,
+        dependencyProbe
+      })
+    ).rejects.toThrowError(new TypeError(error));
+    expect(dependencyProbe).not.toHaveBeenCalled();
+  });
+
   it("publishes the exact required-check set for each tier", async () => {
     const basic = await diagnose({ tier: "basic", dependencyProbe: async () => false });
     const hybrid = await diagnose({ tier: "hybrid", dependencyProbe: async () => false });
@@ -1500,8 +1524,8 @@ describe("runDoctor — privacy", () => {
   });
 
   it("repair hints preserve privacy filters and custom index locations", async () => {
-    const indexFile = path.join(cacheRoot, "custom fts.db");
-    const embedFile = path.join(cacheRoot, "custom embed.db");
+    const indexFile = path.join(cacheRoot, "custom fts.fts5.db");
+    const embedFile = path.join(cacheRoot, "custom embed.embed.db");
     const result = await diagnose({
       indexFile,
       embedFile,

@@ -37,6 +37,7 @@
 import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import type { FtsIndex } from "./fts5.js";
+import { assertEmbedDbFilePath } from "./persistence-path.js";
 import { type SearchHybridHit, searchHybrid } from "./tools/index.js";
 import type { Vault } from "./vault.js";
 
@@ -738,6 +739,7 @@ export interface RunEvalOptions {
   vault: Vault;
   queries: readonly EvalQuery[];
   ftsIndex: FtsIndex | null;
+  /** Missing is allowed, but the configured path must end exactly in `.embed.db`. */
   embedFile: string;
   k?: number;
   /** Label for the result — useful when running multiple configurations. */
@@ -758,10 +760,13 @@ export interface RunEvalOptions {
  * Run obsidian_search across a set of evaluation queries and compute
  * NDCG@K, Recall@K, MRR. Returns a fully-populated EvalResult.
  *
- * `embedFile` may be a non-existent path — embeddings simply won't
- * contribute (graceful degradation matches `searchHybrid` behavior).
+ * `embedFile` may be a non-existent admitted `.embed.db` path — embeddings
+ * simply won't contribute (graceful degradation matches `searchHybrid`).
+ *
+ * @throws {TypeError} If `embedFile` is outside the exact `.embed.db` namespace.
  */
 export async function runEval(opts: RunEvalOptions): Promise<EvalResult> {
+  assertEmbedDbFilePath(opts.embedFile);
   const k = opts.k ?? 10;
   if (!Number.isInteger(k) || k <= 0) throw new Error("enquire eval: k must be a positive integer");
   validateEvalQueryCohort(opts.queries);

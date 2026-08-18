@@ -3,6 +3,7 @@ import { Worker } from "node:worker_threads";
 import { parseFrontmatter } from "../frontmatter.js";
 import { foldName, foldTag, lookupFoldedAny, lookupFoldedKey } from "../name-fold.js";
 import { INLINE_TAG_RE, scanWikilinkInners, stripCodeAndInline } from "../parser.js";
+import { assertEmbedDbFilePath } from "../persistence-path.js";
 import {
   MAX_RESEARCH_SUBQUERIES,
   normalizeResearchQueries,
@@ -2121,6 +2122,7 @@ export interface ContextPackResult {
  *   (the CRL-1/M5 class). Now the full ctx flows through, so the pack's
  *   top-10 is ranked exactly like `obsidian_search` would rank it.
  * @returns A {@link ContextPackResult} with the packed bundle + meta.
+ * @throws {TypeError} If a non-null `ctx.embedFile` is outside the exact `.embed.db` namespace.
  * @throws {Error} If `query` is empty / whitespace-only.
  * @example
  * ```ts
@@ -2143,6 +2145,7 @@ export async function contextPack(
   args: ContextPackArgs,
   ctx: Parameters<typeof searchHybrid>[2]
 ): Promise<ContextPackResult> {
+  if (ctx.embedFile !== null) assertEmbedDbFilePath(ctx.embedFile);
   await vault.ensureExists();
   if (!args.query?.trim()) throw new Error("context_pack: `query` is required");
   const budget = args.budget_tokens ?? 4000;

@@ -14,9 +14,18 @@
 import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { EmbedDb } from "../src/embed-db.js";
-import { buildHnsw, hnswResultsToHits, hnswResultsToReceiptHits, loadHnswFromDisk } from "../src/hnsw.js";
+import {
+  buildHnsw,
+  clearHnswPersistedArtifacts,
+  type HnswPersistedMeta,
+  hnswResultsToHits,
+  hnswResultsToReceiptHits,
+  isHnswGenerationBasename,
+  loadHnswFromDisk,
+  preflightHnswPersistedArtifacts
+} from "../src/hnsw.js";
 import { adaptiveHnswRefill, assertHnswModelMatchesEmbedder, selectUsableHnswContext } from "../src/tools/search.js";
 
 /** L2-normalize a Float32Array in place; returns it for chaining. */
@@ -33,6 +42,55 @@ function l2(v: Float32Array): Float32Array {
   }
   return v;
 }
+
+async function persistMinimalGeneration(
+  persistFile: string,
+  signature: string,
+  label = 0
+): Promise<Record<string, unknown>> {
+  const vector = l2(new Float32Array([label + 1, 2, 3, 4]));
+  const index = await buildHnsw([{ label, vector }], { dim: 4, maxElements: 1, seed: label + 101 });
+  const saved = await index.saveTo(persistFile, new Map(), signature);
+  if (!saved) throw new Error("minimal HNSW fixture did not persist");
+  return JSON.parse(await fs.readFile(`${persistFile}.meta.json`, "utf8")) as Record<string, unknown>;
+}
+
+// Compile-time compatibility pin: format-2 disk publication is internal. The
+// exported v1 metadata shape remains exact source compatibility for existing users.
+type ExpectedPublicMetaV1 = {
+  formatVersion: 1;
+  dim: number;
+  size: number;
+  signature: string;
+  rowsByLabel: Record<
+    string,
+    {
+      rel_path: string;
+      chunk_index: number;
+      line_start: number;
+      line_end: number;
+      text_preview: string;
+      kind: "md" | "pdf";
+    }
+  >;
+  writtenAt: string;
+};
+type TypeEqual<Left, Right> =
+  (<Value>() => Value extends Left ? 1 : 2) extends <Value>() => Value extends Right ? 1 : 2
+    ? (<Value>() => Value extends Right ? 1 : 2) extends <Value>() => Value extends Left ? 1 : 2
+      ? true
+      : false
+    : false;
+type StablePublicMetaV1 = TypeEqual<HnswPersistedMeta, ExpectedPublicMetaV1>;
+
+const PUBLIC_META_V1_FIXTURE: StablePublicMetaV1 extends true ? ExpectedPublicMetaV1 : never = {
+  formatVersion: 1,
+  dim: 4,
+  size: 0,
+  signature: "legacy-signature",
+  rowsByLabel: {},
+  writtenAt: "2026-01-01T00:00:00.000Z"
+};
 
 /**
  * Make a deterministic synthetic corpus of n vectors clustered around
@@ -336,7 +394,33 @@ describe("HNSW persistence (v2.16.0)", () => {
     await fs.rm(dir, { recursive: true, force: true });
   });
 
-  it("saveTo + loadHnswFromDisk roundtrip preserves search results", async () => {
+  const invalidHnswAdmissionCases = [
+    ["missing suffix", "index.bin"],
+    ["uppercase suffix", "index.HNSW"],
+    ["trailing LF", "index.hnsw\n"],
+    ["trailing U+2028", "index.hnsw\u2028"]
+  ] as const;
+  const hnswAdmissionRoutes = [
+    { route: "load", invoke: async (file: string) => loadHnswFromDisk(file, "signature") },
+    { route: "preflight", invoke: async (file: string) => preflightHnswPersistedArtifacts(file) },
+    { route: "clear", invoke: async (file: string) => clearHnswPersistedArtifacts(file) },
+    {
+      route: "generation classifier",
+      invoke: async (file: string) => isHnswGenerationBasename(file, "index.hnsw.aaaaaaaa.bin")
+    }
+  ].flatMap(({ route, invoke }) =>
+    invalidHnswAdmissionCases.map(([shape, basename]) => ({ route, invoke, shape, basename }))
+  );
+
+  it.each(hnswAdmissionRoutes)("$route rejects $shape before filesystem work", async ({ invoke, basename }) => {
+    const absentParent = path.join(dir, `invalid-${Buffer.from(basename).toString("hex")}`);
+    await expect(invoke(path.join(absentParent, basename))).rejects.toThrow(
+      new TypeError("HNSW persistence base must end exactly in '.hnsw'")
+    );
+    await expect(fs.lstat(absentParent)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("saveTo publishes one coherent generation and load reproduces search results", async () => {
     const dim = 8;
     const n = 30;
     // Reuse the cluster-corpus generator via a tiny inline replica.
@@ -379,13 +463,19 @@ describe("HNSW persistence (v2.16.0)", () => {
         kind: "md"
       });
     }
-    const ok = await index.saveTo(persistFile, rowsByLabel, "sig-v1");
-    expect(ok).toBe(true);
+    expect(await index.saveTo(persistFile, rowsByLabel, "sig-v1")).toBe(true);
 
-    // Both files should exist.
-    await expect(fs.access(`${persistFile}.bin`)).resolves.toBeUndefined();
+    // The stable meta leaf points to one immutable, digest-bound generation.
+    const persistedMeta = JSON.parse(await fs.readFile(`${persistFile}.meta.json`, "utf8")) as {
+      formatVersion: number;
+      binFile: string;
+      binSha256: string;
+    };
+    expect(persistedMeta.formatVersion).toBe(2);
+    expect(persistedMeta.binFile).toMatch(/^test\.hnsw\.[0-9a-f]{48}\.bin$/);
+    expect(persistedMeta.binSha256).toMatch(/^[0-9a-f]{64}$/);
+    await expect(fs.access(path.join(dir, persistedMeta.binFile))).resolves.toBeUndefined();
     await expect(fs.access(`${persistFile}.meta.json`)).resolves.toBeUndefined();
-
     // Load with matching signature.
     const loaded = await loadHnswFromDisk(persistFile, "sig-v1");
     expect(loaded).not.toBeNull();
@@ -400,7 +490,57 @@ describe("HNSW persistence (v2.16.0)", () => {
     expect(afterLoad.labels).toEqual(beforePersist.labels);
   });
 
-  it("M1 (v3.9.0-rc.11) — saveTo persists the LIVE element count after applyDiff, not the build-time size", async () => {
+  it.for([{ sidecar: "legacy binary" as const }, { sidecar: "stable metadata" as const }])(
+    "saveTo does not follow a planted $sidecar sidecar symlink",
+    async ({ sidecar }, { skip }) => {
+      const persistFile = path.join(dir, `symlink-${sidecar.replace(" ", "-")}.hnsw`);
+      const link = sidecar === "legacy binary" ? `${persistFile}.bin` : `${persistFile}.meta.json`;
+      const sentinel = path.join(dir, `symlink-${sidecar.replace(" ", "-")}-sentinel.txt`);
+      await fs.writeFile(sentinel, `UNCHANGED_${sidecar}`);
+      try {
+        await fs.symlink(sentinel, link, "file");
+      } catch (err) {
+        const code = (err as NodeJS.ErrnoException).code;
+        if (code === "EPERM" || code === "EACCES" || code === "ENOSYS") {
+          skip(`filesystem cannot create the symlink control (${code})`);
+          return;
+        }
+        throw err;
+      }
+
+      await persistMinimalGeneration(persistFile, `symlink-${sidecar}`);
+      expect(await fs.readFile(sentinel, "utf8")).toBe(`UNCHANGED_${sidecar}`);
+      if (sidecar === "legacy binary") {
+        await expect(fs.lstat(link)).rejects.toMatchObject({ code: "ENOENT" });
+      } else {
+        expect((await fs.lstat(link)).isSymbolicLink()).toBe(false);
+      }
+    }
+  );
+
+  it.each(["native stage"])("post-publish %s cleanup failure does not turn success into failure", async () => {
+    const persistFile = path.join(dir, "stage-cleanup.hnsw");
+    const realRmdir = fs.rmdir.bind(fs);
+    let injected = false;
+    const rmdirSpy = vi.spyOn(fs, "rmdir").mockImplementation(async (candidate) => {
+      if (!injected && String(candidate).includes(".enquire-stage-")) {
+        injected = true;
+        throw Object.assign(new Error("injected post-publish stage cleanup failure"), { code: "EACCES" });
+      }
+      await realRmdir(candidate);
+    });
+    let meta: Record<string, unknown> | null = null;
+    try {
+      meta = await persistMinimalGeneration(persistFile, "stage-cleanup-signature");
+    } finally {
+      rmdirSpy.mockRestore();
+    }
+    expect(injected).toBe(true);
+    expect(meta?.formatVersion).toBe(2);
+    expect(await loadHnswFromDisk(persistFile, "stage-cleanup-signature")).not.toBeNull();
+  });
+
+  it("M1 live count remains correct in persisted metadata", async () => {
     const dim = 4;
     const n = 3;
     const norm = (a: number[]) => {
@@ -420,10 +560,85 @@ describe("HNSW persistence (v2.16.0)", () => {
 
     const persistFile = path.join(dir, "m1.hnsw");
     await index.saveTo(persistFile, new Map(), "m1-sig");
-    const meta = JSON.parse(await fs.readFile(`${persistFile}.meta.json`, "utf8")) as { size: number };
+    const meta = JSON.parse(await fs.readFile(`${persistFile}.meta.json`, "utf8")) as {
+      size: number;
+      binFile: string;
+    };
     expect(meta.size, "persisted meta.size must be the live count").toBe(liveCount);
     expect(meta.size, "NEGATIVE control: must NOT be the stale build-time size").not.toBe(n);
   });
+
+  it.each(["old immutable generation"])("post-meta GC failure for %s is non-fatal", async () => {
+    const persistFile = path.join(dir, "gc-failure.hnsw");
+    await persistMinimalGeneration(persistFile, "gc-failure-signature", 41);
+    const oldMeta = JSON.parse(await fs.readFile(`${persistFile}.meta.json`, "utf8")) as { binFile: string };
+    const oldGeneration = path.join(dir, oldMeta.binFile);
+    const vector = l2(new Float32Array([1, 2, 3, 4]));
+    const index = await buildHnsw([{ label: 42, vector }], { dim: 4, maxElements: 1, seed: 142 });
+    const realUnlink = fs.unlink.bind(fs);
+    let injectedOldGenerationGcFailure = false;
+    const unlinkSpy = vi.spyOn(fs, "unlink").mockImplementation(async (candidate) => {
+      if (!injectedOldGenerationGcFailure && String(candidate) === oldGeneration) {
+        injectedOldGenerationGcFailure = true;
+        throw Object.assign(new Error("injected old-generation GC failure"), { code: "EACCES" });
+      }
+      await realUnlink(candidate);
+    });
+    let savedAfterGcFailure = false;
+    try {
+      savedAfterGcFailure = await index.saveTo(persistFile, new Map(), "gc-failure-signature");
+    } finally {
+      unlinkSpy.mockRestore();
+    }
+    expect(injectedOldGenerationGcFailure).toBe(true);
+    expect(savedAfterGcFailure).toBe(true);
+    const newMeta = JSON.parse(await fs.readFile(`${persistFile}.meta.json`, "utf8")) as {
+      binFile: string;
+    };
+    expect(newMeta.binFile).not.toBe(oldMeta.binFile);
+    expect((await fs.lstat(oldGeneration)).isFile()).toBe(true);
+    const loaded = await loadHnswFromDisk(persistFile, "gc-failure-signature");
+    expect(loaded).not.toBeNull();
+    expect(loaded?.index.searchKnn(vector, 1).labels).toEqual([42]);
+  });
+
+  it.each(["metadata one byte over its read limit"])(
+    "refuses %s before pointer commit and cleans the unreferenced generation",
+    async () => {
+      const persistFile = path.join(dir, "oversize-meta.hnsw");
+      const vector = l2(new Float32Array([1, 2, 3, 4]));
+      const index = await buildHnsw([{ label: 601, vector }], { dim: 4, maxElements: 1, seed: 601 });
+      const realRename = fs.rename.bind(fs);
+      const renameTargets: string[] = [];
+      const byteLengthSpy = vi
+        .spyOn(Buffer, "byteLength")
+        .mockImplementationOnce(() => 256 * 1024 * 1024 + 1);
+      const renameSpy = vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+        renameTargets.push(String(to));
+        await realRename(from, to);
+      });
+      try {
+        await expect(index.saveTo(persistFile, new Map(), "oversize-meta-signature")).rejects.toThrow(
+          /metadata exceeds the persistence read limit/
+        );
+        expect(byteLengthSpy).toHaveBeenCalledTimes(1);
+        expect(String(byteLengthSpy.mock.calls[0]?.[0])).toContain('"formatVersion": 2');
+      } finally {
+        byteLengthSpy.mockRestore();
+        renameSpy.mockRestore();
+      }
+
+      const generation = renameTargets.find(
+        (target) => target.startsWith(`${persistFile}.`) && target.endsWith(".bin")
+      );
+      expect(generation).toBeDefined();
+      if (!generation) throw new Error("oversize HNSW control did not publish its binary generation");
+      expect(renameTargets).not.toContain(`${persistFile}.meta.json`);
+      await expect(fs.lstat(generation)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.lstat(`${persistFile}.meta.json`)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(index.searchKnn(vector, 1).labels).toEqual([601]);
+    }
+  );
 
   it("M6 (rc.16 audit) — applyDiff with a wrong-dim point throws ATOMICALLY (no markDelete before the throw)", async () => {
     const dim = 4;
@@ -453,7 +668,73 @@ describe("HNSW persistence (v2.16.0)", () => {
     expect(index.searchKnn(q, 3).labels, "valid diff removes label 0").not.toContain(0);
   });
 
-  it("returns null when signature doesn't match (stale index)", async () => {
+  it.each(["applyDiff"] as const)("%s throws before native mutation while persistence is in flight", async () => {
+    const persistFile = path.join(dir, "mutation-overlap.hnsw");
+    const query = l2(new Float32Array([1, 0, 0, 0]));
+    const replacement = l2(new Float32Array([0, 1, 0, 0]));
+    const index = await buildHnsw([{ label: 801, vector: query }], { dim: 4, maxElements: 2, seed: 801 });
+    expect(index.searchKnn(query, 1).labels).toEqual([801]);
+
+    const realRename = fs.rename.bind(fs);
+    let releaseGeneration = (): void => {};
+    let observeGeneration = (): void => {};
+    const generationGate = new Promise<void>((resolve) => {
+      releaseGeneration = resolve;
+    });
+    const generationObserved = new Promise<void>((resolve) => {
+      observeGeneration = resolve;
+    });
+    let blocked = false;
+    const renameSpy = vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+      if (!blocked && String(to).startsWith(`${persistFile}.`) && String(to).endsWith(".bin")) {
+        blocked = true;
+        observeGeneration();
+        await generationGate;
+      }
+      await realRename(from, to);
+    });
+    let save: Promise<boolean> | undefined;
+    try {
+      save = index.saveTo(persistFile, new Map(), "mutation-overlap-signature");
+      await generationObserved;
+      expect(() => index.applyDiff([801], [{ label: 802, vector: replacement }])).toThrow(
+        /persistence snapshot is in flight/
+      );
+      expect(index.searchKnn(query, 1).labels, "rejected overlap must not delete label 801").toEqual([801]);
+      releaseGeneration();
+      await expect(save).resolves.toBe(true);
+    } finally {
+      releaseGeneration();
+      renameSpy.mockRestore();
+      await save?.catch(() => {});
+    }
+
+    expect(index.applyDiff([801], [{ label: 802, vector: replacement }])).toEqual({ removed: 1, added: 1 });
+    expect(index.searchKnn(replacement, 1).labels).toEqual([802]);
+  });
+
+  it.each(["queued save"])("mutation before a %s starts rejects it before native publication", async () => {
+    const persistFile = path.join(dir, "queued-epoch.hnsw");
+    const original = l2(new Float32Array([1, 0, 0, 0]));
+    const replacement = l2(new Float32Array([0, 1, 0, 0]));
+    const index = await buildHnsw([{ label: 811, vector: original }], { dim: 4, maxElements: 2, seed: 811 });
+    const openSpy = vi.spyOn(fs, "open");
+    const renameSpy = vi.spyOn(fs, "rename");
+    try {
+      const save = index.saveTo(persistFile, new Map(), "queued-epoch-signature");
+      expect(index.applyDiff([811], [{ label: 812, vector: replacement }])).toEqual({ removed: 1, added: 1 });
+      await expect(save).rejects.toThrow(/changed before.*persistence snapshot/i);
+      expect(openSpy, "rejected queued epoch must not reserve a generation file").not.toHaveBeenCalled();
+      expect(renameSpy, "rejected queued epoch must not publish a generation or pointer").not.toHaveBeenCalled();
+    } finally {
+      openSpy.mockRestore();
+      renameSpy.mockRestore();
+    }
+    expect(index.searchKnn(replacement, 1).labels).toEqual([812]);
+    await expect(fs.access(`${persistFile}.meta.json`)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("rejects a persisted generation with a stale embed signature", async () => {
     const persistFile = path.join(dir, "stale.hnsw");
     const v = new Float32Array(4).fill(0.5);
     let s = 0;
@@ -468,12 +749,142 @@ describe("HNSW persistence (v2.16.0)", () => {
     expect(loaded).toBeNull();
   });
 
+  it.each(["digest-bound immutable binary"])("rejects a mixed HNSW generation via its %s", async () => {
+    const persistFile = path.join(dir, "mixed.hnsw");
+    const vectorA = l2(new Float32Array([0.5, 0.5, 0.5, 0.5]));
+    const indexA = await buildHnsw([{ label: 0, vector: vectorA }], { dim: 4, maxElements: 1 });
+    await indexA.saveTo(persistFile, new Map(), "same-signature");
+    const metaA = JSON.parse(await fs.readFile(`${persistFile}.meta.json`, "utf8")) as Record<string, unknown>;
+    const generationA = path.join(dir, String(metaA.binFile));
+    const generationABytes = await fs.readFile(generationA);
+
+    // Publish a distinct graph generation under the same logical signature,
+    // then reconstruct the crash/race shape "meta A + binary B" at A's valid
+    // generation basename. Both native files are loadable and the signature is
+    // equal, so only the exact binary digest can reject the mixed pair.
+    const other = l2(new Float32Array([0.9, -0.1, 0.2, -0.4]));
+    const otherIndex = await buildHnsw([{ label: 99, vector: other }], { dim: 4, maxElements: 1, seed: 909 });
+    await otherIndex.saveTo(persistFile, new Map(), "same-signature");
+    const metaB = JSON.parse(await fs.readFile(`${persistFile}.meta.json`, "utf8")) as Record<string, unknown>;
+    const generationB = path.join(dir, String(metaB.binFile));
+    await fs.writeFile(generationA, await fs.readFile(generationB), { mode: 0o600 });
+    await fs.writeFile(`${persistFile}.meta.json`, JSON.stringify(metaA), { mode: 0o600 });
+    expect(await loadHnswFromDisk(persistFile, "same-signature")).toBeNull();
+
+    // NEGATIVE setup control: A and B really are different native generations;
+    // otherwise a digest equality would make the mixed fixture non-discriminating.
+    expect(await fs.readFile(generationA)).not.toEqual(generationABytes);
+  });
+
+  it.each(["two wrapped indexes"])("keeps concurrent %s publications whole", async () => {
+    // Actual two-publisher interleaving: hold A's meta-pointer rename after its
+    // immutable binary has landed, let B commit fully, then release A. The final
+    // state must be the complete A pair (pointer + digest + native graph + rows),
+    // never A metadata over B's graph as with the historical fixed `.bin` leaf.
+    const concurrentFile = path.join(dir, "concurrent.hnsw");
+    const concurrentMetaFile = `${concurrentFile}.meta.json`;
+    const vectorA = l2(new Float32Array([1, 0, 0, 0]));
+    const vectorB = l2(new Float32Array([0, 1, 0, 0]));
+    const indexA = await buildHnsw([{ label: 701, vector: vectorA }], { dim: 4, maxElements: 1, seed: 701 });
+    const indexB = await buildHnsw([{ label: 702, vector: vectorB }], { dim: 4, maxElements: 1, seed: 702 });
+    const row = (relPath: string) => ({
+      rel_path: relPath,
+      chunk_index: 0,
+      line_start: 1,
+      line_end: 1,
+      text_preview: relPath,
+      kind: "md" as const
+    });
+    const realRename = fs.rename.bind(fs);
+    let releaseMetaA = (): void => {};
+    let observeMetaA = (): void => {};
+    let observeMetaB = (): void => {};
+    const metaAGate = new Promise<void>((resolve) => {
+      releaseMetaA = resolve;
+    });
+    const metaAObserved = new Promise<void>((resolve) => {
+      observeMetaA = resolve;
+    });
+    const metaBObserved = new Promise<void>((resolve) => {
+      observeMetaB = resolve;
+    });
+    let metaRenameCount = 0;
+    const renameSpy = vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+      if (String(to) === concurrentMetaFile) {
+        metaRenameCount += 1;
+        if (metaRenameCount === 1) {
+          observeMetaA();
+          await metaAGate;
+          await realRename(from, to);
+          return;
+        }
+        await realRename(from, to);
+        observeMetaB();
+        return;
+      }
+      await realRename(from, to);
+    });
+    try {
+      const saveA = indexA.saveTo(concurrentFile, new Map([[701, row("A.md")]]), "concurrent-sig");
+      await metaAObserved;
+      const saveB = indexB.saveTo(concurrentFile, new Map([[702, row("B.md")]]), "concurrent-sig");
+      await metaBObserved;
+      await saveB;
+      releaseMetaA();
+      await saveA;
+    } finally {
+      releaseMetaA();
+      renameSpy.mockRestore();
+    }
+    expect(metaRenameCount).toBe(2);
+    const concurrentLoaded = await loadHnswFromDisk(concurrentFile, "concurrent-sig");
+    expect(concurrentLoaded).not.toBeNull();
+    if (!concurrentLoaded) throw new Error("concurrent HNSW generation was not loadable");
+    expect([...concurrentLoaded.rowsByLabel.keys()]).toEqual([701]);
+    expect(concurrentLoaded.index.searchKnn(vectorA, 1).labels).toEqual([701]);
+  });
+
   it("returns null when meta file is missing", async () => {
     const loaded = await loadHnswFromDisk(path.join(dir, "nonexistent.hnsw"), "any-sig");
     expect(loaded).toBeNull();
   });
 
-  it("returns null when meta is malformed JSON", async () => {
+  it.each(["resolved false", "threw"] as const)("returns null when native readIndex %s", async (outcome) => {
+    const persistFile = path.join(dir, `read-index-${outcome.replace(" ", "-")}.hnsw`);
+    await persistMinimalGeneration(persistFile, "native-read-signature");
+    const imported = (await import("hnswlib-node")) as unknown as {
+      default?: unknown;
+      HierarchicalNSW?: unknown;
+    };
+    const namespace = [imported.default, imported].find(
+      (candidate) =>
+        typeof candidate === "object" &&
+        candidate !== null &&
+        typeof (candidate as { HierarchicalNSW?: unknown }).HierarchicalNSW === "function"
+    );
+    const nativeConstructor = (namespace as { HierarchicalNSW?: unknown } | undefined)?.HierarchicalNSW;
+    if (typeof nativeConstructor !== "function") throw new Error("test setup: missing native HNSW constructor");
+    const prototype = (
+      nativeConstructor as unknown as {
+        prototype: { readIndex(filename: string, allowReplaceDeleted?: boolean): Promise<boolean> };
+      }
+    ).prototype;
+    const originalReadIndex = prototype.readIndex;
+    let readCalls = 0;
+    prototype.readIndex = async () => {
+      readCalls += 1;
+      if (outcome === "threw") throw new Error("synthetic native read failure");
+      return false;
+    };
+    try {
+      await expect(loadHnswFromDisk(persistFile, "native-read-signature")).resolves.toBeNull();
+    } finally {
+      prototype.readIndex = originalReadIndex;
+    }
+    expect(readCalls).toBe(1);
+  });
+
+  it("returns null when meta JSON is malformed", async () => {
     const persistFile = path.join(dir, "malformed.hnsw");
     await fs.writeFile(`${persistFile}.bin`, "ignored");
     await fs.writeFile(`${persistFile}.meta.json`, "{not valid json");
@@ -481,17 +892,67 @@ describe("HNSW persistence (v2.16.0)", () => {
     expect(loaded).toBeNull();
   });
 
+  it.each([
+    ["null", "null"],
+    ["number", "42"],
+    ["string", '"metadata"'],
+    ["array", "[]"],
+    ["empty object", "{}"]
+  ] as const)("returns null for valid JSON %s metadata", async (name, json) => {
+    const persistFile = path.join(dir, `valid-json-${name.replace(" ", "-")}.hnsw`);
+    await fs.writeFile(`${persistFile}.meta.json`, json);
+    await expect(loadHnswFromDisk(persistFile, "any-sig")).resolves.toBeNull();
+  });
+
+  it.each([
+    [
+      "missing-bin-file",
+      (meta: Record<string, unknown>) => {
+        delete meta.binFile;
+      }
+    ],
+    [
+      "non-string-bin-file",
+      (meta: Record<string, unknown>) => {
+        meta.binFile = 42;
+      }
+    ],
+    [
+      "missing-bin-sha",
+      (meta: Record<string, unknown>) => {
+        delete meta.binSha256;
+      }
+    ],
+    [
+      "non-string-bin-sha",
+      (meta: Record<string, unknown>) => {
+        meta.binSha256 = 42;
+      }
+    ],
+    [
+      "bin-sha-trailing-LF",
+      (meta: Record<string, unknown>) => {
+        meta.binSha256 = `${String(meta.binSha256)}\n`;
+      }
+    ],
+    [
+      "bin-sha-trailing-U+2028",
+      (meta: Record<string, unknown>) => {
+        meta.binSha256 = `${String(meta.binSha256)}\u2028`;
+      }
+    ]
+  ] as const)("returns null when format-2 metadata has %s", async (name, mutate) => {
+    const malformedBase = path.join(dir, `${name}.hnsw`);
+    const meta = await persistMinimalGeneration(malformedBase, "format-2-signature");
+    mutate(meta);
+    await fs.writeFile(`${malformedBase}.meta.json`, JSON.stringify(meta));
+    expect(await loadHnswFromDisk(malformedBase, "format-2-signature")).toBeNull();
+  });
+
   it("returns null when meta exists but bin file missing", async () => {
     const persistFile = path.join(dir, "no-bin.hnsw");
-    const meta = {
-      formatVersion: 1,
-      dim: 4,
-      size: 0,
-      signature: "match",
-      rowsByLabel: {},
-      writtenAt: new Date().toISOString()
-    };
-    await fs.writeFile(`${persistFile}.meta.json`, JSON.stringify(meta));
+    const meta = await persistMinimalGeneration(persistFile, "match");
+    await fs.unlink(path.join(dir, String(meta.binFile)));
     const loaded = await loadHnswFromDisk(persistFile, "match");
     expect(loaded).toBeNull();
   });
@@ -501,15 +962,8 @@ describe("HNSW persistence (v2.16.0)", () => {
   // meta with dim=-1 or rowsByLabel:null would crash or produce garbage.
   it("returns null when meta has invalid dim (P3-27 NEGATIVE control)", async () => {
     const persistFile = path.join(dir, "bad-dim.hnsw");
-    const meta = {
-      formatVersion: 1,
-      dim: -1,
-      size: 0,
-      signature: "match",
-      rowsByLabel: {},
-      writtenAt: new Date().toISOString()
-    };
-    await fs.writeFile(`${persistFile}.bin`, "ignored");
+    const meta = await persistMinimalGeneration(persistFile, "match");
+    meta.dim = -1;
     await fs.writeFile(`${persistFile}.meta.json`, JSON.stringify(meta));
     const loaded = await loadHnswFromDisk(persistFile, "match");
     expect(loaded).toBeNull();
@@ -517,42 +971,35 @@ describe("HNSW persistence (v2.16.0)", () => {
 
   it("returns null when meta has invalid rowsByLabel (P3-27 NEGATIVE control)", async () => {
     const persistFile = path.join(dir, "bad-rows.hnsw");
-    const meta = {
-      formatVersion: 1,
-      dim: 4,
-      size: 0,
-      signature: "match",
-      rowsByLabel: null,
-      writtenAt: new Date().toISOString()
-    };
-    await fs.writeFile(`${persistFile}.bin`, "ignored");
+    const meta = await persistMinimalGeneration(persistFile, "match");
+    meta.rowsByLabel = null;
     await fs.writeFile(`${persistFile}.meta.json`, JSON.stringify(meta));
     const loaded = await loadHnswFromDisk(persistFile, "match");
     expect(loaded).toBeNull();
   });
 
   it("returns null on formatVersion mismatch (future-proof)", async () => {
+    const legacyFile = path.join(dir, "legacy-v1.hnsw");
+    await fs.writeFile(`${legacyFile}.meta.json`, JSON.stringify(PUBLIC_META_V1_FIXTURE));
+    await fs.writeFile(`${legacyFile}.bin`, "legacy-binary");
+    expect(await loadHnswFromDisk(legacyFile, "legacy-signature")).toBeNull();
+  });
+
+  it.each([99])("returns null on future formatVersion %i", async (formatVersion) => {
     const persistFile = path.join(dir, "future.hnsw");
-    const meta = {
-      formatVersion: 99,
-      dim: 4,
-      size: 0,
-      signature: "match",
-      rowsByLabel: {},
-      writtenAt: new Date().toISOString()
-    };
-    await fs.writeFile(`${persistFile}.bin`, "ignored");
+    const meta = await persistMinimalGeneration(persistFile, "match");
+    meta.formatVersion = formatVersion;
     await fs.writeFile(`${persistFile}.meta.json`, JSON.stringify(meta));
     const loaded = await loadHnswFromDisk(persistFile, "match");
     expect(loaded).toBeNull();
   });
 
-  // v3.6.2 audit M-7 — both sidecars (.bin + .meta.json) MUST be chmod'd to
-  // 0o600 after write. The .meta.json carries text_preview snippets which are
+  // v3.6.2 audit M-7 — both the immutable binary generation and .meta.json
+  // pointer MUST be mode 0600. The meta carries text_preview snippets which are
   // sensitive note content, so the per-file invariant must hold independently
   // of an existing/custom parent directory's operator-managed mode. Matches
   // the canonical pattern in src/embed-db.ts and src/fts5.ts.
-  it("saveTo chmods both sidecars (.bin + .meta.json) to 0o600 (audit M-7)", async () => {
+  it("saveTo modes both the immutable generation and meta pointer 0o600 (audit M-7)", async () => {
     if (process.platform === "win32") return; // POSIX mode bits don't apply on NTFS
     const dim = 4;
     const v = new Float32Array(dim).fill(0.5);
@@ -567,8 +1014,9 @@ describe("HNSW persistence (v2.16.0)", () => {
     const ok = await index.saveTo(persistFile, new Map(), "chmod-sig");
     expect(ok).toBe(true);
 
-    expect((await fs.stat(freshParent)).mode & 0o777).toBe(0o700);
-    const binStat = await fs.stat(`${persistFile}.bin`);
+    expect((await fs.stat(freshParent)).mode & 0o077).toBe(0); // 0700 request may be tightened by umask
+    const meta = JSON.parse(await fs.readFile(`${persistFile}.meta.json`, "utf8")) as { binFile: string };
+    const binStat = await fs.stat(path.join(freshParent, meta.binFile));
     const metaStat = await fs.stat(`${persistFile}.meta.json`);
     expect(binStat.mode & 0o777).toBe(0o600);
     expect(metaStat.mode & 0o777).toBe(0o600);

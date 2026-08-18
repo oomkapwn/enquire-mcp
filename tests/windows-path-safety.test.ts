@@ -7,6 +7,13 @@ import { embedSingleNote } from "../src/embed-pipeline.js";
 import type { Embedder } from "../src/embeddings.js";
 import { FtsIndex } from "../src/fts5.js";
 import type { HnswIndex } from "../src/hnsw.js";
+import {
+  assertCacheFilePath,
+  assertEmbedDbFilePath,
+  assertFeedbackFilePath,
+  assertFtsIndexFilePath,
+  assertHnswFilePath
+} from "../src/persistence-path.js";
 import { renameNote } from "../src/tools/write.js";
 import { Vault } from "../src/vault.js";
 import { type HnswRowMeta, VaultWatcher } from "../src/watcher.js";
@@ -1499,6 +1506,142 @@ describe("renameNote native case-insensitive filesystem contracts", () => {
 const windowsDescribe = process.platform === "win32" ? describe : describe.skip;
 
 windowsDescribe("Windows hostile-filesystem contracts", () => {
+  type PersistencePathAdmitter = (file: unknown) => void;
+
+  const persistencePathFamilies: ReadonlyArray<{
+    namespace: "cache" | "embed" | "feedback" | "fts" | "hnsw";
+    suffix: string;
+    admit: PersistencePathAdmitter;
+  }> = [
+    { namespace: "cache", suffix: ".json", admit: assertCacheFilePath },
+    { namespace: "embed", suffix: ".embed.db", admit: assertEmbedDbFilePath },
+    { namespace: "feedback", suffix: ".feedback.json", admit: assertFeedbackFilePath },
+    { namespace: "fts", suffix: ".fts5.db", admit: assertFtsIndexFilePath },
+    { namespace: "hnsw", suffix: ".hnsw", admit: assertHnswFilePath }
+  ];
+
+  const portablePersistencePaths = persistencePathFamilies.flatMap(({ namespace, suffix, admit }) => [
+    { namespace, admit, boundary: "ordinary component", file: `C:\\Enquire\\Vault${suffix}` },
+    { namespace, admit, boundary: "non-device COM10 component", file: `C:\\Enquire\\COM10${suffix}` },
+    { namespace, admit, boundary: "UNC root", file: `\\\\server\\share\\Vault${suffix}` }
+  ]);
+
+  const rejectedPersistencePaths = persistencePathFamilies.flatMap(({ namespace, suffix, admit }) =>
+    [
+      {
+        hazard: "alternate data stream",
+        file: `C:\\Enquire\\Vault${suffix}:stream${suffix}`,
+        error: /alternate data stream/
+      },
+      {
+        hazard: "drive-relative path",
+        file: `C:Vault${suffix}`,
+        error: /device namespace or drive-relative path/
+      },
+      {
+        hazard: "device namespace",
+        file: `\\\\?\\C:\\Enquire\\Vault${suffix}`,
+        error: /device namespace or drive-relative path/
+      },
+      {
+        hazard: "mixed-separator GLOBALROOT device namespace",
+        file: `/\\?/GLOBALROOT/Device/HarddiskVolume1/Vault${suffix}`,
+        error: /device namespace or drive-relative path/
+      },
+      {
+        hazard: "mixed-separator pipe device namespace",
+        file: `\\/./pipe/Vault${suffix}`,
+        error: /device namespace or drive-relative path/
+      },
+      {
+        hazard: "DOS device basename",
+        file: `C:\\Enquire\\CON${suffix}`,
+        error: /reserved Windows device basename/
+      },
+      {
+        hazard: "trailing-dot component",
+        file: `C:\\Enquire.\\Vault${suffix}`,
+        error: /trailing-dot or trailing-space path component/
+      },
+      {
+        hazard: "trailing-space component",
+        file: `C:\\Enquire \\Vault${suffix}`,
+        error: /trailing-dot or trailing-space path component/
+      },
+      {
+        hazard: "forbidden-character component",
+        file: `C:\\Bad?\\Vault${suffix}`,
+        error: /portable Windows path/
+      },
+      {
+        hazard: "control-character component",
+        file: `C:\\Bad\u001f\\Vault${suffix}`,
+        error: /portable Windows path/
+      },
+      {
+        hazard: "current-directory alias",
+        file: `C:\\Enquire\\.\\Vault${suffix}`,
+        error: /portable Windows path/
+      },
+      {
+        hazard: "parent-directory alias",
+        file: `C:\\Enquire\\..\\Vault${suffix}`,
+        error: /portable Windows path/
+      },
+      {
+        hazard: "repeated mixed-separator alias",
+        file: `C:\\Enquire\\/Vault${suffix}`,
+        error: /portable Windows path/
+      },
+      {
+        hazard: "zero-index DOS device basename",
+        file: `C:\\Enquire\\COM0${suffix}`,
+        error: /reserved Windows device basename/
+      }
+    ].map((testCase) => ({ namespace, admit, ...testCase }))
+  );
+
+  function expectPersistenceAdmissionBeforeFilesystem(
+    admit: PersistencePathAdmitter,
+    file: string,
+    expectedError?: RegExp
+  ): void {
+    const accessSpy = vi.spyOn(fs, "access");
+    const lstatSpy = vi.spyOn(fs, "lstat");
+    const openSpy = vi.spyOn(fs, "open");
+    const readFileSpy = vi.spyOn(fs, "readFile");
+    const statSpy = vi.spyOn(fs, "stat");
+    try {
+      if (expectedError) expect(() => admit(file)).toThrow(expectedError);
+      else expect(() => admit(file)).not.toThrow();
+      expect(accessSpy).not.toHaveBeenCalled();
+      expect(lstatSpy).not.toHaveBeenCalled();
+      expect(openSpy).not.toHaveBeenCalled();
+      expect(readFileSpy).not.toHaveBeenCalled();
+      expect(statSpy).not.toHaveBeenCalled();
+    } finally {
+      accessSpy.mockRestore();
+      lstatSpy.mockRestore();
+      openSpy.mockRestore();
+      readFileSpy.mockRestore();
+      statSpy.mockRestore();
+    }
+  }
+
+  it.for(portablePersistencePaths)(
+    "$namespace persistence admission accepts a $boundary before filesystem I/O",
+    ({ admit, file }) => {
+      expectPersistenceAdmissionBeforeFilesystem(admit, file);
+    }
+  );
+
+  it.for(rejectedPersistencePaths)(
+    "$namespace persistence admission rejects a $hazard before filesystem I/O",
+    ({ admit, file, error }) => {
+      expectPersistenceAdmissionBeforeFilesystem(admit, file, error);
+    }
+  );
+
   it("rejects reserved names, ADS, forbidden components, and traversal before filesystem I/O", async () => {
     const rejected = [
       "CON",

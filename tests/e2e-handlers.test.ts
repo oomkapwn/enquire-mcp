@@ -413,17 +413,23 @@ describe("T-4 — serve-http HTTP smoke (v3.8.5)", () => {
 // crashed → the spawnServer initialize handshake would time out → client null.
 describe("FTS5 fail-soft on --persistent-index open failure (v3.10.0-rc.33)", () => {
   let client: RpcClient | null = null;
+  let badIndexParent: string | null = null;
   beforeAll(async () => {
     if (!distExists()) return;
     const vault = await makeSemanticVault("fts-failsoft");
-    const badIndex = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-bad-ftsindex-"));
+    badIndexParent = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-bad-ftsindex-"));
+    const badIndex = path.join(badIndexParent, "bad.fts5.db");
+    await fs.mkdir(badIndex);
     try {
       client = await spawnServer(vault, ["--persistent-index", "--index-file", badIndex]);
     } catch {
       client = null; // pre-fix: startup crash → initialize times out → reject
     }
   });
-  afterAll(() => client?.close());
+  afterAll(async () => {
+    client?.close();
+    if (badIndexParent) await fs.rm(badIndexParent, { recursive: true, force: true });
+  });
 
   it("CI GUARD — serve still came up (degraded to TF-IDF) despite the unopenable FTS5 index", () => {
     if (!distExists()) return;

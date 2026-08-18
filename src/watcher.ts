@@ -23,6 +23,7 @@ import type { EmbedDb } from "./embed-db.js";
 import type { loadEmbedder } from "./embeddings.js";
 import { deriveFtsTitle, extractAliases, type FtsIndex } from "./fts5.js";
 import type { HnswIndex } from "./hnsw.js";
+import { assertHnswFilePath } from "./persistence-path.js";
 import type { CachedNote, Vault } from "./vault.js";
 
 /**
@@ -263,7 +264,7 @@ export function statsMtimeMsFromNs(mtimeNs: bigint): number {
  * the same order, so a length mismatch is a bug. The pre-rc.11 code used
  * `newIds[i] ?? -1`, which silently inserted a vector under SENTINEL label
  * `-1` on any mismatch — corrupting the in-memory index, the shared
- * `rowsByLabel` map, AND the persisted `.hnsw.bin` sidecar (a later
+ * `rowsByLabel` map, AND the persisted HNSW generation (a later
  * `markDelete(-1)` or a real row colliding on `-1` then scrambles results).
  * This throws (fail-closed) instead: the watcher's per-event try/catch logs it
  * and skips the HNSW update for that file. The surrounding embed-sync catch
@@ -339,9 +340,9 @@ export class VaultWatcher {
   private hnsw: HnswIndex | null = null;
   private hnswRowsByLabel: Map<number, HnswRowMeta> | null = null;
   // v3.9.0-rc.6 — HNSW disk persistence on live update. The in-memory
-  // HNSW index diverges from the persisted `.hnsw.bin` after every
+  // HNSW index diverges from the persisted immutable generation after every
   // applyDiff. Correctness is already guaranteed by the signature guard
-  // (a stale `.hnsw.bin` is ignored on next serve because
+  // (a stale generation is ignored on next serve because
   // loadHnswFromDisk recomputes the embed-db signature and rebuilds on
   // mismatch). The ONLY benefit of re-persisting is restart SPEED:
   // keeping the sidecar current avoids the ~25s rebuild on next serve.
@@ -603,14 +604,14 @@ export class VaultWatcher {
    * @param rowsByLabel - the mutable label→row metadata used for live
    *   sidecar maintenance and persistence. Search output does not trust this
    *   preview map: native labels are rehydrated from the current EmbedDb.
-   * @param persistFile - v3.9.0-rc.6: optional sidecar base path
-   *   (`<embed-db-without-suffix>.hnsw`). When provided AND HNSW live
+   * @param persistFile - Optional exact `.hnsw` sidecar base path. When provided AND HNSW live
    *   updates occurred, the watcher re-persists the index at close time
    *   so the next serve loads the up-to-date sidecar instead of
    *   rebuilding. Omit (or pass when `--no-hnsw-persist`) to skip
    *   persistence — correctness is unaffected (signature guard).
    */
   attachHnsw(hnsw: HnswIndex, rowsByLabel: Map<number, HnswRowMeta>, persistFile?: string): void {
+    if (persistFile !== undefined) assertHnswFilePath(persistFile);
     this.assertLateAttachmentAllowed("attachHnsw");
     if (!this.embedDb) {
       throw new Error(
@@ -662,16 +663,17 @@ export class VaultWatcher {
       return false;
     }
     try {
-      // v3.10.0-rc.40 (#7) — clear dirty BEFORE the await: a concurrent applyDiff that
-      // re-marks dirty DURING saveTo must NOT be clobbered by a late `= false`. If it
-      // stays dirty, the next serve's signature-guard rebuilds rather than trusting a
-      // sidecar that predates the concurrent diff. Re-set to true on failure below.
+      // Clear dirty before the await. Normal production shutdown drains watcher
+      // queues before this flush; if a public caller nevertheless overlaps a
+      // live mutation, HnswIndex rejects it before touching the native graph and
+      // this watcher's existing failure path quarantines HNSW. A failed save is
+      // re-marked dirty below so a later flush can retry.
       this.hnswDirty = false;
       const signature = this.embedDb.computeSignature();
       await this.hnsw.saveTo(this.hnswPersistFile, this.hnswRowsByLabel, signature);
       if (!this.silent) {
         process.stderr.write(
-          `enquire: watcher persisted live-updated HNSW index to ${this.hnswPersistFile}.bin (+ .meta.json)\n`
+          `enquire: watcher persisted live-updated HNSW generation + meta pointer at ${this.hnswPersistFile}\n`
         );
       }
       return true;

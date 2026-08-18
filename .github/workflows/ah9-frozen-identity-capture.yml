@@ -1,0 +1,403 @@
+name: AH-9 frozen identity capture
+
+on:
+  push:
+    branches:
+      - codex/ah9-atomic-publish-20260817
+    paths:
+      - .github/workflows/ah9-frozen-identity-capture.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ah9-frozen-identity-capture
+  cancel-in-progress: false
+
+jobs:
+  capture:
+    if: >-
+      github.repository == 'oomkapwn/enquire-mcp' &&
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/codex/ah9-atomic-publish-20260817' &&
+      github.run_attempt == 1
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      BASH_ENV: ""
+      ENV: ""
+      NODE_OPTIONS: ""
+      TAR_OPTIONS: ""
+    defaults:
+      run:
+        shell: /bin/bash --noprofile --norc -p -e -o pipefail {0}
+    steps:
+      - name: Check out the workflow commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Admit the exact workflow-only child
+        env:
+          CANDIDATE_COMMIT: 1356a2ae15ec3e54c7a8b0449ebd21d0235df342
+          CANDIDATE_TREE: fed0b611a8f68e12d0d678652be1befda369a43f
+          HISTORICAL_COMMIT: 8420e2fca3ed0dac994859a9e9a30b933d5ddf9e
+          WORKFLOW_PATH: .github/workflows/ah9-frozen-identity-capture.yml
+        run: |
+          test "$GITHUB_REPOSITORY" = "oomkapwn/enquire-mcp"
+          test "$GITHUB_EVENT_NAME" = "push"
+          test "$GITHUB_REF" = "refs/heads/codex/ah9-atomic-publish-20260817"
+          test "$GITHUB_RUN_ATTEMPT" = "1"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          set -- $(git rev-list --parents -n1 HEAD)
+          test "$#" -eq 2
+          test "$1" = "$GITHUB_SHA"
+          test "$2" = "$CANDIDATE_COMMIT"
+          test "$(git rev-parse "$CANDIDATE_COMMIT^{tree}")" = "$CANDIDATE_TREE"
+          test "$(git diff --name-only --no-renames "$CANDIDATE_COMMIT" HEAD)" = "$WORKFLOW_PATH"
+          test "$(git diff --diff-filter=A --name-only --no-renames "$CANDIDATE_COMMIT" HEAD)" = "$WORKFLOW_PATH"
+          git diff --check "$CANDIDATE_COMMIT" HEAD --
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          git cat-file -e "$HISTORICAL_COMMIT^{commit}"
+          git merge-base --is-ancestor "$HISTORICAL_COMMIT" "$CANDIDATE_COMMIT"
+
+      - name: Set up exact Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "22.13.0"
+
+      - name: Generate and verify the bounded capture
+        env:
+          CANDIDATE_COMMIT: 1356a2ae15ec3e54c7a8b0449ebd21d0235df342
+          CANDIDATE_TREE: fed0b611a8f68e12d0d678652be1befda369a43f
+          HISTORICAL_COMMIT: 8420e2fca3ed0dac994859a9e9a30b933d5ddf9e
+          HISTORICAL_SOURCE_SHA256: 3fa0b67411e2fc0f4d7c6bce6075ba91eb25edc19a210b5c2f8dd408def6e18b
+          HYBRID_SOURCE_SHA256: 2a15da915814bdfd4baacda33c87d93ce8679d89a93fb459ac97c37d3ba8763e
+          GENERATOR_SHA256: 97d9d8537b55bb47845d5fc4cd6481ba024975eeaa904850a0baf6ab0c265647
+          BASELINE_FIXTURE_SHA256: b6d7df02797ecf20f3091bb500036c5ff1bf7c81410e0b6a2cc7ed1c235ce7ad
+          GENERATED_FIXTURE_SHA256: b01606c018935e9dbde58388526c372f5354b04549225bc675f272a3a2fba089
+          OUTPUT_DIR: ${{ runner.temp }}/ah9-frozen-identity-output
+        run: |
+          test "$(node --version)" = "v22.13.0"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          CAPTURE_ROOT="$(mktemp -d "$RUNNER_TEMP/ah9-frozen-identity.XXXXXX")"
+          TREE_DIR="$CAPTURE_ROOT/tree"
+          mkdir "$TREE_DIR"
+          mkdir "$OUTPUT_DIR"
+          git archive "$CANDIDATE_COMMIT" | tar -xf - -C "$TREE_DIR"
+          test "$(sha256sum "$TREE_DIR/scripts/generate-release-mutation-identity.mjs" | cut -d ' ' -f1)" = "$GENERATOR_SHA256"
+          test "$(sha256sum "$TREE_DIR/tests/fixtures/release-mutation-identity.v2.json" | cut -d ' ' -f1)" = "$BASELINE_FIXTURE_SHA256"
+          test "$(sha256sum "$TREE_DIR/tests/release-integrity.test.ts" | cut -d ' ' -f1)" = "$HYBRID_SOURCE_SHA256"
+          git show "$HISTORICAL_COMMIT:tests/release-integrity.test.ts" > "$TREE_DIR/tests/release-integrity.test.ts"
+          test "$(sha256sum "$TREE_DIR/tests/release-integrity.test.ts" | cut -d ' ' -f1)" = "$HISTORICAL_SOURCE_SHA256"
+          (
+            cd "$TREE_DIR"
+            node scripts/generate-release-mutation-identity.mjs > "$OUTPUT_DIR/release-mutation-identity.v2.json"
+          )
+          export TREE_DIR
+          node --input-type=module <<'NODE'
+          import { execFileSync } from "node:child_process";
+          import { createHash } from "node:crypto";
+          import { readFileSync, writeFileSync } from "node:fs";
+          import { join } from "node:path";
+
+          function fail(message) {
+            throw new Error("AH-9 capture verifier: " + message);
+          }
+
+          function assert(condition, message) {
+            if (!condition) fail(message);
+          }
+
+          function sha256(bytes) {
+            return createHash("sha256").update(bytes).digest("hex");
+          }
+
+          function collectDifferences(before, after, path, output) {
+            if (Object.is(before, after)) return;
+            if (
+              before === null ||
+              after === null ||
+              typeof before !== "object" ||
+              typeof after !== "object" ||
+              Array.isArray(before) !== Array.isArray(after)
+            ) {
+              output.push(path);
+              return;
+            }
+            if (Array.isArray(before) && Array.isArray(after)) {
+              if (before.length !== after.length) output.push(path + ".length");
+              const limit = Math.min(before.length, after.length);
+              for (let index = 0; index < limit; index++) {
+                collectDifferences(before[index], after[index], path + "[" + index + "]", output);
+              }
+              return;
+            }
+            const keys = [...new Set([...Object.keys(before), ...Object.keys(after)])].sort();
+            for (const key of keys) {
+              if (!Object.hasOwn(before, key) || !Object.hasOwn(after, key)) {
+                output.push(path + "." + key);
+                continue;
+              }
+              collectDifferences(before[key], after[key], path + "." + key, output);
+            }
+          }
+
+          function isHexSha(value) {
+            return (
+              typeof value === "string" &&
+              value.length === 64 &&
+              [...value].every((character) => "0123456789abcdef".includes(character))
+            );
+          }
+
+          function isSemanticSha(value) {
+            return typeof value === "string" && value.startsWith("sha256:") && isHexSha(value.slice(7));
+          }
+
+          const treeDir = process.env.TREE_DIR;
+          const outputDir = process.env.OUTPUT_DIR;
+          assert(typeof treeDir === "string" && treeDir.length > 0, "TREE_DIR missing");
+          assert(typeof outputDir === "string" && outputDir.length > 0, "OUTPUT_DIR missing");
+          const baselinePath = join(treeDir, "tests/fixtures/release-mutation-identity.v2.json");
+          const generatedPath = join(outputDir, "release-mutation-identity.v2.json");
+          const baselineBytes = readFileSync(baselinePath);
+          const generatedBytes = readFileSync(generatedPath);
+          const baselineText = baselineBytes.toString("utf8");
+          const generatedText = generatedBytes.toString("utf8");
+          assert(sha256(baselineBytes) === process.env.BASELINE_FIXTURE_SHA256, "baseline fixture hash drift");
+          assert(sha256(generatedBytes) === process.env.GENERATED_FIXTURE_SHA256, "generated fixture hash drift");
+          assert(baselineBytes.length === 1446893, "baseline fixture byte-count drift");
+          assert(generatedBytes.length === baselineBytes.length, "generated fixture byte-count drift");
+          assert(generatedBytes.length <= 2 * 1024 * 1024, "generated fixture exceeds 2 MiB");
+          assert(baselineText.endsWith(String.fromCharCode(10)), "baseline fixture lacks terminal LF");
+          assert(generatedText.endsWith(String.fromCharCode(10)), "generated fixture lacks terminal LF");
+          const newline = String.fromCharCode(10);
+          assert(baselineText.split(newline).length - 1 === 1138, "baseline fixture line-count drift");
+          assert(generatedText.split(newline).length - 1 === 1138, "generated fixture line-count drift");
+
+          const baseline = JSON.parse(baselineText);
+          const generated = JSON.parse(generatedText);
+          const expectedIds = [
+            [generated.sources[0]?.id, "document.api"],
+            [generated.sources[24]?.id, "source.cli"],
+            [generated.sources[25]?.id, "source.cli-help"],
+            [generated.sources[26]?.id, "source.server-ts"],
+            [generated.mutations[466]?.id, "release.m467"],
+            [generated.mutations[468]?.id, "release.m469"]
+          ];
+          for (const [actual, expected] of expectedIds) assert(actual === expected, "identity index drift for " + expected);
+
+          const selectors = [
+            {
+              path: "$.sources[0].contentSha256",
+              before: baseline.sources[0].contentSha256,
+              after: generated.sources[0].contentSha256,
+              expected: "8a525295cedc71fd5c8b82d8cbd55f5eaeb0b3bb4dedad5040c3fa486a1e1fcd"
+            },
+            {
+              path: "$.sources[0].semanticFingerprint",
+              before: baseline.sources[0].semanticFingerprint,
+              after: generated.sources[0].semanticFingerprint,
+              expected: "sha256:4d1e43d05b722fc21d3cbd32b96af5129518221a9c8b56d8152e179cddea5609"
+            },
+            {
+              path: "$.sources[24].contentSha256",
+              before: baseline.sources[24].contentSha256,
+              after: generated.sources[24].contentSha256,
+              expected: "c729828d331028ec84ed0860793043d192d2d7f7803c1df158b3a5f8e1cb59c7"
+            },
+            {
+              path: "$.sources[24].semanticFingerprint",
+              before: baseline.sources[24].semanticFingerprint,
+              after: generated.sources[24].semanticFingerprint,
+              expected: "sha256:357c8a052cf10e7c241bb95356f5fffeeb453a8bbe612db6beef9ea65aefbef0"
+            },
+            {
+              path: "$.sources[25].contentSha256",
+              before: baseline.sources[25].contentSha256,
+              after: generated.sources[25].contentSha256,
+              expected: "0b91111989cc56193a2a45249e8ef123ee678aff6bd0ea235a9d3db84683f3c8"
+            },
+            {
+              path: "$.sources[25].semanticFingerprint",
+              before: baseline.sources[25].semanticFingerprint,
+              after: generated.sources[25].semanticFingerprint,
+              expected: "sha256:a36bad851368579ae7d7c7b0102f7ec6f17dbd26a54a5dd66c4acf5fc84a969b"
+            },
+            {
+              path: "$.sources[26].contentSha256",
+              before: baseline.sources[26].contentSha256,
+              after: generated.sources[26].contentSha256,
+              expected: "e0d6ac190ca01243f441dd1c586d6b519f900914d8ed39c436fb54aaa2c790a4"
+            },
+            {
+              path: "$.sources[26].semanticFingerprint",
+              before: baseline.sources[26].semanticFingerprint,
+              after: generated.sources[26].semanticFingerprint,
+              expected: "sha256:53fc2786f1d1109e4013521224e69948a127811055a7eb67cae36405d62a601c"
+            },
+            {
+              path: "$.mutations[466].witness.sourceSha256",
+              before: baseline.mutations[466].witness.sourceSha256,
+              after: generated.mutations[466].witness.sourceSha256,
+              expected: "8a525295cedc71fd5c8b82d8cbd55f5eaeb0b3bb4dedad5040c3fa486a1e1fcd"
+            },
+            {
+              path: "$.mutations[466].witness.mutantSha256",
+              before: baseline.mutations[466].witness.mutantSha256,
+              after: generated.mutations[466].witness.mutantSha256,
+              expected: "3e5a8f395d818dc5e0a4b2a5f94ed7756a052f403542703d01f81cab7eafd992"
+            },
+            {
+              path: "$.mutations[466].semanticFingerprint",
+              before: baseline.mutations[466].semanticFingerprint,
+              after: generated.mutations[466].semanticFingerprint,
+              expected: "sha256:e41261ed6ae9b93aeba89fe93e246825f669039cd9acfbd024cf783babc9cc9e"
+            },
+            {
+              path: "$.mutations[468].witness.sourceSha256",
+              before: baseline.mutations[468].witness.sourceSha256,
+              after: generated.mutations[468].witness.sourceSha256,
+              expected: "e0d6ac190ca01243f441dd1c586d6b519f900914d8ed39c436fb54aaa2c790a4"
+            },
+            {
+              path: "$.mutations[468].witness.mutantSha256",
+              before: baseline.mutations[468].witness.mutantSha256,
+              after: generated.mutations[468].witness.mutantSha256,
+              expected: "47dcbe064c08cd4ead0a3f9fbe726df617776980aa2fba1027ce3b12c44c3251"
+            },
+            {
+              path: "$.mutations[468].semanticFingerprint",
+              before: baseline.mutations[468].semanticFingerprint,
+              after: generated.mutations[468].semanticFingerprint,
+              expected: "sha256:9f32ac1009e4f3d87c79bef7b69045ef0e32a58f45eeed71826849c36dd744f7"
+            }
+          ];
+          const differences = [];
+          collectDifferences(baseline, generated, "$", differences);
+          const actualPaths = [...differences].sort();
+          const allowedPaths = selectors.map((entry) => entry.path).sort();
+          assert(JSON.stringify(actualPaths) === JSON.stringify(allowedPaths), "deep-diff allowlist mismatch");
+          for (const entry of selectors) {
+            assert(entry.before !== entry.after, "allowed leaf did not change: " + entry.path);
+            assert(entry.after === entry.expected, "unexpected generated value: " + entry.path);
+            if (entry.path.endsWith("semanticFingerprint")) assert(isSemanticSha(entry.after), "invalid semantic SHA");
+            else assert(isHexSha(entry.after), "invalid content SHA");
+          }
+          assert(
+            generated.mutations[466].witness.sourceSha256 === generated.sources[0].contentSha256,
+            "release.m467 source witness mismatch"
+          );
+          assert(
+            generated.mutations[468].witness.sourceSha256 === generated.sources[26].contentSha256,
+            "release.m469 source witness mismatch"
+          );
+
+          const baselineLines = baselineText.split(newline);
+          const generatedLines = generatedText.split(newline);
+          const changedLines = [];
+          for (let index = 0; index < baselineLines.length; index++) {
+            if (baselineLines[index] !== generatedLines[index]) changedLines.push(index + 1);
+          }
+          assert(
+            JSON.stringify(changedLines) === JSON.stringify([7, 31, 32, 33, 505, 507]),
+            "physical changed-line allowlist mismatch"
+          );
+
+          const candidateSources = {
+            "docs/api.md": "8a525295cedc71fd5c8b82d8cbd55f5eaeb0b3bb4dedad5040c3fa486a1e1fcd",
+            "src/cli.ts": "c729828d331028ec84ed0860793043d192d2d7f7803c1df158b3a5f8e1cb59c7",
+            "src/cli-help.ts": "0b91111989cc56193a2a45249e8ef123ee678aff6bd0ea235a9d3db84683f3c8",
+            "src/server.ts": "e0d6ac190ca01243f441dd1c586d6b519f900914d8ed39c436fb54aaa2c790a4"
+          };
+          for (const [file, expected] of Object.entries(candidateSources)) {
+            assert(sha256(readFileSync(join(treeDir, file))) === expected, "candidate source hash drift: " + file);
+          }
+          assert(
+            sha256(readFileSync(join(treeDir, "scripts/generate-release-mutation-identity.mjs"))) ===
+              process.env.GENERATOR_SHA256,
+            "generator hash drift"
+          );
+          assert(
+            sha256(readFileSync(join(treeDir, "tests/release-integrity.test.ts"))) ===
+              process.env.HISTORICAL_SOURCE_SHA256,
+            "historical source hash drift"
+          );
+          const clean = execFileSync("git", ["status", "--porcelain=v1", "--untracked-files=all"], {
+            encoding: "utf8"
+          });
+          assert(clean === "", "checkout became dirty during capture");
+
+          const receipt = {
+            schemaVersion: 1,
+            repository: process.env.GITHUB_REPOSITORY,
+            ref: process.env.GITHUB_REF,
+            event: process.env.GITHUB_EVENT_NAME,
+            runId: process.env.GITHUB_RUN_ID,
+            runAttempt: process.env.GITHUB_RUN_ATTEMPT,
+            candidateCommit: process.env.CANDIDATE_COMMIT,
+            candidateTree: process.env.CANDIDATE_TREE,
+            workflowCommit: process.env.GITHUB_SHA,
+            nodeVersion: process.version,
+            generatorSha256: process.env.GENERATOR_SHA256,
+            historicalSource: {
+              commit: process.env.HISTORICAL_COMMIT,
+              sha256: process.env.HISTORICAL_SOURCE_SHA256
+            },
+            hybridSourceSha256: process.env.HYBRID_SOURCE_SHA256,
+            baselineFixtureSha256: process.env.BASELINE_FIXTURE_SHA256,
+            generatedFixtureSha256: process.env.GENERATED_FIXTURE_SHA256,
+            candidateSources,
+            changes: selectors.map((entry) => ({
+              path: entry.path,
+              before: entry.before,
+              after: entry.after
+            })),
+            changedLines,
+            pinTargets: [
+              "tests/meta-invariant-coverage.test.ts",
+              "tests/release-mutation-identity-audit.ts"
+            ],
+            inventory: generated.inventory,
+            generatedFrom: generated.generatedFrom,
+            checkoutClean: true
+          };
+          writeFileSync(join(outputDir, "capture-receipt.json"), JSON.stringify(receipt, null, 2) + newline, {
+            mode: 0o600
+          });
+          NODE
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+
+      - name: Upload the exact capture
+        id: capture-upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ah9-frozen-identity-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ah9-frozen-identity-output
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+
+      - name: Verify artifact binding outputs
+        env:
+          ARTIFACT_ID: ${{ steps.capture-upload.outputs.artifact-id }}
+          ARTIFACT_DIGEST: ${{ steps.capture-upload.outputs.artifact-digest }}
+          ARTIFACT_URL: ${{ steps.capture-upload.outputs.artifact-url }}
+        run: |
+          node --input-type=module <<'NODE'
+          const id = process.env.ARTIFACT_ID ?? "";
+          const digest = process.env.ARTIFACT_DIGEST ?? "";
+          const url = process.env.ARTIFACT_URL ?? "";
+          const runId = process.env.GITHUB_RUN_ID ?? "";
+          const decimal = [...id].every((character) => "0123456789".includes(character));
+          const hex = [...digest].every((character) => "0123456789abcdef".includes(character));
+          if (id.length === 0 || !decimal || BigInt(id) <= 0n) throw new Error("invalid artifact id");
+          if (digest.length !== 64 || !hex) throw new Error("invalid artifact digest");
+          const expectedUrl = `https://github.com/oomkapwn/enquire-mcp/actions/runs/${runId}/artifacts/${id}`;
+          if (runId.length === 0 || url !== expectedUrl) {
+            throw new Error("invalid artifact URL");
+          }
+          NODE

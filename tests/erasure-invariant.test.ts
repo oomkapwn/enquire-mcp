@@ -46,7 +46,7 @@ import {
   sensitiveArtifactFinalBasename
 } from "../src/sensitive-artifact.js";
 import { Vault } from "../src/vault.js";
-import { replaceAllExactly, replaceExactly } from "./helpers/exact-source-mutation.js";
+import { replaceExactly } from "./helpers/exact-source-mutation.js";
 
 const repoRoot = path.resolve(__dirname, "..");
 
@@ -113,80 +113,79 @@ const WINDOWS_PERSISTENCE_VALID_PATHS = PERSISTENCE_NAMESPACE_ADMITTERS.flatMap(
   { namespace, admit, boundary: "UNC root", file: `\\\\server\\share\\Vault${suffix}` }
 ]);
 
-const WINDOWS_PERSISTENCE_REJECTIONS = PERSISTENCE_NAMESPACE_ADMITTERS.flatMap(
-  ({ namespace, admit, suffix }) =>
-    [
-      {
-        hazard: "alternate data stream",
-        file: `C:\\Enquire\\Vault${suffix}:stream${suffix}`,
-        error: /alternate data stream/
-      },
-      {
-        hazard: "drive-relative path",
-        file: `C:Vault${suffix}`,
-        error: /device namespace or drive-relative path/
-      },
-      {
-        hazard: "device namespace",
-        file: `\\\\?\\C:\\Enquire\\Vault${suffix}`,
-        error: /device namespace or drive-relative path/
-      },
-      {
-        hazard: "mixed-separator GLOBALROOT device namespace",
-        file: `/\\?/GLOBALROOT/Device/HarddiskVolume1/Vault${suffix}`,
-        error: /device namespace or drive-relative path/
-      },
-      {
-        hazard: "mixed-separator pipe device namespace",
-        file: `\\/./pipe/Vault${suffix}`,
-        error: /device namespace or drive-relative path/
-      },
-      {
-        hazard: "DOS device basename",
-        file: `C:\\Enquire\\CON${suffix}`,
-        error: /reserved Windows device basename/
-      },
-      {
-        hazard: "trailing-dot component",
-        file: `C:\\Enquire.\\Vault${suffix}`,
-        error: /trailing-dot or trailing-space path component/
-      },
-      {
-        hazard: "trailing-space component",
-        file: `C:\\Enquire \\Vault${suffix}`,
-        error: /trailing-dot or trailing-space path component/
-      },
-      {
-        hazard: "forbidden-character component",
-        file: `C:\\Bad?\\Vault${suffix}`,
-        error: /portable Windows path/
-      },
-      {
-        hazard: "control-character component",
-        file: `C:\\Bad\u001f\\Vault${suffix}`,
-        error: /portable Windows path/
-      },
-      {
-        hazard: "current-directory alias",
-        file: `C:\\Enquire\\.\\Vault${suffix}`,
-        error: /portable Windows path/
-      },
-      {
-        hazard: "parent-directory alias",
-        file: `C:\\Enquire\\..\\Vault${suffix}`,
-        error: /portable Windows path/
-      },
-      {
-        hazard: "repeated mixed-separator alias",
-        file: `C:\\Enquire\\/Vault${suffix}`,
-        error: /portable Windows path/
-      },
-      {
-        hazard: "zero-index DOS device basename",
-        file: `C:\\Enquire\\COM0${suffix}`,
-        error: /reserved Windows device basename/
-      }
-    ].map((testCase) => ({ namespace, admit, ...testCase }))
+const WINDOWS_PERSISTENCE_REJECTIONS = PERSISTENCE_NAMESPACE_ADMITTERS.flatMap(({ namespace, admit, suffix }) =>
+  [
+    {
+      hazard: "alternate data stream",
+      file: `C:\\Enquire\\Vault${suffix}:stream${suffix}`,
+      error: /alternate data stream/
+    },
+    {
+      hazard: "drive-relative path",
+      file: `C:Vault${suffix}`,
+      error: /device namespace or drive-relative path/
+    },
+    {
+      hazard: "device namespace",
+      file: `\\\\?\\C:\\Enquire\\Vault${suffix}`,
+      error: /device namespace or drive-relative path/
+    },
+    {
+      hazard: "mixed-separator GLOBALROOT device namespace",
+      file: `/\\?/GLOBALROOT/Device/HarddiskVolume1/Vault${suffix}`,
+      error: /device namespace or drive-relative path/
+    },
+    {
+      hazard: "mixed-separator pipe device namespace",
+      file: `\\/./pipe/Vault${suffix}`,
+      error: /device namespace or drive-relative path/
+    },
+    {
+      hazard: "DOS device basename",
+      file: `C:\\Enquire\\CON${suffix}`,
+      error: /reserved Windows device basename/
+    },
+    {
+      hazard: "trailing-dot component",
+      file: `C:\\Enquire.\\Vault${suffix}`,
+      error: /trailing-dot or trailing-space path component/
+    },
+    {
+      hazard: "trailing-space component",
+      file: `C:\\Enquire \\Vault${suffix}`,
+      error: /trailing-dot or trailing-space path component/
+    },
+    {
+      hazard: "forbidden-character component",
+      file: `C:\\Bad?\\Vault${suffix}`,
+      error: /portable Windows path/
+    },
+    {
+      hazard: "control-character component",
+      file: `C:\\Bad\u001f\\Vault${suffix}`,
+      error: /portable Windows path/
+    },
+    {
+      hazard: "current-directory alias",
+      file: `C:\\Enquire\\.\\Vault${suffix}`,
+      error: /portable Windows path/
+    },
+    {
+      hazard: "parent-directory alias",
+      file: `C:\\Enquire\\..\\Vault${suffix}`,
+      error: /portable Windows path/
+    },
+    {
+      hazard: "repeated mixed-separator alias",
+      file: `C:\\Enquire\\/Vault${suffix}`,
+      error: /portable Windows path/
+    },
+    {
+      hazard: "zero-index DOS device basename",
+      file: `C:\\Enquire\\COM0${suffix}`,
+      error: /reserved Windows device basename/
+    }
+  ].map((testCase) => ({ namespace, admit, ...testCase }))
 );
 
 // ── Manifest: on-disk artifact family → (source file, eraser method, the literal
@@ -262,6 +261,7 @@ interface RuntimeMemberRequirement {
   file: string;
   member: string;
   needles: readonly string[];
+  needleOccurrences?: Readonly<Record<string, number>>;
 }
 
 interface SensitivePublisherInventoryEntry {
@@ -274,6 +274,7 @@ interface SensitivePublisherInventoryEntry {
 const INVENTORY_OTHER = "bbbbbbbbbbbb";
 const INVENTORY_KEEP = "aaaaaaaaaaaa";
 const TOKEN_48 = "a".repeat(48);
+const LEGACY_CACHE_TEMP_SOURCE_NEEDLE = "\x60\x24{file}.tmp\x60";
 const SQLITE_FAMILY_SUFFIXES = ["", "-wal", "-shm", "-journal"] as const;
 const SQLITE_SIDECAR_SUFFIXES = SQLITE_FAMILY_SUFFIXES.slice(1) as ReadonlyArray<"-wal" | "-shm" | "-journal">;
 
@@ -373,10 +374,7 @@ const SENSITIVE_PUBLISHER_INVENTORY: readonly SensitivePublisherInventoryEntry[]
       {
         file: "src/vault.ts",
         member: "clearDiskCache",
-        needles: [
-          "const invocationEpoch = this.cacheEpoch;",
-          "this.clearDiskCacheOnce(file, invocationEpoch)"
-        ]
+        needles: ["const invocationEpoch = this.cacheEpoch;", "this.clearDiskCacheOnce(file, invocationEpoch)"]
       },
       {
         file: "src/vault.ts",
@@ -384,11 +382,11 @@ const SENSITIVE_PUBLISHER_INVENTORY: readonly SensitivePublisherInventoryEntry[]
         needles: [
           "private async clearDiskCacheOnce(file: string, invocationEpoch: number)",
           "preflightSensitiveArtifactTemps(file)",
-          // biome-ignore lint/suspicious/noTemplateCurlyInString: literal template-source needle
-          "`${file}.tmp`",
+          LEGACY_CACHE_TEMP_SOURCE_NEEDLE,
           "removeSensitiveArtifactTemps(file)",
           "this.cacheEpoch === invocationEpoch"
-        ]
+        ],
+        needleOccurrences: { [LEGACY_CACHE_TEMP_SOURCE_NEEDLE]: 2 }
       },
       {
         file: "src/fts5.ts",
@@ -432,10 +430,7 @@ const SENSITIVE_PUBLISHER_INVENTORY: readonly SensitivePublisherInventoryEntry[]
       {
         file: "src/hnsw.ts",
         member: "clearHnswPersistedArtifacts",
-        needles: [
-          "const plan = await planHnswErasure(file);",
-          "removeSensitiveArtifactTempEntry(entry.entryPath)"
-        ]
+        needles: ["const plan = await planHnswErasure(file);", "removeSensitiveArtifactTempEntry(entry.entryPath)"]
       },
       {
         file: "src/hnsw.ts",
@@ -461,10 +456,7 @@ function runtimeMemberBodies(source: string, file: string, member: string): stri
   const sourceFile = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
   const bodies: string[] = [];
   const visit = (node: ts.Node): void => {
-    if (
-      (ts.isMethodDeclaration(node) || ts.isFunctionDeclaration(node)) &&
-      node.name?.getText(sourceFile) === member
-    ) {
+    if ((ts.isMethodDeclaration(node) || ts.isFunctionDeclaration(node)) && node.name?.getText(sourceFile) === member) {
       bodies.push(node.getText(sourceFile));
     }
     ts.forEachChild(node, visit);
@@ -564,7 +556,9 @@ function sqliteNativeOpenProblems(overrides: ReadonlyMap<string, string> = new M
     const constructorOffset = body.indexOf(route.constructorNeedle);
     if (preflightCount !== 2) problems.push(`${route.id}: expected two family preflights, found ${preflightCount}`);
     if (constructorCount !== 1) problems.push(`${route.id}: expected one disk constructor, found ${constructorCount}`);
-    if (!(firstPreflight >= 0 && firstPreflight < loader && loader < lastPreflight && lastPreflight < constructorOffset)) {
+    if (
+      !(firstPreflight >= 0 && firstPreflight < loader && loader < lastPreflight && lastPreflight < constructorOffset)
+    ) {
       problems.push(`${route.id}: preflight/load/preflight/open order is not exact`);
     }
 
@@ -694,8 +688,12 @@ function publisherInventoryProblems(overrides: ReadonlyMap<string, string> = new
       }
       const body = bodies[0] ?? "";
       for (const needle of requirement.needles) {
-        if (!body.includes(needle)) {
-          problems.push(`${entry.id}:${role}:${requirement.file}#${requirement.member} missing ${needle}`);
+        const expectedOccurrences = requirement.needleOccurrences?.[needle] ?? 1;
+        const actualOccurrences = body.split(needle).length - 1;
+        if (actualOccurrences !== expectedOccurrences) {
+          problems.push(
+            `${entry.id}:${role}:${requirement.file}#${requirement.member} expected ${expectedOccurrences} ${needle}, found ${actualOccurrences}`
+          );
         }
       }
     }
@@ -708,13 +706,19 @@ function publisherInventoryProblems(overrides: ReadonlyMap<string, string> = new
 
 const PUBLISHER_INVENTORY_MUTANTS = SENSITIVE_PUBLISHER_INVENTORY.flatMap((entry) =>
   ([entry.publisher, ...entry.eraserRoutes] as const).flatMap((requirement, requirementIndex) =>
-    requirement.needles.map((needle) => ({
-      id: entry.id,
-      role: requirementIndex === 0 ? "publisher" : "eraser",
-      file: requirement.file,
-      member: requirement.member,
-      needle
-    }))
+    requirement.needles.flatMap((needle) => {
+      const expectedOccurrences = requirement.needleOccurrences?.[needle] ?? 1;
+      return Array.from({ length: expectedOccurrences }, (_, occurrenceIndex) => ({
+        id: entry.id,
+        role: requirementIndex === 0 ? "publisher" : "eraser",
+        file: requirement.file,
+        member: requirement.member,
+        needle,
+        occurrenceIndex,
+        occurrenceNumber: occurrenceIndex + 1,
+        expectedOccurrences
+      }));
+    })
   )
 );
 
@@ -948,12 +952,7 @@ describe("erasure-completeness invariant (rc.36, P-2 class)", () => {
       );
       const mutantSource = replaceExactly(source, body, mutantBody);
       expect(sensitiveReaderRouteProblems(mutantSource, file, member, calls, exactCall)).not.toEqual([]);
-      const unboundedBody = replaceExactly(
-        body,
-        exactCall,
-        `readSensitiveArtifactText(${directArgument})`,
-        calls
-      );
+      const unboundedBody = replaceExactly(body, exactCall, `readSensitiveArtifactText(${directArgument})`, calls);
       const unboundedSource = replaceExactly(source, body, unboundedBody);
       expect(sensitiveReaderRouteProblems(unboundedSource, file, member, calls, exactCall)).not.toEqual([]);
     }
@@ -1082,85 +1081,84 @@ describe("erasure-completeness invariant (rc.36, P-2 class)", () => {
     }
   );
 
-  it.for([
-    { kind: "regular file" as const },
-    { kind: "symlink" as const },
-    { kind: "Unix-domain socket" as const }
-  ])("sensitive reader enforces the $kind leaf contract", async ({ kind }, { skip }) => {
-    const file = path.join(cacheDir, `reader-${kind.replaceAll(" ", "-")}.json`);
-    if (kind === "regular file") {
-      await fs.writeFile(file, "REGULAR_READER_BYTES", { flag: "wx", mode: 0o600 });
-      await expect(readSensitiveArtifactText(file)).resolves.toBe("REGULAR_READER_BYTES");
-      return;
-    }
+  it.for([{ kind: "regular file" as const }, { kind: "symlink" as const }, { kind: "Unix-domain socket" as const }])(
+    "sensitive reader enforces the $kind leaf contract",
+    async ({ kind }, { skip }) => {
+      const file = path.join(cacheDir, `reader-${kind.replaceAll(" ", "-")}.json`);
+      if (kind === "regular file") {
+        await fs.writeFile(file, "REGULAR_READER_BYTES", { flag: "wx", mode: 0o600 });
+        await expect(readSensitiveArtifactText(file)).resolves.toBe("REGULAR_READER_BYTES");
+        return;
+      }
 
-    if (kind === "symlink") {
-      const target = path.join(cacheDir, "reader-symlink-target.txt");
-      await fs.writeFile(target, "SYMLINK_TARGET_SENTINEL", { flag: "wx", mode: 0o600 });
-      try {
-        await fs.symlink(target, file, "file");
-      } catch (err) {
-        const code = (err as NodeJS.ErrnoException).code;
-        if (["EPERM", "EACCES", "ENOSYS"].includes(code ?? "")) {
-          skip(`filesystem cannot create the reader symlink control (${code ?? "unknown"})`);
-          return;
+      if (kind === "symlink") {
+        const target = path.join(cacheDir, "reader-symlink-target.txt");
+        await fs.writeFile(target, "SYMLINK_TARGET_SENTINEL", { flag: "wx", mode: 0o600 });
+        try {
+          await fs.symlink(target, file, "file");
+        } catch (err) {
+          const code = (err as NodeJS.ErrnoException).code;
+          if (["EPERM", "EACCES", "ENOSYS"].includes(code ?? "")) {
+            skip(`filesystem cannot create the reader symlink control (${code ?? "unknown"})`);
+            return;
+          }
+          throw err;
         }
-        throw err;
+        const openSpy = vi.spyOn(fs, "open");
+        try {
+          await expect(readSensitiveArtifactText(file)).rejects.toThrow(/non-regular sensitive artifact/);
+          expect(openSpy).not.toHaveBeenCalled();
+        } finally {
+          openSpy.mockRestore();
+        }
+        expect(await fs.readFile(target, "utf8")).toBe("SYMLINK_TARGET_SENTINEL");
+        return;
       }
-      const openSpy = vi.spyOn(fs, "open");
-      try {
-        await expect(readSensitiveArtifactText(file)).rejects.toThrow(/non-regular sensitive artifact/);
-        expect(openSpy).not.toHaveBeenCalled();
-      } finally {
-        openSpy.mockRestore();
-      }
-      expect(await fs.readFile(target, "utf8")).toBe("SYMLINK_TARGET_SENTINEL");
-      return;
-    }
 
-    if (process.platform === "win32") {
-      skip("Unix-domain socket pathname control is POSIX-only");
-      return;
-    }
-    const server = net.createServer();
-    let listening = false;
-    try {
+      if (process.platform === "win32") {
+        skip("Unix-domain socket pathname control is POSIX-only");
+        return;
+      }
+      const server = net.createServer();
+      let listening = false;
       try {
-        await new Promise<void>((resolve, reject) => {
-          server.once("error", reject);
-          server.listen(file, () => {
-            server.removeListener("error", reject);
-            listening = true;
-            resolve();
+        try {
+          await new Promise<void>((resolve, reject) => {
+            server.once("error", reject);
+            server.listen(file, () => {
+              server.removeListener("error", reject);
+              listening = true;
+              resolve();
+            });
           });
-        });
-      } catch (err) {
-        const code = (err as NodeJS.ErrnoException).code;
-        if (["EPERM", "EACCES", "ENOSYS", "ENOTSUP", "EOPNOTSUPP"].includes(code ?? "")) {
-          skip(`filesystem cannot create the reader socket control (${code ?? "unknown"})`);
-          return;
+        } catch (err) {
+          const code = (err as NodeJS.ErrnoException).code;
+          if (["EPERM", "EACCES", "ENOSYS", "ENOTSUP", "EOPNOTSUPP"].includes(code ?? "")) {
+            skip(`filesystem cannot create the reader socket control (${code ?? "unknown"})`);
+            return;
+          }
+          throw err;
         }
-        throw err;
-      }
 
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      const timeout = new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(() => reject(new Error("sensitive reader blocked on a special leaf")), 1000);
-      });
-      try {
-        await expect(Promise.race([readSensitiveArtifactText(file), timeout])).rejects.toThrow(
-          /non-regular sensitive artifact/
-        );
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const timeout = new Promise<never>((_resolve, reject) => {
+          timer = setTimeout(() => reject(new Error("sensitive reader blocked on a special leaf")), 1000);
+        });
+        try {
+          await expect(Promise.race([readSensitiveArtifactText(file), timeout])).rejects.toThrow(
+            /non-regular sensitive artifact/
+          );
+        } finally {
+          if (timer) clearTimeout(timer);
+        }
+        expect((await fs.lstat(file)).isSocket()).toBe(true);
       } finally {
-        if (timer) clearTimeout(timer);
-      }
-      expect((await fs.lstat(file)).isSocket()).toBe(true);
-    } finally {
-      if (listening) {
-        await new Promise<void>((resolve) => server.close(() => resolve()));
+        if (listening) {
+          await new Promise<void>((resolve) => server.close(() => resolve()));
+        }
       }
     }
-  });
+  );
 
   it.for([{ growth: "before bounded read" as const }, { growth: "during bounded read" as const }])(
     "sensitive reader bounds a generation that grows $growth",
@@ -1175,9 +1173,9 @@ describe("erasure-completeness invariant (rc.36, P-2 class)", () => {
       let grown = false;
       const openSpy = vi.spyOn(fs, "open").mockImplementation(async (candidate, flags, mode) => {
         const handle = await realOpen(candidate, flags, mode);
-        const realStat = handle.stat.bind(handle) as (
-          options: { bigint: true }
-        ) => Promise<import("node:fs").BigIntStats>;
+        const realStat = handle.stat.bind(handle) as (options: {
+          bigint: true;
+        }) => Promise<import("node:fs").BigIntStats>;
         const realRead = handle.read.bind(handle) as (
           buffer: Buffer,
           offset: number,
@@ -1225,38 +1223,37 @@ describe("erasure-completeness invariant (rc.36, P-2 class)", () => {
     }
   );
 
-  it.for([
-    { kind: "missing" as const },
-    { kind: "regular file" as const },
-    { kind: "symlink" as const }
-  ])("publisher admits a $kind final leaf", async ({ kind }, { skip }) => {
-    const finalPath = path.join(cacheDir, `replaceable-${kind.replaceAll(" ", "-")}.bin`);
-    const symlinkTarget = path.join(cacheDir, "replaceable-symlink-target.txt");
-    if (kind === "regular file") {
-      await fs.writeFile(finalPath, "OLD_FINAL_BYTES", { flag: "wx", mode: 0o600 });
-    } else if (kind === "symlink") {
-      await fs.writeFile(symlinkTarget, "FOREIGN_TARGET_SENTINEL", { flag: "wx", mode: 0o600 });
-      try {
-        await fs.symlink(symlinkTarget, finalPath, "file");
-      } catch (err) {
-        const code = (err as NodeJS.ErrnoException).code;
-        if (["EPERM", "EACCES", "ENOSYS"].includes(code ?? "")) {
-          skip(`filesystem cannot create the final-leaf symlink control (${code ?? "unknown"})`);
-          return;
+  it.for([{ kind: "missing" as const }, { kind: "regular file" as const }, { kind: "symlink" as const }])(
+    "publisher admits a $kind final leaf",
+    async ({ kind }, { skip }) => {
+      const finalPath = path.join(cacheDir, `replaceable-${kind.replaceAll(" ", "-")}.bin`);
+      const symlinkTarget = path.join(cacheDir, "replaceable-symlink-target.txt");
+      if (kind === "regular file") {
+        await fs.writeFile(finalPath, "OLD_FINAL_BYTES", { flag: "wx", mode: 0o600 });
+      } else if (kind === "symlink") {
+        await fs.writeFile(symlinkTarget, "FOREIGN_TARGET_SENTINEL", { flag: "wx", mode: 0o600 });
+        try {
+          await fs.symlink(symlinkTarget, finalPath, "file");
+        } catch (err) {
+          const code = (err as NodeJS.ErrnoException).code;
+          if (["EPERM", "EACCES", "ENOSYS"].includes(code ?? "")) {
+            skip(`filesystem cannot create the final-leaf symlink control (${code ?? "unknown"})`);
+            return;
+          }
+          throw err;
         }
-        throw err;
+      }
+
+      await expect(publishSensitiveArtifact(finalPath, "NEW_FINAL_BYTES")).resolves.toMatchObject({
+        sha256: expect.stringMatching(/^[0-9a-f]{64}$/)
+      });
+      expect((await fs.lstat(finalPath)).isFile()).toBe(true);
+      expect(await fs.readFile(finalPath, "utf8")).toBe("NEW_FINAL_BYTES");
+      if (kind === "symlink") {
+        expect(await fs.readFile(symlinkTarget, "utf8")).toBe("FOREIGN_TARGET_SENTINEL");
       }
     }
-
-    await expect(publishSensitiveArtifact(finalPath, "NEW_FINAL_BYTES")).resolves.toMatchObject({
-      sha256: expect.stringMatching(/^[0-9a-f]{64}$/)
-    });
-    expect((await fs.lstat(finalPath)).isFile()).toBe(true);
-    expect(await fs.readFile(finalPath, "utf8")).toBe("NEW_FINAL_BYTES");
-    if (kind === "symlink") {
-      expect(await fs.readFile(symlinkTarget, "utf8")).toBe("FOREIGN_TARGET_SENTINEL");
-    }
-  });
+  );
 
   it.for([{ kind: "Unix-domain socket" as const }])(
     "publisher refuses a $kind final leaf before rename and leaves it intact",
@@ -1385,25 +1382,25 @@ describe("erasure-completeness invariant (rc.36, P-2 class)", () => {
     await expect(fs.lstat(finalPath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it.for([{ family: "generated temp", hnsw: false }, { family: "HNSW generation", hnsw: true }])(
-    "folded-name hardlinks cannot impersonate a $family erasure target",
-    async ({ hnsw }, { skip }) => {
-      const token = "f".repeat(48);
-      const exactBase = hnsw ? "CaseVault.hnsw" : "CaseCache.json";
-      const foldedBase = hnsw ? "caseVault.hnsw" : "caseCache.json";
-      const suffix = hnsw ? `.${token}.bin` : `.enquire-tmp-${token}`;
-      const exactPath = path.join(cacheDir, `${exactBase}${suffix}`);
-      const foldedPath = path.join(cacheDir, `${foldedBase}${suffix}`);
-      if (!(await createDistinctFoldedHardlinks(exactPath, foldedPath, skip))) return;
+  it.for([
+    { family: "generated temp", hnsw: false },
+    { family: "HNSW generation", hnsw: true }
+  ])("folded-name hardlinks cannot impersonate a $family erasure target", async ({ hnsw }, { skip }) => {
+    const token = "f".repeat(48);
+    const exactBase = hnsw ? "CaseVault.hnsw" : "CaseCache.json";
+    const foldedBase = hnsw ? "caseVault.hnsw" : "caseCache.json";
+    const suffix = hnsw ? `.${token}.bin` : `.enquire-tmp-${token}`;
+    const exactPath = path.join(cacheDir, `${exactBase}${suffix}`);
+    const foldedPath = path.join(cacheDir, `${foldedBase}${suffix}`);
+    if (!(await createDistinctFoldedHardlinks(exactPath, foldedPath, skip))) return;
 
-      const erase = hnsw
-        ? clearHnswPersistedArtifacts(path.join(cacheDir, exactBase))
-        : removeSensitiveArtifactTemps(path.join(cacheDir, exactBase));
-      await expect(erase).rejects.toThrow(/ambiguous|casing/i);
-      expect(await fs.readFile(exactPath, "utf8")).toBe("HARDLINK_SENTINEL");
-      expect(await fs.readFile(foldedPath, "utf8")).toBe("HARDLINK_SENTINEL");
-    }
-  );
+    const erase = hnsw
+      ? clearHnswPersistedArtifacts(path.join(cacheDir, exactBase))
+      : removeSensitiveArtifactTemps(path.join(cacheDir, exactBase));
+    await expect(erase).rejects.toThrow(/ambiguous|casing/i);
+    expect(await fs.readFile(exactPath, "utf8")).toBe("HARDLINK_SENTINEL");
+    expect(await fs.readFile(foldedPath, "utf8")).toBe("HARDLINK_SENTINEL");
+  });
 
   it.for([
     { route: "sensitive-artifact eraser" as const },
@@ -1722,10 +1719,9 @@ describe("erasure-completeness invariant (rc.36, P-2 class)", () => {
         const preflightNeedle = `preflightSqliteArtifactFamily(${route.fileArgument})`;
         const lastPreflight = body.lastIndexOf(preflightNeedle);
         expect(lastPreflight).toBeGreaterThanOrEqual(0);
-        const mutantBody =
-          body.slice(0, lastPreflight) +
-          "Promise.resolve(true)" +
-          body.slice(lastPreflight + preflightNeedle.length);
+        const mutantBody = `${body.slice(0, lastPreflight)}Promise.resolve(true)${body.slice(
+          lastPreflight + preflightNeedle.length
+        )}`;
         const mutantSource = replaceExactly(source, body, mutantBody);
         const problems = sqliteNativeOpenProblems(new Map([[route.file, mutantSource]]));
         expect(problems.some((problem) => problem.startsWith(`${route.id}:`))).toBe(true);
@@ -1733,22 +1729,28 @@ describe("erasure-completeness invariant (rc.36, P-2 class)", () => {
     );
 
     it.each(PUBLISHER_INVENTORY_MUTANTS)(
-      "inventory rejects $id when its $role route $file#$member is removed",
-      ({ id, role, file, member, needle }) => {
+      "inventory rejects $id when occurrence $occurrenceNumber/$expectedOccurrences of its $role route $file#$member is removed",
+      ({ id, role, file, member, needle, occurrenceIndex, expectedOccurrences }) => {
         const source = readFileSync(path.join(repoRoot, file), "utf8");
         const bodies = runtimeMemberBodies(source, file, member);
         expect(bodies).toHaveLength(1);
         const body = bodies[0] ?? "";
-        const replacement = needle.replace(
-          /[A-Za-z_$][A-Za-z0-9_$]*(?=[^A-Za-z0-9_$]*$)/,
-          "__erasure_mutant__"
-        );
-        const mutantBody = replaceAllExactly(body, needle, replacement, needle === "`${file}.tmp`" ? 2 : 1);
-        expect(mutantBody).not.toContain(needle);
+        const replacement = needle.replace(/[A-Za-z_$][A-Za-z0-9_$]*(?=[^A-Za-z0-9_$]*$)/, "__erasure_mutant__");
+        const offsets: number[] = [];
+        for (let offset = body.indexOf(needle); offset >= 0; offset = body.indexOf(needle, offset + needle.length)) {
+          offsets.push(offset);
+        }
+        expect(offsets).toHaveLength(expectedOccurrences);
+        const offset = offsets[occurrenceIndex] ?? -1;
+        expect(offset).toBeGreaterThanOrEqual(0);
+        const mutantBody = body.slice(0, offset) + replacement + body.slice(offset + needle.length);
+        expect(mutantBody.split(needle)).toHaveLength(expectedOccurrences);
         const mutated = replaceExactly(source, body, mutantBody);
-        expect(publisherInventoryProblems(new Map([[file, mutated]]))).toContain(
-          `${id}:${role}:${file}#${member} missing ${needle}`
-        );
+        expect(
+          publisherInventoryProblems(new Map([[file, mutated]])).some(
+            (problem) => problem.startsWith(`${id}:${role}:${file}#${member} expected `) && problem.includes(needle)
+          )
+        ).toBe(true);
       }
     );
 

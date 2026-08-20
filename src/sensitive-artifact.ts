@@ -489,7 +489,8 @@ async function openRegularNoFollow(file: string): Promise<import("node:fs/promis
   if (before.isSymbolicLink() || !before.isFile()) {
     throw new Error("Refusing to open a non-regular sensitive artifact");
   }
-  const flags = fsConstants.O_RDONLY | (process.platform === "win32" ? 0 : fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK);
+  const flags =
+    fsConstants.O_RDONLY | (process.platform === "win32" ? 0 : fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK);
   const handle = await fs.open(file, flags);
   try {
     const descriptor = await handle.stat({ bigint: true });

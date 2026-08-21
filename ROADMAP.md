@@ -1,6 +1,6 @@
 # enquire-mcp — Roadmap
 
-> Public roadmap for **enquire-mcp**, the #1 Obsidian MCP for freshness-aware, cited AI memory backed by your own vault. Updated 2026-08-10 (`v4.0.0-rc.3`: the current preview of the MCPB Basic bundle first introduced in `v4.0.0-rc.2` on the published `v4.0.0-rc.1` official-SDK-v2 foundation, behind a fail-closed 12-gate remote publication chain; stable `@latest` remains v3).
+> Public roadmap for **enquire-mcp**, the #1 Obsidian MCP for freshness-aware, cited AI memory backed by your own vault. Updated 2026-08-21 (`v4.0.0-rc.4`: the current preview of the MCPB Basic bundle first introduced in `v4.0.0-rc.2` on the published `v4.0.0-rc.1` official-SDK-v2 foundation, behind a fail-closed 13-gate remote publication chain; stable `@latest` remains v3).
 >
 > **North Star:** be — and confidently *stay* — the best project in its spheres (Obsidian MCP; local-first AI-memory layer) on **technology** and **reliability**. "Confidently" means every claim we make is one an external auditor or a privacy-conscious user can verify against the code.
 
@@ -19,7 +19,7 @@ Already shipped and differentiating:
 - **Structured Obsidian documents** — Canvas parsing, Dataview-style LIST/TABLE queries, and supported Base-filter execution (no Obsidian process needed).
 - **PDFs blended into search** with `[page: N]` citations + Tesseract OCR for scanned docs.
 - **Forgetting-aware freshness** (v3.10) — every search hit carries `age_days` + a `stale` flag from the note's live mtime, the `obsidian_stale_notes` tool surfaces aged notes, and opt-in recency re-ranking (`--recency-weight` / `--stale-days`, default off) lets agents prefer fresher knowledge. This directly addresses stale-fact reuse; the 2026-07-24 pinned direct-peer sources do not document an equivalent retrieval control.
-- **Process maturity** — 1807 tests and 12 release-required CI checks (7 currently branch-protected). The v4 line defines official-client protocol conformance, a three-OS packed-consumer aggregate, and an MCPB Basic gate that consumes one exact Linux-built candidate on Linux, Windows, and macOS before release. A pinned Windows hostile-filesystem and startup-interlock prerequisite fails the protected `smoke` context closed; the project also carries a semver-bound public surface, signed npm build provenance (SLSA Build L2), 12 state-driven OIA drift checks, and structural invariants.
+- **Process maturity** — 2207 tests and 13 release-required CI checks (all 13 currently branch-protected; live snapshot verified 2026-08-21). The v4 line defines official-client protocol conformance, a three-OS packed-consumer aggregate, an MCPB Basic gate that consumes one exact Linux-built candidate on Linux, Windows, and macOS, and a Docker build/introspection gate before release. A pinned Windows hostile-filesystem and startup-interlock prerequisite fails the protected `smoke` context closed; the project also carries a semver-bound public surface, signed npm build provenance (SLSA Build L2), 12 state-driven OIA drift checks, and structural invariants.
 
 The **v4.0.0 `@rc` preview** keeps those v3 activation, watcher-generation and mainstream local-filesystem hardlink guarantees while moving the public transports to official MCP SDK v2. Era-aware stdio and strict modern HTTP (`2026-07-28`) coexist with supported legacy clients from one registration factory; malformed modern claims never downgrade. Aggregate write tracking keeps shared persistence behind active modern/stdio work, and the new remote gates are defined to exercise the official client plus the packed public package across Linux, Windows and macOS. The single intentional programmatic break is the nominal SDK type returned by `buildMcpServer()`; tool/prompt/resource, CLI, privacy, write-gate and storage behavior remain compatible. npm `@latest` remains stable v3 pending the explicit stable-promotion decision.
 
@@ -63,7 +63,7 @@ lead immediately visible and independently reproducible:
 The durable positioning is concrete: **the complete local-first long-term
 memory backend grounded in the vault you own**. The proof stack lives in
 [`docs/COMPARISON.md`](./docs/COMPARISON.md), [`docs/benchmarks.md`](./docs/benchmarks.md),
-and the 12-gate release chain.
+and the 13-gate release chain.
 
 ---
 
@@ -125,7 +125,7 @@ The capability gap is won; this closes the *visibility* gap. (Several items belo
 
 - [x] **MCP 2026-07-28 + TypeScript SDK v2 (`4.0.0-rc.1`)** — the published major foundation has official modern/legacy handlers, no-downgrade routing, write-drain parity, and remote protocol-conformance and packed-consumer gates. This is the semver-major migration: inventory protocol/SDK changes, preserve the stable v3 contract where possible, publish an explicit compatibility matrix, and validate every release gate remotely. A hand-built “modern MCP” shim on SDK v1 is explicitly rejected.
 - [x] **First MCPB Basic bundle (`v4.0.0-rc.2`)** — exact v0.3 manifest pin, explicit vault selection, fixed 13-tool read-only allowlist, zero prompts, a Node.js 22.13+ host floor, no native/optional hybrid dependencies, logical content inventory, CycloneDX SBOM, third-party notices, and one CI-built candidate consumed through the official client on macOS, Windows, and Linux.
-- [x] **Fail-closed remote publication gate** — the exact final main/tag identity must pass every protocol, packed-package, and MCPB Basic lane plus the complete 12-context release gate before npm or GitHub Release publication. Cross-platform runtime success is claimed only by those exact remote results; desktop GUI behavior is not.
+- [x] **Fail-closed remote publication gate** — the exact final main/tag identity must pass every protocol, packed-package, MCPB Basic, and Docker lane plus the complete 13-context release gate before npm or GitHub Release publication. Cross-platform runtime success is claimed only by those exact remote results; desktop GUI behavior is not.
 - [ ] **Maintainer UI acceptance and directory decision** — manually review
   installation/removal in a real compatible desktop host, then decide whether
   to submit the bundle to any public directory. Remote consumer evidence does

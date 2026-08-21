@@ -210,6 +210,24 @@ export function tierServeFlags(tier: ConfigTier): string[] {
  * @returns Raw CLI arguments; renderers remain responsible for shell quoting.
  */
 export function buildPrivacyArgs(input: Pick<ConfigInput, "excludeGlobs" | "readPaths">): string[] {
+  if (typeof input !== "object" || input === null || Array.isArray(input)) {
+    throw new TypeError("Privacy config must be an object");
+  }
+  for (const name of ["excludeGlobs", "readPaths"] as const) {
+    const patterns = input[name];
+    if (
+      patterns !== undefined &&
+      (!Array.isArray(patterns) || !patterns.every((pattern) => typeof pattern === "string"))
+    ) {
+      throw new TypeError(`Privacy config ${name} must be an array of strings`);
+    }
+    if (patterns?.some((pattern) => pattern.trim().length === 0)) {
+      throw new TypeError(`Privacy config ${name} must not contain an empty pattern`);
+    }
+  }
+  if (input.readPaths !== undefined && input.readPaths.length === 0) {
+    throw new TypeError("Privacy config readPaths must not be an empty allowlist");
+  }
   const args: string[] = [];
   if (input.excludeGlobs?.length) args.push("--exclude-glob", ...input.excludeGlobs);
   if (input.readPaths?.length) args.push("--read-paths", ...input.readPaths);

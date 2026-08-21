@@ -77,16 +77,21 @@ export type SensitiveArtifactPathWriter = (stagedPath: string) => Promise<void>;
  *
  * @param finalPath - Final artifact path whose parent already exists.
  * @param source - Bytes to write, or a native producer that fills a staged path.
+ * @param maxBytes - Maximum bytes admitted from the held staged descriptor.
  * @returns SHA-256 receipt for the promoted staged generation under that stability boundary.
- * @throws If exclusive reservation, writing, identity validation, sync, or rename fails.
+ * @throws If the limit is invalid or exclusive reservation, writing, bounded identity validation, sync, or rename fails.
  * @example
  * await publishSensitiveArtifact("/tmp/cache.json", JSON.stringify({ version: 1 }));
  * @internal
  */
 export async function publishSensitiveArtifact(
   finalPath: string,
-  source: string | Uint8Array | SensitiveArtifactPathWriter
+  source: string | Uint8Array | SensitiveArtifactPathWriter,
+  maxBytes = Number.MAX_SAFE_INTEGER
 ): Promise<SensitiveArtifactReceipt> {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) {
+    throw new RangeError("Sensitive artifact publish limit must be a non-negative safe integer");
+  }
   const owned =
     typeof source === "function" ? await reserveStagedArtifact(finalPath) : await reserveSiblingTemp(finalPath);
   let published = false;
@@ -103,9 +108,12 @@ export async function publishSensitiveArtifact(
     if (!afterWrite.isFile() || !sameFileIdentity(afterWrite, owned.tempIdentity)) {
       throw new Error("Sensitive artifact producer replaced its owned temporary file");
     }
+    if (afterWrite.size > BigInt(maxBytes)) {
+      throw new Error("Sensitive artifact exceeds the bounded publish limit");
+    }
     await handle.chmod(0o600);
     await handle.sync();
-    const sha256 = await sha256StableHandle(handle);
+    const sha256 = await sha256StableHandle(handle, maxBytes);
     await handle.close();
     owned.handle = null;
 
@@ -140,16 +148,67 @@ async function assertReplaceableFinalLeaf(finalPath: string): Promise<void> {
  * Hash a regular artifact through a non-symlink descriptor.
  *
  * @param file - Artifact path to hash.
+ * @param maxBytes - Maximum bytes admitted from the held descriptor.
  * @returns Lowercase SHA-256 hex for a stable descriptor snapshot.
- * @throws If the path is a symlink/non-file, changes while read, or cannot be read safely.
+ * @throws If the path is a symlink/non-file, exceeds `maxBytes`, changes while read, or cannot be read safely.
  * @example
  * const digest = await sha256SensitiveArtifact("/tmp/index.hnsw.bin");
  * @internal
  */
-export async function sha256SensitiveArtifact(file: string): Promise<string> {
+export async function sha256SensitiveArtifact(file: string, maxBytes = Number.MAX_SAFE_INTEGER): Promise<string> {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) {
+    throw new RangeError("Sensitive artifact hash limit must be a non-negative safe integer");
+  }
   const handle = await openRegularNoFollow(file);
   try {
-    return await sha256StableHandle(handle);
+    return await sha256StableHandle(handle, maxBytes);
+  } finally {
+    await handle.close();
+  }
+}
+
+/**
+ * Inspect one bounded sensitive artifact through a held read-only descriptor.
+ *
+ * The callback receives the already-admitted descriptor and its exact byte
+ * size. The descriptor is kept open until the callback settles, then its
+ * identity, size, mtime, and ctime are compared with the pre-callback receipt.
+ * Callers can therefore parse sparse headers/records without materializing the
+ * whole artifact and without accidentally following a symlink leaf.
+ *
+ * @param file - Artifact path to inspect.
+ * @param maxBytes - Maximum bytes admitted from the held descriptor.
+ * @param inspect - Read-only parser over the held descriptor and stable size.
+ * @returns The parser result after the descriptor receipt remains unchanged.
+ * @throws If the leaf is unsafe, the limit is invalid/exceeded, the parser fails, or the descriptor changes.
+ * @example
+ * const size = await inspectSensitiveArtifact("/tmp/index.bin", 1024, async (_handle, bytes) => bytes);
+ * @internal
+ */
+export async function inspectSensitiveArtifact<Result>(
+  file: string,
+  maxBytes: number,
+  inspect: (handle: import("node:fs/promises").FileHandle, size: bigint) => Promise<Result>
+): Promise<Result> {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) {
+    throw new RangeError("Sensitive artifact inspection limit must be a non-negative safe integer");
+  }
+  const handle = await openRegularNoFollow(file);
+  try {
+    const before = await handle.stat({ bigint: true });
+    if (!before.isFile()) throw new Error("Refusing to inspect a non-regular sensitive artifact");
+    if (before.size > BigInt(maxBytes)) throw new Error("Sensitive artifact exceeds its inspection limit");
+    const result = await inspect(handle, before.size);
+    const after = await handle.stat({ bigint: true });
+    if (
+      !sameFileIdentity(before, after) ||
+      before.size !== after.size ||
+      before.mtimeNs !== after.mtimeNs ||
+      before.ctimeNs !== after.ctimeNs
+    ) {
+      throw new Error("Sensitive artifact changed while being inspected");
+    }
+    return result;
   } finally {
     await handle.close();
   }
@@ -520,17 +579,24 @@ async function assertPathStillOwned(tempPath: string, expected: FileIdentity): P
   }
 }
 
-async function sha256StableHandle(handle: import("node:fs/promises").FileHandle): Promise<string> {
+async function sha256StableHandle(
+  handle: import("node:fs/promises").FileHandle,
+  maxBytes = Number.MAX_SAFE_INTEGER
+): Promise<string> {
   const before = await handle.stat({ bigint: true });
   if (!before.isFile()) throw new Error("Refusing to hash a non-regular sensitive artifact");
+  if (before.size > BigInt(maxBytes)) throw new Error("Sensitive artifact exceeds the bounded hash limit");
   const hash = createHash("sha256");
   const buffer = Buffer.allocUnsafe(64 * 1024);
   let position = 0;
   while (true) {
-    const { bytesRead } = await handle.read(buffer, 0, buffer.length, position);
+    const remaining = maxBytes - position;
+    const requested = remaining >= buffer.length ? buffer.length : remaining + 1;
+    const { bytesRead } = await handle.read(buffer, 0, requested, position);
     if (bytesRead === 0) break;
-    hash.update(buffer.subarray(0, bytesRead));
     position += bytesRead;
+    if (position > maxBytes) throw new Error("Sensitive artifact exceeds the bounded hash limit");
+    hash.update(buffer.subarray(0, bytesRead));
   }
   const after = await handle.stat({ bigint: true });
   if (

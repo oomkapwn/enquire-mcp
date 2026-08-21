@@ -28,8 +28,9 @@ starts from your real knowledge base:
   cited back to a note path or PDF page.
 - **Every agent gets the same memory.** The MCP interface follows you when you
   switch models, clients, or vendors.
-- **Meaning beats exact wording.** BM25, TF-IDF, multilingual embeddings, graph
-  context, and an optional BGE reranker are fused into one retrieval path.
+- **Lexical evidence plus optional meaning.** BM25 and TF-IDF require token
+  overlap; multilingual embeddings add paraphrase and cross-language recall.
+  Graph context and an optional BGE reranker join them in one retrieval path.
 - **Freshness is visible.** Results expose note age and stale-state metadata;
   optional recency weighting can prefer newer knowledge.
 - **Privacy is the default architecture.** enquire initiates zero outbound
@@ -91,7 +92,7 @@ the same outcome?
 | **Available-signal fallback + quarantine on uncertain semantic state** | ✅ | ✕ | ✕ | ✕ |
 | **Read-only default + explicit write gate + privacy filters** | ✅ | ✕ | ✕ | ✕ |
 | **46 tools + 19 MCP prompts + semver-bound MCP contract** | ✅ | ✕ | ✕ | ✕ |
-| **1807 tests + 12 release gates + signed npm provenance** | ✅ | ✕ | ✕ | ✕ |
+| **2207 tests + 13 release gates + signed npm provenance** | ✅ | ✕ | ✕ | ✕ |
 
 **Legend:** `✅` means the complete row is built in. `✕` means the complete
 combination was not documented on the reviewed public product surface; it does
@@ -136,7 +137,7 @@ private branches, future releases, or unadvertised behavior.
 | What a serious AI-memory backend needs | What enquire-mcp delivers | Why it matters |
 |---|---|---|
 | **Knowledge ownership** | Plain Markdown remains the source of truth | No proprietary memory format or provider lock-in |
-| **Conceptual recall** | BM25 + TF-IDF + multilingual embeddings, RRF-fused | Finds the right note when the wording changes |
+| **Conceptual recall** | Multilingual embeddings fused with BM25 + TF-IDF | Embeddings handle wording changes; the lexical legs require token overlap |
 | **Precision on hard queries** | Optional BGE cross-encoder reranking | Measured **+15.5 NDCG@10 / +24.7 MRR** over plain hybrid in the published ablation |
 | **Citable answers** | Source paths on search hits, PDF page markers, read-time line spans, and per-signal scores | Agents can show where grounded evidence came from |
 | **Freshness-aware memory** | `age_days`, `stale`, and optional recency weighting | Old facts are visible instead of silently reused as current |
@@ -145,7 +146,7 @@ private branches, future releases, or unadvertised behavior.
 | **Local scale controls** | HNSW, int8 vectors, persistence, live watcher updates, and adaptive refill | Dense retrieval stays practical as a real vault grows |
 | **Remote-agent readiness** | Streamable HTTP, exact-Origin admission, bearer auth, CORS, rate/session/connection bounds | The same vault can safely serve local and remote MCP clients |
 | **Safe defaults** | Read-only by default, explicit write gate, privacy filters, dry-run support | Agents receive the minimum authority they need |
-| **Release trust** | 12 release gates, signed npm provenance, semver contracts | Buyers can verify both behavior and package origin |
+| **Release trust** | 13 release gates, signed npm provenance, semver contracts | Buyers can verify both behavior and package origin |
 
 ## Proof surface
 
@@ -155,8 +156,8 @@ These numbers are derived from the current repository and guarded by CI:
 |---|---|
 | Tool count | **46** |
 | MCP prompt count | **19** |
-| Test count (public) | **1807** |
-| Release-required CI gates | **12** |
+| Test count (public) | **2207** |
+| Release-required CI gates | **13** |
 | Supported embedder languages | **50+** |
 | Default write posture | **Off / read-only** |
 | Outbound calls initiated by enquire during serve | **Zero** |

@@ -123,7 +123,7 @@ describe("searchHybrid + reranker (v2.9.0)", () => {
   });
 
   afterAll(async () => {
-    idx?.close();
+    await idx?.closeAndRelease();
     await fs.rm(root, { recursive: true, force: true });
     await fs.rm(dbFile, { force: true });
     await fs.rm(`${dbFile}-wal`, { force: true });

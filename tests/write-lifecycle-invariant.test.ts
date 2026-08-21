@@ -54,7 +54,7 @@ function writeLifecycleProblems(registrySource: string, serverSource: string, ma
       problems.push(`${toolName}: rollback signal is not forwarded to the batch implementation`);
     }
   }
-  if (!serverSource.includes("registerFeedbackTool(server, deps.feedbackStore, writeTracker)")) {
+  if (!serverSource.includes("registerFeedbackTool(server, deps.feedbackStore, deps.vault, writeTracker)")) {
     problems.push("server: feedback tracker wiring missing");
   }
   if (!serverSource.includes("registerWriteTools(server, deps.vault, writeTracker)")) {
@@ -113,19 +113,24 @@ function stdioV2ServingProblems(serverSource: string): string[] {
   if (
     !starter.includes("let shutdownPromise: Promise<void> | undefined;") ||
     !starter.includes("if (shutdownPromise) return shutdownPromise;") ||
-    !starter.includes("shutdownPromise = (async () => {")
+    !starter.includes("const attempt = (async () => {") ||
+    !starter.includes("shutdownPromise = attempt;") ||
+    !starter.includes("if (shutdownPromise === attempt) shutdownPromise = undefined;")
   ) {
     problems.push("server: stdio shutdown is not memoized across every exit path");
   }
   if (!starter.includes("let signalExitScheduled = false;") || !starter.includes("if (signalExitScheduled) return;")) {
     problems.push("server: stdio signal and beforeExit paths do not share one shutdown latch");
   }
+  if (!starter.includes("void retryIncompleteShutdownOnce(shutdown).then(")) {
+    problems.push("server: stdio signal path does not use the retained owner for a bounded retry");
+  }
   const closeAdmission = starter.indexOf("writeTracker.closeAdmission(");
-  const startProtocolClose = starter.indexOf("const protocolClose = Promise.resolve()");
+  const startProtocolClose = starter.indexOf("const closeAttempt = Promise.resolve()");
   const abortRollback = starter.indexOf("await writeTracker.abortRollbackSafe(");
   const waitForWrites = starter.indexOf("await writeTracker.waitForAll();");
-  const boundedProtocolClose = starter.indexOf("await waitForStdioProtocolClose(protocolClose)");
-  const closeDeps = starter.indexOf("await shutdownStdioDeps(deps);");
+  const boundedProtocolClose = starter.indexOf("await waitForStdioProtocolClose(protocolClose.catch(() => {}))");
+  const closeDeps = starter.indexOf("await shutdownStdioDeps(deps, stdioCleanupOwner);");
   if (
     !(
       closeAdmission >= 0 &&
@@ -256,7 +261,7 @@ describe("write lifecycle inventory invariant", () => {
     );
     const legacyTransport = replaceExactly(
       missingTrackerImport,
-      "const handle = serveStdio(() => buildMcpServer(deps, opts, writeTracker), {",
+      "handle = serveStdio(() => buildMcpServer(deps, opts, writeTracker), {",
       "const transport = new StdioServerTransport();\n  await buildMcpServer(deps, opts, writeTracker).connect(transport);"
     );
     const missingTracker = replaceExactly(legacyTransport, "const writeTracker = new WriteRequestTracker();", "");
@@ -287,15 +292,21 @@ describe("write lifecycle inventory invariant", () => {
     const unmemoizedShutdown = replaceExactly(serverSource, "if (shutdownPromise) return shutdownPromise;", "");
     const missingSignalState = replaceExactly(unmemoizedShutdown, "let signalExitScheduled = false;", "");
     const missingSignalLatch = replaceExactly(missingSignalState, "if (signalExitScheduled) return;", "");
-    const racyStdio = replaceExactly(
+    const missingSignalRetry = replaceExactly(
       missingSignalLatch,
-      "await waitForStdioProtocolClose(protocolClose)",
+      "void retryIncompleteShutdownOnce(shutdown).then(",
+      "void shutdown().then("
+    );
+    const racyStdio = replaceExactly(
+      missingSignalRetry,
+      "await waitForStdioProtocolClose(protocolClose.catch(() => {}))",
       "await protocolClose.then(() => true)"
     );
     expect(stdioV2ServingProblems(racyStdio)).toEqual(
       expect.arrayContaining([
         "server: stdio shutdown is not memoized across every exit path",
         "server: stdio signal and beforeExit paths do not share one shutdown latch",
+        "server: stdio signal path does not use the retained owner for a bounded retry",
         "server: stdio write integrity and bounded protocol close must precede shared dependency close"
       ])
     );

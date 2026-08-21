@@ -13,11 +13,54 @@ import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { advanceFence, type FenceState, opensBlockFence } from "../src/fence.js";
 import { computeBreadcrumbsByLine } from "../src/fts5.js";
+import { stripCodeAndInline } from "../src/parser.js";
 import { readNote } from "../src/tools/read.js";
+import { rewriteOutsideCodeFences } from "../src/tools/write.js";
 import { Vault } from "../src/vault.js";
 
 const repoRoot = path.resolve(__dirname, "..");
+
+describe("CommonMark fence opener/closer grammar", () => {
+  it("requires a close run at least as long as the opener", () => {
+    let marker: FenceState | null = null;
+    const open = advanceFence("````", marker);
+    marker = open.marker;
+    expect(open).toEqual({ marker: { char: "`", runLength: 4 }, delimiter: true });
+    const short = advanceFence("```", marker);
+    marker = short.marker;
+    expect(short).toEqual({ marker: { char: "`", runLength: 4 }, delimiter: false });
+    expect(advanceFence("````", marker)).toEqual({ marker: null, delimiter: true });
+
+    const three = advanceFence("```", null);
+    expect(advanceFence("````", three.marker)).toEqual({ marker: null, delimiter: true });
+  });
+
+  it("rejects trailing close text and indentation above the fenced-code boundary", () => {
+    const open = advanceFence("```lang", null);
+    expect(advanceFence("```not-a-close", open.marker)).toEqual({ marker: open.marker, delimiter: false });
+    expect(advanceFence("``` \t", open.marker)).toEqual({ marker: null, delimiter: true });
+    for (const candidate of ["    ```", "\t```", "```inline``` text"]) {
+      expect(opensBlockFence(candidate), JSON.stringify(candidate)).toBe(false);
+    }
+    for (const candidate of ["```", "   ```", "~~~lang"]) {
+      expect(opensBlockFence(candidate), JSON.stringify(candidate)).toBe(true);
+    }
+  });
+
+  it("keeps parser sanitization and write mutation on the same long-fence state", () => {
+    const source = "````\n[[Old]]\n```\n#inside [[Old]]\n````\noutside [[Old]]\n";
+    const sanitized = stripCodeAndInline(source);
+    expect(sanitized).not.toContain("#inside");
+    expect(sanitized.match(/\[\[Old\]\]/g)).toHaveLength(1);
+
+    const rewritten = rewriteOutsideCodeFences(source, new Map([["Old", { kind: "wikilink", newRaw: "New" }]]));
+    expect(rewritten.count).toBe(1);
+    expect(rewritten.content).toContain("#inside [[Old]]");
+    expect(rewritten.content).toContain("outside [[New]]");
+  });
+});
 
 describe("read.ts extractHeadings — inline span at line start does not drop headings (v3.11.5-rc.2)", () => {
   let dir: string;
@@ -123,7 +166,7 @@ function fenceStateFilesMissingAdvanceFence(files: Array<{ rel: string; src: str
     if (rel.endsWith("src/fence.ts")) continue;
     const code = stripComments(src);
     const declaresFenceState =
-      /\b(?:let|var)\s+[A-Za-z_]*[Ff]ence[A-Za-z_]*\b/.test(code) || /:\s*FenceChar\b/.test(code);
+      /\b(?:let|var)\s+[A-Za-z_]*[Ff]ence[A-Za-z_]*\b/.test(code) || /:\s*Fence(?:Char|State)\b/.test(code);
     if (declaresFenceState && !/\badvanceFence\b/.test(code)) out.push(rel);
   }
   return out;
@@ -168,6 +211,15 @@ describe("fence-toggle correctness invariant — char-aware, no blind toggle (v3
     expect(fenceStateFilesMissingAdvanceFence(await walkSrc())).toEqual([]);
   });
 
+  it("the canonical parser uses the shared state machine instead of paired fence regexes", async () => {
+    const parser = await fs.readFile(path.join(repoRoot, "src/parser.ts"), "utf8");
+    expect(parser).toContain("const state = advanceFence(line, marker);");
+    expect(parser).toContain("nextLineBounds(text, lineStart, budget)");
+    expect(parser).not.toContain("splitLinesWithEnds(text)");
+    expect(parser).not.toContain('.replace(/```[\\s\\S]*?```/g, "")');
+    expect(parser).not.toContain('.replace(/~~~[\\s\\S]*?~~~/g, "")');
+  });
+
   it("NEGATIVE control — a live char-blind toggle (negation OR ternary) is flagged; a comment is not", () => {
     const bad = [
       { rel: "src/tools/newthing.ts", src: "let inFence = false;\nif (opensBlockFence(l)) inFence = !inFence;" },
@@ -187,14 +239,14 @@ describe("fence-toggle correctness invariant — char-aware, no blind toggle (v3
       // a NEW-file walker (a 5th file) that hand-rolls fence state and never uses advanceFence
       {
         rel: "src/tools/newwalker.ts",
-        src: "let fenceMarker: FenceChar | null = null;\nfor (const l of lines) { /* naive */ }"
+        src: "let fenceMarker: FenceState | null = null;\nfor (const l of lines) { /* naive */ }"
       },
       // a state var NOT named *fence* but typed FenceChar — still caught via the annotation
-      { rel: "src/tools/aliaswalker.ts", src: "let mode: FenceChar | null = null;\nmode = null;" },
+      { rel: "src/tools/aliaswalker.ts", src: "let mode: FenceState | null = null;\nmode = null;" },
       // correct: declares the state AND routes through advanceFence → NOT flagged
       {
         rel: "src/tools/okwalker.ts",
-        src: "let fenceMarker: FenceChar | null = null;\nconst st = advanceFence(l, fenceMarker);"
+        src: "let fenceMarker: FenceState | null = null;\nconst st = advanceFence(l, fenceMarker);"
       },
       // fence.ts itself DEFINES FenceChar/advanceFence → exempt
       { rel: "src/fence.ts", src: "export type FenceChar = 'x';\nlet fenceRun = 0;" }

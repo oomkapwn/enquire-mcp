@@ -4,10 +4,10 @@
     "keywordCounts": {
       "$defs": 0,
       "$ref": 0,
-      "additionalProperties": 3,
+      "additionalProperties": 49,
       "allOf": 0,
       "anyOf": 2,
-      "const": 0,
+      "const": 1,
       "definitions": 0,
       "enum": 5,
       "format": 1,
@@ -16,7 +16,7 @@
       "maxLength": 26,
       "maximum": 42,
       "minItems": 3,
-      "minLength": 18,
+      "minLength": 19,
       "minimum": 8,
       "not": 0,
       "oneOf": 0,
@@ -25,7 +25,7 @@
       "required": 25
     },
     "maxSchemaBytes": {
-      "bytes": 3547,
+      "bytes": 3576,
       "name": "obsidian_search"
     },
     "maxSchemaDepth": {
@@ -34,244 +34,245 @@
     },
     "perTool": [
       {
-        "bytes": 463,
+        "bytes": 492,
         "depth": 3,
         "name": "obsidian_append_to_note"
       },
       {
-        "bytes": 565,
+        "bytes": 594,
         "depth": 3,
         "name": "obsidian_archive_note"
       },
       {
-        "bytes": 563,
+        "bytes": 592,
         "depth": 4,
         "name": "obsidian_chat_thread_append"
       },
       {
-        "bytes": 225,
+        "bytes": 254,
         "depth": 3,
         "name": "obsidian_chat_thread_read"
       },
       {
-        "bytes": 1148,
+        "bytes": 1177,
         "depth": 4,
         "name": "obsidian_context_pack"
       },
       {
-        "bytes": 615,
+        "bytes": 644,
         "depth": 4,
         "name": "obsidian_create_note"
       },
       {
-        "bytes": 211,
+        "bytes": 240,
         "depth": 3,
         "name": "obsidian_dataview_query"
       },
       {
-        "bytes": 611,
+        "bytes": 640,
         "depth": 3,
         "name": "obsidian_embeddings_search"
       },
       {
-        "bytes": 793,
+        "bytes": 822,
         "depth": 3,
         "name": "obsidian_find_path"
       },
       {
-        "bytes": 482,
+        "bytes": 511,
         "depth": 3,
         "name": "obsidian_find_similar"
       },
       {
-        "bytes": 354,
+        "bytes": 397,
         "depth": 3,
         "name": "obsidian_frontmatter_get"
       },
       {
-        "bytes": 611,
+        "bytes": 675,
         "depth": 3,
         "name": "obsidian_frontmatter_search"
       },
       {
-        "bytes": 547,
+        "bytes": 576,
         "depth": 4,
         "name": "obsidian_frontmatter_set"
       },
       {
-        "bytes": 777,
+        "bytes": 806,
         "depth": 3,
         "name": "obsidian_full_text_search"
       },
       {
-        "bytes": 447,
+        "bytes": 476,
         "depth": 3,
         "name": "obsidian_get_backlinks"
       },
       {
-        "bytes": 427,
+        "bytes": 456,
         "depth": 3,
         "name": "obsidian_get_communities"
       },
       {
-        "bytes": 399,
+        "bytes": 428,
         "depth": 3,
         "name": "obsidian_get_note_neighbors"
       },
       {
-        "bytes": 448,
+        "bytes": 477,
         "depth": 3,
         "name": "obsidian_get_outbound_links"
       },
       {
-        "bytes": 401,
+        "bytes": 430,
         "depth": 3,
         "name": "obsidian_get_recent_edits"
       },
       {
-        "bytes": 361,
+        "bytes": 390,
         "depth": 3,
         "name": "obsidian_get_unresolved_wikilinks"
       },
       {
-        "bytes": 924,
+        "bytes": 953,
         "depth": 3,
         "name": "obsidian_hyde_search"
       },
       {
-        "bytes": 849,
+        "bytes": 878,
         "depth": 3,
         "name": "obsidian_lint_wiki"
       },
       {
-        "bytes": 280,
+        "bytes": 309,
         "depth": 3,
         "name": "obsidian_list_bases"
       },
       {
-        "bytes": 283,
+        "bytes": 312,
         "depth": 3,
         "name": "obsidian_list_canvases"
       },
       {
-        "bytes": 466,
+        "bytes": 495,
         "depth": 3,
         "name": "obsidian_list_notes"
       },
       {
-        "bytes": 279,
+        "bytes": 308,
         "depth": 3,
         "name": "obsidian_list_pdfs"
       },
       {
-        "bytes": 410,
+        "bytes": 439,
         "depth": 3,
         "name": "obsidian_list_tags"
       },
       {
-        "bytes": 457,
+        "bytes": 486,
         "depth": 4,
         "name": "obsidian_mark_useful"
       },
       {
-        "bytes": 873,
+        "bytes": 902,
         "depth": 4,
         "name": "obsidian_ocr_pdf"
       },
       {
-        "bytes": 346,
+        "bytes": 375,
         "depth": 3,
         "name": "obsidian_open_in_ui"
       },
       {
-        "bytes": 563,
+        "bytes": 592,
         "depth": 3,
         "name": "obsidian_open_questions"
       },
       {
-        "bytes": 408,
+        "bytes": 437,
         "depth": 3,
         "name": "obsidian_paper_audit"
       },
       {
-        "bytes": 593,
+        "bytes": 622,
         "depth": 3,
         "name": "obsidian_query_base"
       },
       {
-        "bytes": 212,
+        "bytes": 241,
         "depth": 3,
         "name": "obsidian_read_base"
       },
       {
-        "bytes": 216,
+        "bytes": 245,
         "depth": 3,
         "name": "obsidian_read_canvas"
       },
       {
-        "bytes": 465,
+        "bytes": 494,
         "depth": 4,
         "name": "obsidian_read_note"
       },
       {
-        "bytes": 528,
+        "bytes": 557,
         "depth": 4,
         "name": "obsidian_read_pdf"
       },
       {
-        "bytes": 570,
+        "bytes": 599,
         "depth": 3,
         "name": "obsidian_rename_note"
       },
       {
-        "bytes": 736,
+        "bytes": 765,
         "depth": 3,
         "name": "obsidian_replace_in_notes"
       },
       {
-        "bytes": 441,
+        "bytes": 470,
         "depth": 3,
         "name": "obsidian_resolve_wikilink"
       },
       {
-        "bytes": 3547,
+        "bytes": 3576,
         "depth": 9,
         "name": "obsidian_search"
       },
       {
-        "bytes": 610,
+        "bytes": 639,
         "depth": 4,
         "name": "obsidian_search_text"
       },
       {
-        "bytes": 565,
+        "bytes": 594,
         "depth": 3,
         "name": "obsidian_semantic_search"
       },
       {
-        "bytes": 380,
+        "bytes": 409,
         "depth": 3,
         "name": "obsidian_stale_notes"
       },
       {
-        "bytes": 210,
+        "bytes": 239,
         "depth": 3,
         "name": "obsidian_stats"
       },
       {
-        "bytes": 528,
+        "bytes": 557,
         "depth": 4,
         "name": "obsidian_validate_note_proposal"
       }
     ],
-    "totalSchemaBytes": 26187
+    "totalSchemaBytes": 27570
   },
-  "schemaDigest": "sha256:5a7a0230f6520479b75fa539b7c687262d87ab483683b0f376d7670fae4e14f1",
+  "schemaDigest": "sha256:e1e70d9713acfc4c83508040fd8f646fc8b387f3a75d4d36417d2577f18f4dd4",
   "toolCount": 46,
   "tools": [
     {
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
         "properties": {
           "content": {
             "description": "Markdown to append",
@@ -300,6 +301,7 @@
     {
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
         "properties": {
           "archive_folder": {
             "description": "Destination folder. Default `Archive`. Trailing slash optional.",
@@ -328,6 +330,7 @@
     {
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
         "properties": {
           "content": {
             "description": "Message body (markdown allowed)",
@@ -365,6 +368,7 @@
     {
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
         "properties": {
           "note_path": {
             "description": "Vault-relative path to the note hosting the thread",
@@ -382,6 +386,7 @@
     {
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
         "properties": {
           "budget_tokens": {
             "description": "Approximate token budget (default 4000, ~4 chars/token)",
@@ -430,6 +435,7 @@
     {
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
         "properties": {
           "content": {
             "description": "Markdown body (frontmatter is supplied separately)",
@@ -464,6 +470,7 @@
     {
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
         "properties": {
           "query": {
             "description": "Dataview-style query string",
@@ -482,6 +489,7 @@
     {
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
         "properties": {
           "folder": {
             "description": "Restrict to a subfolder (vault-relative)",
@@ -516,6 +524,7 @@
     {
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
         "properties": {
           "follow_embeds": {
             "description": "Treat ![[embeds]] as graph edges (default true)",
@@ -555,6 +564,7 @@
     {
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
         "properties": {
           "limit": {
             "description": "Max similar notes to return (default 10)",
@@ -584,10 +594,12 @@
     {
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
         "properties": {
           "key": {
             "description": "Single key to read; omit for full frontmatter",
             "maxLength": 256,
+            "minLength": 1,
             "type": "string"
           },
           "path": {
@@ -606,6 +618,7 @@
     {
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
         "properties": {
           "contains": {
             "description": "For array values, value must be a member"
@@ -614,7 +627,8 @@
             "description": "Strict equality predicate (JSON.stringify comparison)"
           },
           "exists": {
-            "description": "Predicate: key must exist (any value)",
+            "const": true,
+            "description": "Predicate: key must exist (the only admitted value is true)",
             "type": "boolean"
           },
           "folder": {
@@ -644,6 +658,7 @@
     {
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
         "properties": {
           "dry_run": {
             "description": "Preview the diff without writing (default false)",
@@ -677,6 +692,7 @@
     {
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
         "properties": {
           "folder": {
             "description": "Restrict to a subfolder (vault-relative)",
@@ -716,6 +732,7 @@
     {
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
         "properties": {
           "include_embeds": {
             "description": "Include ![[…]] embeds (default true)",
@@ -743,6 +760,7 @@
     {
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
         "properties": {
           "limit": {
             "description": "Max communities to return (default 50, sorted by size descending)",
@@ -764,6 +782,7 @@
     {
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
         "properties": {
           "max_per_bucket": {
             "description": "Cap each bucket (outbound/inbound/tag_siblings). Default 20.",
@@ -787,6 +806,7 @@
     {
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
         "properties": {
           "include_embeds": {
             "description": "Include ![[…]] embeds (default true)",
@@ -812,6 +832,7 @@
     {
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
         "properties": {
           "folder": {
             "description": "Restrict to a subfolder",
@@ -837,6 +858,7 @@
     {
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
         "properties": {
           "folder": {
             "description": "Restrict the scan to a subfolder",
@@ -860,6 +882,7 @@
     {
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
         "properties": {
           "folder": {
             "description": "Restrict to a subfolder (vault-relative)",
@@ -901,6 +924,7 @@
     {
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
         "properties": {
           "concept_min_mentions": {
             "description": "A capitalised phrase mentioned by ≥ N distinct notes without a page is a concept candidate (default 3)",
@@ -938,6 +962,7 @@
     {
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
         "properties": {
           "folder": {
             "description": "Restrict the listing to a subfolder",
@@ -957,6 +982,7 @@
     {
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
         "properties": {
           "folder": {
             "description": "Restrict the listing to a subfolder",
@@ -976,6 +1002,7 @@
     {
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
         "properties": {
           "folder": {
             "description": "Restrict to a subfolder (relative to vault root)",
@@ -1003,6 +1030,7 @@
     {
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
         "properties": {
           "folder": {
             "description": "Restrict the listing to a subfolder",
@@ -1022,6 +1050,7 @@
     {
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
         "properties": {
           "folder": {
             "description": "Restrict to a subfolder",
@@ -1047,6 +1076,7 @@
     {
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
         "properties": {
           "paths": {
             "description": "Relative vault paths of the notes that were useful (the `path` field from search hits). 1–50.",
@@ -1074,6 +1104,7 @@
     {
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
         "properties": {
           "lang": {
             "description": "Tesseract language pack(s). Default 'eng'. Multi-lang via '+': 'eng+rus' for English+Russian mixed scans (max 8 packs per call). Common: 'eng', 'rus', 'jpn', 'chi_sim', 'fra', 'deu'.",
@@ -1112,6 +1143,7 @@
     {
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
         "properties": {
           "new_pane": {
             "description": "Append `&newpane=true` so Obsidian opens the note in a split",
@@ -1133,6 +1165,7 @@
     {
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
         "properties": {
           "folder": {
             "description": "Restrict the scan to a subfolder",
@@ -1157,6 +1190,7 @@
     {
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
         "properties": {
           "folder": {
             "description": "Restrict the audit to a subfolder",
@@ -1181,6 +1215,7 @@
     {
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
         "properties": {
           "folder": {
             "description": "Extra folder scope on top of the base's filters",
@@ -1211,6 +1246,7 @@
     {
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
         "properties": {
           "path": {
             "description": "Vault-relative path of the .base file (with or without .base)",
@@ -1227,6 +1263,7 @@
     {
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
         "properties": {
           "path": {
             "description": "Vault-relative path of the .canvas file (with or without .canvas)",
@@ -1243,6 +1280,7 @@
     {
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
         "properties": {
           "format": {
             "description": "\"full\" (default) returns body + parsed metadata. \"map\" returns just headings + counts.",
@@ -1268,6 +1306,7 @@
     {
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
         "properties": {
           "include_metadata": {
             "description": "Include doc-level metadata in result (default true)",
@@ -1299,6 +1338,7 @@
     {
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
         "properties": {
           "dry_run": {
             "description": "Preview the rewrite plan without writing anything to disk (default false)",
@@ -1328,6 +1368,7 @@
     {
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
         "properties": {
           "case_sensitive": {
             "description": "Default true. Set false for case-insensitive substring match (replace text inserted verbatim).",
@@ -1364,6 +1405,7 @@
     {
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
         "properties": {
           "from_note": {
             "description": "Calling note's relative path (used to disambiguate same-name files)",
@@ -1388,6 +1430,7 @@
     {
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
         "properties": {
           "embedding_model": {
             "description": "Override the embedding model alias (default 'multilingual'). Only consulted if a .embed.db exists.",
@@ -1491,6 +1534,7 @@
     {
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
         "properties": {
           "folder": {
             "description": "Restrict to a subfolder",
@@ -1528,6 +1572,7 @@
     {
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
         "properties": {
           "folder": {
             "description": "Restrict to a subfolder (vault-relative)",
@@ -1562,6 +1607,7 @@
     {
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
         "properties": {
           "folder": {
             "description": "Restrict to a subfolder",
@@ -1587,6 +1633,7 @@
     {
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
         "properties": {
           "top_tags": {
             "description": "How many top tags to return (default 10)",
@@ -1602,6 +1649,7 @@
     {
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
         "properties": {
           "content": {
             "description": "Full proposed markdown content including any frontmatter block",

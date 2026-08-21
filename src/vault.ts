@@ -5,6 +5,13 @@ import * as path from "node:path";
 import { foldName } from "./name-fold.js";
 import { type ParsedNote, parseNote } from "./parser.js";
 import { loadPeriodicConfig, type PeriodicConfig } from "./periodic.js";
+import {
+  acquirePersistenceFamilyLease,
+  acquirePersistenceFamilyLeaseInScopes,
+  type PersistenceFamilyLeaseHandle,
+  type PersistenceFamilyScopes
+} from "./persistence-coordination.js";
+import { revalidatePersistenceLeaseScope } from "./persistence-lease.js";
 import { assertCacheFilePath } from "./persistence-path.js";
 import {
   preflightSensitiveArtifactTemps,
@@ -147,9 +154,33 @@ async function withAppendIdentityLock<T>(identityKey: string, fn: () => Promise<
 export const DEFAULT_MAX_FILE_BYTES = 5 * 1024 * 1024;
 /** Maximum in-memory parsed-note cache size (LRU eviction past this). */
 export const DEFAULT_MAX_CACHE_ENTRIES = 1024;
+/** Maximum source-file metadata entries retained by one exact legacy listing. */
+export const MAX_EXACT_LIST_FILES = 100_000;
+/** Maximum filesystem directory entries inspected by one exact legacy listing. */
+export const MAX_EXACT_LIST_VISITED_ENTRIES = 1_000_000;
+/** Maximum source-file metadata entries retained by one exact bulk index synchronization. */
+export const MAX_INDEX_SYNC_FILES = MAX_EXACT_LIST_FILES;
+/** Maximum filesystem directory entries inspected by one exact bulk index synchronization. */
+export const MAX_INDEX_SYNC_VISITED_ENTRIES = MAX_EXACT_LIST_VISITED_ENTRIES;
+/** Hard upper bound for persisted-cache candidates inspected during one load. */
+const MAX_PERSISTED_CACHE_ENTRY_INSPECTIONS = 100_000;
+/** Bound filesystem probes issued concurrently while admitting persisted entries. */
+const PERSISTED_CACHE_VALIDATION_CONCURRENCY = 32;
+/** Defensive bound for each parsed-note collection restored from untrusted JSON. */
+const MAX_PERSISTED_PARSED_COLLECTION_ITEMS = 100_000;
+/** Maximum depth of one JSON-compatible entry admitted to the disk-cache serializer. */
+const MAX_DISK_CACHE_JSON_DEPTH = 64;
+/** Maximum primitive/container values traversed in one persisted cache entry. */
+const MAX_DISK_CACHE_JSON_VALUES = 100_000;
+/** Maximum accepted disk-cache save requests retained behind the publication lane. */
+const MAX_PENDING_DISK_CACHE_SAVES = 8;
+/** Maximum historical cache targets whose exact lifetimes one Vault may retain. */
+const MAX_PERSISTENT_CACHE_TARGETS = 64;
+/** Semantic lease family for the v2 parse-cache format and its temp artifacts. */
+const PARSE_CACHE_PERSISTENCE_FAMILY = "parse-cache-v2";
 
-/** Bumped on any change to ParsedNote shape — invalidates persisted caches that don't match. */
-const DISK_CACHE_VERSION = 1;
+/** Bumped on ParsedNote or source-receipt changes — invalidates incompatible persisted caches. */
+const DISK_CACHE_VERSION = 2;
 /** Maximum size of the on-disk parse cache file (`~/.cache/enquire/<hash>.json`).
  *  Refuse to read or write a larger file — defensive limit so a corrupted
  *  cache can't balloon. */
@@ -169,17 +200,73 @@ export interface FileEntry {
   basename: string;
   /** Modification time, ms since epoch. */
   mtimeMs: number;
+  /** Source size captured by the directory walk. Optional for compatibility
+   *  with programmatic callers that construct synthetic {@link FileEntry}s. */
+  sizeBytes?: number;
+  /** Opaque filesystem-generation receipt captured with `mtimeMs`. Production
+   *  vault walkers always populate it; callers must compare it as a whole and
+   *  must not parse its representation. */
+  sourceRevision?: string;
 }
 
-/** A parse-cached note (post-frontmatter body + parsed structure + the
- *  mtime at parse time, for cache freshness). */
+/** Current regular-file state returned by {@link Vault.sourceState}.
+ *
+ * `sourceRevision` binds the physical entry, byte size, and filesystem change
+ * timestamps. It is an opaque equality receipt, not a content-authenticity
+ * proof; callers that expose bytes across an await should additionally bind
+ * those bytes (for example with a digest) and re-check this receipt last.
+ */
+export interface FileSourceState {
+  /** Opaque filesystem-generation receipt; compare only for exact equality. */
+  sourceRevision: string;
+  /** File size in bytes at the same stat generation. */
+  sizeBytes: number;
+  /** Modification time in milliseconds at the same stat generation. */
+  mtimeMs: number;
+}
+
+/** Result of one resource-bounded vault directory walk. */
+export interface BoundedFileListing {
+  /** Admitted regular files, never more than the requested file limit. */
+  entries: FileEntry[];
+  /** Number of directory entries inspected before the walk stopped. */
+  visitedEntries: number;
+  /** True only when the entire requested subtree was inspected without an I/O or budget refusal. */
+  complete: boolean;
+}
+
+/**
+ * Filesystem generation receipt used to reject accidental stale parsed-note
+ * cache hits. It binds source metadata, not the authenticity of persisted
+ * cache bytes: a same-account actor able to rewrite both cache content and its
+ * receipt remains outside this hint-cache trust boundary.
+ */
+interface CacheSourceReceipt {
+  /** Device identifier reported by the filesystem. */
+  readonly dev: number;
+  /** Inode/file identifier reported by the filesystem (may be zero when unavailable). */
+  readonly ino: number;
+  /** File size in bytes. */
+  readonly size: number;
+  /** Modification time in milliseconds. */
+  readonly mtimeMs: number;
+  /** Metadata-change time in milliseconds. */
+  readonly ctimeMs: number;
+}
+
+/** A detached parse-cached note returned to callers. */
 export interface CachedNote {
   /** Raw file content (UTF-8). */
   content: string;
   /** Parsed structure — see `ParsedNote`. */
   parsed: ParsedNote;
-  /** mtime at parse time. Used to detect stale cache entries. */
+  /** mtime at parse time. Retained for stable callers and display metadata. */
   mtimeMs: number;
+}
+
+/** Internal cache authority that never crosses the public read boundary. */
+interface CachedNoteRecord extends CachedNote {
+  readonly sourceReceipt: CacheSourceReceipt;
 }
 
 /**
@@ -249,17 +336,75 @@ export class Vault {
   private excludeMatchers: Array<{ test(path: string): boolean }>;
   private readPathMatchers: Array<{ test(path: string): boolean }>;
   private cacheFileValue: string | null;
-  private cache = new Map<string, CachedNote>();
+  private cache = new Map<string, CachedNoteRecord>();
+  private cacheGeneration = 0;
   private cacheDirty = false;
   private cacheEpoch = 0;
   private cachePublishChain: Promise<void> = Promise.resolve();
+  private pendingCacheSaveRequests = 0;
+  private pendingCacheClears = new Map<string, DiskCacheClearBarrier>();
+  private persistenceLifecycle: "open" | "closing" | "closed" = "open";
+  private persistenceClosePromise: Promise<void> | undefined;
+  private persistenceTargets = new Map<string, DiskCachePersistenceTarget>();
+  private persistenceTargetAcquisitions = new Map<string, Promise<DiskCachePersistenceTarget>>();
+  private persistenceReleaseDebt = new Set<PersistenceFamilyLeaseHandle>();
+  private pendingPersistenceOperations = new Set<Promise<unknown>>();
   private ready = false;
+  private readyPromise: Promise<void> | null = null;
   /** Lazily loaded periodic-notes config (.obsidian/daily-notes.json + Periodic
    *  Notes plugin). Cached forever after first read — users restart the server
    *  if they reconfigure plugins. */
   private periodicConfig: PeriodicConfig | null = null;
 
   constructor(root: string, opts: VaultOptions = {}) {
+    if (typeof root !== "string" || root.trim().length === 0) {
+      throw new TypeError("Vault root must be a non-empty path string");
+    }
+    if (typeof opts !== "object" || opts === null || Array.isArray(opts)) {
+      throw new TypeError("Vault options must be an object");
+    }
+    const allowedOptionNames = new Set([
+      "maxFileBytes",
+      "maxCacheEntries",
+      "enableWrite",
+      "persistentCache",
+      "cacheFile",
+      "maxDiskCacheBytes",
+      "excludeGlobs",
+      "readPaths"
+    ]);
+    const unknownOptionName = Object.keys(opts).find((name) => !allowedOptionNames.has(name));
+    if (unknownOptionName !== undefined) {
+      throw new TypeError(`Unknown Vault option ${unknownOptionName}`);
+    }
+    for (const [name, value] of [
+      ["enableWrite", opts.enableWrite],
+      ["persistentCache", opts.persistentCache]
+    ] as const) {
+      if (value !== undefined && typeof value !== "boolean") {
+        throw new TypeError(`Vault option ${name} must be a boolean`);
+      }
+    }
+    for (const [name, value] of [
+      ["maxFileBytes", opts.maxFileBytes],
+      ["maxCacheEntries", opts.maxCacheEntries],
+      ["maxDiskCacheBytes", opts.maxDiskCacheBytes]
+    ] as const) {
+      if (value !== undefined && (!Number.isSafeInteger(value) || value <= 0)) {
+        throw new TypeError(`Vault option ${name} must be a positive safe integer`);
+      }
+    }
+    for (const [name, value] of [
+      ["excludeGlobs", opts.excludeGlobs],
+      ["readPaths", opts.readPaths]
+    ] as const) {
+      if (value !== undefined && (!Array.isArray(value) || !value.every((pattern) => typeof pattern === "string"))) {
+        throw new TypeError(`Vault option ${name} must be an array of strings`);
+      }
+    }
+    if (opts.readPaths !== undefined && opts.readPaths.length === 0) {
+      throw new TypeError("Vault option readPaths must not be an empty allowlist");
+    }
     if (opts.cacheFile !== undefined) assertCacheFilePath(opts.cacheFile);
     this.root = path.resolve(root);
     this.configuredRoot = this.root;
@@ -268,7 +413,7 @@ export class Vault {
     this.writeEnabled = opts.enableWrite ?? false;
     this.persistentCacheEnabled = opts.persistentCache ?? false;
     this.maxDiskCacheBytes = opts.maxDiskCacheBytes ?? DEFAULT_MAX_DISK_CACHE_BYTES;
-    this.cacheFileValue = opts.cacheFile ?? null;
+    this.cacheFileValue = opts.cacheFile === undefined ? null : path.resolve(opts.cacheFile);
     // v2.0.0-beta.2 P1 sec DiD: refuse to start if the user passed exclusion
     // flags that, after stripping empty / whitespace-only entries, produced
     // 0 working patterns. Pre-fix, e.g. `--read-paths ""` (empty after shell
@@ -306,14 +451,168 @@ export class Vault {
    * @throws {TypeError} If a non-null path is outside the exact parse-cache namespace. */
   set cacheFile(file: string | null) {
     if (file !== null) assertCacheFilePath(file);
-    if (file === this.cacheFileValue) return;
-    this.cacheFileValue = file;
+    const normalized = file === null ? null : path.resolve(file);
+    if (normalized === this.cacheFileValue) return;
+    this.cacheFileValue = normalized;
     // `cacheFile` is a historical writable programmatic surface. Retargeting
     // must create a new persistence generation: an older in-flight save may
     // finish at its invocation-bound path, but it must not clear the dirty bit
     // and make the next save to this new path a no-op.
     this.cacheEpoch += 1;
+    this.cacheGeneration += 1;
     this.cacheDirty = true;
+  }
+
+  private runPersistenceOperation<T>(operation: () => Promise<T>): Promise<T> {
+    if (this.persistenceLifecycle !== "open") {
+      return Promise.reject(new Error("Vault persistence is closing or closed"));
+    }
+    let pending: Promise<T>;
+    try {
+      pending = operation();
+    } catch (error) {
+      return Promise.reject(error);
+    }
+    this.pendingPersistenceOperations.add(pending);
+    void pending.then(
+      () => this.pendingPersistenceOperations.delete(pending),
+      () => this.pendingPersistenceOperations.delete(pending)
+    );
+    return pending;
+  }
+
+  private async persistenceTargetFor(requestedFile: string): Promise<DiskCachePersistenceTarget> {
+    const retained = this.persistenceTargets.get(requestedFile);
+    if (retained) return retained;
+    const acquiring = this.persistenceTargetAcquisitions.get(requestedFile);
+    if (acquiring) return acquiring;
+    if (this.persistenceTargets.size + this.persistenceTargetAcquisitions.size >= MAX_PERSISTENT_CACHE_TARGETS) {
+      throw new Error(`Too many persistent-cache targets (limit ${MAX_PERSISTENT_CACHE_TARGETS})`);
+    }
+    const acquisition = (async (): Promise<DiskCachePersistenceTarget> => {
+      const lifetime = await acquirePersistenceFamilyLease({
+        targetPath: requestedFile,
+        familyKey: PARSE_CACHE_PERSISTENCE_FAMILY,
+        role: "shared"
+      });
+      const canonicalFile = path.join(lifetime.scopes.family.canonicalParent, lifetime.scopes.family.targetName);
+      const target = { requestedFile, canonicalFile, lifetime };
+      this.persistenceTargets.set(requestedFile, target);
+      return target;
+    })();
+    this.persistenceTargetAcquisitions.set(requestedFile, acquisition);
+    try {
+      return await acquisition;
+    } finally {
+      if (this.persistenceTargetAcquisitions.get(requestedFile) === acquisition) {
+        this.persistenceTargetAcquisitions.delete(requestedFile);
+      }
+    }
+  }
+
+  private samePersistenceFamily(left: PersistenceFamilyScopes, right: PersistenceFamilyScopes): boolean {
+    return (
+      left.family.canonicalParent === right.family.canonicalParent &&
+      left.family.parentIdentity.dev === right.family.parentIdentity.dev &&
+      left.family.parentIdentity.ino === right.family.parentIdentity.ino &&
+      left.family.familyKey === right.family.familyKey &&
+      left.family.digest === right.family.digest &&
+      left.family.directory === right.family.directory
+    );
+  }
+
+  private async releasePersistenceHandle(handle: PersistenceFamilyLeaseHandle): Promise<void> {
+    try {
+      await handle.release();
+      this.persistenceReleaseDebt.delete(handle);
+    } catch (error) {
+      this.persistenceReleaseDebt.add(handle);
+      throw error;
+    }
+  }
+
+  private async retirePersistenceFamily(scopes: PersistenceFamilyScopes): Promise<void> {
+    const matching = [...this.persistenceTargets.entries()].filter(([, target]) =>
+      this.samePersistenceFamily(target.lifetime.scopes, scopes)
+    );
+    const failures: unknown[] = [];
+    for (const [requestedFile, target] of matching) {
+      try {
+        await this.releasePersistenceHandle(target.lifetime);
+        if (this.persistenceTargets.get(requestedFile) === target) this.persistenceTargets.delete(requestedFile);
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+    if (failures.length > 0) {
+      throw new AggregateError(failures, "Persistent-cache lifetime release was incomplete before erasure");
+    }
+  }
+
+  private async acquirePersistenceEraser(requestedFile: string): Promise<PersistenceFamilyLeaseHandle> {
+    const target = await this.persistenceTargetFor(requestedFile);
+    const scopes = target.lifetime.scopes;
+    await this.retirePersistenceFamily(scopes);
+    return acquirePersistenceFamilyLeaseInScopes(scopes, { role: "eraser" });
+  }
+
+  private async releaseAllPersistenceHandles(): Promise<void> {
+    const failures: unknown[] = [];
+    const releasedHandles = new Set<PersistenceFamilyLeaseHandle>();
+    for (const handle of [...this.persistenceReleaseDebt]) {
+      try {
+        await this.releasePersistenceHandle(handle);
+        releasedHandles.add(handle);
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+    for (const [requestedFile, target] of [...this.persistenceTargets]) {
+      if (releasedHandles.has(target.lifetime)) {
+        if (this.persistenceTargets.get(requestedFile) === target) this.persistenceTargets.delete(requestedFile);
+        continue;
+      }
+      try {
+        await this.releasePersistenceHandle(target.lifetime);
+        if (this.persistenceTargets.get(requestedFile) === target) this.persistenceTargets.delete(requestedFile);
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+    if (failures.length > 0) {
+      throw new AggregateError(failures, "Vault persistence lifetime release was incomplete");
+    }
+  }
+
+  /**
+   * Stop admitting disk-cache work, join all accepted loads, saves, and clears,
+   * then release every exact historical cache-target lifetime. A failed marker
+   * cleanup remains retryable through a later call; no target is re-resolved.
+   *
+   * @returns A promise that settles only after all retained persistence markers are gone.
+   */
+  closePersistence(): Promise<void> {
+    if (this.persistenceLifecycle === "closed") return Promise.resolve();
+    if (this.persistenceClosePromise !== undefined) return this.persistenceClosePromise;
+    this.persistenceLifecycle = "closing";
+    const close = async (): Promise<void> => {
+      const ready = this.readyPromise;
+      if (ready) await ready.catch(() => {});
+      await Promise.allSettled([...this.pendingPersistenceOperations]);
+      await this.cachePublishChain.catch(() => {});
+      await Promise.allSettled([...this.persistenceTargetAcquisitions.values()]);
+      await this.releaseAllPersistenceHandles();
+      this.persistenceLifecycle = "closed";
+    };
+    const attempt = close();
+    this.persistenceClosePromise = attempt;
+    void attempt.then(
+      () => undefined,
+      () => {
+        if (this.persistenceClosePromise === attempt) this.persistenceClosePromise = undefined;
+      }
+    );
+    return attempt;
   }
 
   /** Return why a path is outside the public vault surface, or `null` when admitted. */
@@ -349,28 +648,47 @@ export class Vault {
    * underlying state is cached after the first successful call.
    *
    * Also (when persistent cache is enabled) loads the on-disk parse cache.
+   * The first disk target is canonicalized through a two-level persistence
+   * lease; its shared lifetime remains held until {@link closePersistence} or
+   * an explicit same-family clear retires it.
    *
    * @throws {Error} If the vault root doesn't exist or isn't a directory.
    */
   async ensureExists(): Promise<void> {
     if (this.ready) return;
-    let stat: import("node:fs").Stats;
+    if (!this.readyPromise) {
+      const initialization = (async (): Promise<void> => {
+        let stat: import("node:fs").Stats;
+        try {
+          stat = await this.statSafe(this.root);
+        } catch {
+          throw new Error(`Vault not found: ${this.root}`);
+        }
+        if (!stat.isDirectory()) {
+          throw new Error(`Vault path is not a directory: ${this.root}`);
+        }
+        this.root = await this.realpathSafe(this.root);
+        if (this.persistentCacheEnabled && !this.cacheFile) {
+          this.cacheFileValue = defaultCacheFile(this.root);
+        }
+        if (this.persistentCacheEnabled) {
+          await this.enqueueDiskCacheLoad({
+            requestedFile: this.cacheFile,
+            acceptedGeneration: this.cacheGeneration
+          });
+        }
+        this.ready = true;
+      })();
+      this.readyPromise = initialization;
+    }
+    const pending = this.readyPromise;
     try {
-      stat = await this.statSafe(this.root);
-    } catch {
-      throw new Error(`Vault not found: ${this.root}`);
+      await pending;
+    } catch (error) {
+      if (this.readyPromise === pending) this.readyPromise = null;
+      throw error;
     }
-    if (!stat.isDirectory()) {
-      throw new Error(`Vault path is not a directory: ${this.root}`);
-    }
-    this.root = await this.realpathSafe(this.root);
-    if (this.persistentCacheEnabled && !this.cacheFile) {
-      this.cacheFileValue = defaultCacheFile(this.root);
-    }
-    this.ready = true;
-    if (this.persistentCacheEnabled) {
-      await this.loadDiskCache();
-    }
+    if (this.readyPromise === pending) this.readyPromise = null;
   }
 
   /**
@@ -388,14 +706,41 @@ export class Vault {
    * persists the pruned snapshot, and emit a stderr disclosure line.
    *
    * Idempotent — entries already in memory aren't duplicated.
+   * Reads use only the canonical file captured by the retained family scope;
+   * later retargeting of a lexical parent alias cannot redirect the load.
    *
    * @returns Number of entries loaded into memory.
    * @internal called automatically by {@link ensureExists} when persistent
    *           cache is enabled.
    */
-  async loadDiskCache(): Promise<number> {
-    const file = this.cacheFile;
-    if (!file) return 0;
+  loadDiskCache(): Promise<number> {
+    return this.runPersistenceOperation(() =>
+      this.enqueueDiskCacheLoad({
+        requestedFile: this.cacheFile,
+        acceptedGeneration: this.cacheGeneration
+      })
+    );
+  }
+
+  private enqueueDiskCacheLoad(request: DiskCacheLoadRequest): Promise<number> {
+    const load = this.cachePublishChain.then(() => this.loadDiskCacheOnce(request));
+    this.cachePublishChain = load.then(
+      () => undefined,
+      () => undefined
+    );
+    return load;
+  }
+
+  private async loadDiskCacheOnce(request: DiskCacheLoadRequest): Promise<number> {
+    const { requestedFile, acceptedGeneration } = request;
+    if (!requestedFile) return 0;
+    const pendingClear = this.pendingCacheClears.get(requestedFile);
+    if (pendingClear) {
+      await pendingClear.promise;
+      if (this.cacheGeneration !== acceptedGeneration || this.cacheFile !== requestedFile) return 0;
+    }
+    const target = await this.persistenceTargetFor(requestedFile);
+    const file = target.canonicalFile;
     try {
       const stat = await this.statSafe(file);
       if (stat.size > this.maxDiskCacheBytes) {
@@ -413,77 +758,104 @@ export class Vault {
     } catch {
       return 0;
     }
-    let data: DiskCacheFile;
+    let data: unknown;
     try {
-      data = JSON.parse(raw) as DiskCacheFile;
+      data = JSON.parse(raw) as unknown;
     } catch {
       return 0;
     }
+    if (!isRecord(data)) return 0;
     if (data.version !== DISK_CACHE_VERSION || data.root !== this.root) return 0;
     if (!Array.isArray(data.entries)) return 0;
 
-    // Stat every candidate in parallel — sequential blocked on big caches.
-    const checks = await Promise.all(
-      data.entries.map(async (entry) => {
-        if (typeof entry.relPath !== "string" || typeof entry.mtimeMs !== "number") return { kind: "drop" } as const;
-        if (typeof entry.content !== "string") return { kind: "drop" } as const;
-        if (Buffer.byteLength(entry.content, "utf8") > this.maxFileBytes) return { kind: "drop" } as const;
-        // Reject relative paths that escape the vault root after resolution.
-        // A crafted cache file with relPath like "../../../etc/hosts" would
-        // otherwise pollute the in-memory cache with a key pointing outside
-        // the vault. The orphaned entry would never be served (resolveSafePath
-        // blocks reads), but it would persist back to disk on next save.
-        let abs: string;
-        try {
-          abs = this.resolveInside(entry.relPath);
-        } catch {
+    const rawEntries = data.entries;
+    const candidates = rawEntries.slice(0, MAX_PERSISTED_CACHE_ENTRY_INSPECTIONS);
+    const checks: DiskCacheCandidateResult[] = [];
+    const inspectCandidate = async (rawEntry: unknown): Promise<DiskCacheCandidateResult> => {
+      if (!isBoundedDiskCacheJsonTree(rawEntry)) return { kind: "drop" };
+      if (!isRecord(rawEntry)) return { kind: "drop" };
+      const entry = rawEntry;
+      if (
+        typeof entry.relPath !== "string" ||
+        typeof entry.mtimeMs !== "number" ||
+        !isCacheSourceReceipt(entry.sourceReceipt) ||
+        entry.mtimeMs !== entry.sourceReceipt.mtimeMs
+      ) {
+        return { kind: "drop" };
+      }
+      if (typeof entry.content !== "string" || !isPersistedParsedNote(entry.parsed)) return { kind: "drop" };
+      if (Buffer.byteLength(entry.content, "utf8") > this.maxFileBytes) return { kind: "drop" } as const;
+      // Reject relative paths that escape the vault root after resolution.
+      // A crafted cache file with relPath like "../../../etc/hosts" would
+      // otherwise pollute the in-memory cache with a key pointing outside
+      // the vault. The orphaned entry would never be served (resolveSafePath
+      // blocks reads), but it would persist back to disk on next save.
+      let abs: string;
+      try {
+        abs = this.resolveInside(entry.relPath);
+      } catch {
+        return { kind: "drop" } as const;
+      }
+      const relCheck = path.relative(this.root, abs);
+      // v3.7.16 P1-4 — drop entries that violate the current privacy
+      // filters (--exclude-glob / --read-paths). Pre-3.7.16, loadDiskCache
+      // happily restored full note bodies even after the user added a new
+      // exclude/allowlist pattern on this run. Direct reads were blocked
+      // by resolveSafePath, but the excluded body remained in the parse
+      // cache + got rewritten to disk by the next saveDiskCache call —
+      // breaking the at-rest privacy boundary across filter changes.
+      // Now we check isExcluded() using the live filter state for every
+      // candidate and drop misses. The drop also marks the cache dirty,
+      // so the next saveDiskCache writes the pruned snapshot back to disk.
+      if (this.isExcluded(relCheck.replace(/\\/g, "/"))) {
+        return { kind: "drop", excludedByPrivacy: true } as const;
+      }
+      try {
+        const s = await this.statSafe(abs);
+        if (!s.isFile() || !cacheSourceReceiptsEqual(cacheSourceReceipt(s), entry.sourceReceipt)) {
           return { kind: "drop" } as const;
         }
-        const relCheck = path.relative(this.root, abs);
-        // v3.7.16 P1-4 — drop entries that violate the current privacy
-        // filters (--exclude-glob / --read-paths). Pre-3.7.16, loadDiskCache
-        // happily restored full note bodies even after the user added a new
-        // exclude/allowlist pattern on this run. Direct reads were blocked
-        // by resolveSafePath, but the excluded body remained in the parse
-        // cache + got rewritten to disk by the next saveDiskCache call —
-        // breaking the at-rest privacy boundary across filter changes.
-        // Now we check isExcluded() using the live filter state for every
-        // candidate and drop misses. The drop also marks the cache dirty,
-        // so the next saveDiskCache writes the pruned snapshot back to disk.
-        if (this.isExcluded(relCheck.replace(/\\/g, "/"))) {
+        // Belt-and-braces: realpath check in case the path includes a symlink
+        // chain that resolves outside the vault.
+        const real = await this.realpathSafe(abs);
+        const realRel = path.relative(this.root, real);
+        if (realRel.startsWith("..") || path.isAbsolute(realRel)) return { kind: "drop" } as const;
+        const canonicalRel = vaultRelative(this.root, real);
+        // The lexical fast-path above is insufficient on case-insensitive
+        // filesystems and for in-vault symlink aliases: the cache key may say
+        // `private/Secret.md` while realpath resolves to excluded
+        // `Private/Secret.md`. Re-apply privacy to the physical identity
+        // before any note body enters memory.
+        if (this.isExcluded(canonicalRel)) {
           return { kind: "drop", excludedByPrivacy: true } as const;
         }
-        try {
-          const s = await this.statSafe(abs);
-          if (!s.isFile() || s.mtimeMs !== entry.mtimeMs) return { kind: "drop" } as const;
-          // Belt-and-braces: realpath check in case the path includes a symlink
-          // chain that resolves outside the vault.
-          const real = await this.realpathSafe(abs);
-          const realRel = path.relative(this.root, real);
-          if (realRel.startsWith("..") || path.isAbsolute(realRel)) return { kind: "drop" } as const;
-          const canonicalRel = vaultRelative(this.root, real);
-          // The lexical fast-path above is insufficient on case-insensitive
-          // filesystems and for in-vault symlink aliases: the cache key may say
-          // `private/Secret.md` while realpath resolves to excluded
-          // `Private/Secret.md`. Re-apply privacy to the physical identity
-          // before any note body enters memory.
-          if (this.isExcluded(canonicalRel)) {
-            return { kind: "drop", excludedByPrivacy: true } as const;
-          }
-          return {
-            kind: "hit",
-            abs: real,
-            entry,
-            needsMigration: entry.relPath !== canonicalRel
-          } as const;
-        } catch {
-          // Source file gone — drop and force a clean rewrite on next save.
-          return { kind: "drop" } as const;
-        }
-      })
-    );
+        return {
+          kind: "hit",
+          abs: real,
+          entry: {
+            relPath: entry.relPath,
+            mtimeMs: entry.mtimeMs,
+            sourceReceipt: entry.sourceReceipt,
+            content: entry.content,
+            parsed: entry.parsed
+          },
+          needsMigration: entry.relPath !== canonicalRel
+        } as const;
+      } catch {
+        // Source file gone — drop and force a clean rewrite on next save.
+        return { kind: "drop" } as const;
+      }
+    };
+    // A bounded batch avoids both a fully sequential startup and one Promise/
+    // filesystem probe per attacker-controlled JSON element.
+    for (let offset = 0; offset < candidates.length; offset += PERSISTED_CACHE_VALIDATION_CONCURRENCY) {
+      const batch = candidates.slice(offset, offset + PERSISTED_CACHE_VALIDATION_CONCURRENCY);
+      checks.push(...(await Promise.all(batch.map((entry) => inspectCandidate(entry)))));
+      if (this.cacheGeneration !== acceptedGeneration || this.cacheFile !== requestedFile) return 0;
+    }
+    if (this.cacheGeneration !== acceptedGeneration || this.cacheFile !== requestedFile) return 0;
     let loaded = 0;
-    let dropped = 0;
+    let dropped = rawEntries.length - candidates.length;
     let droppedByPrivacy = 0;
     const migrationNeeded = checks.some((result) => result.kind === "hit" && result.needsMigration);
     for (const result of checks) {
@@ -501,7 +873,8 @@ export class Vault {
       this.cache.set(result.abs, {
         content: result.entry.content,
         parsed: result.entry.parsed,
-        mtimeMs: result.entry.mtimeMs
+        mtimeMs: result.entry.mtimeMs,
+        sourceReceipt: result.entry.sourceReceipt
       });
       this.cacheEpoch += 1;
       loaded += 1;
@@ -527,24 +900,103 @@ export class Vault {
   }
 
   /**
-   * Delete the on-disk parse cache file and reset the in-memory cache.
-   * No-op when persistent cache wasn't configured.
+   * Once target admission completes, retire the current in-memory generation
+   * synchronously and delete the captured on-disk cache family in publication
+   * order. An already-known target has no pre-admission suspension; resolving
+   * the default target may await filesystem identity first. Reads and saves
+   * accepted after rotation belong to the new generation; a save waits for the
+   * disk-erasure barrier before it may publish those newer entries. Async reads
+   * or loads accepted before the rotation cannot repopulate the new map.
+   * Disk inspection/deletion failures reject the returned promise.
+   * Resolves the default cache path through normal initialization when
+   * persistence is enabled; otherwise it is a no-op when no cache path exists.
+   * Before deletion it retires every own shared handle for the physical family
+   * and acquires its exclusive eraser role. A conflicting external lifetime
+   * rejects before any cache byte is removed.
    *
    * @returns `true` if any stable, legacy-temp, or generated cache artifact was removed.
    */
-  async clearDiskCache(): Promise<boolean> {
-    const file = this.cacheFile;
+  clearDiskCache(): Promise<boolean> {
+    return this.runPersistenceOperation(() => this.clearDiskCacheOperation());
+  }
+
+  private async clearDiskCacheOperation(): Promise<boolean> {
+    // Preserve synchronous admission for an already-known target. Calling the
+    // async resolver unconditionally would yield even when it immediately
+    // returned `this.cacheFile`, allowing a retarget or clean save to overtake
+    // the clear before its generation rotation/barrier was registered.
+    let file = this.cacheFile;
+    if (!file) file = await this.cacheFileForErasure();
     if (!file) return false;
-    const invocationEpoch = this.cacheEpoch;
-    const clear = this.cachePublishChain.then(() => this.clearDiskCacheOnce(file, invocationEpoch));
+    // Linearize the memory erasure at admission, before any queued publisher
+    // can suspend. Async reads/loads carry `cacheGeneration` receipts and
+    // therefore cannot rehydrate this retired Map after the rotation.
+    this.cache = new Map();
+    this.cacheGeneration += 1;
+    this.cacheEpoch += 1;
+    this.cacheDirty = false;
+    const request: DiskCacheClearRequest = { requestedFile: file };
+    const clear = this.cachePublishChain.then(() => this.clearDiskCacheCoordinated(request));
+    this.pendingCacheClears.set(file, { request, promise: clear });
     this.cachePublishChain = clear.then(
-      () => {},
-      () => {}
+      () => {
+        if (this.pendingCacheClears.get(file)?.request === request) this.pendingCacheClears.delete(file);
+      },
+      () => {
+        // Keep the rejected barrier as a fail-closed tombstone. A later load
+        // or save of this family must inherit the erasure failure until an
+        // explicit retry succeeds and removes every same-family tombstone.
+      }
     );
     return clear;
   }
 
-  private async clearDiskCacheOnce(file: string, invocationEpoch: number): Promise<boolean> {
+  private async cacheFileForErasure(): Promise<string | null> {
+    if (this.cacheFile) return this.cacheFile;
+    if (!this.persistentCacheEnabled) return null;
+    let identityRoot = this.configuredRoot;
+    try {
+      const stat = await this.statSafe(identityRoot);
+      if (stat.isDirectory()) identityRoot = await this.realpathSafe(identityRoot);
+    } catch {
+      // Erasure must remain possible after the vault was removed/unmounted.
+      // The lexical configured root is the only remaining default identity;
+      // callers with a former symlink spelling can pass the exact cache path.
+    }
+    const file = defaultCacheFile(identityRoot);
+    if (this.cacheFileValue !== null) return this.cacheFileValue;
+    this.cacheFileValue = file;
+    return file;
+  }
+
+  private async clearDiskCacheCoordinated(request: DiskCacheClearRequest): Promise<boolean> {
+    const eraser = await this.acquirePersistenceEraser(request.requestedFile);
+    const file = path.join(eraser.scopes.family.canonicalParent, eraser.scopes.family.targetName);
+    let bodyError: unknown;
+    let removed = false;
+    try {
+      await revalidatePersistenceLeaseScope(eraser.scopes.namespace);
+      await revalidatePersistenceLeaseScope(eraser.scopes.family);
+      removed = await this.clearDiskCacheOnce({ file });
+      await revalidatePersistenceLeaseScope(eraser.scopes.family);
+      await revalidatePersistenceLeaseScope(eraser.scopes.namespace);
+    } catch (error) {
+      bodyError = error;
+    }
+    try {
+      await this.releasePersistenceHandle(eraser);
+    } catch (releaseError) {
+      if (bodyError !== undefined) {
+        throw new AggregateError([bodyError, releaseError], "Persistent-cache erasure and lease release both failed");
+      }
+      throw releaseError;
+    }
+    if (bodyError !== undefined) throw bodyError;
+    return removed;
+  }
+
+  private async clearDiskCacheOnce(request: DiskCachePhysicalClearRequest): Promise<boolean> {
+    const { file } = request;
     // rc.36 F-2 (P-2 erasure-completeness sibling) — erase BOTH the cache file
     // AND any leftover atomic-write temp. A crash between `saveDiskCache`'s
     // `writeFile(tmp)` and `rename` (or an EXDEV cross-device rename) leaves
@@ -568,15 +1020,6 @@ export class Vault {
       }
     }
     removed = (await removeSensitiveArtifactTemps(file)) > 0 || removed;
-    // The public cacheFile setter may retarget future operations while this
-    // clear waits behind an older publication. Delete only the path captured
-    // by this invocation; reset shared memory/dirty state only if that path is
-    // still the active target when the queued clear executes.
-    if (this.cacheFile === file && this.cacheEpoch === invocationEpoch) {
-      this.cache.clear();
-      this.cacheEpoch += 1;
-      this.cacheDirty = false;
-    }
     return removed;
   }
 
@@ -590,72 +1033,166 @@ export class Vault {
    * this is atomic leaf replacement rather than a power-loss durability claim.
    *
    * No-op when persistent cache wasn't configured or the cache hasn't
-   * been modified since the last save (`cacheDirty` flag).
+   * been modified since the last save (`cacheDirty` flag). Even a clean-cache
+   * call joins any already-accepted clear of the same target and inherits its
+   * failure rather than reporting an early false success.
+   * Rejects after erasing any older on-disk generation when the admitted
+   * snapshot exceeds the configured byte cap; an oversized replacement must
+   * never leave stale or newly excluded note bodies behind while reporting
+   * success.
+   * Every publication acquires a serialized publisher from the target's pinned
+   * scopes and writes only the canonical file captured by its shared lifetime.
+   *
+   * @throws {Error} If validation/publication fails, the snapshot exceeds the
+   *   configured on-disk byte cap, or eight save requests are already pending.
    */
-  async saveDiskCache(): Promise<void> {
-    const file = this.cacheFile;
-    if (!this.persistentCacheEnabled || !file || !this.cacheDirty) return;
-    const write = this.cachePublishChain.then(() => this.saveDiskCacheOnce(file));
-    this.cachePublishChain = write.catch(() => {});
-    return write;
+  saveDiskCache(): Promise<void> {
+    return this.runPersistenceOperation(() => this.saveDiskCacheOperation());
   }
 
-  private async saveDiskCacheOnce(file: string): Promise<void> {
-    if (!this.persistentCacheEnabled || !this.cacheDirty) return;
-    // Capture before the first traversal await. A mutation after an entry has
-    // been copied into `entries` must prevent this older snapshot from clearing
-    // dirty, even if the traversal later observes the new epoch.
+  private async saveDiskCacheOperation(): Promise<void> {
+    if (!this.persistentCacheEnabled) return;
+    // Normalise the public direct-call path before binding a snapshot. Without
+    // this join, an unready save can enqueue a worker whose path validation
+    // recursively waits for the same initialization while a later clear is
+    // queued behind that worker.
+    if (!this.ready) await this.ensureExists();
+    const file = this.cacheFile;
+    if (!file) return;
+    const pendingClear = this.pendingCacheClears.get(file);
+    if (!this.cacheDirty) {
+      if (pendingClear) await pendingClear.promise;
+      return;
+    }
+    if (this.pendingCacheSaveRequests >= MAX_PENDING_DISK_CACHE_SAVES) {
+      throw new Error(`Too many pending persistent-cache saves (limit ${MAX_PENDING_DISK_CACHE_SAVES})`);
+    }
     const publishedEpoch = this.cacheEpoch;
-    const cacheSnapshot = [...this.cache];
-    const entries: DiskCacheEntry[] = [];
-    for (const [abs, cached] of cacheSnapshot) {
+    const cacheSnapshot: DiskCacheSnapshotEntry[] = Array.from(this.cache, ([abs, source]) => ({ abs, source }));
+    this.pendingCacheSaveRequests += 1;
+    const write = this.cachePublishChain.then(async () => {
+      if (pendingClear) await pendingClear.promise;
+      await this.saveDiskCacheOnce({ requestedFile: file, publishedEpoch, cacheSnapshot });
+    });
+    const trackedWrite = write.finally(() => {
+      this.pendingCacheSaveRequests -= 1;
+    });
+    this.cachePublishChain = trackedWrite.catch(() => {});
+    return trackedWrite;
+  }
+
+  private async saveDiskCacheOnce(request: DiskCacheSaveRequest): Promise<void> {
+    if (!this.persistentCacheEnabled) return;
+    const { requestedFile, publishedEpoch, cacheSnapshot } = request;
+    // A previous queued save of this exact generation may already have made
+    // this invocation redundant. A retarget or cache mutation advances the
+    // epoch, so an older request remains bound to its captured path/snapshot
+    // and cannot read a newer generation while it waits in the queue.
+    if (!this.cacheDirty && this.cacheFile === requestedFile && this.cacheEpoch === publishedEpoch) return;
+    const target = await this.persistenceTargetFor(requestedFile);
+    const file = target.canonicalFile;
+    const writtenAt = new Date().toISOString();
+    const prefix =
+      `{"version":${DISK_CACHE_VERSION},"root":${JSON.stringify(this.root)},` +
+      `"writtenAt":${JSON.stringify(writtenAt)},"entries":[`;
+    const suffix = "]}";
+    const fragments: string[] = [prefix];
+    let serializedBytes = Buffer.byteLength(prefix, "utf8") + Buffer.byteLength(suffix, "utf8");
+    let oversized = serializedBytes > this.maxDiskCacheBytes;
+    let firstEntry = true;
+    for (const { abs, source } of cacheSnapshot) {
+      const cached = source;
+      const deleteIfStillCurrent = (): void => {
+        if (this.cache.get(abs) === source) this.deleteCacheEntry(abs);
+      };
       const relPath = vaultRelative(this.root, abs);
       if (this.isExcluded(relPath)) {
-        this.deleteCacheEntry(abs);
+        deleteIfStillCurrent();
         continue;
       }
       try {
         const liveAbs = await this.resolveSafePath(abs);
         const liveStat = await this.statSafe(liveAbs);
-        if (!liveStat.isFile() || liveStat.mtimeMs !== cached.mtimeMs) {
-          this.deleteCacheEntry(abs);
+        if (!liveStat.isFile() || !cacheSourceReceiptsEqual(cacheSourceReceipt(liveStat), cached.sourceReceipt)) {
+          deleteIfStillCurrent();
           continue;
         }
       } catch {
-        this.deleteCacheEntry(abs);
+        deleteIfStillCurrent();
         continue;
       }
-      entries.push({
+      const entry: DiskCacheEntry = {
         relPath,
         mtimeMs: cached.mtimeMs,
+        sourceReceipt: cached.sourceReceipt,
         content: cached.content,
         parsed: cached.parsed
-      });
+      };
+      if (oversized) continue;
+      const delimiter = firstEntry ? "" : ",";
+      const delimiterBytes = Buffer.byteLength(delimiter, "utf8");
+      const measurement = measureBoundedDiskCacheJson(entry, this.maxDiskCacheBytes - serializedBytes - delimiterBytes);
+      if (measurement.kind === "invalid") continue;
+      if (measurement.kind === "over-budget") {
+        oversized = true;
+        continue;
+      }
+      const fragment = JSON.stringify(entry);
+      const measuredFragmentBytes = Buffer.byteLength(fragment, "utf8");
+      if (measuredFragmentBytes !== measurement.bytes) {
+        throw new Error("Persistent cache JSON byte measurement disagreed with serialization");
+      }
+      const fragmentBytes = delimiterBytes + measuredFragmentBytes;
+      if (serializedBytes + fragmentBytes > this.maxDiskCacheBytes) {
+        oversized = true;
+        continue;
+      }
+      fragments.push(delimiter, fragment);
+      serializedBytes += fragmentBytes;
+      firstEntry = false;
     }
-    const payload: DiskCacheFile = {
-      version: DISK_CACHE_VERSION,
-      root: this.root,
-      writtenAt: new Date().toISOString(),
-      entries
-    };
-    const serialized = JSON.stringify(payload);
-    if (Buffer.byteLength(serialized, "utf8") > this.maxDiskCacheBytes) {
-      process.stderr.write(
-        `enquire: refusing to write cache (${Buffer.byteLength(serialized, "utf8")} bytes > limit ${this.maxDiskCacheBytes}): ${file}\n`
-      );
-      return;
+    if (oversized) {
+      // This worker owns the publication lane. Remove the older generation
+      // before rejecting so a privacy-driven drop cannot leave its raw body
+      // parked on disk merely because the replacement became too large.
+      await this.clearDiskCacheCoordinated({ requestedFile });
+      throw new Error(`Persistent cache snapshot exceeds the configured byte cap (> ${this.maxDiskCacheBytes})`);
     }
-    const cacheDir = path.dirname(file);
-    // Recursive mkdir applies 0700 (subject only to a more-restrictive umask)
-    // to directories this call creates and leaves an existing/custom parent
-    // untouched. Never infer ownership from a pre-stat and then path-chmod:
-    // another creator can legitimately win between those two operations.
-    await this.mkdirSafe(cacheDir, { recursive: true, mode: 0o700 });
-    // The shared publisher owns an unpredictable exclusive mode-0600 sibling
-    // and promotes it by rename. A final symlink leaf is replaced, never
-    // followed; there is no post-publish chmod(final) race.
-    await publishSensitiveArtifact(file, serialized);
-    if (this.cacheFile === file && this.cacheEpoch === publishedEpoch) this.cacheDirty = false;
+    fragments.push(suffix);
+    const serialized = fragments.join("");
+    const publisher = await acquirePersistenceFamilyLeaseInScopes(target.lifetime.scopes, { role: "publisher" });
+    let bodyError: unknown;
+    try {
+      await revalidatePersistenceLeaseScope(publisher.scopes.namespace);
+      await revalidatePersistenceLeaseScope(publisher.scopes.family);
+      const cacheDir = publisher.scopes.family.canonicalParent;
+      // Recursive mkdir applies 0700 (subject only to a more-restrictive umask)
+      // to directories this call creates and leaves an existing/custom parent
+      // untouched. Never infer ownership from a pre-stat and then path-chmod:
+      // another creator can legitimately win between those two operations.
+      await this.mkdirSafe(cacheDir, { recursive: true, mode: 0o700 });
+      // The shared publisher owns an unpredictable exclusive mode-0600 sibling
+      // and promotes it by rename. A final symlink leaf is replaced, never
+      // followed; there is no post-publish chmod(final) race.
+      await publishSensitiveArtifact(file, serialized, this.maxDiskCacheBytes);
+      await revalidatePersistenceLeaseScope(publisher.scopes.family);
+      await revalidatePersistenceLeaseScope(publisher.scopes.namespace);
+    } catch (error) {
+      bodyError = error;
+    }
+    try {
+      await this.releasePersistenceHandle(publisher);
+    } catch (releaseError) {
+      if (bodyError !== undefined) {
+        throw new AggregateError(
+          [bodyError, releaseError],
+          "Persistent-cache publication and lease release both failed"
+        );
+      }
+      throw releaseError;
+    }
+    if (bodyError !== undefined) throw bodyError;
+    if (this.cacheFile === requestedFile && this.cacheEpoch === publishedEpoch) this.cacheDirty = false;
   }
 
   /**
@@ -711,53 +1248,161 @@ export class Vault {
    * @param folder - Optional vault-relative subfolder. When set, scan
    *   only under that folder. Returns `[]` if the folder doesn't exist,
    *   is a symlink, or is itself excluded.
-   * @returns Discovered files in walk order (depth-first, alphabetical).
+   * @returns Complete discovered inventory sorted by vault-relative path.
+   * @throws {Error} If the exact inventory exceeds the hard file/traversal
+   *   envelope or a subtree cannot be inspected completely.
    */
   async listMarkdown(folder?: string): Promise<FileEntry[]> {
-    if (!this.ready) await this.ensureExists();
-    let start = folder ? this.resolveInside(folder) : this.root;
-    if (folder) {
-      if (this.isExcluded(vaultRelative(this.root, start))) return [];
-      const lstat = await fs.lstat(start).catch(() => null);
-      if (!lstat) return [];
-      if (lstat.isSymbolicLink()) return [];
-      const real = await fs.realpath(start).catch(() => null);
-      if (!real) return [];
-      const rel = path.relative(this.root, real);
-      if (rel.startsWith("..") || path.isAbsolute(rel)) return [];
-      // If the requested folder itself matches an exclude glob, treat as empty.
-      if (this.isExcluded(rel)) return [];
-      start = real;
+    const listing = await this.listFilesByExtensionsBounded(
+      [".md"],
+      MAX_EXACT_LIST_FILES,
+      MAX_EXACT_LIST_VISITED_ENTRIES,
+      folder
+    );
+    if (!listing.complete) {
+      throw new Error(
+        `Markdown inventory is incomplete within ${MAX_EXACT_LIST_FILES} files / ` +
+          `${MAX_EXACT_LIST_VISITED_ENTRIES} visited entries`
+      );
     }
-    const out: FileEntry[] = [];
-    await walk(start, this.root, out);
-    // Apply privacy filter — paths matching any --exclude-glob OR not matching
-    // any --read-paths allowlist pattern are omitted from the listing entirely.
-    // resolveSafePath also rejects them on direct read/write, so the LLM has
-    // no way to reach excluded content.
-    return out.filter((e) => !this.isExcluded(e.relPath.replace(/\\/g, "/")));
+    return listing.entries;
   }
 
-  /** Walk the vault and return files ending with the given extension (e.g.
-   *  ".canvas", ".pdf"). Honors --exclude-glob + --read-paths. Used by the
-   *  v1.7 canvas tools and any future file-format-specific tools. */
+  /** Walk the vault and return a complete, path-sorted inventory ending with
+   *  the given extension (e.g. ".canvas", ".pdf"). Honors --exclude-glob +
+   *  --read-paths and fails if the exact inventory exceeds the hard envelope. */
   async listFilesByExtension(ext: string, folder?: string): Promise<FileEntry[]> {
+    const listing = await this.listFilesByExtensionsBounded(
+      [ext],
+      MAX_EXACT_LIST_FILES,
+      MAX_EXACT_LIST_VISITED_ENTRIES,
+      folder
+    );
+    if (!listing.complete) {
+      throw new Error(
+        `${ext} inventory is incomplete within ${MAX_EXACT_LIST_FILES} files / ` +
+          `${MAX_EXACT_LIST_VISITED_ENTRIES} visited entries`
+      );
+    }
+    return listing.entries;
+  }
+
+  /**
+   * Walk the vault incrementally for a closed set of file extensions.
+   *
+   * This is the common bounded primitive used by the exact legacy listing
+   * wrappers and by callers with tighter, operation-specific budgets. It stops
+   * at the first `maxFiles + 1` admitted
+   * match, after `maxVisitedEntries` directory entries, on an unreadable/racy
+   * subtree, or when the real-directory depth envelope is exceeded. In each of
+   * those cases `complete` is false so an exhaustive caller can fail closed.
+   *
+   * @param extensions - Non-empty lowercase-or-mixed extensions beginning with
+   *   `.`, for example `[".md", ".pdf"]`.
+   * @param maxFiles - Maximum admitted files retained in `entries`.
+   * @param maxVisitedEntries - Maximum directory entries inspected, including
+   *   directories and non-matching files.
+   * @param folder - Optional vault-relative subtree.
+   * @returns A bounded listing sorted by vault-relative path and an explicit completeness receipt.
+   */
+  async listFilesByExtensionsBounded(
+    extensions: readonly string[],
+    maxFiles: number,
+    maxVisitedEntries: number,
+    folder?: string
+  ): Promise<BoundedFileListing> {
+    if (!Number.isSafeInteger(maxFiles) || maxFiles < 1) {
+      throw new TypeError("maxFiles must be a positive safe integer");
+    }
+    if (!Number.isSafeInteger(maxVisitedEntries) || maxVisitedEntries < 1) {
+      throw new TypeError("maxVisitedEntries must be a positive safe integer");
+    }
+    if (extensions.length === 0) throw new TypeError("extensions must contain at least one file extension");
+    const normalizedExtensions = new Set<string>();
+    for (const extension of extensions) {
+      if (typeof extension !== "string" || !/^\.[a-z0-9]+$/iu.test(extension)) {
+        throw new TypeError("each extension must begin with '.' and contain only letters or digits");
+      }
+      normalizedExtensions.add(extension.toLowerCase());
+    }
+
     if (!this.ready) await this.ensureExists();
     let start = folder ? this.resolveInside(folder) : this.root;
     if (folder) {
-      if (this.isExcluded(vaultRelative(this.root, start))) return [];
+      if (this.isExcluded(vaultRelative(this.root, start))) {
+        return { entries: [], visitedEntries: 0, complete: true };
+      }
       const lstat = await fs.lstat(start).catch(() => null);
-      if (!lstat || lstat.isSymbolicLink()) return [];
+      if (!lstat) return { entries: [], visitedEntries: 0, complete: true };
+      if (lstat.isSymbolicLink()) return { entries: [], visitedEntries: 0, complete: true };
       const real = await fs.realpath(start).catch(() => null);
-      if (!real) return [];
+      if (!real) return { entries: [], visitedEntries: 0, complete: false };
       const rel = path.relative(this.root, real);
-      if (rel.startsWith("..") || path.isAbsolute(rel)) return [];
-      if (this.isExcluded(rel)) return [];
+      if (rel.startsWith("..") || path.isAbsolute(rel)) {
+        return { entries: [], visitedEntries: 0, complete: false };
+      }
+      if (this.isExcluded(rel)) return { entries: [], visitedEntries: 0, complete: true };
       start = real;
     }
-    const out: FileEntry[] = [];
-    await walkAnyExt(start, this.root, out, ext.toLowerCase());
-    return out.filter((e) => !this.isExcluded(e.relPath.replace(/\\/g, "/")));
+
+    const state: BoundedWalkState = { entries: [], visitedEntries: 0, complete: true };
+    await walkBoundedExtensions(
+      start,
+      this.root,
+      normalizedExtensions,
+      maxFiles,
+      maxVisitedEntries,
+      (relPath) => this.isExcluded(relPath),
+      state
+    );
+    state.entries.sort((left, right) => (left.relPath === right.relPath ? 0 : left.relPath < right.relPath ? -1 : 1));
+    return state;
+  }
+
+  /**
+   * Admit feedback identities against the same live public-path authority as
+   * note and PDF reads. Every input must be a vault-relative path to an
+   * existing regular `.md` or `.pdf` file; traversal, absolute paths,
+   * symlinks escaping the vault, hidden/reserved paths, and configured privacy
+   * exclusions reject the entire batch. Returned paths use the filesystem's
+   * canonical vault-relative spelling and forward separators.
+   *
+   * @param relPaths - Candidate paths copied from current search hits.
+   * @returns Deduplicated canonical public identities in input order.
+   * @throws {Error} If any candidate is not a current public searchable file.
+   */
+  async canonicalFeedbackPaths(relPaths: readonly string[]): Promise<string[]> {
+    if (!Array.isArray(relPaths) || relPaths.some((relPath) => typeof relPath !== "string")) {
+      throw new TypeError("Feedback paths must be an array of strings");
+    }
+    if (!this.ready) await this.ensureExists();
+    const admitted: string[] = [];
+    const seen = new Set<string>();
+    for (const relPath of relPaths) {
+      const components = relPath.split("/");
+      if (
+        relPath.length === 0 ||
+        path.isAbsolute(relPath) ||
+        relPath.includes("\\") ||
+        /^[a-z]:/iu.test(relPath) ||
+        components.some((component: string) => component === "" || component === "." || component === "..")
+      ) {
+        throw new Error(`Feedback path must be vault-relative: ${JSON.stringify(relPath)}`);
+      }
+      const real = await this.resolveSafePath(relPath);
+      const stat = await this.statSafe(real);
+      if (!stat.isFile()) throw new Error(`Feedback path is not a regular file: ${relPath}`);
+      const canonicalRel = vaultRelative(this.root, real);
+      const extension = path.extname(canonicalRel).toLowerCase();
+      if (extension !== ".md" && extension !== ".pdf") {
+        throw new Error(`Feedback path must name a Markdown or PDF search result: ${canonicalRel}`);
+      }
+      if (!seen.has(canonicalRel)) {
+        seen.add(canonicalRel);
+        admitted.push(canonicalRel);
+      }
+    }
+    return admitted;
   }
 
   /** Read a non-markdown file (e.g. `.canvas` JSON). Same path-safety + size
@@ -913,18 +1558,50 @@ export class Vault {
 
   /**
    * Read and parse a markdown note. Returns the cached entry when the
-   * file's mtime hasn't changed; otherwise reads from disk, parses via
+   * file's full filesystem receipt hasn't changed; otherwise reads from disk, parses via
    * `parseNote`, and caches the result (LRU-evicting the oldest
    * entry when at capacity).
    *
    * @param relOrAbs - Vault-relative or absolute path to a `.md` file.
-   * @param knownMtimeMs - Optional pre-stat'd mtime (saves a `fs.stat`
-   *   call when the caller already has it, e.g. straight after `listMarkdown`).
-   * @returns Cached note including parsed structure.
+   * @param knownMtimeMs - Optional pre-listing mtime hint retained for API
+   *   compatibility. Cache admission always checks a fresh full receipt.
+   * @returns A detached note snapshot including parsed structure. Mutating the
+   *   returned object cannot alter the Vault's internal cache generation.
    * @throws {Error} If the path escapes the vault, is excluded, or
    *   exceeds the size cap.
    */
   async readNote(relOrAbs: string, knownMtimeMs?: number): Promise<CachedNote> {
+    return this.readNoteWithCachePolicy(relOrAbs, knownMtimeMs, true);
+  }
+
+  /**
+   * Read and parse one markdown generation without consulting or mutating the
+   * shared parsed-note cache.
+   *
+   * This is intended for multi-stage callers that must not publish a candidate
+   * into separately visible cache state before their own final receipt commits.
+   * It performs the same path, size, and before/after source-receipt checks as
+   * {@link readNote} and returns the same detached public shape.
+   *
+   * @param relOrAbs - Vault-relative or absolute path to a `.md` file.
+   * @param knownMtimeMs - Optional finite listing hint retained for parity with
+   *   {@link readNote}; authority always comes from a fresh full receipt.
+   * @returns A detached parsed note that was never inserted into the Vault cache.
+   */
+  async readNoteUncached(relOrAbs: string, knownMtimeMs?: number): Promise<CachedNote> {
+    return this.readNoteWithCachePolicy(relOrAbs, knownMtimeMs, false);
+  }
+
+  /** Shared receipt-bound implementation for cached and staging-only reads. */
+  private async readNoteWithCachePolicy(
+    relOrAbs: string,
+    knownMtimeMs: number | undefined,
+    useCache: boolean
+  ): Promise<CachedNote> {
+    if (knownMtimeMs !== undefined && !Number.isFinite(knownMtimeMs)) {
+      throw new TypeError("knownMtimeMs must be finite when provided");
+    }
+    const acceptedGeneration = this.cacheGeneration;
     const abs = await this.resolveSafePath(relOrAbs);
     // v3.10.0-rc.49 (abs-path-leak class — re-audit CODE-1) — readNote is the
     // primary list-then-read funnel (getNoteNeighbors / semanticSearch / etc.
@@ -934,20 +1611,30 @@ export class Vault {
     // Wrap the disk ops; sanitizeFsError is a no-op on the (relative) deliberate
     // errors, so only raw fs errors get the root stripped.
     try {
-      const mtimeMs = knownMtimeMs ?? (await this.statSafe(abs)).mtimeMs;
-      const cached = this.cache.get(abs);
-      if (cached && cached.mtimeMs === mtimeMs) {
+      const beforeStat = await this.statSafe(abs);
+      const sourceReceipt = cacheSourceReceipt(beforeStat);
+      const cached = useCache ? this.cache.get(abs) : undefined;
+      if (useCache && cached && cacheSourceReceiptsEqual(cached.sourceReceipt, sourceReceipt)) {
         // LRU bump: re-insert so this entry is "freshest"
         this.cache.delete(abs);
         this.cache.set(abs, cached);
-        return cached;
+        return cloneCachedNote(cached);
       }
-      await this.assertSize(abs);
+      if (beforeStat.size > this.maxFileBytes) {
+        throw new Error(
+          `File too large (${beforeStat.size} bytes > limit ${this.maxFileBytes}): ${vaultRelative(this.root, abs)}`
+        );
+      }
       const content = await this.readFileSafe(abs, "utf8");
+      const afterStat = await this.statSafe(abs);
+      if (!afterStat.isFile() || !cacheSourceReceiptsEqual(sourceReceipt, cacheSourceReceipt(afterStat))) {
+        throw new Error(`File changed while being read: ${vaultRelative(this.root, abs)}`);
+      }
       const parsed = parseNote(content);
-      const entry = { content, parsed, mtimeMs };
-      this.cacheSet(abs, entry);
-      return entry;
+      const entry = { content, parsed, mtimeMs: sourceReceipt.mtimeMs, sourceReceipt };
+      const detached = cloneCachedNote(entry);
+      if (useCache && this.cacheGeneration === acceptedGeneration) this.cacheSet(abs, entry);
+      return detached;
     } catch (err) {
       throw this.sanitizeFsError(err);
     }
@@ -1715,6 +2402,42 @@ export class Vault {
     }
   }
 
+  /**
+   * Return an opaque generation receipt for one current public regular file.
+   *
+   * The path is admitted through the same canonical containment, symlink, and
+   * privacy checks as reads. The receipt includes physical identity, size,
+   * modification time, and metadata-change time; callers compare the complete
+   * string and do not depend on its internal encoding.
+   *
+   * @param relOrAbs - Vault-relative or accepted absolute file path.
+   * @returns Current regular-file generation state.
+   * @throws {Error} If the path is missing, excluded, escapes the vault, or is
+   *   not a regular file.
+   * @example
+   * ```ts
+   * const before = await vault.sourceState("Notes/A.md");
+   * const after = await vault.sourceState("Notes/A.md");
+   * if (before.sourceRevision !== after.sourceRevision) throw new Error("changed");
+   * ```
+   */
+  async sourceState(relOrAbs: string): Promise<FileSourceState> {
+    const abs = await this.resolveSafePath(relOrAbs);
+    try {
+      const stat = await this.statSafe(abs);
+      if (!stat.isFile()) {
+        throw new Error(`Path is not a regular file: ${vaultRelative(this.root, abs)}`);
+      }
+      return {
+        sourceRevision: fileSourceRevision(stat),
+        sizeBytes: stat.size,
+        mtimeMs: stat.mtimeMs
+      };
+    } catch (err) {
+      throw this.sanitizeFsError(err);
+    }
+  }
+
   /** Convert an absolute path under the vault to a vault-relative one
    *  (POSIX-separated on all platforms). Does not verify the result
    *  stays inside the vault; callers needing that should use
@@ -1838,7 +2561,7 @@ export class Vault {
     }
   }
 
-  private cacheSet(key: string, value: CachedNote): void {
+  private cacheSet(key: string, value: CachedNoteRecord): void {
     if (this.cache.size >= this.maxCacheEntries) {
       const oldest = this.cache.keys().next().value;
       if (oldest !== undefined) this.cache.delete(oldest);
@@ -1864,15 +2587,326 @@ function isErrnoException(err: unknown): err is NodeJS.ErrnoException {
 interface DiskCacheEntry {
   relPath: string;
   mtimeMs: number;
+  sourceReceipt: CacheSourceReceipt;
   content: string;
   parsed: ParsedNote;
 }
 
-interface DiskCacheFile {
-  version: number;
-  root: string;
-  writtenAt: string;
-  entries: DiskCacheEntry[];
+type DiskCacheCandidateResult =
+  | { kind: "drop"; excludedByPrivacy?: true }
+  | { kind: "hit"; abs: string; entry: DiskCacheEntry; needsMigration: boolean };
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function cacheSourceReceipt(stat: import("node:fs").Stats): CacheSourceReceipt {
+  return {
+    dev: stat.dev,
+    ino: stat.ino,
+    size: stat.size,
+    mtimeMs: stat.mtimeMs,
+    ctimeMs: stat.ctimeMs
+  };
+}
+
+/** Opaque v1 regular-file generation receipt shared by listings and point
+ *  admission. Delimiters and field order are deliberately private. */
+function fileSourceRevision(stat: import("node:fs").Stats): string {
+  const encoded = [stat.dev, stat.ino, stat.size, stat.mtimeMs, stat.ctimeMs, stat.mode].join("\0");
+  return `fs-v1:${createHash("sha256").update(encoded, "utf8").digest("hex")}`;
+}
+
+function cloneCachedNote(entry: CachedNoteRecord): CachedNote {
+  return {
+    content: entry.content,
+    parsed: cloneBoundedParsedNote(entry.parsed),
+    mtimeMs: entry.mtimeMs
+  };
+}
+
+function cloneBoundedParsedNote(parsed: ParsedNote): ParsedNote {
+  const clones = new WeakMap<object, object>();
+  const active = new WeakSet<object>();
+  let inspectedValues = 0;
+  const cloneValue = (value: unknown, depth: number): unknown => {
+    inspectedValues += 1;
+    if (inspectedValues > MAX_DISK_CACHE_JSON_VALUES) {
+      throw new Error("Parsed note exceeds the detached-value limit");
+    }
+    if (value === null || typeof value === "string" || typeof value === "boolean") return value;
+    if (typeof value === "number") {
+      if (!Number.isFinite(value)) throw new Error("Parsed note contains a non-finite number");
+      return value;
+    }
+    if (typeof value !== "object" || depth > MAX_DISK_CACHE_JSON_DEPTH) {
+      throw new Error("Parsed note contains an unsupported or over-deep value");
+    }
+    if (active.has(value)) throw new Error("Parsed note contains a cyclic value");
+    const prior = clones.get(value);
+    if (prior) return prior;
+    active.add(value);
+    if (Array.isArray(value)) {
+      if (Object.hasOwn(value, "toJSON") || Object.getOwnPropertySymbols(value).length > 0) {
+        throw new Error("Parsed note contains an unsupported array value");
+      }
+      if (value.length > MAX_DISK_CACHE_JSON_VALUES - inspectedValues) {
+        throw new Error("Parsed note exceeds the detached-value limit");
+      }
+      const cloned: unknown[] = new Array(value.length);
+      clones.set(value, cloned);
+      for (let index = 0; index < value.length; index += 1) {
+        const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+        if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) {
+          throw new Error("Parsed note contains a sparse or accessor-backed array");
+        }
+        cloned[index] = cloneValue(descriptor.value, depth + 1);
+      }
+      for (const key in value) {
+        if (!Object.hasOwn(value, key)) continue;
+        const index = Number(key);
+        if (!Number.isSafeInteger(index) || index < 0 || index >= value.length || String(index) !== key) {
+          throw new Error("Parsed note contains a custom array property");
+        }
+      }
+      active.delete(value);
+      return cloned;
+    }
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) {
+      throw new Error("Parsed note contains a non-plain object");
+    }
+    if (Object.hasOwn(value, "toJSON") || Object.getOwnPropertySymbols(value).length > 0) {
+      throw new Error("Parsed note contains an unsupported object value");
+    }
+    const cloned = Object.create(prototype) as Record<string, unknown>;
+    clones.set(value, cloned);
+    for (const key in value) {
+      if (!Object.hasOwn(value, key)) continue;
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) {
+        throw new Error("Parsed note contains an accessor-backed object");
+      }
+      if (inspectedValues >= MAX_DISK_CACHE_JSON_VALUES) {
+        throw new Error("Parsed note exceeds the detached-value limit");
+      }
+      Object.defineProperty(cloned, key, {
+        configurable: true,
+        enumerable: true,
+        writable: true,
+        value: cloneValue(descriptor.value, depth + 1)
+      });
+    }
+    active.delete(value);
+    return cloned;
+  };
+  return cloneValue(parsed, 0) as ParsedNote;
+}
+
+function isCacheSourceReceipt(value: unknown): value is CacheSourceReceipt {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.dev === "number" &&
+    Number.isSafeInteger(value.dev) &&
+    value.dev >= 0 &&
+    typeof value.ino === "number" &&
+    Number.isSafeInteger(value.ino) &&
+    value.ino >= 0 &&
+    typeof value.size === "number" &&
+    Number.isSafeInteger(value.size) &&
+    value.size >= 0 &&
+    typeof value.mtimeMs === "number" &&
+    Number.isFinite(value.mtimeMs) &&
+    typeof value.ctimeMs === "number" &&
+    Number.isFinite(value.ctimeMs)
+  );
+}
+
+function cacheSourceReceiptsEqual(left: CacheSourceReceipt, right: CacheSourceReceipt): boolean {
+  return (
+    left.dev === right.dev &&
+    left.ino === right.ino &&
+    left.size === right.size &&
+    left.mtimeMs === right.mtimeMs &&
+    left.ctimeMs === right.ctimeMs
+  );
+}
+
+function isPersistedLink(value: unknown): boolean {
+  if (!isRecord(value) || typeof value.raw !== "string" || typeof value.target !== "string") return false;
+  if (
+    !Number.isSafeInteger(value.sourceStart) ||
+    !Number.isSafeInteger(value.sourceEnd) ||
+    (value.sourceStart as number) < 0 ||
+    (value.sourceEnd as number) <= (value.sourceStart as number)
+  ) {
+    return false;
+  }
+  for (const optional of ["section", "block", "alias"] as const) {
+    if (Object.hasOwn(value, optional) && typeof value[optional] !== "string") return false;
+  }
+  return true;
+}
+
+function isBoundedArray(value: unknown): value is unknown[] {
+  return Array.isArray(value) && value.length <= MAX_PERSISTED_PARSED_COLLECTION_ITEMS;
+}
+
+function isPersistedParsedNote(value: unknown): value is ParsedNote {
+  if (!isRecord(value) || !isRecord(value.frontmatter) || typeof value.body !== "string") return false;
+  if (!Number.isSafeInteger(value.bodyStartLine) || (value.bodyStartLine as number) < 1) return false;
+  if (!isBoundedArray(value.wikilinks) || !value.wikilinks.every(isPersistedLink)) return false;
+  if (!isBoundedArray(value.embeds) || !value.embeds.every(isPersistedLink)) return false;
+  return isBoundedArray(value.tags) && value.tags.every((tag) => typeof tag === "string");
+}
+
+type DiskCacheJsonMeasurement = { kind: "ok"; bytes: number } | { kind: "invalid" } | { kind: "over-budget" };
+
+function measureJsonStringBytes(value: string, maxBytes: number): number | null {
+  let bytes = 2;
+  if (bytes > maxBytes) return null;
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    let additional: number;
+    if (code === 0x22 || code === 0x5c || [0x08, 0x09, 0x0a, 0x0c, 0x0d].includes(code)) {
+      additional = 2;
+    } else if (code <= 0x1f) {
+      additional = 6;
+    } else if (code <= 0x7f) {
+      additional = 1;
+    } else if (code <= 0x7ff) {
+      additional = 2;
+    } else if (code >= 0xd800 && code <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (next >= 0xdc00 && next <= 0xdfff) {
+        additional = 4;
+        index += 1;
+      } else {
+        additional = 6;
+      }
+    } else if (code >= 0xdc00 && code <= 0xdfff) {
+      additional = 6;
+    } else {
+      additional = 3;
+    }
+    if (additional > maxBytes - bytes) return null;
+    bytes += additional;
+  }
+  return bytes;
+}
+
+function measureBoundedDiskCacheJson(root: unknown, maxBytes: number): DiskCacheJsonMeasurement {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) return { kind: "over-budget" };
+  const seen = new WeakSet<object>();
+  let inspectedValues = 0;
+  let bytes = 0;
+  const addBytes = (additional: number): boolean => {
+    if (additional > maxBytes - bytes) return false;
+    bytes += additional;
+    return true;
+  };
+  const visit = (value: unknown, depth: number): "ok" | "invalid" | "over-budget" => {
+    inspectedValues += 1;
+    if (inspectedValues > MAX_DISK_CACHE_JSON_VALUES) return "invalid";
+    if (value === null) return addBytes(4) ? "ok" : "over-budget";
+    if (typeof value === "string") {
+      const measured = measureJsonStringBytes(value, maxBytes - bytes);
+      if (measured === null) return "over-budget";
+      bytes += measured;
+      return "ok";
+    }
+    if (typeof value === "boolean") return addBytes(value ? 4 : 5) ? "ok" : "over-budget";
+    if (typeof value === "number") {
+      if (!Number.isFinite(value)) return "invalid";
+      return addBytes(String(value).length) ? "ok" : "over-budget";
+    }
+    if (typeof value !== "object" || depth > MAX_DISK_CACHE_JSON_DEPTH) return "invalid";
+    if (seen.has(value)) return "invalid";
+    seen.add(value);
+
+    if (Array.isArray(value)) {
+      if (Object.hasOwn(value, "toJSON") || Object.getOwnPropertySymbols(value).length > 0) return "invalid";
+      if (value.length > MAX_DISK_CACHE_JSON_VALUES - inspectedValues) return "invalid";
+      if (!addBytes(1)) return "over-budget";
+      for (let index = 0; index < value.length; index += 1) {
+        const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+        if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) return "invalid";
+        if (index > 0 && !addBytes(1)) return "over-budget";
+        const child = visit(descriptor.value, depth + 1);
+        if (child !== "ok") return child;
+      }
+      for (const key in value) {
+        if (!Object.hasOwn(value, key)) continue;
+        const index = Number(key);
+        if (!Number.isSafeInteger(index) || index < 0 || index >= value.length || String(index) !== key) {
+          return "invalid";
+        }
+      }
+      return addBytes(1) ? "ok" : "over-budget";
+    }
+
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) return "invalid";
+    if (Object.hasOwn(value, "toJSON") || Object.getOwnPropertySymbols(value).length > 0) return "invalid";
+    if (!addBytes(1)) return "over-budget";
+    let first = true;
+    for (const key in value) {
+      if (!Object.hasOwn(value, key)) continue;
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) return "invalid";
+      if (inspectedValues >= MAX_DISK_CACHE_JSON_VALUES) return "invalid";
+      if (!first && !addBytes(1)) return "over-budget";
+      const keyBytes = measureJsonStringBytes(key, maxBytes - bytes);
+      if (keyBytes === null) return "over-budget";
+      bytes += keyBytes;
+      if (!addBytes(1)) return "over-budget";
+      const child = visit(descriptor.value, depth + 1);
+      if (child !== "ok") return child;
+      first = false;
+    }
+    return addBytes(1) ? "ok" : "over-budget";
+  };
+  const outcome = visit(root, 0);
+  return outcome === "ok" ? { kind: "ok", bytes } : { kind: outcome };
+}
+
+function isBoundedDiskCacheJsonTree(root: unknown): boolean {
+  return measureBoundedDiskCacheJson(root, Number.MAX_SAFE_INTEGER).kind === "ok";
+}
+
+interface DiskCacheSnapshotEntry {
+  abs: string;
+  source: CachedNoteRecord;
+}
+
+interface DiskCachePersistenceTarget {
+  requestedFile: string;
+  canonicalFile: string;
+  lifetime: PersistenceFamilyLeaseHandle;
+}
+
+interface DiskCacheLoadRequest {
+  requestedFile: string | null;
+  acceptedGeneration: number;
+}
+
+interface DiskCacheSaveRequest {
+  requestedFile: string;
+  publishedEpoch: number;
+  cacheSnapshot: readonly DiskCacheSnapshotEntry[];
+}
+
+interface DiskCacheClearRequest {
+  requestedFile: string;
+}
+
+interface DiskCachePhysicalClearRequest {
+  file: string;
+}
+
+interface DiskCacheClearBarrier {
+  request: DiskCacheClearRequest;
+  promise: Promise<boolean>;
 }
 
 function defaultCacheFile(root: string): string {
@@ -1883,76 +2917,80 @@ function defaultCacheFile(root: string): string {
   return path.join(base, "enquire", `${hash}.json`);
 }
 
-// v3.10.0-rc.44 (G2) — recursion-DEPTH bound for the vault walkers. Symlinks are already
-// skipped (no cycle risk), but a pathologically deep REAL directory tree would drive
-// unbounded recursion + readdir I/O BEFORE capScanEntries(MAX_SCAN_NOTES) — which only
-// caps the RESULT array after the full tree is traversed — ever applies. 64 is far below
-// any real vault's nesting yet bounds a hostile/accidental deep tree.
+// Recursion-depth bound for the common incremental vault walker. Symlinks are
+// skipped (no cycle risk), while a pathologically deep real directory tree is
+// reported as an incomplete inventory rather than silently accepted as exact.
 const MAX_WALK_DEPTH = 64;
 
-async function walk(dir: string, root: string, out: FileEntry[], depth = 0): Promise<void> {
-  if (depth > MAX_WALK_DEPTH) return;
-  let entries: import("node:fs").Dirent[];
-  try {
-    entries = await fs.readdir(dir, { withFileTypes: true });
-  } catch {
-    return;
-  }
-  for (const e of entries) {
-    const full = path.join(dir, e.name);
-    const relPath = vaultRelative(root, full);
-    if (restrictedVaultPathReason(relPath)) continue;
-    if (e.isSymbolicLink()) continue;
-    if (e.isDirectory()) {
-      const real = await fs.realpath(full).catch(() => null);
-      if (!real) continue;
-      const rel = path.relative(root, real);
-      if (rel.startsWith("..") || path.isAbsolute(rel)) continue;
-      await walk(full, root, out, depth + 1);
-    } else if (e.isFile() && e.name.toLowerCase().endsWith(".md")) {
-      const stat = await fs.stat(full).catch(() => null);
-      if (!stat) continue;
-      out.push({
-        absPath: full,
-        relPath,
-        basename: e.name,
-        mtimeMs: stat.mtimeMs
-      });
-    }
-  }
-}
+interface BoundedWalkState extends BoundedFileListing {}
 
-/** Generic walker — same skip rules as the markdown walker, but matches any
- *  file extension (lowercase). Used by listFilesByExtension(".canvas") etc. */
-async function walkAnyExt(dir: string, root: string, out: FileEntry[], ext: string, depth = 0): Promise<void> {
-  if (depth > MAX_WALK_DEPTH) return; // rc.44 G2 — bound recursion depth (see walk())
-  let entries: import("node:fs").Dirent[];
+async function walkBoundedExtensions(
+  dir: string,
+  root: string,
+  extensions: ReadonlySet<string>,
+  maxFiles: number,
+  maxVisitedEntries: number,
+  isExcluded: (relPath: string) => boolean,
+  state: BoundedWalkState,
+  depth = 0
+): Promise<void> {
+  let directory: import("node:fs").Dir;
   try {
-    entries = await fs.readdir(dir, { withFileTypes: true });
+    directory = await fs.opendir(dir);
   } catch {
+    state.complete = false;
     return;
   }
-  for (const e of entries) {
-    const full = path.join(dir, e.name);
-    const relPath = vaultRelative(root, full);
-    if (restrictedVaultPathReason(relPath)) continue;
-    if (e.isSymbolicLink()) continue;
-    if (e.isDirectory()) {
-      const real = await fs.realpath(full).catch(() => null);
-      if (!real) continue;
-      const rel = path.relative(root, real);
-      if (rel.startsWith("..") || path.isAbsolute(rel)) continue;
-      await walkAnyExt(full, root, out, ext, depth + 1);
-    } else if (e.isFile() && e.name.toLowerCase().endsWith(ext)) {
-      const stat = await fs.stat(full).catch(() => null);
-      if (!stat) continue;
-      out.push({
-        absPath: full,
-        relPath,
-        basename: e.name,
-        mtimeMs: stat.mtimeMs
-      });
+
+  for await (const entry of directory) {
+    state.visitedEntries += 1;
+    if (state.visitedEntries > maxVisitedEntries) {
+      state.complete = false;
+      return;
     }
+
+    const full = path.join(dir, entry.name);
+    const relPath = vaultRelative(root, full);
+    if (restrictedVaultPathReason(relPath) || entry.isSymbolicLink()) continue;
+    if (entry.isDirectory()) {
+      if (depth >= MAX_WALK_DEPTH) {
+        state.complete = false;
+        return;
+      }
+      const real = await fs.realpath(full).catch(() => null);
+      if (!real) {
+        state.complete = false;
+        return;
+      }
+      const rel = path.relative(root, real);
+      if (rel.startsWith("..") || path.isAbsolute(rel)) {
+        state.complete = false;
+        return;
+      }
+      await walkBoundedExtensions(real, root, extensions, maxFiles, maxVisitedEntries, isExcluded, state, depth + 1);
+      if (!state.complete) return;
+      continue;
+    }
+    if (!entry.isFile() || !extensions.has(path.extname(entry.name).toLowerCase())) continue;
+    const normalizedRelPath = relPath.replace(/\\/g, "/");
+    if (isExcluded(normalizedRelPath)) continue;
+    if (state.entries.length >= maxFiles) {
+      state.complete = false;
+      return;
+    }
+    const stat = await fs.stat(full).catch(() => null);
+    if (!stat?.isFile()) {
+      state.complete = false;
+      return;
+    }
+    state.entries.push({
+      absPath: full,
+      relPath,
+      basename: entry.name,
+      mtimeMs: stat.mtimeMs,
+      sizeBytes: stat.size,
+      sourceRevision: fileSourceRevision(stat)
+    });
   }
 }
 

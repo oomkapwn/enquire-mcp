@@ -149,12 +149,12 @@ describe("CRLF open_questions (rc.19) — getOpenQuestions matches on CRLF candi
     expect(out.map((q) => q.question)).toContain("What is the LF answer?");
   });
 
-  it("getOpenQuestions builds `lineTexts` through stripTrailingLineEnds (inventory guard + NEGATIVE control)", () => {
+  it("getOpenQuestions normalizes each bounded candidate through stripTrailingLineEnds (inventory guard + NEGATIVE control)", () => {
     const src = readFileSync(path.join(repoRoot, "src/tools/meta.ts"), "utf8");
-    const m = /const lineTexts = candidates\.map\(([^;]*)\)/.exec(src);
-    expect(m, "lineTexts candidate map not found in meta.ts (moved? update the guard)").not.toBeNull();
+    const m = /const text = (stripTrailingLineEnds\(line\.text\));/.exec(src);
+    expect(m, "bounded candidate normalization not found in meta.ts (moved? update the guard)").not.toBeNull();
     expect(/stripTrailingLineEnds\(/.test(m?.[1] ?? "")).toBe(true);
     // NEGATIVE control — the pre-rc.19 raw form would NOT contain the strip.
-    expect(/stripTrailingLineEnds\(/.test("candidates.map((c) => c.line)")).toBe(false);
+    expect(/stripTrailingLineEnds\(/.test("const text = line.text;")).toBe(false);
   });
 });

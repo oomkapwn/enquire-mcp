@@ -29,6 +29,7 @@ import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import { resolveOcrPageRange } from "../src/ocr.js";
+import { replaceExactly } from "./helpers/exact-source-mutation.js";
 
 const repoRoot = path.resolve(__dirname, "..");
 
@@ -38,12 +39,23 @@ const PAIRED_SINKS = [
   {
     pair: "page-range: inverted/empty range must fail-closed (throw), never silent-empty",
     members: [
-      { file: "src/ocr.ts", fn: "resolveOcrPageRange" },
-      { file: "src/pdf.ts", fn: "extractPdfText" }
+      {
+        file: "src/ocr.ts",
+        fn: "resolveOcrPageRange",
+        guardSource: "if (requestedTo < from) {",
+        guardMutant: "if (false) {"
+      },
+      {
+        file: "src/pdf.ts",
+        fn: "extractPdfText",
+        guardSource: "if (toPage < fromPage) {",
+        guardMutant: "if (false) {"
+      }
     ],
-    // The inverted-range condition, in either site's syntax (pdf: `to < from`;
-    // ocr: `to - from + 1 < 1`). A member's body must contain BOTH this AND a throw.
-    invertedGuard: /to\s*<\s*from|to\s*-\s*from\s*\+\s*1\s*<\s*1|from\s*>\s*to/
+    // The inverted-range condition in the current named-bound syntax plus the
+    // historical generic forms. A member's body must contain BOTH this AND a throw.
+    invertedGuard:
+      /requestedTo\s*<\s*from|toPage\s*<\s*fromPage|to\s*<\s*from|to\s*-\s*from\s*\+\s*1\s*<\s*1|from\s*>\s*to/
   }
 ] as const;
 
@@ -86,6 +98,12 @@ describe("sink-parity invariant (v3.9.1, H-3 class)", () => {
         it(`${m.fn} (${m.file}) fails closed on an inverted range — [${sink.pair}]`, () => {
           const body = functionBody(readFileSync(path.join(repoRoot, m.file), "utf8"), m.fn);
           expect(sinkFailsClosed(body, sink.invertedGuard), `${m.file}#${m.fn}`).toBeNull();
+        });
+
+        it(`NEGATIVE control — ${m.fn} detector rejects removal of its live inverted-range guard`, () => {
+          const source = readFileSync(path.join(repoRoot, m.file), "utf8");
+          const mutant = replaceExactly(source, m.guardSource, m.guardMutant);
+          expect(sinkFailsClosed(functionBody(mutant, m.fn), sink.invertedGuard)).toMatch(/no inverted-range/);
         });
       }
     }

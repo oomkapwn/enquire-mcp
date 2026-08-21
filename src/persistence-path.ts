@@ -1,4 +1,7 @@
+import { stripTrailingRun } from "./wildcard-match.js";
 import { windowsRelativePathProblem } from "./windows-path.js";
+
+const isWindowsIgnoredDeviceStemSuffix = (code: number): boolean => code === 0x20 || code === 0x2e;
 
 function assertExactSuffix(file: unknown, suffix: string, label: string): asserts file is string {
   if (typeof file !== "string" || file.length === 0 || !file.endsWith(suffix)) {
@@ -23,10 +26,10 @@ function assertPortableWindowsPersistencePath(file: string, label: string): void
   const components = withoutDrive.slice(rootPrefixLength).split("\\");
   for (const component of components) {
     if (component === "." || component === "..") continue;
-    if (/[ .](?![\s\S])/u.test(component)) {
+    if (component.endsWith(" ") || component.endsWith(".")) {
       throw new TypeError(`${label} must not use a Windows trailing-dot or trailing-space path component`);
     }
-    const deviceStem = (component.split(".")[0] ?? "").replace(/[ .]+(?![\s\S])/u, "");
+    const deviceStem = stripTrailingRun(component.split(".")[0] ?? "", isWindowsIgnoredDeviceStemSuffix);
     if (/^(?:con|prn|aux|nul|conin\$|conout\$|com[0-9¹²³]|lpt[0-9¹²³])(?![\s\S])/iu.test(deviceStem)) {
       throw new TypeError(`${label} must not use a reserved Windows device basename`);
     }

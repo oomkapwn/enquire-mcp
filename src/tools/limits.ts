@@ -9,38 +9,40 @@
 // because nothing forced a sweep of the sibling graph-builders. This shared cap
 // + the `tests/resource-bound-invariant.test.ts` manifest close the class: the
 // CAP-vs-EXEMPT decision is now explicit and structurally enforced for every
-// whole-vault scanner (graph/pairwise → CAP here; inherent single-pass O(N)
-// like searchText / listTags / getBacklinks → EXEMPT, since capping those would
-// silently corrupt exhaustive enumeration or aggregation results).
+// whole-vault scanner. Exact scanners fail closed when the bounded discovery
+// receipt is incomplete; top-K graph tools no longer hide an arbitrary prefix.
 //
-// 50_000 is far above any real Obsidian vault, so in practice this is graceful
-// degradation (a slightly less-complete top-K ranking on an absurd vault),
-// never a functional limit — the capped tools already return a bounded top-K,
-// so trimming the scan only drops the long tail of candidates.
+import type { FileEntry, Vault } from "../vault.js";
 
 /** Max notes a single graph/neighborhood tool ingests in one whole-vault scan. */
 export const MAX_SCAN_NOTES = 50_000;
 
-const warnedTools = new Set<string>();
+/** Max directory entries inspected while discovering one exact tool corpus. */
+export const MAX_SCAN_VISITED_ENTRIES = 200_000;
 
 /**
- * Truncate a whole-vault entry list to {@link MAX_SCAN_NOTES}, warning once per
- * tool per process on the (vanishingly rare) overflow. Returns the input
- * unchanged when under the cap; pure aside from the one-shot stderr warning.
+ * Discover an exact markdown corpus within the shared tool envelope.
  *
- * @typeParam T - entry element type (e.g. `FileEntry`).
- * @param entries - the full `vault.listMarkdown()` result.
- * @param tool - MCP tool name, for the operator warning.
- * @returns `entries` unchanged, or its first `MAX_SCAN_NOTES` elements.
+ * Admission happens inside the filesystem walker. An overflow, unreadable
+ * subtree, race, or depth refusal is never represented as an exact prefix.
+ *
+ * @param vault - Vault whose public markdown namespace is scanned.
+ * @param folder - Optional public vault-relative subtree.
+ * @param tool - Stable tool label used in the refusal message.
+ * @returns Complete, path-sorted file inventory.
+ * @throws {Error} If the bounded walker cannot prove the inventory complete.
  */
-export function capScanEntries<T>(entries: T[], tool: string): T[] {
-  if (entries.length <= MAX_SCAN_NOTES) return entries;
-  if (!warnedTools.has(tool)) {
-    warnedTools.add(tool);
-    process.stderr.write(
-      `enquire: ${tool} scanned the first ${MAX_SCAN_NOTES} of ${entries.length} notes ` +
-        "(MAX_SCAN_NOTES defense-in-depth cap; results may be partial on a vault this large).\n"
+export async function listExactScanEntries(
+  vault: Vault,
+  folder: string | undefined,
+  tool: string
+): Promise<FileEntry[]> {
+  const listing = await vault.listFilesByExtensionsBounded([".md"], MAX_SCAN_NOTES, MAX_SCAN_VISITED_ENTRIES, folder);
+  if (!listing.complete) {
+    throw new Error(
+      `${tool}: exact results require a complete vault inventory within ` +
+        `${MAX_SCAN_NOTES} notes / ${MAX_SCAN_VISITED_ENTRIES} visited entries`
     );
   }
-  return entries.slice(0, MAX_SCAN_NOTES);
+  return listing.entries;
 }

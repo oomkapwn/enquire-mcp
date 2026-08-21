@@ -15,7 +15,7 @@
 [![CI](https://github.com/oomkapwn/enquire-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/oomkapwn/enquire-mcp/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/@oomkapwn/enquire-mcp.svg?label=npm&color=cb3837)](https://www.npmjs.com/package/@oomkapwn/enquire-mcp)
 [![downloads](https://img.shields.io/npm/dm/@oomkapwn/enquire-mcp.svg?color=cb3837)](https://www.npmjs.com/package/@oomkapwn/enquire-mcp)
-[![tests](https://img.shields.io/badge/tests-1807%20contracts-brightgreen.svg)](#️-доверие)
+[![tests](https://img.shields.io/badge/tests-2207%20contracts-brightgreen.svg)](#️-доверие)
 [![stable](https://img.shields.io/badge/v3.11.x-stable-brightgreen.svg)](./STABILITY.md)
 [![build provenance](https://img.shields.io/badge/build_provenance-SLSA_L2-blue.svg)](https://slsa.dev/spec/v1.0/levels#build-l2)
 [![MCP](https://img.shields.io/badge/MCP-2026--07--28-8A2BE2.svg)](https://modelcontextprotocol.io/)
@@ -53,7 +53,7 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 > 3. **Ноль исходящих сетевых вызовов, инициированных enquire в режиме `serve`.** Модели кешируются локально после явной однократной загрузки с HuggingFace. Содержимое возвращается только подключённому MCP-клиенту; обработка данных этим клиентом или туннелем находится в его собственной границе доверия.
 > 4. **Поиск с учётом свежести.** Каждый результат сообщает, насколько стара заметка; опциональное переранжирование по давности позволяет агенту предпочитать свежие знания и помечать устаревшие факты для повторной проверки — рубеж «осознания забывания», построенный на `mtime`, который ваши файлы уже имеют.
 
-**46 инструментов · 19 MCP-промптов · 1807+ модульных тестов · 50+ языков · стабильная ветка v3.11.x · с гарантиями semver · MIT · подтверждённая сборка в npm (SLSA L2).**
+**46 инструментов · 19 MCP-промптов · 2207+ модульных тестов · 50+ языков · стабильная ветка v3.11.x · с гарантиями semver · MIT · подтверждённая сборка в npm (SLSA L2).**
 
 ---
 
@@ -72,7 +72,7 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 | **Вся поверхность знаний Obsidian** | ✅ Markdown, wikilinks, frontmatter, Canvas, Bases, PDF и OCR |
 | **Агентный поиск для сложных вопросов** | ✅ HyDE, декомпозиция на подвопросы, context packs, GraphRAG-light и 19 MCP-промптов |
 | **Масштаб без потери контроля** | ✅ Live-update HNSW, персистентность, адаптивное дозаполнение и int8-квантизация |
-| **Продакшен-доверие** | ✅ Read-only по умолчанию, privacy-фильтры, авторизованный HTTP, semver-контракты, 1807 тестов, 12 релизных гейтов и SLSA L2 provenance |
+| **Продакшен-доверие** | ✅ Read-only по умолчанию, privacy-фильтры, авторизованный HTTP, semver-контракты, 2207 тестов, 13 релизных гейтов и SLSA L2 provenance |
 
 **Одно хранилище. Все агенты. Полный стек поиска. Никакого облачного lock-in.**
 
@@ -102,7 +102,7 @@ enquire-mcp serve --vault ~/Documents/Obsidian\ Vault
 
 ### Нужен проверяемый desktop-бандл? MCPB Basic
 
-В [GitHub Release `v4.0.0-rc.3`](https://github.com/oomkapwn/enquire-mcp/releases/tag/v4.0.0-rc.3) доступен `enquire-mcp-basic-4.0.0-rc.3.mcpb` вместе с checksum, инвентарём, SBOM, notices и provenance. Бандл включает JavaScript-код сервера и обычные зависимости; совместимый MCPB-хост должен предоставить Node.js 22.13 или новее.
+В [GitHub Release `v4.0.0-rc.4`](https://github.com/oomkapwn/enquire-mcp/releases/tag/v4.0.0-rc.4) доступен `enquire-mcp-basic-4.0.0-rc.4.mcpb` вместе с checksum, инвентарём, SBOM, notices и provenance. Бандл включает JavaScript-код сервера и обычные зависимости; совместимый MCPB-хост должен предоставить Node.js 22.13 или новее.
 
 Basic фиксирован на **13 инструментах только для чтения** и **0 промптах**: без записи, persistent-индексов, моделей, PDF/OCR и watcher. Реальный desktop GUI, подпись, выбор директории и допуск в каталог ещё требуют проверки владельцем. enquire не делает исходящих вызовов при работе, но запрошенный текст заметок передаётся подключённому MCP-клиенту и далее регулируется его условиями приватности.
 
@@ -111,7 +111,7 @@ Basic фиксирован на **13 инструментах только дл�
 **Нужна вся мощь гибридного поиска?** Выполните гибридный preflight, затем запускайте сервер:
 
 ```bash
-npm install -g @oomkapwn/enquire-mcp@4.0.0-rc.3      # exact prerelease package
+npm install -g @oomkapwn/enquire-mcp@4.0.0-rc.4      # exact prerelease package
 enquire-mcp --version
 # recommended: preview first, then explicitly apply the same package-coherent plan
 enquire-mcp first-run --tier hybrid --client claude-desktop --vault <path>
@@ -283,8 +283,8 @@ graph LR
 | **HTTP-транспорт** | Bearer-аутентификация (SHA-256 с постоянным временем + `timingSafeEqual`), ограничение частоты по токену, строгий CORS |
 | **Frontmatter** | `js-yaml@5` `load` (YAML 1.2 core schema, безопасно по умолчанию) — без выполнения кода |
 | **Файлы кеша + индекса** | Там, где работают POSIX-права, Enquire по возможности повторно выставляет чувствительным файлам `0600`; созданная Enquire родительская директория — `0700`, существующая/пользовательская остаётся под управлением оператора |
-| **1807 модульных тестов · 12 обязательных для релиза CI-проверок · 7 сейчас защищают ветку** | Текущая проверенная релизная позиция; операционная детализация закреплена ниже. |
-| **CI** | `release.yml` напрямую перечисляет **12 релизных гейтов**, и все они запускаются на каждом PR: `lint`, `test (22)`, `test (24)`, `smoke`, `audit`, `coverage`, `version-consistency`, `docs`, `oia`, `protocol-conformance`, `package-consumer` и `mcpb-basic`. Закреплённый Windows hostile-filesystem job `test-windows` — дополнительный именованный check-run, который транзитивно обязателен как блокирующая предпосылка `smoke`. Защита ветки сейчас требует только **7** из них; `docs`, `oia`, `protocol-conformance`, `package-consumer` и `mcpb-basic` обязательны для релиза, но не защищены (снимок защиты ветки проверен онлайн 2026-07-23). `test-macos` — единственный совещательный job с `continue-on-error`. `docker` способен сделать CI-workflow красным, но не защищён; CodeQL запускает две отдельные незащищённые проверки через [настройку GitHub по умолчанию](https://docs.github.com/code-security/code-scanning/automatically-scanning-your-code-for-vulnerabilities-and-errors/configuring-default-setup-for-code-scanning). Перед npm publish `release.yml` повторно проверяет все 12 напрямую перечисленных гейтов на помеченном SHA. |
+| **2207 модульных тестов · 13 обязательных для релиза CI-проверок · все 13 сейчас защищают ветку** | Текущая проверенная релизная позиция; операционная детализация закреплена ниже. |
+| **CI** | `release.yml` напрямую перечисляет **13 релизных гейтов**, и все они запускаются на каждом PR: `lint`, `test (22)`, `test (24)`, `smoke`, `audit`, `coverage`, `version-consistency`, `docs`, `oia`, `protocol-conformance`, `package-consumer`, `mcpb-basic` и `docker`. Закреплённый Windows hostile-filesystem job `test-windows` — дополнительный именованный check-run, который транзитивно обязателен как блокирующая предпосылка `smoke`. Защита ветки теперь требует все **13** (снимок защиты ветки проверен онлайн 2026-08-21). `test-macos` — единственный совещательный job с `continue-on-error`. Гейт `docker` собирает образ и выполняет ограниченные проверки CLI и MCP-интроспекции; CodeQL запускает две отдельные незащищённые проверки через [настройку GitHub по умолчанию](https://docs.github.com/code-security/code-scanning/automatically-scanning-your-code-for-vulnerabilities-and-errors/configuring-default-setup-for-code-scanning). Перед npm publish `release.yml` повторно проверяет все 13 напрямую перечисленных гейтов на помеченном SHA. |
 | **Покрытие** | Строки ≥86% · выражения ≥82% · функции ≥75% · ветви ≥74% (контролируется гейтом) |
 | **Релизы** | npm + релиз на GitHub на каждый тег · semver · **подтверждённое происхождение сборки** (npm + Sigstore, SLSA Build L2; генератор L3 в дорожной карте) |
 | **Стабильность** | v3.0+ с гарантиями semver — каждый CLI-флаг, имя инструмента, MCP-ресурс, промпт, экспортируемый символ является контрактом |
@@ -324,7 +324,7 @@ graph LR
 ```bash
 git clone https://github.com/oomkapwn/enquire-mcp.git
 cd enquire-mcp && npm install
-npm test       # полный набор (1807 тестов)
+npm test       # полный набор (2207 тестов)
 npm run lint   # ноль предупреждений
 npm run build  # tsc → dist/
 ```

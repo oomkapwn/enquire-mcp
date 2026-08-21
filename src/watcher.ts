@@ -19,7 +19,14 @@
 import { lstat } from "node:fs/promises";
 import * as path from "node:path";
 import chokidar, { type FSWatcher } from "chokidar";
-import type { EmbedDb } from "./embed-db.js";
+import {
+  type EmbedDb,
+  type EmbedDbGenerationIdentity,
+  type EmbedUpsertResult,
+  type HnswPersistenceRow,
+  sameEmbedDbGenerationIdentity,
+  sameHnswPersistenceReceipt
+} from "./embed-db.js";
 import type { loadEmbedder } from "./embeddings.js";
 import { deriveFtsTitle, extractAliases, type FtsIndex } from "./fts5.js";
 import type { HnswIndex } from "./hnsw.js";
@@ -42,12 +49,42 @@ export interface HnswRowMeta {
   kind: "md" | "pdf";
 }
 
+/** Shared mutable generation authority consumed by live HNSW search. */
+export interface HnswLiveGenerationAuthority {
+  /** Physical EmbedDb UUID whose vectors the graph currently mirrors. */
+  dbInstanceUuid: string;
+  /** Exact committed EmbedDb epoch whose diff has reached the graph. */
+  dbMutationEpoch: number;
+}
+
+function sameHnswRowManifest(
+  liveRows: ReadonlyMap<number, HnswRowMeta>,
+  databaseRows: ReadonlyMap<number, HnswPersistenceRow>
+): boolean {
+  if (liveRows.size !== databaseRows.size) return false;
+  for (const [label, live] of liveRows) {
+    const stored = databaseRows.get(label);
+    if (
+      !stored ||
+      live.rel_path !== stored.rel_path ||
+      live.chunk_index !== stored.chunk_index ||
+      live.line_start !== stored.line_start ||
+      live.line_end !== stored.line_end ||
+      live.text_preview !== stored.text_preview ||
+      live.kind !== stored.kind
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
 /**
  * Mutable search-route health shared with the prepared server generation.
  *
  * A fatal staged watcher preparation failure leaves the prior generation
- * intact and does not change these flags. Optional OCR failure retains its
- * explicit fail-soft path. A sink mutation failure is different: the current
+ * intact and does not change these flags. PDF/OCR page failures use that same
+ * quarantined preparation path. A sink mutation failure is different: the current
  * route can no longer prove it matches the other enabled sinks, so the affected
  * optimization is quarantined until restart.
  */
@@ -57,8 +94,11 @@ export interface WatcherSearchHealth {
 }
 
 const DEFAULT_ACTIVATION_PATH_LIMIT = 50_000;
+const ACTIVATION_SCAN_ENTRY_MULTIPLIER = 4;
 const ACTIVATION_REPLAY_CONCURRENCY = 4;
 const ACTIVATION_MAX_GENERATIONS = 16;
+const DEFAULT_LIVE_EVENT_CONCURRENCY = 4;
+const DEFAULT_LIVE_EVENT_PENDING_LIMIT = 1_024;
 const FILE_GENERATION_ATTEMPTS = 2;
 const PHYSICAL_ALIAS_ATTEMPTS = 2;
 const PHYSICAL_ALIAS_INVENTORY_LOCK = "inventory:physical-alias";
@@ -71,6 +111,13 @@ class PhysicalAliasInventoryLimitError extends Error {
   ) {
     super(`watcher physical-alias inventory/plan found ${count} paths (limit ${limit})`);
     this.name = "PhysicalAliasInventoryLimitError";
+  }
+}
+
+class LiveWatcherAdmissionLimitError extends Error {
+  constructor(readonly limit: number) {
+    super(`watcher live-event queue exceeded ${limit} pending distinct paths`);
+    this.name = "LiveWatcherAdmissionLimitError";
   }
 }
 
@@ -134,8 +181,9 @@ export interface WatcherOptions {
    * Requires `tesseract.js` + `@napi-rs/canvas` optional dependencies
    * + the requested language trained-data files pre-installed via
    * `enquire-mcp install-ocr-lang <code>` (see v3.7.16 P1-1 offline
-   * enforcement). If those aren't available, OCR fails-soft — the
-   * watcher still updates FTS5 + clears any stale embed-db rows.
+   * enforcement). If those aren't available, the PDF generation is
+   * quarantined and every prior FTS/embed/HNSW row is retained until a later
+   * complete extraction succeeds.
    *
    * Recommended pairing: `--ocr-pdfs` + `--watch` + `--include-pdfs`
    * for users with scanned-document vaults that change during sessions.
@@ -149,9 +197,9 @@ export interface WatcherOptions {
   ocrLangs?: string;
   /**
    * v3.9.0-rc.1 — page cap for OCR runs. Mirrors `DEFAULT_OCR_MAX_PAGES`
-   * (200) — image-only PDFs that exceed this won't be embed-sync'd
-   * (the watcher logs the skip + still updates FTS5). Operators can
-   * lift the cap when they trust their PDF set.
+   * (200). Exceeding it quarantines the entire changed PDF generation and
+   * preserves every prior FTS/embed/HNSW row. Operators can lift the cap when
+   * they trust their PDF set.
    */
   ocrMaxPages?: number;
   /**
@@ -172,6 +220,21 @@ export interface WatcherOptions {
    * Primarily configurable for deterministic tests.
    */
   activationPathLimit?: number;
+  /**
+   * Maximum filesystem directory entries inspected by one exhaustive watcher
+   * inventory. Defaults to four times `activationPathLimit`. This bounds
+   * non-markdown files and directory fan-out before result-path caps apply.
+   * Primarily configurable for deterministic tests.
+   */
+  activationScanEntryLimit?: number;
+  /** Maximum distinct live paths processed concurrently. Default 4. */
+  liveEventConcurrency?: number;
+  /**
+   * Maximum additional distinct live paths waiting for admission. Repeated
+   * events for one active/pending path coalesce to its latest final-state hint.
+   * Exceeding the cap is a fail-stop error. Default 1024.
+   */
+  liveEventPendingLimit?: number;
 }
 
 /** Row shape shared by `embedSingleNote` / `embedSinglePdf` results. */
@@ -274,28 +337,32 @@ export function statsMtimeMsFromNs(mtimeNs: bigint): number {
  *
  * @param rows - The embed rows (vector + chunk metadata), in insertion order.
  * @param newIds - The row ids `upsertNote` assigned, parallel to `rows`.
+ * @param canonicalVectors - Vectors decoded from the exact persisted EmbedDb
+ *   BLOBs, parallel to `rows`; these replace the staged input vectors.
  * @returns Add-points for `syncHnswForFile`, each id guaranteed defined.
- * @throws {Error} If `newIds.length !== rows.length`.
+ * @throws {Error} If either parallel array length differs from `rows.length`.
  */
 export function zipHnswAddPoints(
   rows: ReadonlyArray<EmbedRowLike>,
-  newIds: ReadonlyArray<number>
+  newIds: ReadonlyArray<number>,
+  canonicalVectors: ReadonlyArray<Float32Array>
 ): Array<EmbedRowLike & { id: number }> {
-  if (newIds.length !== rows.length) {
+  if (newIds.length !== rows.length || canonicalVectors.length !== rows.length) {
     throw new Error(
-      `HNSW sync: embed-db returned ${newIds.length} ids for ${rows.length} rows — refusing to insert a sentinel label (would corrupt the index).`
+      `HNSW sync: embed-db returned ${newIds.length} ids and ${canonicalVectors.length} canonical vectors for ${rows.length} rows — refusing an unbound live update.`
     );
   }
   const points: Array<EmbedRowLike & { id: number }> = [];
   for (let i = 0; i < rows.length; i++) {
     const r = rows[i];
     const id = newIds[i];
-    if (r === undefined || id === undefined) {
-      throw new Error("HNSW sync: unexpected undefined row/id during zip.");
+    const canonicalVector = canonicalVectors[i];
+    if (r === undefined || id === undefined || canonicalVector === undefined) {
+      throw new Error("HNSW sync: unexpected undefined row/id/vector during zip.");
     }
     points.push({
       id,
-      vector: r.vector,
+      vector: canonicalVector,
       chunkIndex: r.chunkIndex,
       lineStart: r.lineStart,
       lineEnd: r.lineEnd,
@@ -339,6 +406,10 @@ export class VaultWatcher {
   // next serve restart rebuilt from the freshly-upserted embed-db).
   private hnsw: HnswIndex | null = null;
   private hnswRowsByLabel: Map<number, HnswRowMeta> | null = null;
+  // This is the SAME mutable object exported by server.ts to search handlers.
+  // It advances only after a conditional EmbedDb commit and synchronous graph
+  // diff both succeed. An external writer is never adopted into this object.
+  private hnswGenerationAuthority: HnswLiveGenerationAuthority | null = null;
   // v3.9.0-rc.6 — HNSW disk persistence on live update. The in-memory
   // HNSW index diverges from the persisted immutable generation after every
   // applyDiff. Correctness is already guaranteed by the signature guard
@@ -368,6 +439,7 @@ export class VaultWatcher {
   private activationState: "capturing" | "activating" | "live";
   private readonly deferredActivation: boolean;
   private readonly activationPathLimit: number;
+  private readonly activationScanEntryLimit: number;
   private readonly activationPaths = new Set<string>();
   // Exact source_state keys that no longer appear in the live listing. Keep
   // these separate from filesystem paths: on Windows, legacy separators or
@@ -375,6 +447,7 @@ export class VaultWatcher {
   // canonical spelling, while the old exact SQLite key still needs purging.
   private readonly activationStoredIdentities = new Map<string, "md" | "pdf">();
   private activationOverflowed = false;
+  private attachedSinkDriftPromise: Promise<void> | null = null;
   private activationPromise: Promise<void> | null = null;
   private closePromise: Promise<void> | null = null;
   private closing = false;
@@ -414,6 +487,13 @@ export class VaultWatcher {
         );
       }
     }
+    // A quarantine mutation changes the admitted DB generation without an
+    // equivalent graph deletion. Keeping HNSW as a candidate could under-fill
+    // recall around the withheld label, so leave the authoritative brute path
+    // available but quarantine this process's graph until restart.
+    if (this.embedDb && this.hnsw) {
+      this.quarantineHnswGeneration(`source ${relPath} entered semantic quarantine`);
+    }
   }
   // v3.9.0-rc.11 (audit H1) — per-file serialization. chokidar dispatches file
   // events concurrently; without this, two rapid saves to the SAME file
@@ -424,6 +504,14 @@ export class VaultWatcher {
   // keep independent chains and stay parallel. Keyed by absolute path; entries
   // self-evict when a file's chain drains (bounded memory over a long serve).
   private readonly fileQueues = new Map<string, Promise<void>>();
+  private readonly liveEventConcurrency: number;
+  private readonly liveEventPendingLimit: number;
+  private liveEventActive = 0;
+  private readonly liveEventActivePaths = new Set<string>();
+  private readonly liveEventPending = new Map<string, "add" | "change" | "unlink">();
+  private liveEventDrainPromise: Promise<void> | null = null;
+  private liveEventDrainResolve: (() => void) | null = null;
+  private liveAdmissionError: LiveWatcherAdmissionLimitError | null = null;
   // v3.12.0-rc.27 — regular-file hardlinks remain distinct searchable paths,
   // but all currently-visible aliases of one physical identity reconcile under
   // one multi-key critical section. Exact strings are retained: storage
@@ -464,11 +552,27 @@ export class VaultWatcher {
     this.ocrPdfs = opts.ocrPdfs ?? false;
     this.ocrLangs = opts.ocrLangs ?? "eng";
     this.ocrMaxPages = opts.ocrMaxPages;
+    if (this.ocrMaxPages !== undefined && (!Number.isSafeInteger(this.ocrMaxPages) || this.ocrMaxPages < 1)) {
+      throw new Error("VaultWatcher: ocrMaxPages must be a positive safe integer");
+    }
     this.deferredActivation = opts.deferActivation === true;
     this.activationState = this.deferredActivation ? "capturing" : "live";
     this.activationPathLimit = opts.activationPathLimit ?? DEFAULT_ACTIVATION_PATH_LIMIT;
     if (!Number.isSafeInteger(this.activationPathLimit) || this.activationPathLimit < 1) {
       throw new Error("VaultWatcher: activationPathLimit must be a positive safe integer");
+    }
+    const defaultScanEntryLimit = this.activationPathLimit * ACTIVATION_SCAN_ENTRY_MULTIPLIER;
+    this.activationScanEntryLimit = opts.activationScanEntryLimit ?? defaultScanEntryLimit;
+    if (!Number.isSafeInteger(this.activationScanEntryLimit) || this.activationScanEntryLimit < 1) {
+      throw new Error("VaultWatcher: activationScanEntryLimit must be a positive safe integer");
+    }
+    this.liveEventConcurrency = opts.liveEventConcurrency ?? DEFAULT_LIVE_EVENT_CONCURRENCY;
+    if (!Number.isSafeInteger(this.liveEventConcurrency) || this.liveEventConcurrency < 1) {
+      throw new Error("VaultWatcher: liveEventConcurrency must be a positive safe integer");
+    }
+    this.liveEventPendingLimit = opts.liveEventPendingLimit ?? DEFAULT_LIVE_EVENT_PENDING_LIMIT;
+    if (!Number.isSafeInteger(this.liveEventPendingLimit) || this.liveEventPendingLimit < 1) {
+      throw new Error("VaultWatcher: liveEventPendingLimit must be a positive safe integer");
     }
     // v3.8.0-rc.2 R-7 — fail loud if embedDb is wired without embedder.
     // Pre-flight check vs silently no-op'ing the embed sync.
@@ -493,6 +597,9 @@ export class VaultWatcher {
    */
   setOcrPdfs(enabled: boolean, langs?: string, maxPages?: number): void {
     this.assertLateAttachmentAllowed("setOcrPdfs");
+    if (maxPages !== undefined && (!Number.isSafeInteger(maxPages) || maxPages < 1)) {
+      throw new Error("VaultWatcher.setOcrPdfs: maxPages must be a positive safe integer");
+    }
     if (enabled && !this.includePdfs) {
       throw new Error("VaultWatcher.setOcrPdfs: enabling OCR requires includePdfs=true at construction time");
     }
@@ -548,10 +655,18 @@ export class VaultWatcher {
    * await watcher.captureAttachedSinkDrift();
    * await watcher.activate();
    */
-  async captureAttachedSinkDrift(): Promise<void> {
+  captureAttachedSinkDrift(): Promise<void> {
     if (this.closing || this.closed || this.activationState !== "capturing") {
       throw new Error("VaultWatcher.captureAttachedSinkDrift: activation is already live or watcher is closing");
     }
+    if (this.attachedSinkDriftPromise) return this.attachedSinkDriftPromise;
+    const accepted = this.captureAttachedSinkDriftOnce();
+    this.attachedSinkDriftPromise = accepted;
+    return accepted;
+  }
+
+  /** Perform the one accepted attached-sink drift capture. */
+  private async captureAttachedSinkDriftOnce(): Promise<void> {
     const embedDb = this.embedDb;
     if (!embedDb) return;
 
@@ -559,8 +674,17 @@ export class VaultWatcher {
       kind: "md" | "pdf",
       entries: ReadonlyArray<{ relPath: string; absPath: string; mtimeMs: number }>
     ): Promise<void> => {
-      const known = new Map(embedDb.getSourceStates(kind).map((state) => [state.rel_path, state.mtime_ms]));
-      const quarantined = new Set(embedDb.getQuarantinedPaths(kind));
+      const boundedRowLimit = this.activationPathLimit + 1;
+      const sourceStates = embedDb.getSourceStates(kind, boundedRowLimit);
+      const quarantinedPaths = embedDb.getQuarantinedPaths(kind, boundedRowLimit);
+      if (sourceStates.length > this.activationPathLimit || quarantinedPaths.length > this.activationPathLimit) {
+        throw new PhysicalAliasInventoryLimitError(
+          Math.max(sourceStates.length, quarantinedPaths.length),
+          this.activationPathLimit
+        );
+      }
+      const known = new Map(sourceStates.map((state) => [state.rel_path, state.mtime_ms]));
+      const quarantined = new Set(quarantinedPaths);
       const live = new Set<string>();
       for (const entry of entries) {
         live.add(entry.relPath);
@@ -582,9 +706,16 @@ export class VaultWatcher {
       }
     };
 
-    await captureKind("md", await this.vault.listMarkdown());
+    const entries = await this.listVisibleWatcherFilesBounded();
+    await captureKind(
+      "md",
+      entries.filter((entry) => entry.relPath.toLowerCase().endsWith(".md"))
+    );
     if (this.includePdfs) {
-      await captureKind("pdf", await this.vault.listFilesByExtension(".pdf"));
+      await captureKind(
+        "pdf",
+        entries.filter((entry) => entry.relPath.toLowerCase().endsWith(".pdf"))
+      );
     }
   }
 
@@ -609,8 +740,15 @@ export class VaultWatcher {
    *   so the next serve loads the up-to-date sidecar instead of
    *   rebuilding. Omit (or pass when `--no-hnsw-persist`) to skip
    *   persistence — correctness is unaffected (signature guard).
+   * @param sharedGenerationAuthority - Mutable UUID/epoch object also exposed
+   *   to search handlers. Omitted callers receive a watcher-local authority.
    */
-  attachHnsw(hnsw: HnswIndex, rowsByLabel: Map<number, HnswRowMeta>, persistFile?: string): void {
+  attachHnsw(
+    hnsw: HnswIndex,
+    rowsByLabel: Map<number, HnswRowMeta>,
+    persistFile?: string,
+    sharedGenerationAuthority?: HnswLiveGenerationAuthority
+  ): void {
     if (persistFile !== undefined) assertHnswFilePath(persistFile);
     this.assertLateAttachmentAllowed("attachHnsw");
     if (!this.embedDb) {
@@ -618,8 +756,16 @@ export class VaultWatcher {
         "VaultWatcher.attachHnsw: embedDb not attached — call attachEmbed first (HNSW live update requires it)"
       );
     }
+    const currentGeneration = this.embedDb.captureGenerationIdentity();
+    if (
+      sharedGenerationAuthority !== undefined &&
+      !sameEmbedDbGenerationIdentity(sharedGenerationAuthority, currentGeneration)
+    ) {
+      throw new Error("VaultWatcher.attachHnsw: shared HNSW authority does not match the current EmbedDb generation");
+    }
     this.hnsw = hnsw;
     this.hnswRowsByLabel = rowsByLabel;
+    this.hnswGenerationAuthority = sharedGenerationAuthority ?? { ...currentGeneration };
     this.hnswPersistFile = persistFile ?? null;
     this.searchHealth.hnswUsable = true;
   }
@@ -641,10 +787,11 @@ export class VaultWatcher {
    * v3.9.0-rc.6 — flush the live-updated HNSW index to its disk sidecar.
    * No-op unless ALL of: the index is dirty (had ≥1 applyDiff since the
    * last flush), an index + rowsByLabel + persistFile + embedDb are all
-   * wired. Recomputes the embed-db signature so the persisted
-   * `.meta.json` matches what `loadHnswFromDisk` will expect on the next
-   * serve (any external embed-db change since then → signature mismatch
-   * → safe rebuild). Permanently skips persistence after any live HNSW diff
+   * wired. Captures one exact embed-db receipt and compares the complete
+   * label metadata before saving, then captures again after the awaited native
+   * write. Any generation drift quarantines the route, while the stale pointer
+   * is rejected by the next serve's payload signature. Permanently skips
+   * persistence after any live HNSW diff
    * failure, leaving the older signature behind so restart must rebuild rather
    * than blessing a partial graph as current. Fail-soft: a save error is logged
    * + swallowed (the signature guard means a stale/missing sidecar rebuilds).
@@ -663,14 +810,60 @@ export class VaultWatcher {
       return false;
     }
     try {
-      // Clear dirty before the await. Normal production shutdown drains watcher
-      // queues before this flush; if a public caller nevertheless overlaps a
-      // live mutation, HnswIndex rejects it before touching the native graph and
-      // this watcher's existing failure path quarantines HNSW. A failed save is
-      // re-marked dirty below so a later flush can retry.
+      const before = this.embedDb.captureHnswBuildSnapshot();
+      if (!sameHnswRowManifest(this.hnswRowsByLabel, before.rowsByLabel)) {
+        this.hnswPersistUnsafe = true;
+        this.searchHealth.hnswUsable = false;
+        if (!this.silent) {
+          process.stderr.write(
+            "enquire: watcher refused to persist HNSW because its label metadata differs from the current embedding snapshot\n"
+          );
+        }
+        return false;
+      }
+      // Never serialize the mutation-heavy live graph: markDelete retains old
+      // vector bytes in native tombstone slots, and int8 live updates must use
+      // the exact decoded DB representation. Build a separate compact graph
+      // from one atomic EmbedDb snapshot, revalidate it before publication,
+      // and leave the serving graph untouched.
+      const { buildHnsw, clearHnswPersistedArtifacts } = await import("./hnsw.js");
+      const compact = await buildHnsw(
+        before.vectors.map((row) => ({ label: row.label, vector: row.vector })),
+        { dim: before.receipt.dim, maxElements: before.vectors.length }
+      );
+      const afterBuild = this.embedDb.captureHnswReceiptSnapshot();
+      if (!sameHnswPersistenceReceipt(before.receipt, afterBuild.receipt)) {
+        this.hnswPersistUnsafe = true;
+        this.searchHealth.hnswUsable = false;
+        return false;
+      }
+      const saved = await compact.saveTo(
+        this.hnswPersistFile,
+        before.rowsByLabel,
+        before.receipt.signature,
+        {
+          dbInstanceUuid: before.receipt.dbInstanceUuid,
+          dbMutationEpoch: before.receipt.dbMutationEpoch
+        },
+        this.embedDb.getPersistenceFamilyScopes()
+      );
+      if (!saved) throw new Error("HNSW compact persistence did not commit its metadata pointer");
+      const after = this.embedDb.captureHnswReceiptSnapshot();
+      if (!sameHnswPersistenceReceipt(before.receipt, after.receipt)) {
+        this.hnswPersistUnsafe = true;
+        this.searchHealth.hnswUsable = false;
+        // A post-publication DB drift makes the just-written graph stale and
+        // may include bytes that the new generation deleted. Erase the family
+        // now instead of leaving privacy cleanup to a future restart.
+        await clearHnswPersistedArtifacts(this.hnswPersistFile, this.embedDb.getPersistenceFamilyScopes());
+        if (!this.silent) {
+          process.stderr.write(
+            "enquire: watcher embedding generation changed during HNSW persistence; the live route is quarantined\n"
+          );
+        }
+        return false;
+      }
       this.hnswDirty = false;
-      const signature = this.embedDb.computeSignature();
-      await this.hnsw.saveTo(this.hnswPersistFile, this.hnswRowsByLabel, signature);
       if (!this.silent) {
         process.stderr.write(
           `enquire: watcher persisted live-updated HNSW generation + meta pointer at ${this.hnswPersistFile}\n`
@@ -709,6 +902,113 @@ export class VaultWatcher {
    * `fileQueues` (rc.11 H1) serialize only SAME-file events, whose chains span the
    * diff-compute awaits. (Enforced by `tests/hnsw-sync-critical-section.test.ts`.)
    */
+  private quarantineHnswGeneration(reason: string): void {
+    if (!this.hnsw) return;
+    const newlyQuarantined = this.searchHealth.hnswUsable;
+    this.hnswPersistUnsafe = true;
+    this.searchHealth.hnswUsable = false;
+    if (newlyQuarantined && !this.silent) {
+      process.stderr.write(
+        `enquire: watcher HNSW generation quarantined — ${reason} (semantic search falls back to EmbedDb until restart)\n`
+      );
+    }
+  }
+
+  /** Publish a watcher-owned generation only after its graph diff completed. */
+  private publishCommittedHnswGeneration(committedGeneration: EmbedDbGenerationIdentity): void {
+    if (!this.embedDb || !this.hnswGenerationAuthority) return;
+    const currentGeneration = this.embedDb.captureGenerationIdentity();
+    if (!sameEmbedDbGenerationIdentity(committedGeneration, currentGeneration)) {
+      this.quarantineHnswGeneration("EmbedDb changed again before the watcher could publish its graph authority");
+      return;
+    }
+    this.hnswGenerationAuthority.dbInstanceUuid = committedGeneration.dbInstanceUuid;
+    this.hnswGenerationAuthority.dbMutationEpoch = committedGeneration.dbMutationEpoch;
+  }
+
+  /** Replace one semantic source and mirror only the watcher-owned commit. */
+  private upsertEmbedAndSyncHnsw(
+    relPath: string,
+    mtimeMs: number,
+    rows: ReadonlyArray<{
+      chunkIndex: number;
+      lineStart: number;
+      lineEnd: number;
+      textPreview: string;
+      vector: Float32Array;
+    }>,
+    kind: "md" | "pdf"
+  ): EmbedUpsertResult & { hnswResult: { removed: number; added: number } | null } {
+    const embedDb = this.embedDb;
+    if (!embedDb) throw new Error("VaultWatcher semantic upsert requires an attached EmbedDb");
+
+    let mutation: EmbedUpsertResult;
+    let committedGeneration: EmbedDbGenerationIdentity | null = null;
+    if (this.hnsw && this.hnswRowsByLabel && this.hnswGenerationAuthority && this.searchHealth.hnswUsable) {
+      const attempt = embedDb.upsertNoteWithCanonicalVectorsIfGeneration(
+        { ...this.hnswGenerationAuthority },
+        relPath,
+        mtimeMs,
+        rows,
+        kind
+      );
+      if (attempt.kind === "committed") {
+        mutation = attempt.value;
+        committedGeneration = attempt.committedGeneration;
+      } else {
+        // Do not adopt `observedGeneration`: it belongs to another writer and
+        // the in-memory graph has never applied that writer's diff.
+        this.quarantineHnswGeneration("another process advanced EmbedDb before a live upsert");
+        mutation = embedDb.upsertNoteWithCanonicalVectors(relPath, mtimeMs, rows, kind);
+      }
+    } else {
+      mutation = embedDb.upsertNoteWithCanonicalVectors(relPath, mtimeMs, rows, kind);
+    }
+
+    let hnswResult: { removed: number; added: number } | null = null;
+    if (committedGeneration) {
+      hnswResult = this.syncHnswForFile(
+        relPath,
+        kind,
+        mutation.oldIds,
+        zipHnswAddPoints(rows, mutation.newIds, mutation.newVectors)
+      );
+      if (hnswResult) this.publishCommittedHnswGeneration(committedGeneration);
+    }
+    return { ...mutation, hnswResult };
+  }
+
+  /** Delete one semantic source and mirror only the watcher-owned commit. */
+  private deleteEmbedAndSyncHnsw(
+    relPath: string,
+    kind: "md" | "pdf"
+  ): { deletedIds: number[]; hnswResult: { removed: number; added: number } | null } {
+    const embedDb = this.embedDb;
+    if (!embedDb) throw new Error("VaultWatcher semantic delete requires an attached EmbedDb");
+
+    let deletedIds: number[];
+    let committedGeneration: EmbedDbGenerationIdentity | null = null;
+    if (this.hnsw && this.hnswRowsByLabel && this.hnswGenerationAuthority && this.searchHealth.hnswUsable) {
+      const attempt = embedDb.deleteNoteIfGeneration({ ...this.hnswGenerationAuthority }, relPath);
+      if (attempt.kind === "committed") {
+        deletedIds = attempt.value;
+        committedGeneration = attempt.committedGeneration;
+      } else {
+        this.quarantineHnswGeneration("another process advanced EmbedDb before a live delete");
+        deletedIds = embedDb.deleteNote(relPath);
+      }
+    } else {
+      deletedIds = embedDb.deleteNote(relPath);
+    }
+
+    let hnswResult: { removed: number; added: number } | null = null;
+    if (committedGeneration) {
+      hnswResult = this.syncHnswForFile(relPath, kind, deletedIds, []);
+      if (hnswResult) this.publishCommittedHnswGeneration(committedGeneration);
+    }
+    return { deletedIds, hnswResult };
+  }
+
   private syncHnswForFile(
     relPath: string,
     kind: "md" | "pdf",
@@ -723,6 +1023,7 @@ export class VaultWatcher {
     }>
   ): { removed: number; added: number } | null {
     if (!this.hnsw || !this.hnswRowsByLabel) return null;
+    if (oldIds.length === 0 && newRows.length === 0) return { removed: 0, added: 0 };
     try {
       const result = this.hnsw.applyDiff(
         oldIds,
@@ -752,8 +1053,7 @@ export class VaultWatcher {
       // throwing. Even if an earlier/later successful diff marked the index
       // dirty, never save this uncertain graph with the current EmbedDb
       // signature: that would defeat the restart signature guard.
-      this.hnswPersistUnsafe = true;
-      this.searchHealth.hnswUsable = false;
+      this.quarantineHnswGeneration(`live graph diff failed for ${relPath}`);
       if (!this.silent) {
         process.stderr.write(
           `enquire: watcher HNSW live-update failed for ${relPath} — ${err instanceof Error ? err.message : String(err)} (HNSW quarantined; semantic search falls back to EmbedDb until restart)\n`
@@ -826,6 +1126,80 @@ export class VaultWatcher {
     );
   }
 
+  /** Create one drain receipt for the current non-empty live scheduler generation. */
+  private ensureLiveEventDrainReceipt(): void {
+    if (this.liveEventDrainPromise) return;
+    this.liveEventDrainPromise = new Promise<void>((resolve) => {
+      this.liveEventDrainResolve = resolve;
+    });
+  }
+
+  /** Resolve the current live scheduler receipt once no accepted work remains. */
+  private finishLiveEventDrainIfIdle(): void {
+    if (this.liveEventActive !== 0 || this.liveEventPending.size !== 0) return;
+    const resolve = this.liveEventDrainResolve;
+    this.liveEventDrainResolve = null;
+    this.liveEventDrainPromise = null;
+    resolve?.();
+  }
+
+  /** Start pending distinct paths until the global active bound is full. */
+  private drainLiveEventQueue(): void {
+    while (this.liveEventActive < this.liveEventConcurrency && this.liveEventPending.size > 0) {
+      const next = this.liveEventPending.entries().next().value as
+        | readonly [string, "add" | "change" | "unlink"]
+        | undefined;
+      if (!next) break;
+      const [absPath, kind] = next;
+      this.liveEventPending.delete(absPath);
+      this.startLiveEvent(absPath, kind);
+    }
+    this.finishLiveEventDrainIfIdle();
+  }
+
+  /** Run one globally admitted live path through the existing per-path lane. */
+  private startLiveEvent(absPath: string, kind: "add" | "change" | "unlink"): void {
+    this.liveEventActive += 1;
+    this.liveEventActivePaths.add(absPath);
+    const tail = this.enqueueFileEvent(absPath, kind);
+    const complete = () => {
+      this.liveEventActive -= 1;
+      this.liveEventActivePaths.delete(absPath);
+      this.drainLiveEventQueue();
+    };
+    void tail.then(complete, complete);
+  }
+
+  /**
+   * Admit one live native path under a global concurrency and pending-path cap.
+   *
+   * An active/pending path retains only its newest event hint because every
+   * handler derives the authoritative final filesystem state. Distinct-path
+   * overflow is synchronous and sticky: continuing would serve derived state
+   * after knowingly dropping freshness work.
+   */
+  private scheduleLiveEvent(absPath: string, kind: "add" | "change" | "unlink"): void {
+    if (this.liveAdmissionError) throw this.liveAdmissionError;
+    this.ensureLiveEventDrainReceipt();
+    if (!this.liveEventActivePaths.has(absPath) && this.liveEventActive < this.liveEventConcurrency) {
+      this.startLiveEvent(absPath, kind);
+      return;
+    }
+    if (this.liveEventPending.has(absPath)) {
+      this.liveEventPending.set(absPath, kind);
+      return;
+    }
+    if (this.liveEventPending.size >= this.liveEventPendingLimit) {
+      const error = new LiveWatcherAdmissionLimitError(this.liveEventPendingLimit);
+      this.liveAdmissionError = error;
+      this.searchHealth.semanticUsable = false;
+      this.searchHealth.hnswUsable = false;
+      this.hnswPersistUnsafe = true;
+      throw error;
+    }
+    this.liveEventPending.set(absPath, kind);
+  }
+
   /**
    * Map an accepted configured-root spelling onto the canonical vault root.
    *
@@ -896,10 +1270,7 @@ export class VaultWatcher {
     try {
       this.ftsIndex?.dropFile(relPath);
       if (this.embedDb) {
-        const deletedIds = this.embedDb.deleteNote(relPath);
-        if (deletedIds.length > 0 && this.hnsw) {
-          this.syncHnswForFile(relPath, kind, deletedIds, []);
-        }
+        this.deleteEmbedAndSyncHnsw(relPath, kind);
       }
     } catch (err) {
       this.quarantineFailedGeneration(relPath, kind);
@@ -944,7 +1315,7 @@ export class VaultWatcher {
       this.captureActivationPath(canonicalAbsPath);
       return;
     }
-    void this.enqueueFileEvent(canonicalAbsPath, kind);
+    this.scheduleLiveEvent(canonicalAbsPath, kind);
   }
 
   /**
@@ -1051,6 +1422,10 @@ export class VaultWatcher {
     if (this.activationState === "live") return;
 
     this.activationPromise = (async () => {
+      // captureAttachedSinkDrift() publishes its receipt synchronously before
+      // its first suspension. Activation and close therefore join every scan
+      // accepted while the watcher was still in the capturing state.
+      if (this.attachedSinkDriftPromise) await this.attachedSinkDriftPromise;
       this.activationState = "activating";
       let generation = 0;
       while (true) {
@@ -1431,6 +1806,32 @@ export class VaultWatcher {
   }
 
   /**
+   * Capture one complete privacy-filtered markdown/PDF inventory within both
+   * the path-result and directory-entry budgets.
+   *
+   * @returns A complete admitted watcher listing.
+   * @throws {PhysicalAliasInventoryLimitError} When traversal, I/O, depth, or
+   *   either resource budget prevents a complete snapshot.
+   */
+  private async listVisibleWatcherFilesBounded(): Promise<
+    Array<{ relPath: string; absPath: string; mtimeMs: number }>
+  > {
+    const listing = await this.vault.listFilesByExtensionsBounded(
+      this.includePdfs ? [".md", ".pdf"] : [".md"],
+      this.activationPathLimit,
+      this.activationScanEntryLimit
+    );
+    if (!listing.complete) {
+      const fileBudgetExhausted = listing.entries.length >= this.activationPathLimit;
+      throw new PhysicalAliasInventoryLimitError(
+        fileBudgetExhausted ? this.activationPathLimit + 1 : listing.visitedEntries,
+        fileBudgetExhausted ? this.activationPathLimit : this.activationScanEntryLimit
+      );
+    }
+    return listing.entries;
+  }
+
+  /**
    * List every currently admitted watcher path with a bounded fan-out.
    *
    * The vault walkers already exclude hidden/private paths and refuse
@@ -1445,13 +1846,7 @@ export class VaultWatcher {
    * @throws {Error} When the configured activation bound would be exceeded.
    */
   private async inspectVisibleAliasInventory(): Promise<VisibleAliasInventoryEntry[]> {
-    const entries = [
-      ...(await this.vault.listMarkdown()),
-      ...(this.includePdfs ? await this.vault.listFilesByExtension(".pdf") : [])
-    ];
-    if (entries.length > this.activationPathLimit) {
-      throw new PhysicalAliasInventoryLimitError(entries.length, this.activationPathLimit);
-    }
+    const entries = await this.listVisibleWatcherFilesBounded();
 
     const inspected: VisibleAliasInventoryEntry[] = [];
     for (let offset = 0; offset < entries.length; offset += ACTIVATION_REPLAY_CONCURRENCY) {
@@ -1590,8 +1985,7 @@ export class VaultWatcher {
     generation: FileGeneration
   ): Promise<StagedMarkdownGeneration | undefined> {
     try {
-      this.vault.invalidateOne(absPath);
-      const note = await this.vault.readNote(absPath, generation.mtimeMs);
+      const note = await this.vault.readNoteUncached(absPath, generation.mtimeMs);
       let embedResult: StagedEmbedResult | null | undefined;
       if (this.embedDb && this.embedder) {
         const { embedSingleNote } = await import("./embed-pipeline.js");
@@ -1639,8 +2033,9 @@ export class VaultWatcher {
   ): Promise<StagedPdfGeneration | undefined> {
     try {
       const buf = await this.vault.readBinaryFile(absPath);
-      const { extractPdfText } = await import("./pdf.js");
+      const { assertPdfPagesComplete, extractPdfText } = await import("./pdf.js");
       const extracted = await extractPdfText(buf);
+      assertPdfPagesComplete(extracted.pages);
       const pages = extracted.pages.map((page) => ({ pageNumber: page.pageNumber, text: page.text }));
       let embedResult: StagedEmbedResult | null | undefined;
       let embedSource: "OCR" | "pdfjs" | null = null;
@@ -1648,25 +2043,16 @@ export class VaultWatcher {
       if (this.embedDb && this.embedder) {
         let pagesForEmbed: ReadonlyArray<{ pageNumber: number; text: string }> = extracted.hasText ? pages : [];
         if (this.ocrPdfs && !extracted.hasText) {
-          try {
-            const { extractPdfWithOcr } = await import("./ocr.js");
-            const ocrResult = await extractPdfWithOcr(buf, {
-              langs: this.ocrLangs,
-              ...(this.ocrMaxPages !== undefined ? { maxPages: this.ocrMaxPages } : {})
-            });
-            pagesForEmbed = ocrResult.pages
-              .filter((page) => !page.isEmpty)
-              .map((page) => ({ pageNumber: page.pageNumber, text: page.text }));
-          } catch (ocrErr) {
-            // OCR remains fail-soft. The same captured pdfjs pages still feed
-            // FTS, while an image-only semantic generation is staged as empty.
-            if (!this.silent) {
-              process.stderr.write(
-                `enquire: watcher PDF OCR failed for ${relPath} — ${ocrErr instanceof Error ? ocrErr.message : String(ocrErr)}\n`
-              );
-            }
-            pagesForEmbed = [];
-          }
+          const { assertOcrPagesComplete, extractPdfWithOcr } = await import("./ocr.js");
+          const ocrResult = await extractPdfWithOcr(buf, {
+            langs: this.ocrLangs,
+            ...(this.ocrMaxPages !== undefined ? { maxPages: this.ocrMaxPages } : {})
+          });
+          assertOcrPagesComplete(ocrResult.pages);
+          pagesForEmbed = ocrResult.pages
+            .filter((page) => page.status === "ok")
+            .map((page) => ({ pageNumber: page.pageNumber, text: page.text }));
+          embedSource = "OCR";
         }
 
         if (pagesForEmbed.length === 0) {
@@ -1716,6 +2102,10 @@ export class VaultWatcher {
     staged: StagedMarkdownGeneration
   ): string | undefined {
     try {
+      // The staged read deliberately bypasses the shared Vault cache. Publish
+      // cache invalidation only inside the same no-await commit section as the
+      // derived-index generation.
+      this.vault.invalidateOne(this.vault.resolveInside(relPath));
       const wikilinkTargets = staged.note.parsed.wikilinks
         .map((link) => link.target)
         .filter((target) => target.length > 0);
@@ -1732,23 +2122,21 @@ export class VaultWatcher {
       let embedNote = "";
       if (this.embedDb && staged.embedResult !== undefined) {
         if (staged.embedResult === null) {
-          const deletedIds = this.embedDb.deleteNote(relPath);
+          const { deletedIds, hnswResult } = this.deleteEmbedAndSyncHnsw(relPath, "md");
           embedNote = " + embed-db cleared (empty note)";
-          if (deletedIds.length > 0 && this.hnsw) {
-            const hnswResult = this.syncHnswForFile(relPath, "md", deletedIds, []);
-            if (hnswResult) embedNote += ` + hnsw -${hnswResult.removed}`;
+          if (deletedIds.length > 0 && hnswResult) {
+            embedNote += ` + hnsw -${hnswResult.removed}`;
           }
         } else {
-          const { oldIds, newIds } = this.embedDb.upsertNote(relPath, generation.mtimeMs, staged.embedResult.rows);
+          const { oldIds, newIds, hnswResult } = this.upsertEmbedAndSyncHnsw(
+            relPath,
+            generation.mtimeMs,
+            staged.embedResult.rows,
+            "md"
+          );
           embedNote = ` + embed-db upserted (${staged.embedResult.chunks} chunks)`;
-          if (this.hnsw) {
-            const hnswResult = this.syncHnswForFile(
-              relPath,
-              "md",
-              oldIds,
-              zipHnswAddPoints(staged.embedResult.rows, newIds)
-            );
-            if (hnswResult) embedNote += ` + hnsw -${hnswResult.removed}/+${hnswResult.added}`;
+          if ((oldIds.length > 0 || newIds.length > 0) && hnswResult) {
+            embedNote += ` + hnsw -${hnswResult.removed}/+${hnswResult.added}`;
           }
         }
       }
@@ -1787,17 +2175,16 @@ export class VaultWatcher {
       let embedNote = "";
       if (this.embedDb && staged.embedResult !== undefined) {
         if (staged.embedResult === null) {
-          const deletedIds = this.embedDb.deleteNote(relPath);
+          const { deletedIds, hnswResult } = this.deleteEmbedAndSyncHnsw(relPath, "pdf");
           embedNote =
             staged.embedSource === "OCR"
               ? " + embed-db cleared (OCR also empty)"
               : " + embed-db cleared (image-only or empty)";
-          if (deletedIds.length > 0 && this.hnsw) {
-            const hnswResult = this.syncHnswForFile(relPath, "pdf", deletedIds, []);
-            if (hnswResult) embedNote += ` + hnsw -${hnswResult.removed}`;
+          if (deletedIds.length > 0 && hnswResult) {
+            embedNote += ` + hnsw -${hnswResult.removed}`;
           }
         } else {
-          const { oldIds, newIds } = this.embedDb.upsertNote(
+          const { oldIds, newIds, hnswResult } = this.upsertEmbedAndSyncHnsw(
             relPath,
             generation.mtimeMs,
             staged.embedResult.rows,
@@ -1806,14 +2193,8 @@ export class VaultWatcher {
           embedNote = ` + embed-db upserted (${staged.embedResult.chunks} chunks, kind=pdf, src=${
             staged.embedSource ?? "pdfjs"
           })`;
-          if (this.hnsw) {
-            const hnswResult = this.syncHnswForFile(
-              relPath,
-              "pdf",
-              oldIds,
-              zipHnswAddPoints(staged.embedResult.rows, newIds)
-            );
-            if (hnswResult) embedNote += ` + hnsw -${hnswResult.removed}/+${hnswResult.added}`;
+          if ((oldIds.length > 0 || newIds.length > 0) && hnswResult) {
+            embedNote += ` + hnsw -${hnswResult.removed}/+${hnswResult.added}`;
           }
         }
       }
@@ -1862,11 +2243,10 @@ export class VaultWatcher {
     let embedDeleteSucceeded = this.embedDb === null;
     if (this.embedDb) {
       try {
-        const deletedIds = this.embedDb.deleteNote(relPath);
+        const { deletedIds, hnswResult } = this.deleteEmbedAndSyncHnsw(relPath, isPdf ? "pdf" : "md");
         embedDeleteSucceeded = true;
-        if (deletedIds.length > 0 && this.hnsw) {
-          const result = this.syncHnswForFile(relPath, isPdf ? "pdf" : "md", deletedIds, []);
-          if (result) unlinkHnswNote = ` + hnsw -${result.removed}`;
+        if (deletedIds.length > 0 && hnswResult) {
+          unlinkHnswNote = ` + hnsw -${hnswResult.removed}`;
         }
       } catch (err) {
         this.quarantineFailedGeneration(relPath, isPdf ? "pdf" : "md");
@@ -2422,14 +2802,19 @@ export class VaultWatcher {
             activationError = err;
           }
         }
+        // Native delivery is closed above, so this receipt owns every globally
+        // admitted live path (including coalesced pending final states).
+        const liveDrain = this.liveEventDrainPromise;
+        if (liveDrain) await liveDrain;
         // v3.9.0-rc.11 (H1) — drain every accepted per-file tail so a pending
         // upsert + applyDiff completes before the sidecar flush.
         await Promise.allSettled([...this.fileQueues.values()]);
         // v3.9.0-rc.6 — persist the fully drained live-updated index.
-        if (activationError === undefined) {
+        if (activationError === undefined && this.liveAdmissionError === null) {
           await this.flushHnswToDisk();
         }
         if (activationError !== undefined) throw activationError;
+        if (this.liveAdmissionError) throw this.liveAdmissionError;
         if (seedError !== undefined) throw seedError;
       } finally {
         this.activationPaths.clear();
@@ -2439,6 +2824,11 @@ export class VaultWatcher {
         this.physicalKnownPaths.clear();
         this.physicalAliasLockTails.clear();
         this.physicalAliasSeedPromise = null;
+        this.attachedSinkDriftPromise = null;
+        this.liveEventPending.clear();
+        this.liveEventActivePaths.clear();
+        this.liveEventDrainPromise = null;
+        this.liveEventDrainResolve = null;
         this.watcherReadyReject = null;
         this.closed = true;
       }

@@ -271,7 +271,7 @@ export const TOOL_MANIFEST: readonly ToolManifestEntry[] = [
     name: "obsidian_semantic_search",
     kind: "diagnostic",
     gating: "--diagnostic-search-tools",
-    summary: "Pure-JS TF-IDF cosine semantic search (no model download)."
+    summary: "Pure-JS TF-IDF weighted lexical search (no model download)."
   },
   {
     name: "obsidian_embeddings_search",

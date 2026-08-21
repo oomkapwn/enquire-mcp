@@ -1,4 +1,6 @@
 import * as path from "node:path";
+import type { OcrTextExtractionLimits } from "../ocr.js";
+import type { PdfTextExtractionLimits } from "../pdf.js";
 import type { Vault } from "../vault.js";
 import { findBestMatch } from "./meta.js";
 
@@ -456,6 +458,12 @@ export interface ReadPdfArgs {
   include_metadata?: boolean;
 }
 
+/** Internal request options for {@link readPdf}; excluded from the strict MCP schema. */
+export interface ReadPdfOptions {
+  /** Optional extraction limits; values may only narrow production defaults. */
+  textLimits?: Partial<PdfTextExtractionLimits>;
+}
+
 /**
  * One page of extracted PDF text.
  *
@@ -468,17 +476,22 @@ export interface ReadPdfPage {
   page_number: number;
   /** Extracted text content (may be empty for image-only pages). */
   text: string;
-  /** True when no text could be extracted (likely needs OCR). */
+  /** Explicit extraction outcome. `failed` is never treated as a blank scan. */
+  status: "ok" | "empty" | "failed";
+  /** True when the page has no text; inspect `status` for the reason. */
   is_empty: boolean;
   /** Character count of `text` (post-extraction, post-trim). */
   char_count: number;
+  /** Bounded failure evidence, present only for `status: "failed"`. */
+  failure?: { code: string; detail: string };
 }
 
 /**
  * Envelope returned by {@link readPdf}.
  *
- * `has_text` is the OR across pages — false for image-only scans, which
- * agents should detect and route through {@link ocrPdf}. `metadata` is
+ * `has_text` is the OR across successfully extracted pages. When `complete`
+ * is true, false means an image-only/blank selection that agents can route
+ * through {@link ocrPdf}; when false, inspect page failures instead. `metadata` is
  * present when `args.include_metadata` is not explicitly false AND the
  * PDF carries any doc-level metadata.
  */
@@ -489,6 +502,8 @@ export interface ReadPdfResult {
   mtime: string;
   page_count: number;
   has_text: boolean;
+  /** True only when every requested page was extracted or proven empty. */
+  complete: boolean;
   pages: ReadPdfPage[];
   full_text: string;
   metadata?: {
@@ -510,14 +525,16 @@ export interface ReadPdfResult {
  * Extract text from a PDF page-by-page, with optional page-range slicing
  * and metadata.
  *
- * Image-only / scanned PDFs surface `has_text: false` — agents should
- * detect this and route through {@link ocrPdf} for OCR. Lazy-loads
+ * Image-only / scanned PDFs surface `has_text: false` with `complete: true`;
+ * page failures surface `complete: false` and explicit failure evidence.
+ * Lazy-loads
  * `pdfjs-dist` (optional dep) so markdown-only users pay zero cost.
- * Out-of-range `pages` slice arguments are clamped rather than thrown
- * (matches `Array.prototype.slice` semantics).
+ * A valid upper bound beyond the document is clamped. Non-finite, fractional,
+ * non-positive, inverted, or wholly out-of-document ranges are rejected.
  *
  * @param vault - The vault.
  * @param args - {@link ReadPdfArgs}. `path` required.
+ * @param options - Internal narrowing options, excluded from the MCP input schema.
  * @returns A {@link ReadPdfResult} with per-page text, full-text join,
  *   metadata, and original `total_page_count`.
  * @throws {Error} If `path` is empty, the file is missing or excluded,
@@ -535,9 +552,18 @@ export interface ReadPdfResult {
  * console.log(r.metadata?.title, r.full_text.slice(0, 200));
  * ```
  */
-export async function readPdf(vault: Vault, args: ReadPdfArgs): Promise<ReadPdfResult> {
+export async function readPdf(vault: Vault, args: ReadPdfArgs, options: ReadPdfOptions = {}): Promise<ReadPdfResult> {
   await vault.ensureExists();
   if (!args.path) throw new Error("path is required");
+  if (args.pages !== undefined) {
+    if (!Array.isArray(args.pages) || args.pages.length !== 2) {
+      throw new TypeError("pages must be a two-item [from, to] range");
+    }
+    const [from, to] = args.pages;
+    if (!Number.isSafeInteger(from) || from < 1 || !Number.isSafeInteger(to) || to < from) {
+      throw new TypeError("pages must contain positive safe integers with from <= to");
+    }
+  }
   const normalized = args.path.toLowerCase().endsWith(".pdf") ? args.path : `${args.path}.pdf`;
   const abs = vault.resolveInside(normalized);
   const stat = await vault.stat(abs); // throws if missing or excluded
@@ -554,17 +580,16 @@ export async function readPdf(vault: Vault, args: ReadPdfArgs): Promise<ReadPdfR
   // in serve-http. Note: `result.pageCount` still reports the document
   // total (read from pdfjs's metadata, not from page count returned),
   // so callers can paginate. Range validation: `to >= from > 0`; an
-  // invalid range silently falls back to "all pages" via the undefined
-  // branch (kept for backward compatibility — schema-level rejection of
-  // invalid ranges is L2 territory).
+  // invalid ranges are rejected above before binary reading.
   let pageRange: { from: number; to: number } | undefined;
   if (args.pages && args.pages.length === 2) {
     const [from, to] = args.pages;
-    if (typeof from === "number" && typeof to === "number" && from > 0 && to >= from) {
-      pageRange = { from, to };
-    }
+    pageRange = { from, to };
   }
-  const result = await extractPdfText(buf, pageRange ? { pageRange } : {});
+  const result = await extractPdfText(buf, {
+    ...(pageRange ? { pageRange } : {}),
+    ...(options.textLimits ? { textLimits: options.textLimits } : {})
+  });
 
   // The pages array already reflects the requested window (or all pages
   // if no range was passed).
@@ -580,30 +605,32 @@ export async function readPdf(vault: Vault, args: ReadPdfArgs): Promise<ReadPdfR
     size_bytes: buf.byteLength,
     mtime: new Date(stat.mtimeMs).toISOString(),
     page_count: pages.length,
-    has_text: pages.some((p) => !p.isEmpty),
+    has_text: result.hasText,
+    complete: result.complete,
     pages: pages.map((p) => ({
       page_number: p.pageNumber,
       text: p.text,
+      status: p.status,
       is_empty: p.isEmpty,
-      char_count: p.charCount
+      char_count: p.charCount,
+      ...(p.failure ? { failure: p.failure } : {})
     })),
-    full_text: pages
-      .map((p) => p.text)
-      .filter((t) => t.length > 0)
-      .join("\n\n"),
+    // Reuse the extractor's single admitted aggregate. Rejoining public pages
+    // here would create a second peak-sized string before MCP serialization.
+    full_text: result.fullText,
     total_page_count: result.pageCount
   };
 
   if (args.include_metadata !== false && Object.keys(result.metadata).length > 0) {
     out.metadata = {
-      title: result.metadata.title,
-      author: result.metadata.author,
-      subject: result.metadata.subject,
-      keywords: result.metadata.keywords,
-      creator: result.metadata.creator,
-      producer: result.metadata.producer,
-      creation_date: result.metadata.creationDate,
-      mod_date: result.metadata.modDate
+      ...(result.metadata.title !== undefined ? { title: result.metadata.title } : {}),
+      ...(result.metadata.author !== undefined ? { author: result.metadata.author } : {}),
+      ...(result.metadata.subject !== undefined ? { subject: result.metadata.subject } : {}),
+      ...(result.metadata.keywords !== undefined ? { keywords: result.metadata.keywords } : {}),
+      ...(result.metadata.creator !== undefined ? { creator: result.metadata.creator } : {}),
+      ...(result.metadata.producer !== undefined ? { producer: result.metadata.producer } : {}),
+      ...(result.metadata.creationDate !== undefined ? { creation_date: result.metadata.creationDate } : {}),
+      ...(result.metadata.modDate !== undefined ? { mod_date: result.metadata.modDate } : {})
     };
   }
 
@@ -645,6 +672,8 @@ export interface OcrPdfArgs {
 export interface OcrPdfOptions {
   /** MCP/client cancellation signal propagated into render and worker cleanup. */
   signal?: AbortSignal;
+  /** Optional OCR text limits; values may only narrow production defaults. */
+  textLimits?: Partial<OcrTextExtractionLimits>;
 }
 
 /**
@@ -659,19 +688,23 @@ export interface OcrPdfPage {
   page_number: number;
   /** OCR'd text content. */
   text: string;
-  /** True when OCR returned no text (blank page or render failure). */
+  /** Explicit OCR outcome. `failed` is never treated as a blank page. */
+  status: "ok" | "empty" | "failed";
+  /** True when OCR returned no text; inspect `status` for the reason. */
   is_empty: boolean;
   /** Character count of `text`. */
   char_count: number;
-  /** Tesseract's mean confidence for this page, 0-100. */
-  confidence: number;
+  /** Tesseract's finite mean confidence for this page, 0-100, or null. */
+  confidence: number | null;
+  /** Bounded failure evidence, present only for `status: "failed"`. */
+  failure?: { code: string; detail: string };
 }
 
 /**
  * Envelope returned by {@link ocrPdf}.
  *
- * `mean_confidence` is the average across pages with text (NaN if all
- * empty). `langs` echoes the language(s) used so the caller can audit
+ * `mean_confidence` is the average across text pages with valid finite
+ * confidence, or null when none is available. `langs` echoes the language(s) used so the caller can audit
  * what was actually tried (especially relevant when defaulting to `'eng'`).
  */
 export interface OcrPdfResult {
@@ -682,10 +715,12 @@ export interface OcrPdfResult {
   page_count: number;
   total_page_count: number;
   has_text: boolean;
+  /** True only when every requested page was OCR'd or proven empty. */
+  complete: boolean;
   pages: OcrPdfPage[];
   full_text: string;
-  /** Mean confidence across pages with text. NaN if all pages empty. */
-  mean_confidence: number;
+  /** Mean finite confidence across pages with text, or null when unavailable. */
+  mean_confidence: number | null;
   /** Languages used for OCR (whatever the caller passed). */
   langs: string;
 }
@@ -704,7 +739,7 @@ export interface OcrPdfResult {
  *
  * @param vault - The vault.
  * @param args - {@link OcrPdfArgs}. `path` required.
- * @param options - Request cancellation lifecycle.
+ * @param options - Request cancellation and internal narrowing text limits.
  * @returns An {@link OcrPdfResult} with per-page text, confidence scores,
  *   and aggregate statistics.
  * @throws {Error} If `path` is empty / missing / excluded, or the OCR
@@ -718,12 +753,24 @@ export interface OcrPdfResult {
  *   pages: [1, 10],
  *   scale: 3
  * });
- * console.log(`OCR confidence: ${r.mean_confidence}/100`);
+ * console.log(r.mean_confidence === null ? "OCR confidence unavailable" : `${r.mean_confidence}/100`);
  * ```
  */
 export async function ocrPdf(vault: Vault, args: OcrPdfArgs, options: OcrPdfOptions = {}): Promise<OcrPdfResult> {
   await vault.ensureExists();
   if (!args.path) throw new Error("path is required");
+  if (args.pages !== undefined) {
+    if (!Array.isArray(args.pages) || args.pages.length !== 2) {
+      throw new TypeError("pages must be a two-item [from, to] range");
+    }
+    const [from, to] = args.pages;
+    if (!Number.isSafeInteger(from) || from < 1 || !Number.isSafeInteger(to) || to < from) {
+      throw new TypeError("pages must contain positive safe integers with from <= to");
+    }
+  }
+  if (args.scale !== undefined && (!Number.isFinite(args.scale) || args.scale <= 0)) {
+    throw new TypeError("scale must be a finite positive number");
+  }
   const normalized = args.path.toLowerCase().endsWith(".pdf") ? args.path : `${args.path}.pdf`;
   const abs = vault.resolveInside(normalized);
   const stat = await vault.stat(abs); // throws if missing or excluded
@@ -737,7 +784,8 @@ export async function ocrPdf(vault: Vault, args: OcrPdfArgs, options: OcrPdfOpti
     ...(args.lang ? { langs: args.lang } : {}),
     ...(args.pages ? { pages: args.pages } : {}),
     ...(typeof args.scale === "number" ? { scale: args.scale } : {}),
-    ...(options.signal ? { signal: options.signal } : {})
+    ...(options.signal ? { signal: options.signal } : {}),
+    ...(options.textLimits ? { textLimits: options.textLimits } : {})
   });
 
   return {
@@ -752,15 +800,20 @@ export async function ocrPdf(vault: Vault, args: OcrPdfArgs, options: OcrPdfOpti
     page_count: result.pages.length,
     total_page_count: result.pageCount,
     has_text: result.hasText,
+    complete: result.complete,
     pages: result.pages.map((p) => ({
       page_number: p.pageNumber,
       text: p.text,
+      status: p.status,
       is_empty: p.isEmpty,
       char_count: p.charCount,
-      confidence: Math.round(p.confidence * 10) / 10
+      confidence: p.confidence === null ? null : Math.round(p.confidence * 10) / 10,
+      ...(p.failure ? { failure: p.failure } : {})
     })),
+    // Reuse the extractor's single admitted aggregate; the v4 envelope keeps
+    // both page text and full_text, but this layer never recomputes the latter.
     full_text: result.fullText,
-    mean_confidence: Number.isFinite(result.meanConfidence) ? Math.round(result.meanConfidence * 10) / 10 : Number.NaN,
+    mean_confidence: result.meanConfidence === null ? null : Math.round(result.meanConfidence * 10) / 10,
     langs: result.langs
   };
 }

@@ -1,11 +1,15 @@
 import { type McpServer, ResourceTemplate } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { MAX_DQL_QUERY_LEN } from "./dql.js";
+import { markUseful } from "./feedback-admission.js";
 import { defaultIndexFile, type FtsIndex } from "./fts5.js";
 import { VERSION } from "./index.js";
+import { textResult } from "./mcp-result.js";
 import { DEFAULT_OCR_TIMEOUT_MS } from "./ocr-admission.js";
 import { MAX_RESEARCH_SUBQUERIES } from "./research-protocol.js";
+import { decodeNotePath, listVaultNoteResources, readChunkResource, vaultResourceInfo } from "./resource-admission.js";
 import type { ServerDeps } from "./server.js";
+import { RENAME_NOTE_INPUT_SCHEMA } from "./tool-input-admission.js";
 import {
   appendToNote,
   archiveNote,
@@ -38,7 +42,6 @@ import {
   openInUi,
   paperAudit,
   readCanvas,
-  readLiveFtsChunk,
   readNote,
   readPdf,
   renameNote,
@@ -101,7 +104,6 @@ const MAX_FRONTMATTER_KEY_LEN = 256;
  * A real frontmatter value is short; 8 KiB is very generous.
  */
 const MAX_FRONTMATTER_VALUE_LEN = 8192;
-
 /** Default location for the persistent embedding index, alongside .fts5.db. */
 export function embedDbPath(vaultRoot: string): string {
   // Match the FTS5 location convention by stripping the .fts5.db extension
@@ -118,7 +120,7 @@ export function registerFtsTools(server: McpServer, idx: FtsIndex, vault: Vault)
       description:
         "BM25-ranked full-text search backed by a SQLite FTS5 inverted index. Returns chunk-level hits with snippet excerpts. Hyphenated tokens (e.g. `claude-telegram`) are auto-quoted. Optional filters: `folder` (vault-relative subtree), `tag` (exact frontmatter or inline tag membership), `since` (ISO date — only chunks from notes modified on/after this). Use `obsidian_search_text` instead if the index isn't built yet — this tool is only registered when the server is started with BOTH `--persistent-index` (so the FTS5 index exists) AND `--diagnostic-search-tools` (single-ranker diagnostic surface; the hybrid `obsidian_search` tool is the recommended default).",
       annotations: { ...READ_ONLY, title: "Full-text search" },
-      inputSchema: z.object({
+      inputSchema: z.strictObject({
         // v3.11.0-rc.18 (rc.17 external audit, Codex RESOURCE-DOS-tool-registry-fts-query-cap)
         // — these were uncapped `z.string()` while every other search tool caps `query`.
         // A 4096-byte repeated-token `query` flows into SQLite FTS5 `MATCH` and stalled the
@@ -239,7 +241,7 @@ export function registerReadTools(
       description:
         "List notes in the vault. Filter by tag, folder, or modified-since date. Returns title, path, frontmatter, tags, and mtime — newest first.",
       annotations: { ...READ_ONLY, title: "List notes" },
-      inputSchema: z.object({
+      inputSchema: z.strictObject({
         tag: z.string().optional().describe("Filter by tag (with or without leading #)"),
         folder: z.string().optional().describe("Restrict to a subfolder (relative to vault root)"),
         since_date: z.string().optional().describe("ISO 8601 date (YYYY-MM-DD); only notes mtime >= this"),
@@ -256,7 +258,7 @@ export function registerReadTools(
       description:
         'Read a note by relative path or by title (filename without .md). Default `format: "full"` returns content + frontmatter + wikilinks + embeds + tags. `format: "map"` returns just headings + frontmatter keys + counts (no body) — useful for planning a surgical edit without paying token cost for the body. Title accepts periodic-note aliases ("today"/"daily"/"weekly"/"monthly") that resolve to the standard `YYYY-MM-DD`/`YYYY-Www`/`YYYY-MM` names. Errors include `Did you mean: ...` suggestions on near-misses.',
       annotations: { ...READ_ONLY, title: "Read note" },
-      inputSchema: z.object({
+      inputSchema: z.strictObject({
         path: z.string().optional().describe("Path relative to vault root, with or without .md"),
         title: z
           .string()
@@ -278,7 +280,7 @@ export function registerReadTools(
       description:
         "Resolve an Obsidian [[wikilink]] (or ![[embed]]) to a vault file. Handles aliases (Note|alias), sections (Note#Heading), block refs (Note^block), and ../-relative paths.",
       annotations: { ...READ_ONLY, title: "Resolve wikilink" },
-      inputSchema: z.object({
+      inputSchema: z.strictObject({
         wikilink: z.string().describe("Wikilink target (e.g. 'Note Name', 'Note#Heading', 'Folder/Note|alias')"),
         from_note: z
           .string()
@@ -303,7 +305,7 @@ export function registerReadTools(
         description:
           "Case-insensitive token search across all notes. Default mode `all` requires every whitespace-separated token to appear in a note (AND-tokenizer); `any` requires at least one (OR); `phrase` does the old contiguous-substring match. Returns a structured response with `query`, `mode`, `scanned_notes`, and ranked `matches` (each with snippet, line, score, matched_terms) — empty matches are explicit, not ambiguous with a broken call.",
         annotations: { ...READ_ONLY, title: "Search text" },
-        inputSchema: z.object({
+        inputSchema: z.strictObject({
           query: z
             .string()
             .min(1)
@@ -326,7 +328,7 @@ export function registerReadTools(
       title: "Get recent edits",
       description: "List notes ordered by most recent modification. Useful for picking up where work was left off.",
       annotations: { ...READ_ONLY, title: "Get recent edits" },
-      inputSchema: z.object({
+      inputSchema: z.strictObject({
         since_minutes: z.number().int().positive().optional().describe("Only notes edited within this many minutes"),
         folder: z.string().optional().describe("Restrict to a subfolder"),
         limit: z.number().int().positive().max(200).optional().describe("Max results (default 20)")
@@ -342,7 +344,7 @@ export function registerReadTools(
       description:
         "List notes not edited in N days (forgetting-aware staleness), oldest first. Use to surface facts that may be outdated before relying on them, or to pick notes to refresh. Cheap mtime-only scan; returns path / title / mtime / age_days.",
       annotations: { ...READ_ONLY, title: "Stale notes" },
-      inputSchema: z.object({
+      inputSchema: z.strictObject({
         stale_days: z.number().int().positive().max(36500).optional().describe("Age threshold in days (default 365)"),
         folder: z.string().optional().describe("Restrict to a subfolder"),
         limit: z.number().int().positive().max(500).optional().describe("Max results (default 50)")
@@ -358,7 +360,7 @@ export function registerReadTools(
       description:
         "List every note in the vault that links (or embeds) the target note. Returns ranked hits with snippets and link kind (wikilink/embed/mixed).",
       annotations: { ...READ_ONLY, title: "Get backlinks" },
-      inputSchema: z.object({
+      inputSchema: z.strictObject({
         path: z.string().optional().describe("Target note path relative to vault root"),
         title: z.string().optional().describe("Target note title (filename without .md)"),
         include_embeds: z.boolean().optional().describe("Include ![[…]] embeds (default true)"),
@@ -375,7 +377,7 @@ export function registerReadTools(
       description:
         "List every unique tag in the vault with usage counts (frontmatter vs inline). Sorted by count desc.",
       annotations: { ...READ_ONLY, title: "List tags" },
-      inputSchema: z.object({
+      inputSchema: z.strictObject({
         folder: z.string().optional().describe("Restrict to a subfolder"),
         min_count: z
           .number()
@@ -396,7 +398,7 @@ export function registerReadTools(
       description:
         'Run a Dataview-style query. Grammar: (LIST | TABLE col1, col2) FROM ("folder" | #tag) [WHERE pred (AND|OR pred)*] [SORT field [ASC|DESC]] [LIMIT n]. Operators: =, !=, contains, like (SQL-LIKE wildcard with *, escape with \\*). Special fields: file.name, file.path, file.mtime, file.tags. Other identifiers read frontmatter. No expressions, FLATTEN, GROUP BY, or joins — see docs/api.md for the unsupported set.',
       annotations: { ...READ_ONLY, title: "Dataview query" },
-      inputSchema: z.object({
+      inputSchema: z.strictObject({
         // v3.10.0-rc.57 (DQL-PARSE-QUADRATIC-DOS) — boundary length cap (mirrors
         // MAX_QUESTION_PATTERN_LEN); parseDql enforces the same cap fail-closed at the sink.
         query: z.string().min(1).max(MAX_DQL_QUERY_LEN).describe("Dataview-style query string")
@@ -412,7 +414,7 @@ export function registerReadTools(
       description:
         "Find every [[wikilink]] (and ![[embed]]) in the vault whose target does not resolve to a file. Useful as a vault-hygiene utility — broken links, typos, notes you intended to create.",
       annotations: { ...READ_ONLY, title: "Get unresolved wikilinks" },
-      inputSchema: z.object({
+      inputSchema: z.strictObject({
         folder: z.string().optional().describe("Restrict the scan to a subfolder"),
         include_embeds: z.boolean().optional().describe("Include ![[…]] embeds (default true)"),
         limit: z.number().int().positive().max(2000).optional().describe("Max results (default 200)")
@@ -428,7 +430,7 @@ export function registerReadTools(
       description:
         "List every link this note points to — wikilinks and (optionally) embeds, with each one's resolution status. Symmetric counterpart to obsidian_get_backlinks.",
       annotations: { ...READ_ONLY, title: "Get outbound links" },
-      inputSchema: z.object({
+      inputSchema: z.strictObject({
         path: z.string().optional().describe("Source note path relative to vault root"),
         title: z.string().optional().describe("Source note title (filename without .md)"),
         include_embeds: z.boolean().optional().describe("Include ![[…]] embeds (default true)"),
@@ -445,7 +447,7 @@ export function registerReadTools(
       description:
         "Lint a draft note BEFORE writing. Closes the #1 LLM-write pain: AI generates structurally-broken notes (bad YAML, fake wikilinks, inconsistent tags). This tool parses the proposed YAML, resolves every [[wikilink]] against the live vault (broken/resolved with did-you-mean), pre-classifies every tag (existing vs new), and checks for path/title collisions. Returns errors (blocking) + warnings (non-blocking) + per-link/tag diagnostics. Always available — does NOT require --enable-write. Recommended workflow: validate → fix → obsidian_create_note.",
       annotations: { ...READ_ONLY, title: "Validate note proposal" },
-      inputSchema: z.object({
+      inputSchema: z.strictObject({
         path: z.string().describe("Vault-relative path the LLM intends to write to (e.g. 'Inbox/idea.md')"),
         // v3.10.0-rc.67 (round-3 re-sweep, DoS) — cap the proposed content. The wikilink scan +
         // per-broken-link suggestion is bounded by body size; 1 MB is generous for any real note
@@ -472,7 +474,7 @@ export function registerReadTools(
       description:
         "Given a note, return up to N other notes that are 'related' — by tag overlap (Jaccard), title 3-gram overlap, shared outbound links, and co-backlinks. Score is a weighted sum of those four signals; each is also returned individually so the caller can re-rank. No embeddings, no native deps — pure structural retrieval over the existing vault graph. Runs O(N) over the whole vault per call; for vaults >5k notes prefer batching. **v3.10:** each result also carries `age_days` + a `stale` flag (from the note's live mtime) so you can prefer fresher related notes or flag aged ones.",
       annotations: { ...READ_ONLY, title: "Find similar notes" },
-      inputSchema: z.object({
+      inputSchema: z.strictObject({
         path: z.string().optional().describe("Vault-relative path to the source note"),
         title: z.string().optional().describe("Source note title (alternative to path)"),
         limit: z.number().int().positive().max(50).optional().describe("Max similar notes to return (default 10)"),
@@ -489,7 +491,7 @@ export function registerReadTools(
       description:
         "Return a note's immediate graph neighborhood in one call: outbound wikilinks (resolved), inbound backlinks (with count), and tag-cluster siblings (notes sharing ≥1 tag, excluding outbound/inbound). Replaces the read_note → backlinks → outbound → resolve_wikilink chain with a single round-trip — designed for RAG-style 'give the LLM enough context to reason about THIS note'.",
       annotations: { ...READ_ONLY, title: "Get note neighbors" },
-      inputSchema: z.object({
+      inputSchema: z.strictObject({
         path: z.string().optional().describe("Vault-relative path to the center note"),
         title: z.string().optional().describe("Center note title (alternative to path)"),
         max_per_bucket: z
@@ -511,7 +513,7 @@ export function registerReadTools(
       description:
         "Vault-wide summary: total notes, total bytes, average note length, recently-modified count (last 7 days), orphan notes (no inbound + no outbound), broken wikilink count, total tag count, and top-N tags by frequency. Cheap (one pass over the cached parse). Useful as the first call in a session so the LLM has structural context before issuing targeted reads.",
       annotations: { ...READ_ONLY, title: "Vault stats" },
-      inputSchema: z.object({
+      inputSchema: z.strictObject({
         top_tags: z.number().int().positive().max(50).optional().describe("How many top tags to return (default 10)")
       })
     },
@@ -525,7 +527,7 @@ export function registerReadTools(
       description:
         "Comprehensive vault-hygiene check inspired by Karpathy's LLM-Wiki gist (gist.github.com/karpathy/442a6bf555914893e9891c11519de94f). Returns five buckets of findings in one call: orphans (no inbound + no outbound), broken wikilinks, stub pages (under N words), stale pages (frontmatter `last_reviewed` or mtime older than M days), and concept candidates (capitalised phrases mentioned by ≥ K notes that lack their own page). Each finding carries a path + suggestion shaped so the agent can fix via existing tools (validate_note_proposal → create_note / append_to_note / rename_note). Read-only.",
       annotations: { ...READ_ONLY, title: "Lint wiki" },
-      inputSchema: z.object({
+      inputSchema: z.strictObject({
         folder: z.string().optional().describe("Restrict the lint to a subfolder (default: whole vault)"),
         stub_word_threshold: z
           .number()
@@ -569,7 +571,7 @@ export function registerReadTools(
       description:
         "Walks every note for lines matching deferred-thinking markers — `Open question:` / `Q:` / `TODO?` / `??` (plus optional list-bullet/quote/heading prefixes). Returns each hit with source, the heading it lives under, line number, and age in days, sorted oldest-first so things aging out surface first. Common research-PKM pattern (Karpathy's wiki, Eleanor Konik, academic Zettelkasten). Read-only.",
       annotations: { ...READ_ONLY, title: "Open questions" },
-      inputSchema: z.object({
+      inputSchema: z.strictObject({
         folder: z.string().optional().describe("Restrict the scan to a subfolder"),
         limit: z.number().int().positive().max(500).optional().describe("Max questions to return (default 100)"),
         pattern: z
@@ -591,7 +593,7 @@ export function registerReadTools(
       description:
         "For each note tagged `#paper` (configurable), verify frontmatter has at least one citable identifier (arxiv / doi / url / isbn). Also flag notes whose body contains an arxiv ID (e.g. `arxiv:2401.12345`) or DOI but doesn't carry the same identifier in frontmatter — common after quick-capture from a chat. Returns each flagged note with what was found in body and a proposed frontmatter patch the agent can apply via validate_note_proposal + create_note/append_to_note. Read-only.",
       annotations: { ...READ_ONLY, title: "Paper audit" },
-      inputSchema: z.object({
+      inputSchema: z.strictObject({
         tag: z
           .string()
           .max(MAX_TAG_ARG_LEN)
@@ -611,7 +613,7 @@ export function registerReadTools(
       description:
         "Multi-hop graph traversal: BFS from `from` to `to` over the wikilink graph, returning the shortest path (sequence of notes connected by wikilinks) up to `max_depth` hops. Each step in the returned path carries the wikilink text used to traverse to it. With `include_alternatives=true`, returns up to 10 same-length paths so the agent can compare. Embeds (`![[…]]`) are followed by default; pass `follow_embeds=false` to skip them. Read-only.",
       annotations: { ...READ_ONLY, title: "Find path" },
-      inputSchema: z.object({
+      inputSchema: z.strictObject({
         from: z.string().optional().describe("Vault-relative path of the source note"),
         from_title: z.string().optional().describe("Source note title (alternative to `from`)"),
         to: z.string().optional().describe("Vault-relative path of the destination note"),
@@ -640,7 +642,7 @@ export function registerReadTools(
       description:
         "Returns an `obsidian://open?vault=<vault>&file=<path>` URI for hand-off to the running Obsidian desktop app. No filesystem or network side effect — the URI emission lets the agent say 'open this in Obsidian' without enquire-mcp coordinating with the running app. Optional `new_pane=true` opens the note in a split. Read-only.",
       annotations: { ...READ_ONLY, title: "Open in Obsidian" },
-      inputSchema: z.object({
+      inputSchema: z.strictObject({
         path: z.string().optional().describe("Vault-relative path of the note"),
         title: z.string().optional().describe("Note title (alternative to `path`)"),
         new_pane: z.boolean().optional().describe("Append `&newpane=true` so Obsidian opens the note in a split")
@@ -656,7 +658,7 @@ export function registerReadTools(
       description:
         "Lists `.canvas` files (Obsidian's whiteboard / mind-map format — JSON nodes + edges) in the vault, with each canvas's node and edge counts. Read-only. Honors `--exclude-glob` and `--read-paths`. Use this to discover which canvases exist before calling `obsidian_read_canvas` to inspect one.",
       annotations: { ...READ_ONLY, title: "List canvases" },
-      inputSchema: z.object({
+      inputSchema: z.strictObject({
         folder: z.string().optional().describe("Restrict the listing to a subfolder"),
         limit: z.number().int().positive().max(500).optional().describe("Max canvases to return (default 100)")
       })
@@ -675,9 +677,9 @@ export function registerReadTools(
     {
       title: "Detect wikilink-graph communities (GraphRAG-light)",
       description:
-        "v3.4.0 — Computes structural communities over the vault's wikilink graph via greedy modularity optimization (single-phase Louvain). Returns `community_count`, `modularity` (∈ [-0.5, 1] — higher = stronger structure), `iterations` (greedy passes run) and `converged` (true if a stable partition was reached, false if it hit the 50-pass cap), `communities[]` (each with id/size/sorted-members/representative — the highest-in-community-degree note), and `membership` (path → id). Pure structural — no embeddings consulted. Server stays LLM-free; the agent can summarize a community by reading its representative + sample members. Computation is O(passes × edges); typical 8K-note vault completes in <500ms. The result is NOT cached — call once per session and reuse. First MCP server with native vault community detection.",
+        "v3.4.0 — Computes structural communities over a complete resource-bounded vault wikilink graph via greedy modularity optimization (single-phase Louvain). Returns exact total/eligible/returned community and member counts, membership-path JSON UTF-8 byte receipts, explicit truncation receipts, `modularity` (∈ [-0.5, 1]), `iterations`, `converged`, and bounded `communities[]` with id/size/sorted-members/representative. Membership is encoded once in `communities[].members`; no duplicate path→id map is emitted. Pure structural — no embeddings or LLM calls. The result is NOT cached — call once per session and reuse.",
       annotations: { ...READ_ONLY, title: "Get communities" },
-      inputSchema: z.object({
+      inputSchema: z.strictObject({
         min_size: z
           .number()
           .int()
@@ -697,26 +699,10 @@ export function registerReadTools(
       })
     },
     async (args) => {
-      const { buildWikilinkGraph, detectCommunities } = await import("./communities.js");
+      const { buildWikilinkGraph, detectCommunities, formatCommunityResponse } = await import("./communities.js");
       const graph = await buildWikilinkGraph(vault);
       const result = detectCommunities(graph);
-      const minSize = args.min_size ?? 1;
-      const limit = args.limit ?? 50;
-      const filtered = result.communities.filter((c) => c.size >= minSize).slice(0, limit);
-      const keptIds = new Set(filtered.map((c) => c.id));
-      const membershipObj: Record<string, number> = {};
-      for (const [k, v] of result.membership.entries()) {
-        if (keptIds.has(v)) membershipObj[k] = v;
-      }
-      return textResult({
-        community_count: result.community_count,
-        modularity: result.modularity,
-        iterations: result.iterations,
-        converged: result.converged,
-        node_count: result.membership.size,
-        communities: filtered,
-        membership: membershipObj
-      });
+      return textResult(formatCommunityResponse(result, { minSize: args.min_size, limit: args.limit }));
     }
   );
 
@@ -734,7 +720,7 @@ export function registerReadTools(
       description:
         "v3.2.0 — Lists `.base` files (Obsidian's structured-query primitive — YAML files defining filters/views over the vault) with each base's view count and view names. Read-only. Honors `--exclude-glob` and `--read-paths`. Use this to discover which bases exist before calling `obsidian_read_base` (metadata) or `obsidian_query_base` (execute filters). Sorted by mtime descending.",
       annotations: { ...READ_ONLY, title: "List bases" },
-      inputSchema: z.object({
+      inputSchema: z.strictObject({
         folder: z.string().optional().describe("Restrict the listing to a subfolder"),
         limit: z.number().int().positive().max(500).optional().describe("Max bases to return (default 100)")
       })
@@ -752,7 +738,7 @@ export function registerReadTools(
       description:
         "v3.2.0 — Parses a `.base` file into structured JSON (filters, formulas, properties, summaries, views). Does NOT execute the query — use `obsidian_query_base` for that. Useful when an agent wants to introspect the structure of a base before deciding which view to run, or to surface the base's saved queries to the user. Read-only.",
       annotations: { ...READ_ONLY, title: "Read base" },
-      inputSchema: z.object({
+      inputSchema: z.strictObject({
         path: z.string().describe("Vault-relative path of the .base file (with or without .base)")
       })
     },
@@ -769,7 +755,7 @@ export function registerReadTools(
       description:
         'v3.2.0 (extended in v3.5.0) — Runs a `.base` file\'s filter against the vault\'s markdown notes, returning matching paths + the frontmatter values that contributed to the match. Supported DSL: `tag == "x"`, `taggedWith(file.file, "x")`, `linksTo(file.file, "Target")` (v3.5.0 — outbound wikilink check, basename-resolved, case-insensitive), `path startsWith "X"` / `path contains "X"` / `file.path startsWith "X"` (v3.5.0 — `file.` prefix accepted), `file.name == "X"` / `file.name != "X"` (v3.5.0 — basename equality, .md stripped), `<frontmatter_key> == <value>`, `<key> != <value>`, `<key> contains "<substr>"`, plus `and` / `or` / `not` combinators. Anything else (formula evaluation, date arithmetic, summaries) is **fail-closed since v3.6.2 HN-2** — treated as `false` (excludes the row) and returned in `unevaluated_predicates` so callers see typo/unsupported expressions in the response. Pre-v3.6.2 the behavior was permissive (`true`); v3.6.2 flipped it after an external auditor flagged over-include risk. Pair with `obsidian_search` for retrieval-quality search; this is for explicit saved queries.',
       annotations: { ...READ_ONLY, title: "Query base" },
-      inputSchema: z.object({
+      inputSchema: z.strictObject({
         path: z.string().describe("Vault-relative path of the .base file"),
         view: z
           .string()
@@ -794,7 +780,7 @@ export function registerReadTools(
       description:
         "Parses one `.canvas` file into typed nodes (text / file / link / group) + edges (with from/to node IDs and optional sides + labels). Each `file` node carries a `file_resolved` field — the vault-relative path that the canvas's file reference resolved to (or null if broken). The response also includes a `summary` of node-kind counts and a `broken_file_refs` array surfacing canvas files that reference non-existent notes. Read-only.",
       annotations: { ...READ_ONLY, title: "Read canvas" },
-      inputSchema: z.object({
+      inputSchema: z.strictObject({
         path: z.string().describe("Vault-relative path of the .canvas file (with or without .canvas)")
       })
     },
@@ -816,7 +802,7 @@ export function registerReadTools(
       description:
         "Lists `.pdf` files in the vault with size + last-modified timestamp. Read-only. Honors `--exclude-glob` and `--read-paths`. Use this to discover which PDFs exist before calling `obsidian_read_pdf` to extract text. Sorted by mtime descending (newest first). PDFs are the #1 non-markdown content kind in real research vaults; this is the discovery entry point.",
       annotations: { ...READ_ONLY, title: "List PDFs" },
-      inputSchema: z.object({
+      inputSchema: z.strictObject({
         folder: z.string().optional().describe("Restrict the listing to a subfolder"),
         limit: z.number().int().positive().max(500).optional().describe("Max PDFs to return (default 100)")
       })
@@ -829,9 +815,9 @@ export function registerReadTools(
     {
       title: "Extract text from a PDF (page-by-page)",
       description:
-        "Extracts plain text from one PDF, returning per-page text + a `full_text` join + doc-level metadata (title/author/subject/etc). Image-only / scanned PDFs surface `has_text: false` so agents can detect-and-recommend OCR via `obsidian_ocr_pdf` (v2.10.0). Optional `pages` slice (1-indexed inclusive range) for partial reads of long documents. Read-only. Same path-safety + privacy filter as `obsidian_read_note`. Powered by Mozilla's PDF.js (Apache-2.0).",
+        "Extracts plain text from one PDF, returning per-page text, the extractor's single bounded `full_text` aggregate (not a second join), and doc-level metadata. Every page reports `status: ok | empty | failed` with bounded failure evidence when failed; `complete` is true only when every requested page is `ok` or `empty`, so `has_text: false` means a genuine blank/image-only selection only when `complete: true`. Built-in hard UTF-8 item/page/aggregate and item/node/page-result budgets are enforced during application-level extraction before retention and joins. Overflow emits terminal `PDF_TEXT_BUDGET_EXCEEDED` failed evidence and stops before later pages. Optional `pages` slice (1-indexed inclusive range) supports partial reads. Read-only, with the same path-safety and privacy filter as `obsidian_read_note`. Powered by Mozilla's PDF.js (Apache-2.0).",
       annotations: { ...READ_ONLY, title: "Read PDF" },
-      inputSchema: z.object({
+      inputSchema: z.strictObject({
         path: z.string().describe("Vault-relative path of the .pdf file (with or without .pdf)"),
         // v3.7.13 L2 — schema-level rejection of inverted ranges (parity
         // with obsidian_ocr_pdf). Pre-3.7.13 a `[10, 5]` request flowed
@@ -881,9 +867,9 @@ export function registerReadTools(
     "obsidian_ocr_pdf",
     {
       title: "OCR a scanned/image-only PDF (Tesseract.js)",
-      description: `Runs Tesseract OCR over each page of an image-only / scanned PDF, returning per-page text + per-page confidence + mean confidence + the same shape as \`obsidian_read_pdf\`. Use this when \`obsidian_read_pdf\` returns \`has_text: false\` (typical for scans, photographed paper, image-only PDFs). Multilingual via \`lang\` (default \`'eng'\`; multi-lang via \`'+'\`, e.g. \`'eng+rus'\`). Optional \`pages\` range and \`scale\` (DPI multiplier, default 2 ~ 150 DPI, capped at 4). ~1-2s per page on M1 CPU; OCR is serialized process-wide behind a bounded queue and limited to ${DEFAULT_OCR_TIMEOUT_MS / 60_000} minutes per request (including queue wait), with client cancellation propagated to cleanup. Read-only. Powered by Tesseract.js (Apache-2.0; language trained-data must be pre-installed via \`enquire-mcp install-ocr-lang <code>\` — serve mode makes zero outbound network calls, so a language missing from the local cache fails closed with an install hint rather than downloading at runtime) + @napi-rs/canvas for PDF→bitmap rendering. Both gated to \`optionalDependencies\` so the markdown-only path stays zero-cost.`,
+      description: `Runs Tesseract OCR over each page of an image-only/scanned PDF. Every page reports \`status: ok | empty | failed\` and bounded failure evidence; \`complete\` is true only when every requested page is \`ok\` or \`empty\`. Per-page \`confidence\` and \`mean_confidence\` are finite 0-100 numbers or \`null\`, never NaN. Built-in hard UTF-8 item/page/aggregate and item/node/page-result budgets are enforced during application-level extraction before retention and joins; overflow emits terminal \`OCR_TEXT_BUDGET_EXCEEDED\` failed evidence and stops before later pages. \`full_text\` reuses the extractor's single bounded aggregate. Use this only when \`obsidian_read_pdf\` returns both \`complete: true\` and \`has_text: false\`. Multilingual via \`lang\` (default \`'eng'\`; multi-lang via \`'+'\`, e.g. \`'eng+rus'\`). Optional \`pages\` range and \`scale\` (DPI multiplier, default 2 ~ 150 DPI, capped at 4). ~1-2s per page on M1 CPU; OCR is serialized process-wide behind a bounded queue and limited to ${DEFAULT_OCR_TIMEOUT_MS / 60_000} minutes per request (including queue wait), with client cancellation propagated to cleanup. Read-only. Powered by Tesseract.js (Apache-2.0; language trained-data must be pre-installed via \`enquire-mcp install-ocr-lang <code>\` — serve mode makes zero outbound network calls, so a language missing from the local cache fails closed with an install hint rather than downloading at runtime) + @napi-rs/canvas for PDF-to-bitmap rendering. Both are optional dependencies, so the markdown-only path stays zero-cost.`,
       annotations: { ...READ_ONLY, title: "OCR PDF" },
-      inputSchema: z.object({
+      inputSchema: z.strictObject({
         path: z.string().describe("Vault-relative path of the .pdf file (with or without .pdf)"),
         // v3.7.13 M3 / v3.9.0-rc.10 (#16) — `lang` is validated then passed to the
         // Tesseract worker, which runs `cacheMethod: "readOnly"` against the local
@@ -949,9 +935,9 @@ export function registerReadTools(
       {
         title: "Semantic search (TF-IDF cosine)",
         description:
-          "Pure-JS lexical-semantic retrieval. Tokenizes + TF-IDFs + L2-normalizes every note's body once per session, then ranks notes by cosine similarity to the query. Free, offline, and model-free: use it when `obsidian_search_text` (substring) and `obsidian_full_text_search` (BM25) miss synonyms or related-term matches. For best results pair with `--persistent-index` so BM25 + semantic both run cheap. Returns ranked hits with snippet + matched terms (highest-IDF first). **v3.10:** each hit also carries `age_days` + a `stale` flag (from the note's live mtime) — a freshness signal you can reason over.",
+          "Pure-JS weighted lexical retrieval. Tokenizes + TF-IDFs + L2-normalizes each admitted note body, then ranks by cosine similarity over exact normalized token overlap. Free, offline, and model-free: it can emphasize rare shared terms, but it does not infer synonyms, paraphrases, or cross-language meaning; use embeddings for those cases. A folder scopes both discovery and IDF. Corpus/token/byte budgets fail closed instead of returning a silent prefix, and source-generation receipts prevent stale vectors from being paired with live snippets. Returns ranked hits with snippet + matched terms (highest-IDF first). **v3.10:** each hit also carries `age_days` + a `stale` flag (from the note's live mtime) — a freshness signal you can reason over.",
         annotations: { ...READ_ONLY, title: "Semantic search" },
-        inputSchema: z.object({
+        inputSchema: z.strictObject({
           query: z
             .string()
             .min(1)
@@ -982,7 +968,7 @@ export function registerReadTools(
         description:
           "ML-embedding retrieval via @huggingface/transformers + paraphrase-multilingual-MiniLM-L12-v2 q8 (50+ languages, 384-dim, runs on CPU). Higher-quality than `obsidian_semantic_search` for paraphrases / synonyms / cross-language queries, but requires a one-time setup: (1) `enquire-mcp install-model multilingual` downloads the ONNX weights (~118MB) and (2) `enquire-mcp build-embeddings --vault <path>` writes the persistent vector index. Query latency depends on corpus and hardware; enable HNSW when measurements justify approximate nearest-neighbor retrieval. If the index is missing, the tool returns a clean error with the exact command to run — it does NOT silently kick off a model download.",
         annotations: { ...READ_ONLY, title: "Embeddings search" },
-        inputSchema: z.object({
+        inputSchema: z.strictObject({
           query: z
             .string()
             .min(1)
@@ -1019,7 +1005,7 @@ export function registerReadTools(
       description:
         'v3.1.0 — HyDE retrieval (Gao et al 2023). Caller agent generates a synthetic answer to its own question, passes it as `hypothetical_answer`; the server embeds the answer (not the question) and retrieves against the answer-shaped vector. Typically beats raw-query embedding by +2-5 NDCG@10 on under-specified queries (e.g. "what did I learn about X" — the question vector is generic; the answer vector is topically anchored). Uses the same `.embed.db` as `obsidian_embeddings_search`. The agent SHOULD generate the hypothetical answer with no vault access (otherwise the loop is circular); 1-3 sentences in the same style/register as your notes. If `hypothetical_answer` is empty, falls back to embedding the raw `query`. Requires `enquire-mcp build-embeddings` first.',
       annotations: { ...READ_ONLY, title: "HyDE search" },
-      inputSchema: z.object({
+      inputSchema: z.strictObject({
         query: z
           .string()
           .min(1)
@@ -1055,7 +1041,7 @@ export function registerReadTools(
       description:
         '**The default search tool for v2.0.** Auto-detects every available retrieval signal — BM25 via FTS5 (if `--persistent-index`), TF-IDF cosine (always), and ML embeddings (if `enquire-mcp build-embeddings` ran) — and fuses them with Reciprocal Rank Fusion (Cormack et al, 2009) for higher recall and better paraphrase / synonym matching than any single ranker. Equal weights, k=60. Gracefully degrades: with only TF-IDF available it produces TF-IDF-style ranking; with BM25+TF-IDF it does keyword-augmented retrieval; with all 3 it provides full hybrid conceptual + lexical retrieval, free / offline / open-source. Returns per-signal observability (`per_signal: { bm25, tfidf, embeddings }`) so you can see WHY each hit ranked. **v2.8.0:** when `--include-pdfs` was passed to `serve` (or `enquire-mcp index --include-pdfs` ran), PDF chunks are blended into results — each hit carries a `kind: "md" | "pdf"` flag and PDF chunks include `[page: N]` markers in snippets so agents can cite the right page. Use this instead of the individual `_search_text` / `_full_text_search` / `_semantic_search` / `_embeddings_search` tools unless you specifically need single-ranker output for diagnostics. **v3.10 (forgetting-aware):** every hit also carries `age_days` (whole days since the note was last edited, from its live mtime) and a `stale` boolean (true past ~1 year) — use these to flag a recalled fact as possibly out-of-date instead of stating it as current. Ranking stays relevance-driven by default; if the server was started with `--recency-weight`, fresher notes are blended upward.',
       annotations: { ...READ_ONLY, title: "Hybrid search" },
-      inputSchema: z.object({
+      inputSchema: z.strictObject({
         query: z
           .string()
           .min(1)
@@ -1155,7 +1141,7 @@ export function registerReadTools(
       description:
         "Parse a note's `## Chat: <title>` block into structured messages with role/timestamp/content/line-range. Non-chat content in the same note is ignored. Read-only.",
       annotations: { ...READ_ONLY, title: "Read chat thread" },
-      inputSchema: z.object({
+      inputSchema: z.strictObject({
         note_path: z.string().min(1).describe("Vault-relative path to the note hosting the thread")
       })
     },
@@ -1170,7 +1156,7 @@ export function registerReadTools(
       description:
         "Given a question, retrieve the top relevant Markdown notes (via hybrid search), gather backlink summaries + optionally recent dailies, deduplicate, pack to a token budget, and return a single ready-to-paste markdown bundle. Ranked PDF hits are never parsed as Markdown: their paths are returned in `skipped_pdf_candidates` for bounded follow-up with `obsidian_read_pdf`. Optional `subqueries[]` adds bounded coverage-aware retrieval: reserve the best available unique candidate per atomic sub-question, then RRF-fill the remaining slots. Saves the agent ~5 separate tool calls while keeping document-kind handling explicit.",
       annotations: { ...READ_ONLY, title: "Context pack" },
-      inputSchema: z.object({
+      inputSchema: z.strictObject({
         query: z.string().min(1).max(MAX_QUERY_LEN).describe("Topic or question to gather context for"),
         subqueries: z
           .array(z.string().min(1).max(MAX_QUERY_LEN))
@@ -1229,11 +1215,12 @@ export function registerReadTools(
       description:
         "Return parsed YAML frontmatter for a note. With `key`, returns just that field's value. Without `key`, returns the whole frontmatter object. Read-only.",
       annotations: { ...READ_ONLY, title: "Get frontmatter" },
-      inputSchema: z.object({
+      inputSchema: z.strictObject({
         path: z.string().optional().describe("Vault-relative path"),
         title: z.string().optional().describe("Note title (filename without .md, accepts periodic aliases)"),
         key: z
           .string()
+          .min(1)
           .max(MAX_FRONTMATTER_KEY_LEN)
           .optional()
           .describe("Single key to read; omit for full frontmatter")
@@ -1249,7 +1236,7 @@ export function registerReadTools(
       description:
         "Find every note where frontmatter.<key> matches a predicate. Useful as a precursor to bulk frontmatter_set: 'find all notes with status:draft and set their status to published'. Predicates are exclusive: pass exactly one of `equals` (strict equality), `exists` (key must be present), `contains` (for array values, member match).",
       annotations: { ...READ_ONLY, title: "Search frontmatter" },
-      inputSchema: z.object({
+      inputSchema: z.strictObject({
         key: z.string().min(1).max(MAX_FRONTMATTER_KEY_LEN).describe("Frontmatter key to test"),
         // rc.21 — bound the stringified value predicate: it is JSON.stringify'd and
         // string-compared against EVERY note's frontmatter across the whole vault, so an
@@ -1261,7 +1248,7 @@ export function registerReadTools(
             message: `equals predicate too large (stringified > ${MAX_FRONTMATTER_VALUE_LEN} chars)`
           })
           .describe("Strict equality predicate (JSON.stringify comparison)"),
-        exists: z.boolean().optional().describe("Predicate: key must exist (any value)"),
+        exists: z.literal(true).optional().describe("Predicate: key must exist (the only admitted value is true)"),
         contains: z
           .unknown()
           .optional()
@@ -1288,10 +1275,16 @@ export function registerReadTools(
  * vault root plus relative path keys, counts, and ISO timestamps (no note
  * content, snippets, or query text), is erased by `prune`, and the boost is
  * opt-in.
+ *
+ * @param server - MCP server receiving the state-mutating tool.
+ * @param store - Root-bound durable feedback tally.
+ * @param vault - Live path/privacy authority used before any tally mutation.
+ * @param writeTracker - Optional transport lifecycle tracker.
  */
 export function registerFeedbackTool(
   server: McpServer,
   store: import("./feedback.js").FeedbackStore,
+  vault: Vault,
   writeTracker?: WriteRequestTracker
 ): void {
   // K-3 invariant: `obsidian_mark_useful` is NOT read-only (it mutates the feedback
@@ -1308,7 +1301,7 @@ export function registerFeedbackTool(
       description:
         "Close the retrieval feedback loop: after using `obsidian_search` results, call this with the note path(s) that ACTUALLY helped answer the query (pass the `path` field of the useful hits). The recorded usefulness gently boosts those notes in future searches for this vault (active only when the server was started with `--feedback-weight`). Set `useful: false` to record a note that looked relevant but was NOT helpful (lowers its boost). The per-vault cache sidecar stores the canonical absolute vault root plus relative path keys, counts, and ISO timestamps — never note content, snippets, or the query — and `enquire-mcp prune` erases it. Each call increments the tally (not idempotent).",
       annotations: { ...WRITE, title: "Mark useful" },
-      inputSchema: z.object({
+      inputSchema: z.strictObject({
         paths: z
           .array(z.string().min(1).max(1024))
           .min(1)
@@ -1321,28 +1314,8 @@ export function registerFeedbackTool(
       })
     },
     async (args, ctx) =>
-      textResult(await runTrackedWrite(store, writeTracker, ctx.mcpReq, "finish", () => markUseful(store, args)))
+      textResult(await runTrackedWrite(store, writeTracker, ctx.mcpReq, "finish", () => markUseful(store, vault, args)))
   );
-}
-
-/**
- * Handler for `obsidian_mark_useful` — records usefulness marks into the feedback
- * store (a cache sidecar, NOT the vault). Extracted + named so the K-3 invariant
- * can pin it as the tool's write handler (`KNOWN_WRITE_HANDLERS`). `new Date()` is
- * called here (not in the Date-free `feedback.ts` module) and injected into `record`.
- */
-async function markUseful(
-  store: import("./feedback.js").FeedbackStore,
-  args: { paths: string[]; useful?: boolean }
-): Promise<{ recorded: number; useful: boolean; total_notes_with_feedback: number; note: string }> {
-  const useful = args.useful !== false;
-  const recorded = await store.record(args.paths, useful, new Date().toISOString());
-  return {
-    recorded,
-    useful,
-    total_notes_with_feedback: store.size(),
-    note: "Feedback boosts future obsidian_search ranking for this vault when --feedback-weight > 0."
-  };
 }
 
 export function registerWriteTools(server: McpServer, vault: Vault, writeTracker?: WriteRequestTracker): void {
@@ -1358,7 +1331,7 @@ export function registerWriteTools(server: McpServer, vault: Vault, writeTracker
       description:
         "Create a new note inside the vault. Refuses to overwrite unless overwrite=true. Frontmatter is rendered as YAML when supplied. WRITE TOOL — only available when the server is started with --enable-write.",
       annotations: { ...WRITE, title: "Create note" },
-      inputSchema: z.object({
+      inputSchema: z.strictObject({
         path: z
           .string()
           .min(1)
@@ -1382,7 +1355,7 @@ export function registerWriteTools(server: McpServer, vault: Vault, writeTracker
       description:
         "Append a block of markdown to the end of an existing note. Provide either path or title. WRITE TOOL — only available when the server is started with --enable-write.",
       annotations: { ...WRITE, title: "Append to note" },
-      inputSchema: z.object({
+      inputSchema: z.strictObject({
         path: z.string().optional().describe("Vault-relative path of the target note"),
         title: z.string().optional().describe("Target note title (filename without .md)"),
         content: z.string().describe("Markdown to append"),
@@ -1403,17 +1376,7 @@ export function registerWriteTools(server: McpServer, vault: Vault, writeTracker
       description:
         "Atomically rename a note AND rewrite every [[wikilink]] / ![[embed]] in the rest of the vault that resolves to it — preserving |alias, #section, ^block, and the user's chosen path-qualification convention (bare basename vs path). Code-fence-aware: wikilinks inside ``` / ~~~ blocks are left verbatim. Use dry_run=true to preview which files would change without touching disk. Returns per-file rewrite counts + total. WRITE TOOL — only available when the server is started with --enable-write.",
       annotations: { ...WRITE, title: "Rename note" },
-      inputSchema: z.object({
-        from: z.string().describe("Vault-relative path of the existing note (with or without .md)"),
-        to: z
-          .string()
-          .describe("Vault-relative path of the new location (with or without .md). Different folder = move."),
-        dry_run: z
-          .boolean()
-          .optional()
-          .describe("Preview the rewrite plan without writing anything to disk (default false)"),
-        overwrite: z.boolean().optional().describe("Allow overwriting an existing note at `to` (default false)")
-      })
+      inputSchema: RENAME_NOTE_INPUT_SCHEMA
     },
     async (args, ctx) =>
       textResult(
@@ -1430,7 +1393,7 @@ export function registerWriteTools(server: McpServer, vault: Vault, writeTracker
       description:
         "Walks the vault (or a `folder` subset), substitutes every occurrence of `search` with `replace` outside fenced code blocks (` ``` ` / `~~~`), and writes each modified file back. Reuses the same line-walker rename_note uses, so example snippets and code documentation stay verbatim. Pass `dry_run=true` to preview the plan without touching disk — you get per-file occurrence counts + total. `case_sensitive` defaults to true. Refuses identical search/replace and empty search to prevent footguns. WRITE TOOL — only registered when --enable-write is passed.",
       annotations: { ...WRITE, title: "Replace in notes" },
-      inputSchema: z.object({
+      inputSchema: z.strictObject({
         search: z.string().min(1).max(MAX_QUERY_LEN).describe("Literal substring to find. Empty string is rejected."),
         replace: z
           .string()
@@ -1459,7 +1422,7 @@ export function registerWriteTools(server: McpServer, vault: Vault, writeTracker
       description:
         "Convenience wrapper around obsidian_rename_note for the common archive workflow. Moves the note's basename into `archive_folder` (default `Archive/`) and rewrites every wikilink/embed pointing at it. All the rename_note guarantees apply: code-fence-aware, dry_run preview, refuses to clobber an existing archive entry without `overwrite: true`. Returns the same shape as `obsidian_rename_note`. WRITE TOOL — only registered when --enable-write is passed.",
       annotations: { ...WRITE, title: "Archive note" },
-      inputSchema: z.object({
+      inputSchema: z.strictObject({
         path: z.string().describe("Vault-relative path of the note to archive (with or without `.md`)"),
         archive_folder: z
           .string()
@@ -1488,7 +1451,7 @@ export function registerWriteTools(server: McpServer, vault: Vault, writeTracker
       description:
         "Add a user/assistant/system message to a note's `## Chat: <title>` block. Creates the note + heading if absent. Threads are stored as markdown so they're searchable, version-controllable, and survive across sessions / clients. Pair with `obsidian_chat_thread_read` to load past context. WRITE TOOL — only registered with --enable-write.",
       annotations: { ...WRITE, title: "Append chat thread" },
-      inputSchema: z.object({
+      inputSchema: z.strictObject({
         note_path: z.string().min(1).describe("Vault-relative path to the note hosting the thread"),
         role: z.enum(["user", "assistant", "system"]).describe("Role of the message being appended"),
         content: z.string().min(1).describe("Message body (markdown allowed)"),
@@ -1510,7 +1473,7 @@ export function registerWriteTools(server: McpServer, vault: Vault, writeTracker
       description:
         "Surgical YAML manipulation: set one or more keys, or remove them by passing `null` as the value. Round-trips through the same js-yaml-backed frontmatter serializer used at write time so YAML formatting / quoting / type-coercion stays consistent. Returns `before` + `after` + list of changed keys for observability. `dry_run: true` shows the diff without writing.",
       annotations: { ...WRITE, title: "Set frontmatter" },
-      inputSchema: z.object({
+      inputSchema: z.strictObject({
         path: z.string().optional().describe("Vault-relative path"),
         title: z.string().optional().describe("Note title (filename without .md)"),
         set: z
@@ -1553,19 +1516,7 @@ export function registerChunkResource(server: McpServer, idx: FtsIndex, vault: V
         "Chunk-level addressing for FTS5 search hits. URI shape: `obsidian://chunk/<chunk_index>/<note-path>` — only registered when `--persistent-index` is on. Construct these URIs from `chunk_index` + `rel_path` returned by `obsidian_full_text_search`.",
       mimeType: "text/plain"
     },
-    async (uri, params) => {
-      const indexRaw = String(params.chunkIndex ?? "");
-      const chunkIndex = Number.parseInt(indexRaw, 10);
-      if (!Number.isInteger(chunkIndex) || chunkIndex < 0) {
-        throw new Error(`Invalid chunk index in URI: ${indexRaw}`);
-      }
-      const notePathRaw = Array.isArray(params.notePath) ? params.notePath.join("/") : (params.notePath as string);
-      const decoded = decodeNotePath(notePathRaw);
-      const payload = await readLiveFtsChunk(vault, idx, decoded, chunkIndex);
-      return {
-        contents: [{ uri: uri.href, mimeType: "application/json", text: JSON.stringify(payload, null, 2) }]
-      };
-    }
+    async (uri, params) => readChunkResource(vault, idx, uri, params)
   );
 }
 
@@ -1579,15 +1530,7 @@ export function registerResources(server: McpServer, vault: Vault): void {
       mimeType: "application/json"
     },
     async (uri) => {
-      const entries = await vault.listMarkdown();
-      const payload = {
-        root: vault.root,
-        note_count: entries.length,
-        write_enabled: vault.writeEnabled,
-        max_file_bytes: vault.maxFileBytes,
-        max_cache_entries: vault.maxCacheEntries,
-        version: VERSION
-      };
+      const payload = await vaultResourceInfo(vault, VERSION);
       return {
         contents: [{ uri: uri.href, mimeType: "application/json", text: JSON.stringify(payload, null, 2) }]
       };
@@ -1597,17 +1540,7 @@ export function registerResources(server: McpServer, vault: Vault): void {
   server.registerResource(
     "vault-note",
     new ResourceTemplate("obsidian://note/{+notePath}", {
-      list: async () => {
-        const entries = await vault.listMarkdown();
-        return {
-          resources: entries.map((e) => ({
-            uri: `obsidian://note/${encodeNotePath(e.relPath)}`,
-            name: e.basename.replace(/\.md$/i, ""),
-            description: e.relPath,
-            mimeType: "text/markdown"
-          }))
-        };
-      }
+      list: async () => ({ resources: await listVaultNoteResources(vault) })
     }),
     {
       title: "Vault notes",
@@ -1625,10 +1558,27 @@ export function registerResources(server: McpServer, vault: Vault): void {
   );
 }
 
-export function parsePositiveInt(raw: string, flag: string): number {
-  const n = Number(raw);
-  if (!Number.isFinite(n) || !Number.isInteger(n) || n <= 0) {
-    throw new Error(`${flag} must be a positive integer; got "${raw}"`);
+/**
+ * Parse a CLI-style positive integer without allowing IEEE-754 or native-width truncation.
+ *
+ * @param raw - Decimal spelling supplied by the caller.
+ * @param flag - Human-readable option name used in the error.
+ * @param maximum - Inclusive upper bound; defaults to JavaScript's safe-integer maximum.
+ * @returns The admitted integer.
+ * @throws {Error} If the spelling is not a positive safe integer within the bound.
+ * @example
+ * ```ts
+ * const ef = parsePositiveInt("100", "--hnsw-ef", 0xffff_ffff);
+ * ```
+ */
+export function parsePositiveInt(raw: string, flag: string, maximum = Number.MAX_SAFE_INTEGER): number {
+  if (!Number.isSafeInteger(maximum) || maximum <= 0) {
+    throw new TypeError("parsePositiveInt maximum must be a positive safe integer");
+  }
+  const canonical = typeof raw === "string" && /^[1-9][0-9]*$/u.test(raw);
+  const n = canonical ? Number(raw) : Number.NaN;
+  if (!Number.isSafeInteger(n) || n <= 0 || n > maximum) {
+    throw new Error(`${flag} must be a positive integer between 1 and ${maximum}; got "${raw}"`);
   }
   return n;
 }
@@ -1648,33 +1598,4 @@ export function parseQuantizationMode(raw: string | undefined): "f32" | "int8" |
     `--quantize-embeddings must be "f32" or "int8" (got "${raw}"). ` +
       `Aliases: "none"/"float32" → f32, "q8"/"i8" → int8.`
   );
-}
-
-/**
- * Encode a normalized vault-relative path for a slash-preserving note URI.
- *
- * Vault entries use forward slashes on every host, including Windows. Split
- * that canonical representation rather than the host filesystem separator.
- *
- * @param relPath - Canonical forward-slash vault-relative note path.
- * @returns A component-encoded path whose directory separators remain `/`.
- */
-export function encodeNotePath(relPath: string): string {
-  return relPath.split("/").map(encodeURIComponent).join("/");
-}
-
-/**
- * Decode the path portion of an Obsidian note resource URI.
- *
- * @param uriPath - Slash-separated, component-encoded URI path.
- * @returns A normalized forward-slash vault-relative path.
- */
-export function decodeNotePath(uriPath: string): string {
-  return uriPath.split("/").map(decodeURIComponent).join("/");
-}
-
-export function textResult(payload: unknown): { content: Array<{ type: "text"; text: string }> } {
-  return {
-    content: [{ type: "text", text: JSON.stringify(payload, null, 2) }]
-  };
 }

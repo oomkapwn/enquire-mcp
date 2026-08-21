@@ -45,7 +45,8 @@ export const REQUIRED_RELEASE_CHECKS = Object.freeze([
   "oia",
   "protocol-conformance",
   "package-consumer",
-  "mcpb-basic"
+  "mcpb-basic",
+  "docker"
 ]);
 
 const PROVENANCE_CONTEXT_FIELDS = Object.freeze([
@@ -2001,6 +2002,82 @@ export function evaluateMcpbCandidateRun(input) {
   return { state: "selected", artifactId, digest, runAttempt: producerAttempt };
 }
 
+/**
+ * Select the unique canonical npm tarball artifact from one trusted CI run.
+ * The producer and the blocking three-platform consumer aggregate must both
+ * succeed, and retry provenance may pin the exact producer attempt, artifact
+ * ID, and GitHub archive digest.
+ *
+ * @param {unknown} input Jobs, artifacts, exact-run identity, and optional pins.
+ * @returns {{state:"skip"}|{state:"selected",artifactId:string,digest:string,runAttempt:number}}
+ *   Selection state and immutable npm candidate identity when selected.
+ */
+export function evaluateNpmPackageCandidateRun(input) {
+  if (!isRecord(input) || !Array.isArray(input.jobs) || !Array.isArray(input.artifacts)) {
+    throw new Error("npm Actions candidate state must explicitly contain jobs and artifacts");
+  }
+  const trustedRun = assertTrustedCiWorkflowRun(input.workflowRun, input.expectedSourceSha);
+  const jobIds = new Set();
+  for (const job of input.jobs) {
+    const trustedJob = assertTrustedWorkflowJob(job, trustedRun, input.expectedSourceSha, "npm candidate CI job");
+    if (jobIds.has(trustedJob.id)) throw new Error(`duplicate npm candidate CI job id: ${trustedJob.id}`);
+    jobIds.add(trustedJob.id);
+  }
+  const latestNamedJob = (name) => {
+    const named = input.jobs.filter((job) => job?.name === name);
+    const latestAttempt = named.length > 0 ? Math.max(...named.map((job) => job.run_attempt)) : 0;
+    const latest = named.filter((job) => job.run_attempt === latestAttempt);
+    if (latest.length > 1) throw new Error(`duplicate latest-attempt ${name} jobs`);
+    return latest[0];
+  };
+  const aggregate = latestNamedJob("package-consumer");
+  const producer = latestNamedJob("npm-package");
+  if (aggregate?.status !== "completed" || aggregate?.conclusion !== "success") return { state: "skip" };
+  if (producer?.status !== "completed" || producer?.conclusion !== "success") return { state: "skip" };
+  const producerAttempt = producer.run_attempt;
+  if (aggregate.run_attempt < producerAttempt) return { state: "skip" };
+  const pinnedRunAttempt = optionalPositiveSafeIntegerPin(input.pinnedRunAttempt, "pinned npm producer attempt");
+  if (pinnedRunAttempt !== null && pinnedRunAttempt !== producerAttempt) {
+    throw new Error("canonical npm artifact producer attempt differs from release provenance");
+  }
+
+  const artifactIds = new Set();
+  for (const artifact of input.artifacts) {
+    if (
+      !isRecord(artifact) ||
+      !isPositiveSafeInteger(artifact.id) ||
+      typeof artifact.name !== "string" ||
+      artifact.name.length === 0 ||
+      typeof artifact.expired !== "boolean" ||
+      (artifact.digest !== null &&
+        (typeof artifact.digest !== "string" || !/^sha256:[0-9a-f]{64}$/u.test(artifact.digest)))
+    ) {
+      throw new Error("npm Actions artifact collection contains an invalid identity");
+    }
+    if (artifactIds.has(artifact.id)) throw new Error(`duplicate npm Actions artifact id: ${String(artifact.id)}`);
+    artifactIds.add(artifact.id);
+  }
+  const expectedName = `npm-package-candidate-${producerAttempt}`;
+  const live = input.artifacts.filter((artifact) => artifact?.name === expectedName && artifact?.expired === false);
+  if (live.length > 1) throw new Error(`duplicate live ${expectedName} artifacts`);
+  if (live.length === 0) return { state: "skip" };
+  const artifact = live[0];
+  const artifactId = String(artifact.id);
+  const digest = artifact?.digest;
+  if (typeof digest !== "string" || !/^sha256:[0-9a-f]{64}$/u.test(digest)) {
+    throw new Error("canonical npm Actions artifact lacks an exact id or SHA-256 digest");
+  }
+  const pinnedArtifactId = optionalPositiveSafeIntegerPin(input.pinnedArtifactId, "pinned npm artifact id");
+  if (pinnedArtifactId !== null && pinnedArtifactId !== artifact.id) {
+    throw new Error("canonical npm Actions artifact id differs from release provenance");
+  }
+  const pinnedDigest = optionalExactSha256DigestPin(input.pinnedDigest, "pinned npm artifact digest");
+  if (pinnedDigest !== null && pinnedDigest !== digest) {
+    throw new Error("canonical npm Actions artifact digest differs from release provenance");
+  }
+  return { state: "selected", artifactId, digest, runAttempt: producerAttempt };
+}
+
 const RELEASE_BODY_LIMIT = 125_000;
 
 function canonicalUtf8Text(input, label) {
@@ -2309,7 +2386,8 @@ function usage() {
     "release-body-create <version> <path> | release-body-audit <path> <sha256> <bytes> <chars> |",
     "npm-provenance-context <source-sha> <tag> |",
     "npm-provenance <name> <version> <sha512-sri> <source-sha> <tag> <publish-attempted> <run-id> <run-attempt> |",
-    "mcp-registry-state <preflight|convergence> | candidate-runs <source-sha> | candidate <source-sha>"
+    "mcp-registry-state <preflight|convergence> | candidate-runs <source-sha> |",
+    "candidate <source-sha> | npm-candidate <source-sha>"
   ].join(" ");
 }
 
@@ -2432,6 +2510,20 @@ if (isEntrypoint(import.meta.url)) {
       console.log(
         JSON.stringify(
           evaluateMcpbCandidateRun({
+            ...payload,
+            workflowRun: payload?.workflow_run,
+            expectedSourceSha: first,
+            pinnedRunAttempt: second === "-" ? "" : second,
+            pinnedArtifactId: process.argv[5] === "-" ? "" : process.argv[5],
+            pinnedDigest: process.argv[6] === "-" ? "" : process.argv[6]
+          })
+        )
+      );
+    } else if (mode === "npm-candidate") {
+      const payload = JSON.parse(readFileSync(0, "utf8"));
+      console.log(
+        JSON.stringify(
+          evaluateNpmPackageCandidateRun({
             ...payload,
             workflowRun: payload?.workflow_run,
             expectedSourceSha: first,

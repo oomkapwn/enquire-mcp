@@ -8,12 +8,10 @@
 // engine is now js-yaml@5 (`load`/`dump` safe-by-default, YAML 1.2 core — the v3 `safeLoad`/
 // `safeDump` semantics).
 //
-// The STRUCTURAL split + stringify logic below is a faithful PORT of gray-matter's own
-// `index.js#parseMatter` + `lib/stringify.js` (delimiter handling, the `----` guard, the
-// comment-only-emptiness check, the CR/LF strip after the closing fence, the UTF-8 BOM
-// strip, the `newline()` join) — a dev-only differential test (since deleted; it imported
-// gray-matter) confirmed byte-identical `{data,content}` + stringify on those STRUCTURAL
-// paths over a broad corpus.
+// The stringify logic below is a port of gray-matter's default-delimiter behavior.  The
+// structural reader is intentionally stricter: only a standalone `---` logical line opens
+// or closes frontmatter.  It recognizes LF, CRLF, CR, U+2028, and U+2029 in one linear pass;
+// prefix lines such as `---yaml`, `---trailing`, and `----` are ordinary body/YAML text.
 //
 // NOT byte-identical on SCALAR RESOLUTION (v3.10.0-rc.54 audit FM-1/SC-2; re-verified UNCHANGED
 // on js-yaml@5 in rc.6): the engine is js-yaml@5 (YAML 1.2 core), whereas gray-matter used
@@ -80,7 +78,43 @@ export interface Frontmatter {
 }
 
 const OPEN = "---";
-const CLOSE = "\n---";
+
+interface LogicalLine {
+  textEnd: number;
+  next: number;
+}
+
+/** Locate one logical line without allocating or rescanning an already-inspected suffix. */
+function logicalLineAt(source: string, start: number): LogicalLine {
+  let cursor = start;
+  while (cursor < source.length) {
+    const code = source.charCodeAt(cursor);
+    if (code === 0x0a || code === 0x2028 || code === 0x2029) {
+      return { textEnd: cursor, next: cursor + 1 };
+    }
+    if (code === 0x0d) {
+      return { textEnd: cursor, next: source.charCodeAt(cursor + 1) === 0x0a ? cursor + 2 : cursor + 1 };
+    }
+    cursor += 1;
+  }
+  return { textEnd: source.length, next: source.length };
+}
+
+/** True when the block contains YAML other than blank or comment-only logical lines. */
+function hasYamlContent(source: string): boolean {
+  let start = 0;
+  while (start < source.length) {
+    const line = logicalLineAt(source, start);
+    let cursor = start;
+    while (cursor < line.textEnd && (source.charCodeAt(cursor) === 0x20 || source.charCodeAt(cursor) === 0x09)) {
+      cursor += 1;
+    }
+    if (cursor < line.textEnd && source.charCodeAt(cursor) !== 0x23) return true;
+    if (line.next === start) break;
+    start = line.next;
+  }
+  return false;
+}
 
 /**
  * True only for a PLAIN object (a YAML mapping) — rejects `null`, arrays, and
@@ -110,24 +144,30 @@ export function parseFrontmatter(input: string): Frontmatter {
   // `source.lastIndexOf(body)` for bodyStartLine is unaffected.
   if (input.charCodeAt(0) === 0xfeff) input = input.slice(1);
   if (input === "") return { data: {}, content: "", coerced: false };
-  if (!input.startsWith(OPEN)) return { data: {}, content: input, coerced: false };
-  // gray-matter guard: `----…` (a 4th dash right after the opening fence) is NOT
-  // frontmatter — treat the whole input as body.
-  if (input.charAt(OPEN.length) === "-") return { data: {}, content: input, coerced: false };
+  const opening = logicalLineAt(input, 0);
+  if (input.slice(0, opening.textEnd) !== OPEN) return { data: {}, content: input, coerced: false };
 
-  const str = input.slice(OPEN.length);
-  const len = str.length;
-  let closeIndex = str.indexOf(CLOSE);
-  if (closeIndex === -1) closeIndex = len;
+  const matterStart = opening.next;
+  let cursor = matterStart;
+  let closeStart = -1;
+  let contentStart = input.length;
+  while (cursor < input.length) {
+    const line = logicalLineAt(input, cursor);
+    if (input.slice(cursor, line.textEnd) === OPEN) {
+      closeStart = cursor;
+      contentStart = line.next;
+      break;
+    }
+    if (line.next === cursor) break;
+    cursor = line.next;
+  }
 
-  const matterBlock = str.slice(0, closeIndex);
-  // Strip YAML comment-only lines for the emptiness decision (gray-matter parity).
-  const block = matterBlock.replace(/^\s*#[^\n]+/gm, "").trim();
+  const matterBlock = input.slice(matterStart, closeStart === -1 ? input.length : closeStart);
   let data: Record<string, unknown> = {};
   // v3.10.0-rc.64 (round-3 audit) — track whether a non-empty block was coerced
   // away from a non-mapping document (see the `coerced` field doc on Frontmatter).
   let coerced = false;
-  if (block !== "") {
+  if (hasYamlContent(matterBlock)) {
     // v3.10.0-rc.54 (audit FM-SCALAR) — coerce a NON-MAPPING document (scalar / array /
     // null) to {} the way gray-matter did. Otherwise a frontmatter block that's a bare
     // scalar (`---\nhello\n---`) or a sequence (`---\n- a\n- b\n---`) would be cast to
@@ -144,14 +184,7 @@ export function parseFrontmatter(input: string): Frontmatter {
     }
   }
 
-  let content: string;
-  if (closeIndex === len) {
-    content = "";
-  } else {
-    content = str.slice(closeIndex + CLOSE.length);
-    if (content[0] === "\r") content = content.slice(1);
-    if (content[0] === "\n") content = content.slice(1);
-  }
+  const content = closeStart === -1 ? "" : input.slice(contentStart);
   return { data, content, coerced };
 }
 

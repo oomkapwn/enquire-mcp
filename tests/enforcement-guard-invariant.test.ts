@@ -321,6 +321,32 @@ function persistedEgressGuardViolations(search: string): string[] {
   return violations;
 }
 
+/** Pin the MCP chunk-resource boundary to the live FTS receipt guard extracted from the registry. */
+function chunkResourceAdmissionViolations(registry: string, resourceAdmission: string): string[] {
+  const violations: string[] = [];
+  const delegation = "async (uri, params) => readChunkResource(vault, idx, uri, params)";
+  if (!registry.includes(delegation)) {
+    violations.push("chunk resource registry: readChunkResource delegation missing");
+  }
+
+  const start = resourceAdmission.indexOf("export async function readChunkResource(");
+  if (start < 0) return [...violations, "chunk resource admission: helper region missing"];
+  const body = resourceAdmission.slice(start);
+  const decoded = body.indexOf("const decoded = decodeNotePath(notePathRaw);");
+  const liveRead = body.indexOf("const payload = await readLiveFtsChunk(vault, idx, decoded, chunkIndex);");
+  const serialized = body.indexOf("JSON.stringify(payload, null, 2)");
+  if (decoded < 0) violations.push("chunk resource admission: canonical path decode missing");
+  if (liveRead < 0) violations.push("chunk resource admission: live readLiveFtsChunk guard missing");
+  if (serialized < 0) violations.push("chunk resource admission: admitted payload serialization missing");
+  if (!(decoded >= 0 && liveRead > decoded && serialized > liveRead)) {
+    violations.push("chunk resource admission: decode/live-guard/serialize order broken");
+  }
+  for (const bypass of ["idx.getChunk(", "idx.getChunkWithReceipt("]) {
+    if (body.includes(bypass)) violations.push(`chunk resource admission: direct index bypass via ${bypass}`);
+  }
+  return violations;
+}
+
 /** Public result construction must strip both halves of the internal receipt. */
 function publicReceiptLeakViolations(search: string, registry: string): string[] {
   const slice = (text: string, start: string, end: string): string => {
@@ -488,7 +514,7 @@ function writerParentModeProblems(sources: {
       label: "Vault parse cache",
       body: between(
         sources.vault,
-        "  private async saveDiskCacheOnce(file: string)",
+        "  private async saveDiskCacheOnce(request: DiskCacheSaveRequest)",
         "  /**\n   * Resolve a vault-relative"
       ),
       mkdir: "await this.mkdirSafe(cacheDir, { recursive: true, mode: 0o700 });",
@@ -496,7 +522,11 @@ function writerParentModeProblems(sources: {
     },
     {
       label: "Feedback",
-      body: between(sources.feedback, "  private async writeOnce()", "\n  }\n}"),
+      body: between(
+        sources.feedback,
+        "  private async writeOnce(data: FeedbackData = this.data): Promise<void> {",
+        "\n  }\n}"
+      ),
       mkdir: "await fs.mkdir(dir, { recursive: true, mode: 0o700 });",
       forbidden: ["dirExisted", "fs.stat(dir", "fs.chmod(dir"]
     },
@@ -553,6 +583,7 @@ describe("enforcement-guarantee → code-guard invariant (rc.3, overclaim #15/#1
     const offenders = GUARANTEES.map((g) => checkGuarantee(g, security, src)).filter(Boolean) as string[];
     expect(offenders, offenders.join("\n")).toEqual([]);
     const registry = readFileSync(path.join(repoRoot, "src/tool-registry.ts"), "utf8");
+    const resourceAdmission = readFileSync(path.join(repoRoot, "src/resource-admission.ts"), "utf8");
     const hnsw = readFileSync(path.join(repoRoot, "src/hnsw.ts"), "utf8");
     const search = readFileSync(path.join(repoRoot, "src/tools/search.ts"), "utf8");
     const meta = readFileSync(path.join(repoRoot, "src/tools/meta.ts"), "utf8");
@@ -574,7 +605,7 @@ describe("enforcement-guarantee → code-guard invariant (rc.3, overclaim #15/#1
     expect(diagnosticMap).not.toContain("...match");
     expect(diagnosticMap).not.toContain("indexed_mtime_ms");
     expect(diagnosticMap).not.toContain("indexed_revision");
-    expect(registry).toContain("const payload = await readLiveFtsChunk(vault, idx, decoded, chunkIndex);");
+    expect(chunkResourceAdmissionViolations(registry, resourceAdmission)).toEqual([]);
     expect(search).toContain("const hits = await filterLiveVaultHits(");
     expect(search).toContain("const ftsHits = await filterLiveVaultHits(");
     expect(search).toContain("const hydratedRows = db.getSearchRowsByIds(labels);");
@@ -677,6 +708,7 @@ describe("enforcement-guarantee → code-guard invariant (rc.3, overclaim #15/#1
     const doctor = readFileSync(path.join(repoRoot, "src/doctor.ts"), "utf8");
     const evalSource = readFileSync(path.join(repoRoot, "src/eval.ts"), "utf8");
     const registry = readFileSync(path.join(repoRoot, "src/tool-registry.ts"), "utf8");
+    const resourceAdmission = readFileSync(path.join(repoRoot, "src/resource-admission.ts"), "utf8");
     const vault = readFileSync(path.join(repoRoot, "src/vault.ts"), "utf8");
     const feedback = readFileSync(path.join(repoRoot, "src/feedback.ts"), "utf8");
     const hnsw = readFileSync(path.join(repoRoot, "src/hnsw.ts"), "utf8");
@@ -692,6 +724,19 @@ describe("enforcement-guarantee → code-guard invariant (rc.3, overclaim #15/#1
     );
     expect(persistedEgressGuardViolations(search.replace(ftsMask, "() => []"))).toContain(
       `diagnostic FTS: missing ${ftsMask}`
+    );
+
+    const liveChunkRead = "const payload = await readLiveFtsChunk(vault, idx, decoded, chunkIndex);";
+    const chunkGuardMutant = replaceExactly(
+      resourceAdmission,
+      liveChunkRead,
+      "const payload = idx.getChunk(decoded, chunkIndex);"
+    );
+    expect(chunkResourceAdmissionViolations(registry, chunkGuardMutant)).toEqual(
+      expect.arrayContaining([
+        "chunk resource admission: live readLiveFtsChunk guard missing",
+        "chunk resource admission: direct index bypass via idx.getChunk("
+      ])
     );
 
     const authoritativeHydration = "let h = hnswResultsToReceiptHits({ labels, distances }, hydratedRows);";

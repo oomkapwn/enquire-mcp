@@ -11,7 +11,7 @@ import {
   syncPdfEmbedDb
 } from "../src/embed-sync.js";
 import type { Embedder } from "../src/embeddings.js";
-import { Vault } from "../src/vault.js";
+import { MAX_INDEX_SYNC_FILES, MAX_INDEX_SYNC_VISITED_ENTRIES, Vault } from "../src/vault.js";
 import { makePdf } from "./helpers/make-pdf.js";
 
 const DIM = 4;
@@ -116,6 +116,36 @@ function expectPriorRowPreserved(db: EmbedDb, relPath: string, kind: "md" | "pdf
 }
 
 describe("bulk embedding synchronization evidence", () => {
+  it("refuses incomplete Markdown/PDF inventories before deletion and accepts a complete negative inventory", async () => {
+    const db = await openDb();
+    seedPriorRow(db, "retained.md");
+    seedPriorRow(db, "retained.pdf", 1, "pdf");
+    const markdownVault = new Vault(root);
+    const pdfVault = new Vault(root);
+    const incomplete = { entries: [], visitedEntries: 11, complete: false } as const;
+    const markdownListing = vi.spyOn(markdownVault, "listFilesByExtensionsBounded").mockResolvedValue(incomplete);
+    const pdfListing = vi.spyOn(pdfVault, "listFilesByExtensionsBounded").mockResolvedValue(incomplete);
+
+    await expect(syncEmbedDb(markdownVault, db, deterministicEmbedder())).rejects.toThrow(
+      /Embed Markdown source inventory is incomplete/
+    );
+    await expect(syncPdfEmbedDb(pdfVault, db, deterministicEmbedder())).rejects.toThrow(
+      /Embed PDF source inventory is incomplete/
+    );
+    expectPriorRowPreserved(db, "retained.md");
+    expectPriorRowPreserved(db, "retained.pdf", "pdf");
+    expect(markdownListing).toHaveBeenCalledWith([".md"], MAX_INDEX_SYNC_FILES, MAX_INDEX_SYNC_VISITED_ENTRIES);
+    expect(pdfListing).toHaveBeenCalledWith([".pdf"], MAX_INDEX_SYNC_FILES, MAX_INDEX_SYNC_VISITED_ENTRIES);
+
+    const complete = { entries: [], visitedEntries: 0, complete: true } as const;
+    markdownListing.mockResolvedValue(complete);
+    pdfListing.mockResolvedValue(complete);
+    await expect(syncEmbedDb(markdownVault, db, deterministicEmbedder())).resolves.toMatchObject({ deleted: 1 });
+    await expect(syncPdfEmbedDb(pdfVault, db, deterministicEmbedder())).resolves.toMatchObject({ deleted: 1 });
+    expect(db.getSourceStates("md")).toEqual([]);
+    expect(db.getSourceStates("pdf")).toEqual([]);
+  });
+
   it("strict Markdown sync returns exact complete evidence across add, update, unchanged, and delete", async () => {
     const alphaPath = await writeNote("alpha.md", "Alpha body with searchable context.\n");
     await writeNote("beta.md", "Beta body with other searchable context.\n");

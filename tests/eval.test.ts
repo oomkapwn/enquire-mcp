@@ -264,7 +264,7 @@ describe("runEval (v2.12.0)", () => {
   });
 
   afterAll(async () => {
-    idx?.close();
+    await idx?.closeAndRelease();
     await fs.rm(root, { recursive: true, force: true });
     for (const suffix of ["", "-wal", "-shm"]) {
       await fs.rm(`${dbFile}${suffix}`, { force: true });

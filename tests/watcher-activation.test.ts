@@ -274,8 +274,8 @@ async function createFixture(
     fixtures.push(fixture);
     return fixture;
   } catch (error) {
-    embedDb.close();
-    fts.close();
+    await embedDb.closeAndRelease().catch(() => {});
+    await fts.closeAndRelease().catch(() => {});
     throw error;
   }
 }
@@ -292,8 +292,8 @@ beforeEach(async () => {
 afterEach(async () => {
   for (const fixture of fixtures) {
     await fixture.watcher.close().catch(() => {});
-    fixture.embedDb.close();
-    fixture.fts.close();
+    await fixture.embedDb.closeAndRelease().catch(() => {});
+    await fixture.fts.closeAndRelease().catch(() => {});
   }
   await fs.rm(sandboxRoot, { recursive: true, force: true });
 });
@@ -641,7 +641,7 @@ describe("VaultWatcher startup activation barrier", () => {
       inspectVisibleAliasInventoryInLane(): Promise<unknown>;
     };
     const inventorySpy = vi.spyOn(watcherInternals, "inspectVisibleAliasInventoryInLane");
-    const readNoteSpy = vi.spyOn(fixture.vault, "readNote");
+    const readNoteSpy = vi.spyOn(fixture.vault, "readNoteUncached");
     let readNoteCalls = 0;
     let inventoryCalls = 0;
     const duringPath = path.join(fixture.vault.root, "During.md");

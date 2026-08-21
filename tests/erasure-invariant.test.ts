@@ -22,7 +22,7 @@
 // cross-vault prune authority. Mirrors the rc.25 ReDoS-fuzz move (assert the
 // property, don't re-enumerate by hand).
 
-import { promises as fs, readFileSync } from "node:fs";
+import { promises as fs, readdirSync, readFileSync } from "node:fs";
 import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -43,7 +43,8 @@ import {
   publishSensitiveArtifact,
   readSensitiveArtifactText,
   removeSensitiveArtifactTemps,
-  sensitiveArtifactFinalBasename
+  sensitiveArtifactFinalBasename,
+  sha256SensitiveArtifact
 } from "../src/sensitive-artifact.js";
 import { Vault } from "../src/vault.js";
 import { replaceExactly } from "./helpers/exact-source-mutation.js";
@@ -146,6 +147,16 @@ const WINDOWS_PERSISTENCE_REJECTIONS = PERSISTENCE_NAMESPACE_ADMITTERS.flatMap((
       error: /reserved Windows device basename/
     },
     {
+      hazard: "DOS device basename with an ignored trailing space",
+      file: `C:\\Enquire\\CON ${suffix}`,
+      error: /reserved Windows device basename/
+    },
+    {
+      hazard: "numbered DOS device basename with an ignored trailing space",
+      file: `C:\\Enquire\\COM1 ${suffix}`,
+      error: /reserved Windows device basename/
+    },
+    {
       hazard: "trailing-dot component",
       file: `C:\\Enquire.\\Vault${suffix}`,
       error: /trailing-dot or trailing-space path component/
@@ -228,9 +239,18 @@ const ERASURE_MANIFEST = [
   {
     family: "parse cache + atomic-write temp (full note bodies)",
     file: "src/vault.ts",
-    eraser: "clearDiskCache",
-    requiredTokens: ["clearDiskCacheOnce("],
+    eraser: "clearDiskCacheOperation",
+    requiredTokens: ["clearDiskCacheCoordinated("],
     routeMembers: [
+      {
+        file: "src/vault.ts",
+        member: "clearDiskCacheCoordinated",
+        requiredTokens: [
+          "acquirePersistenceEraser(request.requestedFile)",
+          "clearDiskCacheOnce({ file })",
+          "releasePersistenceHandle(eraser)"
+        ]
+      },
       {
         file: "src/vault.ts",
         member: "clearDiskCacheOnce",
@@ -299,7 +319,7 @@ const SQLITE_NATIVE_OPEN_ROUTES: readonly SqliteNativeOpenRoute[] = [
   {
     id: "FTS mutating open",
     file: "src/fts5.ts",
-    member: "open",
+    member: "openOnce",
     fileArgument: "this.file",
     loaderNeedle: "loadBetterSqlite()",
     constructorNeedle: "new Ctor(this.file)"
@@ -323,7 +343,7 @@ const SQLITE_NATIVE_OPEN_ROUTES: readonly SqliteNativeOpenRoute[] = [
   {
     id: "Embed mutating open",
     file: "src/embed-db.ts",
-    member: "open",
+    member: "openOnce",
     fileArgument: "this.file",
     loaderNeedle: "loadBetterSqlite()",
     constructorNeedle: "new Ctor(this.file)"
@@ -364,27 +384,43 @@ const SENSITIVE_PUBLISHER_INVENTORY: readonly SensitivePublisherInventoryEntry[]
       file: "src/vault.ts",
       member: "saveDiskCacheOnce",
       needles: [
-        "private async saveDiskCacheOnce(file: string)",
-        "const cacheSnapshot = [...this.cache];",
-        "for (const [abs, cached] of cacheSnapshot)",
-        "publishSensitiveArtifact(file, serialized)"
+        "private async saveDiskCacheOnce(request: DiskCacheSaveRequest)",
+        "const { requestedFile, publishedEpoch, cacheSnapshot } = request;",
+        "const file = target.canonicalFile;",
+        "for (const { abs, source } of cacheSnapshot)",
+        "this.cache.get(abs) === source",
+        "publishSensitiveArtifact(file, serialized, this.maxDiskCacheBytes)"
       ]
     },
     eraserRoutes: [
       {
         file: "src/vault.ts",
-        member: "clearDiskCache",
-        needles: ["const invocationEpoch = this.cacheEpoch;", "this.clearDiskCacheOnce(file, invocationEpoch)"]
+        member: "clearDiskCacheOperation",
+        needles: [
+          "this.cache = new Map();",
+          "this.cacheGeneration += 1;",
+          "const request: DiskCacheClearRequest = { requestedFile: file };",
+          "this.pendingCacheClears.set(file, { request, promise: clear });",
+          "this.clearDiskCacheCoordinated(request)"
+        ]
+      },
+      {
+        file: "src/vault.ts",
+        member: "clearDiskCacheCoordinated",
+        needles: [
+          "acquirePersistenceEraser(request.requestedFile)",
+          "clearDiskCacheOnce({ file })",
+          "releasePersistenceHandle(eraser)"
+        ]
       },
       {
         file: "src/vault.ts",
         member: "clearDiskCacheOnce",
         needles: [
-          "private async clearDiskCacheOnce(file: string, invocationEpoch: number)",
+          "private async clearDiskCacheOnce(request: DiskCachePhysicalClearRequest)",
           "preflightSensitiveArtifactTemps(file)",
           LEGACY_CACHE_TEMP_SOURCE_NEEDLE,
-          "removeSensitiveArtifactTemps(file)",
-          "this.cacheEpoch === invocationEpoch"
+          "removeSensitiveArtifactTemps(file)"
         ],
         needleOccurrences: { [LEGACY_CACHE_TEMP_SOURCE_NEEDLE]: 2 }
       },
@@ -401,7 +437,7 @@ const SENSITIVE_PUBLISHER_INVENTORY: readonly SensitivePublisherInventoryEntry[]
     publisher: {
       file: "src/feedback.ts",
       member: "writeOnce",
-      needles: ["publishSensitiveArtifact(this.file, serialized)"]
+      needles: ["publishSensitiveArtifact(this.file, serialized, MAX_FEEDBACK_FILE_BYTES)"]
     },
     eraserRoutes: [
       {
@@ -415,12 +451,12 @@ const SENSITIVE_PUBLISHER_INVENTORY: readonly SensitivePublisherInventoryEntry[]
   ...[
     {
       id: "hnsw-binary-generation",
-      publisherNeedle: "publishSensitiveArtifact(generationFile, async (stagedPath) => {",
+      publisherNeedle: "const binary = await publishSensitiveArtifact(",
       pruneProbe: `${INVENTORY_OTHER}.hnsw.${TOKEN_48}.bin.enquire-stage-${TOKEN_48}`
     },
     {
       id: "hnsw-metadata-pointer",
-      publisherNeedle: "publishSensitiveArtifact(metaFile, serializedMeta)",
+      publisherNeedle: "publishSensitiveArtifact(metaFile, serializedMeta, MAX_HNSW_META_BYTES)",
       pruneProbe: `${INVENTORY_OTHER}.hnsw.meta.json.enquire-tmp-${TOKEN_48}`
     }
   ].map(({ id, publisherNeedle, pruneProbe }) => ({
@@ -452,17 +488,222 @@ const SENSITIVE_PUBLISHER_INVENTORY: readonly SensitivePublisherInventoryEntry[]
   }))
 ];
 
+interface SensitiveReaderInventoryEntry {
+  id: string;
+  file: string;
+  member: string;
+  calls: number;
+  exactCall: string;
+  directArgument: string;
+}
+
+const SENSITIVE_READER_INVENTORY: readonly SensitiveReaderInventoryEntry[] = [
+  {
+    id: "parse-cache load",
+    file: "src/vault.ts",
+    member: "loadDiskCache",
+    calls: 1,
+    exactCall: "readSensitiveArtifactText(file, this.maxDiskCacheBytes)",
+    directArgument: "file"
+  },
+  {
+    id: "feedback load",
+    file: "src/feedback.ts",
+    member: "loadFeedbackData",
+    calls: 1,
+    exactCall: "readSensitiveArtifactText(file, MAX_FEEDBACK_FILE_BYTES)",
+    directArgument: "file"
+  },
+  {
+    id: "HNSW pointer read",
+    file: "src/hnsw.ts",
+    member: "readHnswMetaPointer",
+    calls: 1,
+    exactCall: "readSensitiveArtifactText(metaFile, MAX_HNSW_META_BYTES)",
+    directArgument: "metaFile"
+  },
+  {
+    id: "HNSW load receipt",
+    file: "src/hnsw.ts",
+    member: "loadHnswFromDisk",
+    calls: 2,
+    exactCall: "readSensitiveArtifactText(metaFile, MAX_HNSW_META_BYTES)",
+    directArgument: "metaFile"
+  }
+];
+
+type SensitiveArtifactHelperName =
+  | "inspectSensitiveArtifact"
+  | "publishSensitiveArtifact"
+  | "readSensitiveArtifactText"
+  | "sha256SensitiveArtifact";
+
+interface SensitiveHelperInventoryEntry {
+  helper: SensitiveArtifactHelperName;
+  file: string;
+  member: string;
+  calls: number;
+}
+
+// This is deliberately a census of calls routed through the shared sensitive-
+// artifact helpers, not a claim that every raw `fs` sink in production has been
+// classified. The raw-filesystem surface has different semantics and needs its
+// own inventory rather than being smuggled into this narrower invariant.
+const HNSW_SENSITIVE_HELPER_INVENTORY: readonly SensitiveHelperInventoryEntry[] = [
+  {
+    helper: "inspectSensitiveArtifact",
+    file: "src/hnsw.ts",
+    member: "preflightHnswNativeGeneration",
+    calls: 1
+  },
+  {
+    helper: "inspectSensitiveArtifact",
+    file: "src/hnsw.ts",
+    member: "readHnswMetaPointer",
+    calls: 1
+  },
+  {
+    helper: "sha256SensitiveArtifact",
+    file: "src/hnsw.ts",
+    member: "loadHnswFromDisk",
+    calls: 2
+  }
+];
+
 function runtimeMemberBodies(source: string, file: string, member: string): string[] {
   const sourceFile = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
   const bodies: string[] = [];
   const visit = (node: ts.Node): void => {
-    if ((ts.isMethodDeclaration(node) || ts.isFunctionDeclaration(node)) && node.name?.getText(sourceFile) === member) {
+    if (
+      (ts.isMethodDeclaration(node) || ts.isFunctionDeclaration(node)) &&
+      node.name?.getText(sourceFile) === member &&
+      node.body
+    ) {
       bodies.push(node.getText(sourceFile));
     }
     ts.forEachChild(node, visit);
   };
   visit(sourceFile);
   return bodies;
+}
+
+interface ProductionTypeScriptSource {
+  file: string;
+  source: string;
+}
+
+function productionTypeScriptSources(overrides: ReadonlyMap<string, string> = new Map()): ProductionTypeScriptSource[] {
+  const sources: ProductionTypeScriptSource[] = [];
+  const walk = (dir: string): void => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        walk(full);
+      } else if (entry.isFile() && entry.name.endsWith(".ts")) {
+        const file = path.relative(repoRoot, full).replace(/\\/gu, "/");
+        sources.push({ file, source: overrides.get(file) ?? readFileSync(full, "utf8") });
+      }
+    }
+  };
+  walk(path.join(repoRoot, "src"));
+  return sources.sort((left, right) => left.file.localeCompare(right.file));
+}
+
+function sensitiveArtifactHelperCallSites(overrides: ReadonlyMap<string, string> = new Map()): {
+  sites: string[];
+  violations: string[];
+} {
+  const sites: string[] = [];
+  const violations: string[] = [];
+  const helperNames = new Set<SensitiveArtifactHelperName>([
+    "inspectSensitiveArtifact",
+    "publishSensitiveArtifact",
+    "readSensitiveArtifactText",
+    "sha256SensitiveArtifact"
+  ]);
+  for (const { file, source } of productionTypeScriptSources(overrides)) {
+    if (file === "src/sensitive-artifact.ts") continue;
+    const sourceFile = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+    const importedHelpers = new Set<string>();
+    for (const statement of sourceFile.statements) {
+      if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier)) continue;
+      if (statement.moduleSpecifier.text !== "./sensitive-artifact.js") continue;
+      const bindings = statement.importClause?.namedBindings;
+      if (!bindings || ts.isNamespaceImport(bindings)) {
+        violations.push(`${file}: sensitive-artifact helpers must use canonical named imports`);
+        continue;
+      }
+      for (const specifier of bindings.elements) {
+        const exportedName = specifier.propertyName?.text ?? specifier.name.text;
+        if (!helperNames.has(exportedName)) continue;
+        if (specifier.name.text !== exportedName) {
+          violations.push(`${file}: ${exportedName} must not be imported through alias ${specifier.name.text}`);
+          continue;
+        }
+        importedHelpers.add(exportedName);
+      }
+    }
+    const visit = (node: ts.Node, containingMember: string): void => {
+      let member = containingMember;
+      if (ts.isMethodDeclaration(node) || ts.isFunctionDeclaration(node)) {
+        member = node.name?.getText(sourceFile) ?? "<anonymous>";
+      } else if (
+        ts.isVariableDeclaration(node) &&
+        node.initializer &&
+        (ts.isArrowFunction(node.initializer) || ts.isFunctionExpression(node.initializer))
+      ) {
+        member = node.name.getText(sourceFile);
+      }
+      if (ts.isIdentifier(node) && helperNames.has(node.text) && !ts.isImportSpecifier(node.parent)) {
+        if (!importedHelpers.has(node.text)) {
+          violations.push(`${file}#${member}: ${node.text} is not bound by its canonical named import`);
+        } else if (ts.isCallExpression(node.parent) && node.parent.expression === node) {
+          sites.push(`${node.text}:${file}#${member}`);
+        } else {
+          violations.push(`${file}#${member}: ${node.text} escapes a direct helper call`);
+        }
+      }
+      if (
+        ts.isPropertyAccessExpression(node) &&
+        helperNames.has(node.name.text) &&
+        ts.isCallExpression(node.parent) &&
+        node.parent.expression === node
+      ) {
+        violations.push(`${file}#${member}: ${node.name.text} is called through a property alias`);
+      }
+      ts.forEachChild(node, (child) => visit(child, member));
+    };
+    visit(sourceFile, "<module>");
+  }
+  return { sites: sites.sort(), violations: violations.sort() };
+}
+
+function sensitiveArtifactHelperCensusProblems(overrides: ReadonlyMap<string, string> = new Map()): string[] {
+  const expected = [
+    ...SENSITIVE_PUBLISHER_INVENTORY.map(
+      ({ publisher }) => `publishSensitiveArtifact:${publisher.file}#${publisher.member}`
+    ),
+    ...SENSITIVE_READER_INVENTORY.flatMap(({ file, member, calls }) =>
+      Array.from({ length: calls }, () => `readSensitiveArtifactText:${file}#${member}`)
+    ),
+    ...HNSW_SENSITIVE_HELPER_INVENTORY.flatMap(({ helper, file, member, calls }) =>
+      Array.from({ length: calls }, () => `${helper}:${file}#${member}`)
+    )
+  ].sort();
+  const { sites: actual, violations } = sensitiveArtifactHelperCallSites(overrides);
+  const expectedCounts = new Map<string, number>();
+  const actualCounts = new Map<string, number>();
+  for (const site of expected) expectedCounts.set(site, (expectedCounts.get(site) ?? 0) + 1);
+  for (const site of actual) actualCounts.set(site, (actualCounts.get(site) ?? 0) + 1);
+  const problems: string[] = [...violations];
+  for (const site of new Set([...expectedCounts.keys(), ...actualCounts.keys()])) {
+    const expectedCount = expectedCounts.get(site) ?? 0;
+    const actualCount = actualCounts.get(site) ?? 0;
+    if (expectedCount !== actualCount) {
+      problems.push(`${site}: inventory expected ${expectedCount}, production has ${actualCount}`);
+    }
+  }
+  return problems.sort();
 }
 
 function sensitiveReaderRouteProblems(
@@ -490,43 +731,1739 @@ function sensitiveReaderRouteProblems(
   return problems;
 }
 
+type RuntimeMemberNode = ts.FunctionDeclaration | ts.MethodDeclaration;
+
+function runtimeMemberNodes(
+  source: string,
+  file: string,
+  member: string
+): {
+  sourceFile: ts.SourceFile;
+  nodes: RuntimeMemberNode[];
+} {
+  const sourceFile = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const nodes: RuntimeMemberNode[] = [];
+  const visit = (node: ts.Node): void => {
+    if (
+      (ts.isFunctionDeclaration(node) || ts.isMethodDeclaration(node)) &&
+      node.name?.getText(sourceFile) === member &&
+      node.body
+    ) {
+      nodes.push(node);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  return { sourceFile, nodes };
+}
+
+function callExpressions(root: ts.Node): ts.CallExpression[] {
+  const calls: ts.CallExpression[] = [];
+  const visit = (node: ts.Node): void => {
+    if (ts.isCallExpression(node)) calls.push(node);
+    ts.forEachChild(node, visit);
+  };
+  visit(root);
+  return calls;
+}
+
+function ifStatements(root: ts.Node): ts.IfStatement[] {
+  const statements: ts.IfStatement[] = [];
+  const visit = (node: ts.Node): void => {
+    if (ts.isIfStatement(node)) statements.push(node);
+    ts.forEachChild(node, visit);
+  };
+  visit(root);
+  return statements;
+}
+
+function variableDeclarations(root: ts.Node, sourceFile: ts.SourceFile, name: string): ts.VariableDeclaration[] {
+  const declarations: ts.VariableDeclaration[] = [];
+  const visit = (node: ts.Node): void => {
+    if (ts.isVariableDeclaration(node) && node.name.getText(sourceFile) === name) declarations.push(node);
+    ts.forEachChild(node, visit);
+  };
+  visit(root);
+  return declarations;
+}
+
+function objectPropertyValue(
+  object: ts.ObjectLiteralExpression,
+  sourceFile: ts.SourceFile,
+  name: string
+): ts.Expression | undefined {
+  const matches = object.properties.filter(
+    (property) =>
+      (ts.isPropertyAssignment(property) || ts.isShorthandPropertyAssignment(property)) &&
+      property.name.getText(sourceFile) === name
+  );
+  if (matches.length !== 1) return undefined;
+  const property = matches[0];
+  if (ts.isPropertyAssignment(property)) return property.initializer;
+  return ts.isShorthandPropertyAssignment(property) ? property.name : undefined;
+}
+
+function isPropertyCall(call: ts.CallExpression, sourceFile: ts.SourceFile, owner: string, member: string): boolean {
+  return (
+    ts.isPropertyAccessExpression(call.expression) &&
+    call.expression.expression.getText(sourceFile) === owner &&
+    call.expression.name.text === member
+  );
+}
+
+function branchGuards(
+  node: ts.Node,
+  sourceFile: ts.SourceFile
+): Array<{ branch: "then" | "else"; expression: string }> {
+  const guards: Array<{ branch: "then" | "else"; expression: string }> = [];
+  for (let parent = node.parent; parent; parent = parent.parent) {
+    if (!ts.isIfStatement(parent)) continue;
+    if (
+      node.getStart(sourceFile) >= parent.thenStatement.getStart(sourceFile) &&
+      node.end <= parent.thenStatement.end
+    ) {
+      guards.push({ branch: "then", expression: parent.expression.getText(sourceFile) });
+    } else if (
+      parent.elseStatement &&
+      node.getStart(sourceFile) >= parent.elseStatement.getStart(sourceFile) &&
+      node.end <= parent.elseStatement.end
+    ) {
+      guards.push({ branch: "else", expression: parent.expression.getText(sourceFile) });
+    }
+  }
+  return guards;
+}
+
+function hasBranchGuard(
+  guards: readonly { branch: "then" | "else"; expression: string }[],
+  branch: "then" | "else",
+  expression: string
+): boolean {
+  return guards.some((guard) => guard.branch === branch && guard.expression === expression);
+}
+
+function hnswArtifactBoundaryProblems(source: string): string[] {
+  const problems: string[] = [];
+  const preflight = runtimeMemberNodes(source, "src/hnsw.ts", "preflightHnswNativeGeneration");
+  if (preflight.nodes.length !== 1) {
+    return [`expected one preflightHnswNativeGeneration implementation, found ${preflight.nodes.length}`];
+  }
+  const preflightBody = preflight.nodes[0]?.body;
+  if (!preflightBody) return ["preflightHnswNativeGeneration body disappeared"];
+  const inspectCalls = callExpressions(preflightBody).filter(
+    (call) => call.expression.getText(preflight.sourceFile) === "inspectSensitiveArtifact"
+  );
+  if (inspectCalls.length !== 1) {
+    problems.push(`HNSW preflight must use one held-descriptor inspector, found ${inspectCalls.length}`);
+  } else {
+    const inspectCall = inspectCalls[0];
+    const callback = inspectCall?.arguments[2];
+    if (
+      inspectCall?.arguments[0]?.getText(preflight.sourceFile) !== "file" ||
+      inspectCall.arguments[1]?.getText(preflight.sourceFile) !== "MAX_HNSW_GENERATION_BYTES"
+    ) {
+      problems.push("HNSW preflight must inspect its generation through the exact generation-byte cap");
+    }
+    if (
+      !callback ||
+      (!ts.isArrowFunction(callback) && !ts.isFunctionExpression(callback)) ||
+      callback.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.AsyncKeyword) !== true ||
+      callback.parameters.map((parameter) => parameter.name.getText(preflight.sourceFile)).join(",") !==
+        "handle,fileSize"
+    ) {
+      problems.push("HNSW preflight must parse through the inspector's held handle and stable size");
+    } else {
+      const heldReads = callExpressions(callback.body).filter(
+        (call) => call.expression.getText(preflight.sourceFile) === "readHeldBytes"
+      );
+      if (
+        heldReads.length < 3 ||
+        heldReads.some((call) => call.arguments[0]?.getText(preflight.sourceFile) !== "handle")
+      ) {
+        problems.push("HNSW header, payload, and receipt hash must all read the inspector-held descriptor");
+      }
+      const cursorGuard = ifStatements(callback.body).find((statement) =>
+        statement.expression.getText(preflight.sourceFile).includes("cursor !== fileSize")
+      );
+      const hashDeclarations = variableDeclarations(callback.body, preflight.sourceFile, "hash");
+      const hashDeclaration = hashDeclarations[0];
+      if (
+        hashDeclarations.length !== 1 ||
+        hashDeclaration?.initializer?.getText(preflight.sourceFile) !== 'createHash("sha256")' ||
+        !cursorGuard ||
+        hashDeclaration.getStart(preflight.sourceFile) <= cursorGuard.getStart(preflight.sourceFile)
+      ) {
+        problems.push(
+          "HNSW held-descriptor digest must be computed only after the complete native payload is admitted"
+        );
+      }
+      const snapshotPath = variableDeclarations(callback.body, preflight.sourceFile, "nativeSnapshotPath");
+      const snapshotOpen = callExpressions(callback.body).filter(
+        (call) => call.expression.getText(preflight.sourceFile) === "fs.open"
+      );
+      const admittedAssignments = callExpressions(callback.body).filter(
+        (call) => call.expression.getText(preflight.sourceFile) === "removeHnswNativeSnapshot"
+      );
+      if (
+        snapshotPath.length !== 1 ||
+        snapshotPath[0]?.initializer?.getText(preflight.sourceFile) !==
+          'path.join(nativeSnapshotDirectory, "artifact")' ||
+        snapshotOpen.length !== 1 ||
+        snapshotOpen[0]?.arguments.map((argument) => argument.getText(preflight.sourceFile)).join("|") !==
+          'nativeSnapshotPath|"wx"|0o600' ||
+        !cursorGuard ||
+        (snapshotOpen[0]?.getStart(preflight.sourceFile) ?? -1) <= cursorGuard.getStart(preflight.sourceFile) ||
+        admittedAssignments.length !== 1
+      ) {
+        problems.push(
+          "HNSW preflight must copy fully-admitted held-descriptor bytes into one owned private artifact snapshot"
+        );
+      }
+    }
+  }
+  const outerSnapshot = variableDeclarations(preflightBody, preflight.sourceFile, "admittedSnapshot");
+  const outerCleanup = callExpressions(preflightBody).filter(
+    (call) =>
+      call.expression.getText(preflight.sourceFile) === "removeHnswNativeSnapshot" &&
+      call.arguments[0]?.getText(preflight.sourceFile) === "admittedSnapshot"
+  );
+  if (
+    outerSnapshot.length !== 1 ||
+    outerSnapshot[0]?.initializer?.getText(preflight.sourceFile) !== "null" ||
+    outerCleanup.length !== 1 ||
+    !hasBranchGuard(branchGuards(outerCleanup[0] as ts.Node, preflight.sourceFile), "then", "admittedSnapshot")
+  ) {
+    problems.push("HNSW preflight must erase a private snapshot rejected by the inspector's final descriptor receipt");
+  }
+
+  const loader = runtimeMemberNodes(source, "src/hnsw.ts", "loadHnswFromDisk");
+  if (loader.nodes.length !== 1) {
+    problems.push(`expected one loadHnswFromDisk implementation, found ${loader.nodes.length}`);
+    return problems;
+  }
+  const loaderBody = loader.nodes[0]?.body;
+  if (!loaderBody) return [...problems, "loadHnswFromDisk body disappeared"];
+  const loaderCalls = callExpressions(loaderBody);
+  const callsNamed = (name: string): ts.CallExpression[] =>
+    loaderCalls.filter((call) => call.expression.getText(loader.sourceFile) === name);
+  const preflightCalls = callsNamed("preflightHnswNativeGeneration");
+  const hashCalls = callsNamed("sha256SensitiveArtifact").sort(
+    (left, right) => left.getStart(loader.sourceFile) - right.getStart(loader.sourceFile)
+  );
+  const nativeLoaderCalls = callsNamed("loadHnswlib");
+  const nativeReadCalls = loaderCalls.filter((call) => call.expression.getText(loader.sourceFile) === "ctor.readIndex");
+  if (
+    preflightCalls.length !== 1 ||
+    hashCalls.length !== 2 ||
+    nativeLoaderCalls.length !== 1 ||
+    nativeReadCalls.length !== 1
+  ) {
+    problems.push(
+      "HNSW load must have one preflight, two bounded path receipts, one native import, and one native read"
+    );
+    return problems;
+  }
+  const preflightCall = preflightCalls[0];
+  const beforeHash = hashCalls[0];
+  const afterHash = hashCalls[1];
+  const nativeLoader = nativeLoaderCalls[0];
+  const nativeRead = nativeReadCalls[0];
+  if (
+    preflightCall?.arguments.map((argument) => argument.getText(loader.sourceFile)).join("|") !==
+    "binFile|expectedDim|meta.size|admittedNativeElements|expectedLabels|expectedVectorsByLabel"
+  ) {
+    problems.push("HNSW native preflight must receive every independently trusted shape, label, and vector authority");
+  }
+  const preflightText = preflightBody.getText(preflight.sourceFile);
+  for (const token of [
+    "expectedVectorsByLabel.get(label)",
+    "trustedValue / trustedNorm",
+    "HNSW_DB_VECTOR_COMPONENT_TOLERANCE",
+    "Math.sqrt(dbDistanceSquared) > HNSW_DB_VECTOR_L2_TOLERANCE"
+  ]) {
+    if (!preflightText.includes(token)) {
+      problems.push(`HNSW native preflight must bind DB-canonical vector semantics via ${token}`);
+    }
+  }
+  const loaderText = loaderBody.getText(loader.sourceFile);
+  for (const token of [
+    "expectedVectorsValue === undefined",
+    "expectedVectorsByLabel.size !== declaredExpectedVectors",
+    "!rowsByLabel.has(label)",
+    "value.length !== expectedDim",
+    "!Number.isFinite(vectorComponent)",
+    "normSquared <= 0"
+  ]) {
+    if (!loaderText.includes(token)) {
+      problems.push(`HNSW loader trusted-vector admission must enforce ${token}`);
+    }
+  }
+  for (const token of [
+    "admittedHeader.estimatedNativeAllocationBytes",
+    "HNSW_COMBINED_NON_NATIVE_FIXED_HEADROOM_BYTES",
+    "trustedVectorBytes * 3n",
+    "BigInt(expectedActiveRows) * HNSW_TRUSTED_METADATA_PER_ROW_BYTES * 3n",
+    "trustedRowTextBytes * 3n",
+    "combinedWorkingSetBytes > MAX_HNSW_COMBINED_WORKING_SET_BYTES"
+  ]) {
+    if (!loaderText.includes(token)) {
+      problems.push(`HNSW loader combined working-set envelope must include ${token}`);
+    }
+  }
+  const hnswCombinedCaps = variableDeclarations(
+    loader.sourceFile,
+    loader.sourceFile,
+    "MAX_HNSW_COMBINED_WORKING_SET_BYTES"
+  );
+  if (
+    hnswCombinedCaps.length !== 1 ||
+    hnswCombinedCaps[0]?.initializer?.getText(loader.sourceFile) !== "1024n * 1024n * 1024n"
+  ) {
+    problems.push("HNSW native loader combined working-set cap must remain exactly 1 GiB");
+  }
+  if (
+    hashCalls.some(
+      (call) =>
+        call.arguments[0]?.getText(loader.sourceFile) !== "binFile" ||
+        call.arguments[1]?.getText(loader.sourceFile) !== "MAX_HNSW_GENERATION_BYTES"
+    )
+  ) {
+    problems.push("both pre/post-native HNSW path hashes must use the exact generation-byte cap");
+  }
+  const digestGuards = ifStatements(loaderBody).filter(
+    (statement) =>
+      statement.expression.getText(loader.sourceFile) ===
+      "digestBefore !== admittedHeader.sha256 || digestBefore !== meta.binSha256"
+  );
+  const cleanupCalls = loaderCalls.filter(
+    (call) =>
+      call.expression.getText(loader.sourceFile) === "removeHnswNativeSnapshot" &&
+      call.arguments[0]?.getText(loader.sourceFile) === "admittedHeader"
+  );
+  let cleanupInFinally = false;
+  for (let parent = cleanupCalls[0]?.parent; parent; parent = parent.parent) {
+    if (
+      ts.isTryStatement(parent) &&
+      parent.finallyBlock &&
+      (cleanupCalls[0]?.getStart(loader.sourceFile) ?? -1) >= parent.finallyBlock.getStart(loader.sourceFile) &&
+      (cleanupCalls[0]?.end ?? Number.POSITIVE_INFINITY) <= parent.finallyBlock.end
+    ) {
+      cleanupInFinally = true;
+      break;
+    }
+  }
+  if (
+    !preflightCall ||
+    !beforeHash ||
+    !nativeLoader ||
+    !nativeRead ||
+    !afterHash ||
+    !(preflightCall.getStart(loader.sourceFile) < beforeHash.getStart(loader.sourceFile)) ||
+    digestGuards.length !== 1 ||
+    !(beforeHash.getStart(loader.sourceFile) < (digestGuards[0]?.getStart(loader.sourceFile) ?? -1)) ||
+    !(
+      (digestGuards[0]?.getStart(loader.sourceFile) ?? Number.POSITIVE_INFINITY) <
+      nativeLoader.getStart(loader.sourceFile)
+    ) ||
+    !(nativeLoader.getStart(loader.sourceFile) < nativeRead.getStart(loader.sourceFile)) ||
+    !(nativeRead.getStart(loader.sourceFile) < afterHash.getStart(loader.sourceFile)) ||
+    cleanupCalls.length !== 1 ||
+    !cleanupInFinally ||
+    !(nativeRead.getStart(loader.sourceFile) < (cleanupCalls[0]?.getStart(loader.sourceFile) ?? -1))
+  ) {
+    problems.push(
+      "HNSW admission must bind held bytes before native import/read, re-hash after load, and erase the snapshot"
+    );
+  }
+  if (
+    nativeRead?.arguments.map((argument) => argument.getText(loader.sourceFile)).join("|") !==
+    "admittedHeader.nativeSnapshotPath|true"
+  ) {
+    problems.push("HNSW native load must use the admitted private snapshot with tombstone replacement enabled");
+  }
+  return problems;
+}
+
+function hnswPublisherBoundaryProblems(source: string): string[] {
+  const problems: string[] = [];
+  const saveTo = runtimeMemberNodes(source, "src/hnsw.ts", "saveTo");
+  if (saveTo.nodes.length !== 1) return [`expected one HNSW saveTo implementation, found ${saveTo.nodes.length}`];
+  const body = saveTo.nodes[0]?.body;
+  if (!body) return ["HNSW saveTo body disappeared"];
+  const publishers = callExpressions(body).filter(
+    (call) => call.expression.getText(saveTo.sourceFile) === "publishSensitiveArtifact"
+  );
+  const generation = publishers.filter((call) => call.arguments[0]?.getText(saveTo.sourceFile) === "generationFile");
+  const metadata = publishers.filter((call) => call.arguments[0]?.getText(saveTo.sourceFile) === "metaFile");
+  if (publishers.length !== 2 || generation.length !== 1 || metadata.length !== 1) {
+    return ["HNSW saveTo must publish exactly one immutable generation and one metadata pointer"];
+  }
+  const generationCall = generation[0];
+  const metadataCall = metadata[0];
+  const generationWriter = generationCall?.arguments[1];
+  if (
+    !generationWriter ||
+    !ts.isArrowFunction(generationWriter) ||
+    generationWriter.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.AsyncKeyword) !== true ||
+    generationCall.arguments[2]?.getText(saveTo.sourceFile) !== "MAX_HNSW_GENERATION_BYTES"
+  ) {
+    problems.push("HNSW generation publication must use its async native writer under the exact binary cap");
+  }
+  if (
+    metadataCall?.arguments[1]?.getText(saveTo.sourceFile) !== "serializedMeta" ||
+    metadataCall.arguments[2]?.getText(saveTo.sourceFile) !== "MAX_HNSW_META_BYTES"
+  ) {
+    problems.push("HNSW pointer publication must use the exact serialized metadata and metadata-byte cap");
+  }
+  const formatVersion = variableDeclarations(saveTo.sourceFile, saveTo.sourceFile, "HNSW_META_FORMAT_VERSION");
+  const metaCap = variableDeclarations(saveTo.sourceFile, saveTo.sourceFile, "MAX_HNSW_META_BYTES");
+  if (
+    formatVersion.length !== 1 ||
+    formatVersion[0]?.initializer?.getText(saveTo.sourceFile) !== "4" ||
+    metaCap.length !== 1 ||
+    metaCap[0]?.initializer?.getText(saveTo.sourceFile) !== "64 * 1024"
+  ) {
+    problems.push("HNSW persistence must use compact format v4 under the fixed 64-KiB metadata cap");
+  }
+  const projectedMeta = variableDeclarations(body, saveTo.sourceFile, "projectedMeta");
+  const projectedMetaInitializer = projectedMeta[0]?.initializer;
+  const projectedKeys =
+    projectedMetaInitializer && ts.isObjectLiteralExpression(projectedMetaInitializer)
+      ? projectedMetaInitializer.properties.map((property) => property.name?.getText(saveTo.sourceFile) ?? "<spread>")
+      : [];
+  if (
+    projectedMeta.length !== 1 ||
+    !projectedMetaInitializer ||
+    !ts.isObjectLiteralExpression(projectedMetaInitializer) ||
+    projectedKeys.join("|") !==
+      "formatVersion|binFile|binSha256|dim|size|signature|dbInstanceUuid|dbMutationEpoch|writtenAt" ||
+    objectPropertyValue(projectedMetaInitializer, saveTo.sourceFile, "formatVersion")?.getText(saveTo.sourceFile) !==
+      "HNSW_META_FORMAT_VERSION" ||
+    objectPropertyValue(projectedMetaInitializer, saveTo.sourceFile, "dbInstanceUuid")?.getText(saveTo.sourceFile) !==
+      "generationAuthority.dbInstanceUuid" ||
+    objectPropertyValue(projectedMetaInitializer, saveTo.sourceFile, "dbMutationEpoch")?.getText(saveTo.sourceFile) !==
+      "generationAuthority.dbMutationEpoch"
+  ) {
+    problems.push("HNSW v4 pointer must bind the DB generation in a compact nine-field receipt without row metadata");
+  }
+  const projectedCapGuards = ifStatements(body).filter(
+    (statement) =>
+      statement.expression.getText(saveTo.sourceFile) ===
+      'Buffer.byteLength(projectedSerializedMeta, "utf8") > MAX_HNSW_META_BYTES'
+  );
+  const exactSizeGuards = ifStatements(body).filter(
+    (statement) =>
+      statement.expression.getText(saveTo.sourceFile) ===
+      'Buffer.byteLength(serializedMeta, "utf8") !== Buffer.byteLength(projectedSerializedMeta, "utf8")'
+  );
+  const projectedCapGuard = projectedCapGuards[0];
+  const exactSizeGuard = exactSizeGuards[0];
+  if (
+    projectedCapGuards.length !== 1 ||
+    exactSizeGuards.length !== 1 ||
+    !generationCall ||
+    !metadataCall ||
+    !projectedCapGuard ||
+    !exactSizeGuard ||
+    !(projectedCapGuard.getStart(saveTo.sourceFile) < generationCall.getStart(saveTo.sourceFile)) ||
+    !(generationCall.getStart(saveTo.sourceFile) < exactSizeGuard.getStart(saveTo.sourceFile)) ||
+    !(exactSizeGuard.getStart(saveTo.sourceFile) < metadataCall.getStart(saveTo.sourceFile))
+  ) {
+    problems.push("HNSW compact metadata must be capped before native write and stay exact before pointer commit");
+  }
+  return problems;
+}
+
+interface CandidateAssignment {
+  origin: "built" | "loaded";
+  node: ts.BinaryExpression;
+  value: ts.ObjectLiteralExpression;
+  guards: Array<{ branch: "then" | "else"; expression: string }>;
+}
+
+function hnswServerAtomicityProblems(source: string): string[] {
+  const problems: string[] = [];
+  const prepared = runtimeMemberNodes(source, "src/server.ts", "prepareServerDeps");
+  if (prepared.nodes.length !== 1)
+    return [`expected one prepareServerDeps implementation, found ${prepared.nodes.length}`];
+  const body = prepared.nodes[0]?.body;
+  if (!body) return ["prepareServerDeps body disappeared"];
+  const sourceFile = prepared.sourceFile;
+  const declarations = (name: string): ts.VariableDeclaration[] => variableDeclarations(body, sourceFile, name);
+  const beforeLoad = declarations("beforeLoad");
+  const buildSnapshot = declarations("buildSnapshot");
+  const afterLoad = declarations("afterLoad");
+  const afterAsync = declarations("afterAsync");
+  const afterPersist = declarations("afterPersist");
+  if (
+    beforeLoad.length !== 1 ||
+    beforeLoad[0]?.initializer?.getText(sourceFile) !== "db.captureHnswLoadSnapshot()" ||
+    buildSnapshot.length !== 1 ||
+    buildSnapshot[0]?.initializer?.getText(sourceFile) !== "db.captureHnswBuildSnapshot()" ||
+    afterLoad.length !== 1 ||
+    afterLoad[0]?.initializer?.getText(sourceFile) !== "db.captureHnswReceiptSnapshot()" ||
+    afterAsync.length !== 1 ||
+    afterAsync[0]?.initializer?.getText(sourceFile) !== "db.captureHnswReceiptSnapshot()" ||
+    afterPersist.length !== 1 ||
+    afterPersist[0]?.initializer?.getText(sourceFile) !== "db.captureHnswReceiptSnapshot()"
+  ) {
+    problems.push("server HNSW load/build must use one named capture snapshot at each authority boundary");
+  }
+
+  const calls = callExpressions(body);
+  const loadCalls = calls.filter((call) => call.expression.getText(sourceFile) === "loadHnswFromDisk");
+  if (loadCalls.length !== 1) {
+    problems.push(`server must have one persisted-HNSW load call, found ${loadCalls.length}`);
+  } else {
+    const load = loadCalls[0];
+    const options = load?.arguments[2];
+    if (
+      load.arguments[0]?.getText(sourceFile) !== "persistFile" ||
+      load.arguments[1]?.getText(sourceFile) !== "beforeLoad.receipt.signature" ||
+      !options ||
+      !ts.isObjectLiteralExpression(options) ||
+      objectPropertyValue(options, sourceFile, "expectedDim")?.getText(sourceFile) !== "beforeLoad.receipt.dim" ||
+      objectPropertyValue(options, sourceFile, "expectedRowsByLabel")?.getText(sourceFile) !==
+        "beforeLoad.rowsByLabel" ||
+      objectPropertyValue(options, sourceFile, "expectedVectorsByLabel")?.getText(sourceFile) !==
+        "beforeLoad.vectorsByLabel" ||
+      objectPropertyValue(options, sourceFile, "expectedDbInstanceUuid")?.getText(sourceFile) !==
+        "beforeLoad.receipt.dbInstanceUuid" ||
+      objectPropertyValue(options, sourceFile, "expectedDbMutationEpoch")?.getText(sourceFile) !==
+        "beforeLoad.receipt.dbMutationEpoch"
+    ) {
+      problems.push(
+        "server load options must derive signature, generation, dimension, row, and vector authority from one beforeLoad snapshot"
+      );
+    }
+  }
+
+  const saveCalls = calls.filter((call) => call.expression.getText(sourceFile) === "index.saveTo");
+  const saveAuthority = saveCalls[0]?.arguments[3];
+  if (
+    saveCalls.length !== 1 ||
+    saveCalls[0]?.arguments[0]?.getText(sourceFile) !== "persistFile" ||
+    saveCalls[0]?.arguments[1]?.getText(sourceFile) !== "afterAsync.rowsByLabel" ||
+    saveCalls[0]?.arguments[2]?.getText(sourceFile) !== "afterAsync.receipt.signature" ||
+    !saveAuthority ||
+    !ts.isObjectLiteralExpression(saveAuthority) ||
+    objectPropertyValue(saveAuthority, sourceFile, "dbInstanceUuid")?.getText(sourceFile) !==
+      "afterAsync.receipt.dbInstanceUuid" ||
+    objectPropertyValue(saveAuthority, sourceFile, "dbMutationEpoch")?.getText(sourceFile) !==
+      "afterAsync.receipt.dbMutationEpoch"
+  ) {
+    problems.push("server persistence must bind the pointer to the same post-build DB UUID and epoch receipt");
+  }
+
+  const rows = declarations("rows");
+  const buildCalls = calls.filter((call) => call.expression.getText(sourceFile) === "buildHnsw");
+  const build = buildCalls[0];
+  if (
+    rows.length !== 1 ||
+    rows[0]?.initializer?.getText(sourceFile) !== "buildSnapshot.vectors" ||
+    buildCalls.length !== 1 ||
+    build?.arguments[0]?.getText(sourceFile) !== "rows.map((r) => ({ label: r.label, vector: r.vector }))" ||
+    build.arguments[1]?.getText(sourceFile) !== "{ dim: model.dim, maxElements: rows.length }"
+  ) {
+    problems.push("server HNSW build must consume only vectors from its atomic buildSnapshot");
+  }
+
+  const forbiddenPersistedRows = calls
+    .flatMap((call) => [call.expression, ...call.arguments])
+    .some((node) => node.getText(sourceFile).includes("loadResult.rowsByLabel"));
+  if (forbiddenPersistedRows || body.getText(sourceFile).includes("loadResult.rowsByLabel")) {
+    problems.push("server must never publish the persisted sidecar's rowsByLabel as database authority");
+  }
+
+  const candidates: CandidateAssignment[] = [];
+  const contextAssignments: ts.BinaryExpression[] = [];
+  const inspect = (node: ts.Node): void => {
+    if (
+      ts.isBinaryExpression(node) &&
+      node.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+      node.left.getText(sourceFile) === "candidate" &&
+      ts.isObjectLiteralExpression(node.right)
+    ) {
+      const origin = objectPropertyValue(node.right, sourceFile, "origin")?.getText(sourceFile);
+      if (origin === '"loaded"' || origin === '"built"') {
+        candidates.push({
+          origin: origin.slice(1, -1) as "built" | "loaded",
+          node,
+          value: node.right,
+          guards: branchGuards(node, sourceFile)
+        });
+      }
+    }
+    if (
+      ts.isBinaryExpression(node) &&
+      node.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+      node.left.getText(sourceFile) === "hnswContext" &&
+      ts.isObjectLiteralExpression(node.right)
+    ) {
+      contextAssignments.push(node);
+    }
+    ts.forEachChild(node, inspect);
+  };
+  inspect(body);
+  const loaded = candidates.filter((candidate) => candidate.origin === "loaded");
+  const built = candidates.filter((candidate) => candidate.origin === "built");
+  if (loaded.length !== 1) {
+    problems.push(`server must create one loaded HNSW candidate, found ${loaded.length}`);
+  } else {
+    const candidate = loaded[0];
+    if (
+      objectPropertyValue(candidate.value, sourceFile, "rowByLabel")?.getText(sourceFile) !== "afterLoad.rowsByLabel" ||
+      objectPropertyValue(candidate.value, sourceFile, "receipt")?.getText(sourceFile) !== "afterLoad.receipt" ||
+      !hasBranchGuard(candidate.guards, "then", "sameHnswPersistenceReceipt(beforeLoad.receipt, afterLoad.receipt)")
+    ) {
+      problems.push("loaded HNSW candidate must use post-load database rows inside the matching-receipt branch");
+    }
+  }
+  if (built.length !== 1) {
+    problems.push(`server must create one built HNSW candidate, found ${built.length}`);
+  } else {
+    const candidate = built[0];
+    if (
+      objectPropertyValue(candidate.value, sourceFile, "rowByLabel")?.getText(sourceFile) !==
+        "afterAsync.rowsByLabel" ||
+      objectPropertyValue(candidate.value, sourceFile, "receipt")?.getText(sourceFile) !== "afterAsync.receipt" ||
+      objectPropertyValue(candidate.value, sourceFile, "index")?.getText(sourceFile) !== "index" ||
+      !hasBranchGuard(
+        candidate.guards,
+        "else",
+        "!sameHnswPersistenceReceipt(buildSnapshot.receipt, afterAsync.receipt)"
+      ) ||
+      !hasBranchGuard(candidate.guards, "then", "sameHnswPersistenceReceipt(afterAsync.receipt, afterPersist.receipt)")
+    ) {
+      problems.push("built HNSW candidate must remain inside both post-build and post-persist receipt guards");
+    }
+  }
+
+  const attachCalls = calls.filter((call) => call.expression.getText(sourceFile) === "watcher.attachHnsw");
+  const lastCandidatePosition = Math.max(...candidates.map((candidate) => candidate.node.getStart(sourceFile)), -1);
+  const finalReceiptGuards = ifStatements(body).filter(
+    (statement) =>
+      statement.expression.getText(sourceFile) ===
+      "sameHnswPersistenceReceipt(afterAsync.receipt, afterPersist.receipt)"
+  );
+  const attachCall = attachCalls[0];
+  const attachSharesContextAuthority =
+    attachCall?.arguments.length === 4 && attachCall.arguments[3]?.getText(sourceFile) === "hnswContext";
+  const awaitsAfterFinalReceipt: ts.AwaitExpression[] = [];
+  const collectPostReceiptAwaits = (node: ts.Node): void => {
+    if (
+      ts.isAwaitExpression(node) &&
+      (finalReceiptGuards[0]?.expression.end ?? Number.POSITIVE_INFINITY) < node.getStart(sourceFile) &&
+      node.getStart(sourceFile) < (attachCall?.getStart(sourceFile) ?? -1)
+    ) {
+      awaitsAfterFinalReceipt.push(node);
+    }
+    ts.forEachChild(node, collectPostReceiptAwaits);
+  };
+  collectPostReceiptAwaits(body);
+  if (
+    contextAssignments.length !== 1 ||
+    !hasBranchGuard(branchGuards(contextAssignments[0] as ts.Node, sourceFile), "then", "candidate") ||
+    objectPropertyValue(
+      contextAssignments[0]?.right as ts.ObjectLiteralExpression,
+      sourceFile,
+      "dbInstanceUuid"
+    )?.getText(sourceFile) !== "candidate.receipt.dbInstanceUuid" ||
+    objectPropertyValue(
+      contextAssignments[0]?.right as ts.ObjectLiteralExpression,
+      sourceFile,
+      "dbMutationEpoch"
+    )?.getText(sourceFile) !== "candidate.receipt.dbMutationEpoch" ||
+    (contextAssignments[0]?.getStart(sourceFile) ?? -1) <= lastCandidatePosition ||
+    attachCalls.length !== 1 ||
+    !attachSharesContextAuthority ||
+    !hasBranchGuard(branchGuards(attachCalls[0] as ts.Node, sourceFile), "then", "candidate") ||
+    (attachCalls[0]?.getStart(sourceFile) ?? -1) <= lastCandidatePosition ||
+    finalReceiptGuards.length !== 1 ||
+    awaitsAfterFinalReceipt.length !== 1 ||
+    awaitsAfterFinalReceipt[0]?.expression.getText(sourceFile) !== "db.acquireSharedPersistenceLifetime()"
+  ) {
+    problems.push(
+      "server must publish/attach the returned HNSW after its final receipt guard, sharing exact live authority across the sole lifetime-acquisition suspension"
+    );
+  }
+  return problems;
+}
+
+function watcherCanonicalVectorProblems(source: string): string[] {
+  const problems: string[] = [];
+  const helper = runtimeMemberNodes(source, "src/watcher.ts", "upsertEmbedAndSyncHnsw");
+  const helperBody = helper.nodes[0]?.body;
+  if (helper.nodes.length !== 1 || !helperBody) {
+    problems.push(`expected one upsertEmbedAndSyncHnsw implementation, found ${helper.nodes.length}`);
+  } else {
+    const calls = callExpressions(helperBody);
+    const conditionalUpserts = calls.filter(
+      (call) => call.expression.getText(helper.sourceFile) === "embedDb.upsertNoteWithCanonicalVectorsIfGeneration"
+    );
+    const fallbackUpserts = calls.filter(
+      (call) => call.expression.getText(helper.sourceFile) === "embedDb.upsertNoteWithCanonicalVectors"
+    );
+    const zipped = calls.filter((call) => call.expression.getText(helper.sourceFile) === "zipHnswAddPoints");
+    if (
+      conditionalUpserts.length !== 1 ||
+      conditionalUpserts[0]?.arguments
+        .map((argument) => argument.getText(helper.sourceFile))
+        .slice(1)
+        .join("|") !== "relPath|mtimeMs|rows|kind" ||
+      fallbackUpserts.length !== 2 ||
+      fallbackUpserts.some(
+        (call) =>
+          call.arguments.map((argument) => argument.getText(helper.sourceFile)).join("|") !==
+          "relPath|mtimeMs|rows|kind"
+      ) ||
+      zipped.length !== 1 ||
+      zipped[0]?.arguments.map((argument) => argument.getText(helper.sourceFile)).join("|") !==
+        "rows|mutation.newIds|mutation.newVectors"
+    ) {
+      problems.push(
+        "upsertEmbedAndSyncHnsw must feed the exact DB-canonical vectors from both admitted/fallback upserts into HNSW"
+      );
+    }
+  }
+
+  for (const [member, kind] of [
+    ["commitMarkdownGeneration", '"md"'],
+    ["commitPdfGeneration", '"pdf"']
+  ] as const) {
+    const method = runtimeMemberNodes(source, "src/watcher.ts", member);
+    if (method.nodes.length !== 1) {
+      problems.push(`expected one ${member} implementation, found ${method.nodes.length}`);
+      continue;
+    }
+    const body = method.nodes[0]?.body;
+    if (!body) {
+      problems.push(`${member} body disappeared`);
+      continue;
+    }
+    const calls = callExpressions(body);
+    const upserts = calls.filter(
+      (call) => call.expression.getText(method.sourceFile) === "this.upsertEmbedAndSyncHnsw"
+    );
+    if (
+      upserts.length !== 1 ||
+      upserts[0]?.arguments.map((argument) => argument.getText(method.sourceFile)).join("|") !==
+        `relPath|generation.mtimeMs|staged.embedResult.rows|${kind}`
+    ) {
+      problems.push(`${member} must delegate its exact staged rows and source kind to the canonical-vector helper`);
+    }
+  }
+  return problems;
+}
+
+function isOrderedSubsequence(actual: readonly string[], expected: readonly string[]): boolean {
+  let expectedIndex = 0;
+  for (const value of actual) {
+    if (value === expected[expectedIndex]) expectedIndex += 1;
+  }
+  return expectedIndex === expected.length;
+}
+
+function embedDbGenerationIdentityProblems(embedSource: string, schemaSource: string): string[] {
+  const problems: string[] = [];
+  const sourceFile = ts.createSourceFile(
+    "src/embed-db.ts",
+    embedSource,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TS
+  );
+  const schemaFile = ts.createSourceFile(
+    "src/schema-contract.ts",
+    schemaSource,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TS
+  );
+  const declaration = (name: string): ts.VariableDeclaration | undefined =>
+    variableDeclarations(sourceFile, sourceFile, name)[0];
+  const stringArray = (name: string): string[] | null => {
+    let initializer = declaration(name)?.initializer;
+    while (initializer && (ts.isAsExpression(initializer) || ts.isParenthesizedExpression(initializer))) {
+      initializer = initializer.expression;
+    }
+    if (!initializer || !ts.isArrayLiteralExpression(initializer)) return null;
+    const values: string[] = [];
+    for (const element of initializer.elements) {
+      if (!ts.isStringLiteralLike(element)) return null;
+      values.push(element.text);
+    }
+    return values;
+  };
+
+  const schemaVersions = variableDeclarations(schemaFile, schemaFile, "EMBED_DB_SCHEMA_VERSION");
+  if (
+    schemaVersions.length !== 1 ||
+    schemaVersions[0]?.initializer?.getText(schemaFile) !== "5" ||
+    declaration("MAX_EMBED_MUTATION_EPOCH")?.initializer?.getText(sourceFile) !== "Number.MAX_SAFE_INTEGER"
+  ) {
+    problems.push("EmbedDb durable generation authority must use schema v5 and the safe-integer epoch ceiling");
+  }
+  if (
+    stringArray("MUTATION_EPOCH_TABLES")?.join("|") !== "embeddings|source_state|source_quarantine|source_revision" ||
+    stringArray("MUTATION_EPOCH_OPERATIONS")?.join("|") !== "INSERT|UPDATE|DELETE"
+  ) {
+    problems.push("EmbedDb mutation epoch must cover every operation on every admitted durable payload table");
+  }
+
+  const triggerDefinitions = declaration("MUTATION_EPOCH_TRIGGER_DEFINITIONS")?.initializer?.getText(sourceFile) ?? "";
+  for (const fragment of [
+    "MUTATION_EPOCH_TABLES.flatMap((table) =>",
+    "MUTATION_EPOCH_OPERATIONS.map((operation) =>",
+    "BEFORE $" + "{operation} ON $" + "{table}",
+    "typeof(value) = 'text'",
+    "value = CAST(CAST(value AS INTEGER) AS TEXT)",
+    "CAST(value AS INTEGER) BETWEEN 1 AND $" + "{MAX_EMBED_MUTATION_EPOCH - 1}",
+    "THEN RAISE(ABORT, 'embedding mutation epoch is invalid or exhausted') END",
+    "SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT)",
+    "WHERE key = 'mutation_epoch'"
+  ]) {
+    if (!triggerDefinitions.includes(fragment)) {
+      problems.push(`EmbedDb mutation trigger class must retain ${fragment}`);
+    }
+  }
+  if (
+    declaration("MUTATION_EPOCH_TRIGGER_NAMES")?.initializer?.getText(sourceFile) !==
+    "MUTATION_EPOCH_TRIGGER_DEFINITIONS.map(({ name }) => name)"
+  ) {
+    problems.push("EmbedDb mutation trigger names must be derived from the complete trigger-definition class");
+  }
+
+  const historicalVersions = declaration("HISTORICAL_EMBED_DB_SCHEMA_VERSIONS")?.initializer?.getText(sourceFile);
+  const admission = runtimeMemberNodes(embedSource, "src/embed-db.ts", "inspectEmbedAdmission");
+  const admissionText = admission.nodes[0]?.body?.getText(admission.sourceFile) ?? "";
+  if (
+    historicalVersions !== "new Set([1, 2, 3, 4])" ||
+    admission.nodes.length !== 1 ||
+    !admissionText.includes("schemaVersion > EMBED_DB_SCHEMA_VERSION") ||
+    !admissionText.includes("!currentSchema && !HISTORICAL_EMBED_DB_SCHEMA_VERSIONS.has(schemaVersion)") ||
+    !admissionText.includes(
+      '["schema_version", "vault_root", "model_alias", "dim", "quantization", "instance_uuid", "mutation_epoch"]'
+    ) ||
+    !admissionText.includes("rows.length !== expectedMetaKeys.length") ||
+    !admissionText.includes("!EMBED_META_KEYS.has(row.key)") ||
+    !admissionText.includes("Object.hasOwn(meta, row.key)") ||
+    !admissionText.includes("!EMBED_INSTANCE_UUID_PATTERN.test(storedInstanceUuid)") ||
+    !admissionText.includes("!isCanonicalMutationEpoch(storedMutationEpoch)") ||
+    !admissionText.includes("...MUTATION_EPOCH_TRIGGER_NAMES") ||
+    !admissionText.includes("!hasExactTriggerDefinitions(MUTATION_EPOCH_TRIGGER_DEFINITIONS)") ||
+    !admissionText.includes("MUTATION_EPOCH_TRIGGER_NAMES.some((name) => objectTypes.has(name))")
+  ) {
+    problems.push(
+      "EmbedDb admission must exactly separate supported historical schemas from current UUID/epoch metadata and triggers"
+    );
+  }
+
+  const bootstrap = runtimeMemberNodes(embedSource, "src/embed-db.ts", "bootstrapSchema");
+  const bootstrapText = bootstrap.nodes[0]?.body?.getText(bootstrap.sourceFile) ?? "";
+  const noWriteReopen = bootstrapText.indexOf("if (!requiresBootstrap) return;");
+  const triggerDrop = bootstrapText.indexOf(
+    "for (const name of [...SOURCE_REVISION_TRIGGER_NAMES, ...MUTATION_EPOCH_TRIGGER_NAMES])"
+  );
+  const identityWrite = bootstrapText.indexOf("this.writeMeta({");
+  const epochInstall = bootstrapText.indexOf("for (const definition of MUTATION_EPOCH_TRIGGER_DEFINITIONS)");
+  if (
+    bootstrap.nodes.length !== 1 ||
+    noWriteReopen < 0 ||
+    triggerDrop <= noWriteReopen ||
+    identityWrite <= triggerDrop ||
+    epochInstall <= identityWrite ||
+    !bootstrapText.includes('instance_uuid: randomBytes(16).toString("hex")') ||
+    !bootstrapText.includes('mutation_epoch: "1"') ||
+    !bootstrapText.includes("db.exec(definition.sql)") ||
+    !bootstrapText.includes("txn.immediate()")
+  ) {
+    problems.push(
+      "EmbedDb bootstrap must preserve exact current identity and atomically install a fresh UUID/epoch generation on rebuild"
+    );
+  }
+
+  const capture = runtimeMemberNodes(embedSource, "src/embed-db.ts", "captureHnswSnapshot");
+  const captureText = capture.nodes[0]?.body?.getText(capture.sourceFile) ?? "";
+  if (
+    capture.nodes.length !== 1 ||
+    !captureText.includes('"SELECT key, value FROM meta ORDER BY key LIMIT 8"') ||
+    !captureText.includes("metaRows.length !== 7") ||
+    !captureText.includes('!EMBED_INSTANCE_UUID_PATTERN.test(meta.get("instance_uuid") ?? "")') ||
+    !captureText.includes('!isCanonicalMutationEpoch(meta.get("mutation_epoch"))') ||
+    !captureText.includes('const dbInstanceUuid = meta.get("instance_uuid") as string') ||
+    !captureText.includes('const dbMutationEpoch = Number(meta.get("mutation_epoch"))')
+  ) {
+    problems.push("EmbedDb HNSW snapshot must atomically admit and capture the exact current DB UUID and epoch");
+  }
+  return problems;
+}
+
+function embedHnswSnapshotProblems(source: string): string[] {
+  const problems: string[] = [];
+  const captured = runtimeMemberNodes(source, "src/embed-db.ts", "captureHnswSnapshot");
+  if (captured.nodes.length !== 1) {
+    return [`expected one captureHnswSnapshot implementation, found ${captured.nodes.length}`];
+  }
+  const body = captured.nodes[0]?.body;
+  if (!body) return ["captureHnswSnapshot body disappeared"];
+  const sourceFile = captured.sourceFile;
+  const captureDeclarations = variableDeclarations(body, sourceFile, "capture");
+  const capture = captureDeclarations[0];
+  const transactionCall = capture?.initializer;
+  const callback = ts.isCallExpression(transactionCall) ? transactionCall.arguments[0] : undefined;
+  if (
+    captureDeclarations.length !== 1 ||
+    !transactionCall ||
+    !ts.isCallExpression(transactionCall) ||
+    transactionCall.expression.getText(sourceFile) !== "db.transaction" ||
+    !callback ||
+    !ts.isArrowFunction(callback) ||
+    !ts.isBlock(callback.body)
+  ) {
+    return ["EmbedDb HNSW snapshot must be produced by one synchronous db.transaction callback"];
+  }
+  const callbackBody = callback.body;
+  const callbackCalls = callExpressions(callbackBody);
+  const preparedQueries = callbackCalls.filter((call) => isPropertyCall(call, sourceFile, "db", "prepare"));
+  const allPreparedQueries = callExpressions(body).filter((call) => isPropertyCall(call, sourceFile, "db", "prepare"));
+  const queryRoles = [
+    {
+      id: "configuration metadata",
+      execute: "all",
+      tokens: ["SELECT key, value FROM meta", "ORDER BY key", "LIMIT 8"]
+    },
+    {
+      id: "authority envelope",
+      execute: "get",
+      tokens: [
+        "AS quarantine_count",
+        "AS quarantine_path_bytes",
+        "AS quarantine_max_path_bytes",
+        "AS state_count",
+        "AS state_path_bytes",
+        "AS state_max_path_bytes",
+        "AS revision_count",
+        "AS revision_path_bytes",
+        "AS revision_max_path_bytes",
+        "AS quarantine_invalid_count",
+        "AS state_invalid_count",
+        "AS revision_invalid_count",
+        "length(CAST(rel_path AS BLOB)) NOT BETWEEN 1 AND $" + "{MAX_HNSW_SNAPSHOT_PATH_BYTES}",
+        "typeof(kind) <> 'text' OR kind NOT IN ('md', 'pdf')",
+        "typeof(mtime_ms) NOT IN ('integer', 'real')",
+        "typeof(n_chunks) <> 'integer'",
+        "n_chunks NOT BETWEEN 1 AND $" + "{MAX_HNSW_SNAPSHOT_ROWS}",
+        "typeof(revision) <> 'integer'",
+        "revision NOT BETWEEN 1 AND $" + "{MAX_SOURCE_REVISION}"
+      ]
+    },
+    {
+      id: "quarantine manifest",
+      execute: "iterate",
+      tokens: ["SELECT rel_path, kind FROM source_quarantine", "ORDER BY kind, rel_path"]
+    },
+    {
+      id: "source completeness",
+      execute: "iterate",
+      tokens: [
+        "FROM source_state AS s",
+        "COUNT(e.id) AS actual_count",
+        "MIN(e.chunk_index) AS min_chunk_index",
+        "MAX(e.chunk_index) AS max_chunk_index",
+        "LEFT JOIN source_revision AS r",
+        "LEFT JOIN embeddings AS e",
+        "WHERE q.rel_path IS NULL",
+        "GROUP BY s.rel_path",
+        "ORDER BY s.kind, s.rel_path"
+      ]
+    },
+    {
+      id: "embedding aggregate",
+      execute: "get",
+      tokens: [
+        "SELECT COUNT(*) AS row_count",
+        "AS text_bytes",
+        "AS max_path_bytes",
+        "AS max_preview_bytes",
+        "AS vector_bytes",
+        "typeof(e.vector) <> 'blob' OR length(e.vector) <> ?",
+        "AS invalid_vector_count",
+        "AS invalid_scalar_count",
+        "typeof(e.id) <> 'integer'",
+        "e.id NOT BETWEEN 0 AND $" + "{MAX_HNSW_NATIVE_LABEL}",
+        "typeof(e.rel_path) <> 'text'",
+        "length(CAST(e.rel_path AS BLOB)) NOT BETWEEN 1 AND $" + "{MAX_HNSW_SNAPSHOT_PATH_BYTES}",
+        "typeof(e.chunk_index) <> 'integer'",
+        "e.chunk_index < 0",
+        "typeof(e.line_start) <> 'integer'",
+        "e.line_start < 1",
+        "typeof(e.line_end) <> 'integer'",
+        "e.line_end < e.line_start",
+        "typeof(e.text_preview) <> 'text'",
+        "length(CAST(e.text_preview AS BLOB)) > $" + "{MAX_HNSW_SNAPSHOT_PREVIEW_BYTES}",
+        "typeof(e.kind) <> 'text'",
+        "e.kind NOT IN ('md', 'pdf')",
+        "FROM embeddings AS e",
+        "WHERE q.rel_path IS NULL"
+      ]
+    },
+    {
+      id: "embedding payload",
+      execute: "iterate",
+      tokens: [
+        "SELECT e.id AS label",
+        "e.text_preview, e.vector, e.kind",
+        "s.mtime_ms AS indexed_mtime_ms",
+        "r.revision AS indexed_revision",
+        "q.rel_path AS quarantine_rel_path",
+        "FROM embeddings e",
+        "WHERE q.rel_path IS NULL",
+        "ORDER BY e.id"
+      ]
+    }
+  ] as const;
+  const roleMatches = new Map<string, ts.CallExpression[]>();
+  for (const role of queryRoles) {
+    roleMatches.set(
+      role.id,
+      preparedQueries.filter((query) => {
+        const sql = query.arguments[0]?.getText(sourceFile) ?? "";
+        return role.tokens.every((token) => sql.includes(token));
+      })
+    );
+  }
+  const matchedQueries = new Set([...roleMatches.values()].flat());
+  for (const role of queryRoles) {
+    const matches = roleMatches.get(role.id) ?? [];
+    const query = matches[0];
+    const execute =
+      query?.parent &&
+      ts.isPropertyAccessExpression(query.parent) &&
+      query.parent.parent &&
+      ts.isCallExpression(query.parent.parent)
+        ? query.parent.name.text
+        : "<missing>";
+    if (matches.length !== 1 || execute !== role.execute) {
+      problems.push(`EmbedDb HNSW snapshot must have one ${role.id} ${role.execute} query`);
+    }
+  }
+  if (
+    allPreparedQueries.some((call) => !preparedQueries.includes(call)) ||
+    preparedQueries.some((call) => !matchedQueries.has(call))
+  ) {
+    problems.push("every HNSW snapshot query must have one semantic role inside the single transaction callback");
+  }
+  for (const [name, fields] of [
+    ["authorityCounts", ["quarantine_count", "state_count", "revision_count"]],
+    ["authorityPathBytes", ["quarantine_path_bytes", "state_path_bytes", "revision_path_bytes"]],
+    ["authorityMaxPathBytes", ["quarantine_max_path_bytes", "state_max_path_bytes", "revision_max_path_bytes"]],
+    ["authorityInvalidCounts", ["quarantine_invalid_count", "state_invalid_count", "revision_invalid_count"]]
+  ] as const) {
+    const declarations = variableDeclarations(callbackBody, sourceFile, name);
+    const initializer = declarations[0]?.initializer?.getText(sourceFile) ?? "";
+    if (declarations.length !== 1 || fields.some((field) => !initializer.includes(`authorityEnvelope?.${field}`))) {
+      problems.push(`EmbedDb authority envelope ${name} must bind every table-specific aggregate`);
+    }
+  }
+  const authorityIntegrityGuards = ifStatements(callbackBody).filter((statement) =>
+    statement.expression.getText(sourceFile).includes("authorityInvalidCounts")
+  );
+  const authorityCapacityGuards = ifStatements(callbackBody).filter((statement) => {
+    const expression = statement.expression.getText(sourceFile);
+    return expression.includes("authorityCounts") && expression.includes("MAX_HNSW_SNAPSHOT_ROWS");
+  });
+  const authorityIntegrityExpression = authorityIntegrityGuards[0]?.expression.getText(sourceFile) ?? "";
+  const authorityCapacityExpression = authorityCapacityGuards[0]?.expression.getText(sourceFile) ?? "";
+  for (const predicate of [
+    "authorityCounts.some((value) => !Number.isSafeInteger(value) || (value as number) < 0)",
+    "authorityPathBytes.some((value) => !Number.isSafeInteger(value) || (value as number) < 0)",
+    "authorityMaxPathBytes.some((value) => !Number.isSafeInteger(value) || (value as number) < 0)",
+    "authorityInvalidCounts.some((value) => value !== 0)"
+  ]) {
+    if (authorityIntegrityGuards.length !== 1 || !authorityIntegrityExpression.includes(predicate)) {
+      problems.push(`EmbedDb authority integrity admission must enforce ${predicate}`);
+    }
+  }
+  for (const predicate of [
+    "authorityCounts.some((value) => (value as number) > MAX_HNSW_SNAPSHOT_ROWS)",
+    "authorityPathBytes.some((value) => (value as number) > MAX_HNSW_SNAPSHOT_TEXT_BYTES)",
+    "authorityMaxPathBytes.some((value) => (value as number) > MAX_HNSW_SNAPSHOT_PATH_BYTES)"
+  ]) {
+    if (authorityCapacityGuards.length !== 1 || !authorityCapacityExpression.includes(predicate)) {
+      problems.push(`EmbedDb authority capacity admission must enforce ${predicate}`);
+    }
+  }
+  let callbackAwaits = 0;
+  const countAwaits = (node: ts.Node): void => {
+    if (ts.isAwaitExpression(node)) callbackAwaits += 1;
+    ts.forEachChild(node, countAwaits);
+  };
+  countAwaits(callbackBody);
+  if (callbackAwaits !== 0)
+    problems.push("EmbedDb HNSW capture transaction must remain synchronous and suspension-free");
+  const returnsCapture = [...body.statements].filter(
+    (statement): statement is ts.ReturnStatement =>
+      ts.isReturnStatement(statement) && statement.expression?.getText(sourceFile) === "capture()"
+  );
+  if (returnsCapture.length !== 1 || returnsCapture[0]?.getStart(sourceFile) <= capture.getStart(sourceFile)) {
+    problems.push("EmbedDb must execute and return the transaction-wrapped HNSW capture");
+  }
+
+  const hashDeclaration = (name: string, initializer: string): boolean => {
+    const matches = variableDeclarations(callbackBody, sourceFile, name);
+    return matches.length === 1 && matches[0]?.initializer?.getText(sourceFile) === initializer;
+  };
+  if (
+    !hashDeclaration("liveLabelHash", 'createHash("sha256")') ||
+    !hashDeclaration("payloadHash", 'createHash("sha256")')
+  ) {
+    problems.push("EmbedDb HNSW capture must initialize independent SHA-256 label and payload manifests");
+  }
+  const manifestCalls = callbackCalls.filter((call) => call.expression.getText(sourceFile) === "updateManifestValue");
+  const labelValues = manifestCalls
+    .filter((call) => call.arguments[0]?.getText(sourceFile) === "liveLabelHash")
+    .map((call) => call.arguments[1]?.getText(sourceFile) ?? "<missing>");
+  const payloadValues = manifestCalls
+    .filter((call) => call.arguments[0]?.getText(sourceFile) === "payloadHash")
+    .map((call) => call.arguments[1]?.getText(sourceFile) ?? "<missing>");
+  if (!isOrderedSubsequence(labelValues, ["label"])) {
+    problems.push("EmbedDb live-label manifest must bind each admitted native label");
+  }
+  const expectedPayloadValues = [
+    "EMBED_DB_SCHEMA_VERSION",
+    "this.modelAlias",
+    "this.dim",
+    "this.quantization",
+    "row.kind",
+    "row.rel_path",
+    "state.kind",
+    "state.rel_path",
+    "state.mtime_ms",
+    "state.n_chunks as number",
+    "state.revision as number",
+    "label",
+    "metadata.rel_path",
+    "metadata.kind",
+    "metadata.chunk_index",
+    "metadata.line_start",
+    "metadata.line_end",
+    "metadata.text_preview",
+    "row.indexed_mtime_ms",
+    "row.indexed_revision as number",
+    "row.vector"
+  ];
+  if (!isOrderedSubsequence(payloadValues, expectedPayloadValues)) {
+    problems.push(
+      "EmbedDb payload manifest must bind configuration, quarantine, source completeness, row receipts, and vectors"
+    );
+  }
+
+  const completenessGuards = ifStatements(callbackBody).filter((statement) => {
+    const expression = statement.expression.getText(sourceFile);
+    return expression.includes("state.actual_count") && expression.includes("state.n_chunks");
+  });
+  const completenessExpression = completenessGuards[0]?.expression.getText(sourceFile) ?? "";
+  for (const predicate of [
+    "(state.n_chunks as number) < 1",
+    "state.revision_rel_path !== state.rel_path",
+    "state.revision_kind !== state.kind",
+    "(state.revision as number) < 1",
+    "(state.revision as number) > MAX_SOURCE_REVISION",
+    "state.actual_count !== state.n_chunks",
+    "state.min_chunk_index !== 0",
+    "state.max_chunk_index !== (state.n_chunks as number) - 1"
+  ]) {
+    if (completenessGuards.length !== 1 || !completenessExpression.includes(predicate)) {
+      problems.push(`EmbedDb source completeness guard must enforce ${predicate}`);
+    }
+  }
+
+  const aggregateIntegrityGuards = ifStatements(callbackBody).filter((statement) =>
+    statement.expression.getText(sourceFile).includes("aggregate.invalid_vector_count")
+  );
+  const aggregateIndividualCapacityGuards = ifStatements(callbackBody).filter((statement) => {
+    const expression = statement.expression.getText(sourceFile);
+    return expression.includes("rowCount") && expression.includes("MAX_HNSW_SNAPSHOT_PREVIEW_BYTES");
+  });
+  const aggregateCombinedCapacityGuards = ifStatements(callbackBody).filter((statement) => {
+    const expression = statement.expression.getText(sourceFile);
+    return expression.includes("combinedWorkingSetBytes") && expression.includes("MAX_HNSW_COMBINED_WORKING_SET_BYTES");
+  });
+  const aggregateIntegrityExpression = aggregateIntegrityGuards[0]?.expression.getText(sourceFile) ?? "";
+  for (const predicate of [
+    "aggregate.invalid_vector_count !== 0",
+    "aggregate.invalid_scalar_count !== 0",
+    "aggregate.vector_bytes !== (aggregate.row_count as number) * this.encodedBytes"
+  ]) {
+    if (aggregateIntegrityGuards.length !== 1 || !aggregateIntegrityExpression.includes(predicate)) {
+      problems.push(`EmbedDb aggregate integrity admission must enforce ${predicate}`);
+    }
+  }
+  const aggregateIndividualCapacityExpression =
+    aggregateIndividualCapacityGuards[0]?.expression.getText(sourceFile) ?? "";
+  for (const predicate of [
+    "rowCount > MAX_HNSW_SNAPSHOT_ROWS",
+    "(aggregate.text_bytes as number) > MAX_HNSW_SNAPSHOT_TEXT_BYTES",
+    "(aggregate.max_path_bytes as number) > MAX_HNSW_SNAPSHOT_PATH_BYTES",
+    "(aggregate.max_preview_bytes as number) > MAX_HNSW_SNAPSHOT_PREVIEW_BYTES"
+  ]) {
+    if (aggregateIndividualCapacityGuards.length !== 1 || !aggregateIndividualCapacityExpression.includes(predicate)) {
+      problems.push(`EmbedDb aggregate capacity admission must enforce ${predicate}`);
+    }
+  }
+  if (
+    aggregateCombinedCapacityGuards.length !== 1 ||
+    aggregateCombinedCapacityGuards[0]?.expression.getText(sourceFile) !==
+      "combinedWorkingSetBytes > BigInt(MAX_HNSW_COMBINED_WORKING_SET_BYTES)"
+  ) {
+    problems.push("EmbedDb aggregate capacity admission must enforce the exact combined working-set cap");
+  }
+  const combinedDeclarations = variableDeclarations(callbackBody, sourceFile, "combinedWorkingSetBytes");
+  const combinedInitializer = combinedDeclarations[0]?.initializer?.getText(sourceFile) ?? "";
+  for (const component of [
+    "BigInt(HNSW_COMBINED_FIXED_HEADROOM_BYTES)",
+    "BigInt(nativeCapacity) * BigInt(nativeBytesPerElement)",
+    "BigInt(rowCount) * BigInt(this.dim * 4) * 2n",
+    "BigInt(aggregate.vector_bytes as number)",
+    "BigInt(rowCount) * BigInt(HNSW_SNAPSHOT_METADATA_PER_ROW_BYTES) * 3n",
+    "BigInt(aggregate.text_bytes as number) * 3n",
+    "BigInt(authorityManifestPathBytes) * 2n"
+  ]) {
+    if (combinedDeclarations.length !== 1 || !combinedInitializer.includes(component)) {
+      problems.push(`EmbedDb combined HNSW working-set envelope must include ${component}`);
+    }
+  }
+  const combinedCap = variableDeclarations(callbackBody, sourceFile, "MAX_HNSW_COMBINED_WORKING_SET_BYTES");
+  if (combinedCap.length !== 0) {
+    problems.push("combined HNSW cap must remain module-scoped rather than capture-local");
+  }
+  const moduleCombinedCap = variableDeclarations(sourceFile, sourceFile, "MAX_HNSW_COMBINED_WORKING_SET_BYTES");
+  if (
+    moduleCombinedCap.length !== 1 ||
+    moduleCombinedCap[0]?.initializer?.getText(sourceFile) !== "1024 * 1024 * 1024"
+  ) {
+    problems.push("EmbedDb combined HNSW working-set cap must remain exactly 1 GiB");
+  }
+  const vectorMaps = variableDeclarations(callbackBody, sourceFile, "vectorsByLabel");
+  const vectorMapSets = callbackCalls.filter((call) => call.expression.getText(sourceFile) === "vectorsByLabel.set");
+  if (
+    vectorMaps.length !== 1 ||
+    vectorMaps[0]?.initializer?.getText(sourceFile) !== "new Map<number, Float32Array>()" ||
+    vectorMapSets.length !== 1 ||
+    vectorMapSets[0]?.arguments.map((argument) => argument.getText(sourceFile)).join("|") !== "label|vector" ||
+    !hasBranchGuard(branchGuards(vectorMapSets[0] as ts.Node, sourceFile), "then", 'mode === "load"')
+  ) {
+    problems.push("EmbedDb load snapshot must retain DB-canonical vectors only for the atomic load mode");
+  }
+  const loadSnapshot = runtimeMemberNodes(source, "src/embed-db.ts", "captureHnswLoadSnapshot");
+  const loadSnapshotBody = loadSnapshot.nodes[0]?.body?.getText(loadSnapshot.sourceFile) ?? "";
+  if (
+    loadSnapshot.nodes.length !== 1 ||
+    !loadSnapshotBody.includes('return this.captureHnswSnapshot("load")') ||
+    !callbackBody.getText(sourceFile).includes('if (mode === "load") return { ...snapshot, vectorsByLabel }')
+  ) {
+    problems.push("EmbedDb public HNSW load capture must return the transaction-owned vector authority map");
+  }
+  const aggregateQuery = roleMatches.get("embedding aggregate")?.[0];
+  const aggregateExecution =
+    aggregateQuery?.parent &&
+    ts.isPropertyAccessExpression(aggregateQuery.parent) &&
+    ts.isCallExpression(aggregateQuery.parent.parent)
+      ? aggregateQuery.parent.parent
+      : undefined;
+  if (aggregateExecution?.arguments[0]?.getText(sourceFile) !== "this.encodedBytes") {
+    problems.push("EmbedDb aggregate vector-shape census must bind the active encoded vector width");
+  }
+
+  const liveDigest = variableDeclarations(callbackBody, sourceFile, "liveLabelSha256");
+  const payloadDigest = variableDeclarations(callbackBody, sourceFile, "dbPayloadSha256");
+  const receiptDeclarations = variableDeclarations(callbackBody, sourceFile, "receipt");
+  const receiptInitializer = receiptDeclarations[0]?.initializer;
+  if (
+    liveDigest.length !== 1 ||
+    liveDigest[0]?.initializer?.getText(sourceFile) !== 'liveLabelHash.digest("hex")' ||
+    payloadDigest.length !== 1 ||
+    payloadDigest[0]?.initializer?.getText(sourceFile) !== 'payloadHash.digest("hex")' ||
+    receiptDeclarations.length !== 1 ||
+    !receiptInitializer ||
+    !ts.isObjectLiteralExpression(receiptInitializer) ||
+    objectPropertyValue(receiptInitializer, sourceFile, "dbInstanceUuid")?.getText(sourceFile) !== "dbInstanceUuid" ||
+    objectPropertyValue(receiptInitializer, sourceFile, "dbMutationEpoch")?.getText(sourceFile) !== "dbMutationEpoch" ||
+    objectPropertyValue(receiptInitializer, sourceFile, "liveLabelSha256")?.getText(sourceFile) !== "liveLabelSha256" ||
+    objectPropertyValue(receiptInitializer, sourceFile, "dbPayloadSha256")?.getText(sourceFile) !== "dbPayloadSha256"
+  ) {
+    problems.push("EmbedDb HNSW receipt must expose the digests produced inside its capture transaction");
+  } else {
+    const signature = objectPropertyValue(receiptInitializer, sourceFile, "signature")?.getText(sourceFile) ?? "";
+    const instanceBinding = "instance=$" + "{dbInstanceUuid}";
+    const epochBinding = "epoch=$" + "{dbMutationEpoch}";
+    const labelBinding = "labels=$" + "{liveLabelSha256}";
+    const payloadBinding = "payload=$" + "{dbPayloadSha256}";
+    if (
+      !signature.includes(instanceBinding) ||
+      !signature.includes(epochBinding) ||
+      !signature.includes(labelBinding) ||
+      !signature.includes(payloadBinding)
+    ) {
+      problems.push("EmbedDb HNSW signature must bind DB generation and both cryptographic manifests");
+    }
+  }
+
+  const comparator = runtimeMemberNodes(source, "src/embed-db.ts", "sameHnswPersistenceReceipt");
+  const comparatorBody = comparator.nodes[0]?.body?.getText(comparator.sourceFile) ?? "";
+  for (const field of [
+    "version",
+    "signature",
+    "dbInstanceUuid",
+    "dbMutationEpoch",
+    "dim",
+    "activeRows",
+    "maxLabel",
+    "liveLabelSha256",
+    "dbPayloadSha256"
+  ]) {
+    if (!comparatorBody.includes(`left.${field} === right.${field}`)) {
+      problems.push(`HNSW receipt comparator must bind ${field}`);
+    }
+  }
+  return problems;
+}
+
 function cacheSnapshotProblems(source: string): string[] {
   const sourceFile = ts.createSourceFile("src/vault.ts", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
-  const methods: ts.MethodDeclaration[] = [];
+  const methods = new Map<string, ts.MethodDeclaration[]>();
+  const receiptComparators: ts.FunctionDeclaration[] = [];
   const findMethod = (node: ts.Node): void => {
-    if (ts.isMethodDeclaration(node) && node.name.getText(sourceFile) === "saveDiskCacheOnce") {
-      methods.push(node);
+    if (ts.isFunctionDeclaration(node) && node.name?.text === "cacheSourceReceiptsEqual") {
+      receiptComparators.push(node);
+    }
+    if (ts.isMethodDeclaration(node)) {
+      const name = node.name.getText(sourceFile);
+      if (
+        name === "saveDiskCache" ||
+        name === "saveDiskCacheOperation" ||
+        name === "saveDiskCacheOnce" ||
+        name === "clearDiskCache" ||
+        name === "clearDiskCacheOperation" ||
+        name === "loadDiskCache" ||
+        name === "loadDiskCacheOnce" ||
+        name === "readNote" ||
+        name === "readNoteWithCachePolicy"
+      ) {
+        const matches = methods.get(name) ?? [];
+        matches.push(node);
+        methods.set(name, matches);
+      }
     }
     ts.forEachChild(node, findMethod);
   };
   findMethod(sourceFile);
-  if (methods.length !== 1) return [`expected one saveDiskCacheOnce method, found ${methods.length}`];
-  const method = methods[0];
-  if (!method) return ["saveDiskCacheOnce method disappeared"];
+  const saveMethods = methods.get("saveDiskCacheOperation") ?? [];
+  const workerMethods = methods.get("saveDiskCacheOnce") ?? [];
+  const clearMethods = methods.get("clearDiskCacheOperation") ?? [];
+  const loadMethods = methods.get("loadDiskCacheOnce") ?? [];
+  const readDelegateMethods = methods.get("readNote") ?? [];
+  const readPolicyMethods = methods.get("readNoteWithCachePolicy") ?? [];
+  const problems: string[] = [];
+  if (saveMethods.length !== 1) {
+    problems.push(`expected one saveDiskCacheOperation method, found ${saveMethods.length}`);
+  }
+  if (workerMethods.length !== 1) problems.push(`expected one saveDiskCacheOnce method, found ${workerMethods.length}`);
+  if (clearMethods.length !== 1) {
+    problems.push(`expected one clearDiskCacheOperation method, found ${clearMethods.length}`);
+  }
+  if (loadMethods.length !== 1) {
+    problems.push(`expected one loadDiskCacheOnce method, found ${loadMethods.length}`);
+  }
+  if (readDelegateMethods.length !== 1) {
+    problems.push(`expected one readNote delegate, found ${readDelegateMethods.length}`);
+  }
+  if (readPolicyMethods.length !== 1) {
+    problems.push(`expected one readNoteWithCachePolicy method, found ${readPolicyMethods.length}`);
+  }
+  if (receiptComparators.length !== 1) {
+    problems.push(`expected one cacheSourceReceiptsEqual function, found ${receiptComparators.length}`);
+  } else {
+    const comparatorText = receiptComparators[0]?.body?.getText(sourceFile) ?? "";
+    for (const field of ["dev", "ino", "size", "mtimeMs", "ctimeMs"]) {
+      if (comparatorText.split(`left.${field} === right.${field}`).length - 1 !== 1) {
+        problems.push(`cacheSourceReceiptsEqual must compare receipt.${field} exactly once`);
+      }
+    }
+  }
+  const saveMethod = saveMethods[0];
+  const workerMethod = workerMethods[0];
+  const clearMethod = clearMethods[0];
+  const loadMethod = loadMethods[0];
+  const readDelegateMethod = readDelegateMethods[0];
+  const readPolicyMethod = readPolicyMethods[0];
+  if (
+    !saveMethod?.body ||
+    !workerMethod?.body ||
+    !clearMethod?.body ||
+    !loadMethod?.body ||
+    !readDelegateMethod?.body ||
+    !readPolicyMethod?.body
+  ) {
+    return problems;
+  }
+
+  const delegateStatements = [...readDelegateMethod.body.statements];
+  const delegateReturn = delegateStatements[0];
+  const delegateCall =
+    delegateStatements.length === 1 &&
+    delegateReturn &&
+    ts.isReturnStatement(delegateReturn) &&
+    delegateReturn.expression &&
+    ts.isCallExpression(delegateReturn.expression)
+      ? delegateReturn.expression
+      : undefined;
+  const delegateTarget = delegateCall?.expression;
+  if (
+    !delegateCall ||
+    !delegateTarget ||
+    !ts.isPropertyAccessExpression(delegateTarget) ||
+    delegateTarget.expression.kind !== ts.SyntaxKind.ThisKeyword ||
+    delegateTarget.name.text !== "readNoteWithCachePolicy" ||
+    delegateCall.arguments.length !== 3 ||
+    delegateCall.arguments[0]?.getText(sourceFile) !== "relOrAbs" ||
+    delegateCall.arguments[1]?.getText(sourceFile) !== "knownMtimeMs" ||
+    delegateCall.arguments[2]?.kind !== ts.SyntaxKind.TrueKeyword
+  ) {
+    problems.push("readNote must be a single direct cached-policy delegate");
+  }
 
   let snapshotDeclarations = 0;
-  let snapshotPosition = Number.POSITIVE_INFINITY;
   let snapshotInitializer = "";
+  let snapshotInitializerAwaits = 0;
+  let requestCalls = 0;
   let snapshotLoops = 0;
-  let firstAwait = Number.POSITIVE_INFINITY;
-  const inspect = (node: ts.Node): void => {
+  const inspectSave = (node: ts.Node): void => {
     if (ts.isVariableDeclaration(node) && node.name.getText(sourceFile) === "cacheSnapshot") {
       snapshotDeclarations += 1;
-      snapshotPosition = Math.min(snapshotPosition, node.getStart(sourceFile));
       snapshotInitializer = node.initializer?.getText(sourceFile) ?? "";
+      const countAwaits = (child: ts.Node): void => {
+        if (ts.isAwaitExpression(child)) snapshotInitializerAwaits += 1;
+        ts.forEachChild(child, countAwaits);
+      };
+      if (node.initializer) countAwaits(node.initializer);
     }
-    if (ts.isForOfStatement(node) && node.expression.getText(sourceFile) === "cacheSnapshot") snapshotLoops += 1;
-    if (ts.isAwaitExpression(node)) firstAwait = Math.min(firstAwait, node.getStart(sourceFile));
-    ts.forEachChild(node, inspect);
+    if (
+      ts.isCallExpression(node) &&
+      node.expression.getText(sourceFile) === "this.saveDiskCacheOnce" &&
+      node.arguments[0]?.getText(sourceFile) === "{ requestedFile: file, publishedEpoch, cacheSnapshot }"
+    ) {
+      requestCalls += 1;
+    }
+    ts.forEachChild(node, inspectSave);
   };
-  inspect(method);
+  inspectSave(saveMethod);
+  const inspectWorker = (node: ts.Node): void => {
+    if (ts.isForOfStatement(node) && node.expression.getText(sourceFile) === "cacheSnapshot") snapshotLoops += 1;
+    ts.forEachChild(node, inspectWorker);
+  };
+  inspectWorker(workerMethod);
 
-  const problems: string[] = [];
-  if (snapshotDeclarations !== 1 || snapshotInitializer !== "[...this.cache]") {
-    problems.push("saveDiskCacheOnce must take one synchronous cacheSnapshot");
+  const directStatements = [...saveMethod.body.statements];
+  const declarationIndex = (name: string): number =>
+    directStatements.findIndex(
+      (statement) =>
+        ts.isVariableStatement(statement) &&
+        statement.declarationList.declarations.some((declaration) => declaration.name.getText(sourceFile) === name)
+    );
+  const fileIndex = declarationIndex("file");
+  const pendingClearIndex = declarationIndex("pendingClear");
+  const publishedEpochIndex = declarationIndex("publishedEpoch");
+  const snapshotIndex = declarationIndex("cacheSnapshot");
+  const writeIndex = declarationIndex("write");
+  const trackedWriteIndex = declarationIndex("trackedWrite");
+  const cleanBarrierIndex = directStatements.findIndex((statement) => {
+    if (!ts.isIfStatement(statement)) return false;
+    const text = statement.getText(sourceFile);
+    return (
+      statement.expression.getText(sourceFile) === "!this.cacheDirty" &&
+      text.includes("await pendingClear.promise;") &&
+      text.includes("return;")
+    );
+  });
+  const pendingLimitIndex = directStatements.findIndex(
+    (statement) =>
+      ts.isIfStatement(statement) &&
+      statement.expression.getText(sourceFile) === "this.pendingCacheSaveRequests >= MAX_PENDING_DISK_CACHE_SAVES"
+  );
+  const pendingIncrementIndex = directStatements.findIndex(
+    (statement) => statement.getText(sourceFile) === "this.pendingCacheSaveRequests += 1;"
+  );
+  const initializationIndex = directStatements.findIndex(
+    (statement) =>
+      ts.isIfStatement(statement) &&
+      statement.expression.getText(sourceFile) === "!this.ready" &&
+      statement.getText(sourceFile).includes("await this.ensureExists();")
+  );
+  if (
+    !(
+      initializationIndex >= 0 &&
+      initializationIndex < fileIndex &&
+      fileIndex >= 0 &&
+      fileIndex < pendingClearIndex &&
+      pendingClearIndex < cleanBarrierIndex &&
+      cleanBarrierIndex < pendingLimitIndex &&
+      pendingLimitIndex < publishedEpochIndex
+    )
+  ) {
+    problems.push("saveDiskCache must initialize before capture and join a pending clear before a clean-cache return");
   }
+  if (
+    !(
+      publishedEpochIndex >= 0 &&
+      publishedEpochIndex < snapshotIndex &&
+      snapshotIndex < pendingIncrementIndex &&
+      pendingIncrementIndex < writeIndex &&
+      writeIndex < trackedWriteIndex
+    )
+  ) {
+    problems.push("saveDiskCache must capture epoch and cacheSnapshot before enqueue");
+  }
+  const awaitOutsideNestedFunction = (node: ts.Node): boolean => {
+    let found = false;
+    const visit = (child: ts.Node): void => {
+      if (found) return;
+      if (
+        child !== node &&
+        (ts.isArrowFunction(child) ||
+          ts.isFunctionExpression(child) ||
+          ts.isFunctionDeclaration(child) ||
+          ts.isMethodDeclaration(child))
+      ) {
+        return;
+      }
+      if (ts.isAwaitExpression(child)) {
+        found = true;
+        return;
+      }
+      ts.forEachChild(child, visit);
+    };
+    visit(node);
+    return found;
+  };
+  for (let index = 0; index < snapshotIndex; index += 1) {
+    const statement = directStatements[index];
+    if (
+      statement &&
+      index !== initializationIndex &&
+      index !== cleanBarrierIndex &&
+      awaitOutsideNestedFunction(statement)
+    ) {
+      problems.push("saveDiskCache must not suspend before taking its invocation-bound snapshot");
+    }
+  }
+
+  if (
+    snapshotDeclarations !== 1 ||
+    snapshotInitializer !== "Array.from(this.cache, ([abs, source]) => ({ abs, source }))"
+  ) {
+    problems.push("saveDiskCache must take one invocation-bound cacheSnapshot");
+  }
+  if (snapshotInitializer.includes("structuredClone")) {
+    problems.push(
+      "saveDiskCache snapshot admission must retain immutable entry identities without cloning full bodies"
+    );
+  }
+  if (snapshotInitializerAwaits !== 0) problems.push("saveDiskCache cacheSnapshot must be synchronous");
+  if (requestCalls !== 1) problems.push(`saveDiskCache must enqueue one exact snapshot request, found ${requestCalls}`);
   if (snapshotLoops !== 1) problems.push(`saveDiskCacheOnce must iterate cacheSnapshot once, found ${snapshotLoops}`);
-  if (snapshotPosition >= firstAwait) problems.push("saveDiskCacheOnce cacheSnapshot must precede its first await");
+  const writeStatementText = directStatements[writeIndex]?.getText(sourceFile) ?? "";
+  const pendingWait = writeStatementText.indexOf("if (pendingClear) await pendingClear.promise;");
+  const workerCall = writeStatementText.indexOf(
+    "await this.saveDiskCacheOnce({ requestedFile: file, publishedEpoch, cacheSnapshot });"
+  );
+  if (
+    !writeStatementText.includes("this.cachePublishChain.then(async () =>") ||
+    pendingWait < 0 ||
+    workerCall < 0 ||
+    pendingWait > workerCall
+  ) {
+    problems.push("saveDiskCache must join its captured clear before the queued snapshot worker");
+  }
+  const trackedWriteText = directStatements[trackedWriteIndex]?.getText(sourceFile) ?? "";
+  if (
+    !trackedWriteText.includes("write.finally(() =>") ||
+    !trackedWriteText.includes("this.pendingCacheSaveRequests -= 1;") ||
+    !saveMethod.getText(sourceFile).includes("this.cachePublishChain = trackedWrite.catch(() => {});")
+  ) {
+    problems.push("saveDiskCache must release bounded request admission on every worker outcome");
+  }
+  if (!workerMethod.getText(sourceFile).includes("this.cache.get(abs) === source")) {
+    problems.push("saveDiskCacheOnce must not delete a replacement cache generation");
+  }
+  if (!workerMethod.getText(sourceFile).includes("!this.cacheDirty")) {
+    problems.push("saveDiskCacheOnce must skip a request invalidated by an earlier queued clear");
+  }
+  const workerText = workerMethod.getText(sourceFile);
+  if (!workerText.includes("cacheSourceReceiptsEqual(cacheSourceReceipt(liveStat), cached.sourceReceipt)")) {
+    problems.push("saveDiskCacheOnce must bind a persisted snapshot to the full live source receipt");
+  }
+  const oversizeAdmission = workerText.indexOf("let oversized = serializedBytes > this.maxDiskCacheBytes;");
+  const oversizeBranch = workerText.indexOf("if (oversized) {", oversizeAdmission);
+  const oversizeErase = workerText.indexOf("await this.clearDiskCacheCoordinated({ requestedFile });", oversizeBranch);
+  const oversizeThrow = workerText.indexOf("throw new Error(", oversizeErase);
+  if (
+    !(
+      oversizeAdmission >= 0 &&
+      oversizeAdmission < oversizeBranch &&
+      oversizeBranch < oversizeErase &&
+      oversizeErase < oversizeThrow
+    )
+  ) {
+    problems.push("saveDiskCacheOnce must erase the older generation and reject an oversized snapshot");
+  }
+  const graphPreflight = workerText.indexOf(
+    "const measurement = measureBoundedDiskCacheJson(entry, this.maxDiskCacheBytes - serializedBytes - delimiterBytes);"
+  );
+  const invalidGraph = workerText.indexOf('if (measurement.kind === "invalid") continue;', graphPreflight);
+  const overBudgetGraph = workerText.indexOf('if (measurement.kind === "over-budget") {', invalidGraph);
+  const entrySerialization = workerText.indexOf("const fragment = JSON.stringify(entry);");
+  const utf8Count = workerText.indexOf('const measuredFragmentBytes = Buffer.byteLength(fragment, "utf8");');
+  const measurementAgreement = workerText.indexOf("measuredFragmentBytes !== measurement.bytes", utf8Count);
+  const capBeforeRetain = workerText.indexOf("if (serializedBytes + fragmentBytes > this.maxDiskCacheBytes)");
+  const retainFragment = workerText.indexOf("fragments.push(delimiter, fragment);");
+  const overflowContinue = workerText.indexOf("if (oversized) continue;");
+  if (
+    !(
+      overflowContinue >= 0 &&
+      overflowContinue < graphPreflight &&
+      graphPreflight < invalidGraph &&
+      invalidGraph < overBudgetGraph &&
+      overBudgetGraph < entrySerialization &&
+      entrySerialization < utf8Count &&
+      utf8Count < measurementAgreement &&
+      measurementAgreement < capBeforeRetain &&
+      capBeforeRetain < retainFragment
+    )
+  ) {
+    problems.push("saveDiskCacheOnce must preflight one entry and enforce its UTF-8 cap before retaining bytes");
+  }
+  if (workerText.includes("JSON.stringify(cacheSnapshot)") || workerText.includes("JSON.stringify(payload)")) {
+    problems.push("saveDiskCacheOnce must not materialize the whole cache graph before its byte cap");
+  }
+  if (workerText.includes("break;")) {
+    problems.push("saveDiskCacheOnce must continue stale/private cleanup after detecting byte overflow");
+  }
+  if (!source.includes('if (seen.has(value)) return "invalid";')) {
+    problems.push("disk-cache JSON preflight must reject cycles and repeated alias identities");
+  }
+  if (
+    !source.includes("function measureJsonStringBytes(value: string, maxBytes: number)") ||
+    !source.includes("const measured = measureJsonStringBytes(value, maxBytes - bytes);") ||
+    !source.includes("code >= 0xd800 && code <= 0xdbff") ||
+    !source.includes("additional > maxBytes - bytes")
+  ) {
+    problems.push("disk-cache JSON preflight must count escaped UTF-8 string bytes before serialization");
+  }
+  if (
+    !source.includes('if (value.length > MAX_DISK_CACHE_JSON_VALUES - inspectedValues) return "invalid";') ||
+    !source.includes('if (inspectedValues >= MAX_DISK_CACHE_JSON_VALUES) return "invalid";')
+  ) {
+    problems.push("disk-cache JSON preflight must reject over-wide containers before retaining their children");
+  }
+  const clearText = clearMethod.getText(sourceFile);
+  const clearFile = clearText.indexOf("let file = this.cacheFile;");
+  const clearResolution = clearText.indexOf("if (!file) file = await this.cacheFileForErasure();");
+  const clearNoTarget = clearText.indexOf("if (!file) return false;");
+  const clearMap = clearText.indexOf("this.cache = new Map();");
+  const clearGeneration = clearText.indexOf("this.cacheGeneration += 1;");
+  const clearRequest = clearText.indexOf("const request: DiskCacheClearRequest = { requestedFile: file };");
+  const clearEnqueue = clearText.indexOf("this.clearDiskCacheCoordinated(request)");
+  if (
+    !(
+      clearFile >= 0 &&
+      clearFile < clearResolution &&
+      clearResolution < clearNoTarget &&
+      clearNoTarget < clearMap &&
+      clearMap < clearGeneration &&
+      clearGeneration < clearRequest &&
+      clearRequest < clearEnqueue
+    )
+  ) {
+    problems.push(
+      "clearDiskCache must admit an already-known target without suspension and rotate memory before enqueueing erasure"
+    );
+  }
+  if (
+    !source.includes("this.cacheFileValue = opts.cacheFile === undefined ? null : path.resolve(opts.cacheFile);") ||
+    !source.includes("const normalized = file === null ? null : path.resolve(file);")
+  ) {
+    problems.push("cache-file constructor and setter admissions must normalize lexical aliases");
+  }
+  const clearSet = clearText.indexOf("this.pendingCacheClears.set(file, { request, promise: clear });");
+  const clearSuccess = clearText.indexOf("this.pendingCacheClears.get(file)?.request === request");
+  const clearDelete = clearText.indexOf("this.pendingCacheClears.delete(file)", clearSuccess);
+  const clearFailure = clearText.indexOf("// Keep the rejected barrier as a fail-closed tombstone.");
+  if (
+    !(clearEnqueue < clearSet && clearSet < clearSuccess && clearSuccess < clearDelete && clearDelete < clearFailure)
+  ) {
+    problems.push("clearDiskCache must remove only the still-current same-family tombstone after a successful retry");
+  }
+  const failureTail = clearFailure < 0 ? "" : clearText.slice(clearFailure);
+  if (failureTail.includes("this.pendingCacheClears.delete(")) {
+    problems.push("clearDiskCache must retain a rejected erasure barrier until an explicit retry succeeds");
+  }
+  const loadText = loadMethod.getText(sourceFile);
+  const loadGeneration = loadText.indexOf("const { requestedFile, acceptedGeneration } = request;");
+  const loadPendingClear = loadText.indexOf("const pendingClear = this.pendingCacheClears.get(requestedFile);");
+  const loadClearWait = loadText.indexOf("await pendingClear.promise;");
+  const loadDiskRead = loadText.indexOf("const stat = await this.statSafe(file);");
+  if (
+    !(
+      loadGeneration >= 0 &&
+      loadGeneration < loadPendingClear &&
+      loadPendingClear < loadClearWait &&
+      loadClearWait < loadDiskRead
+    ) ||
+    loadText.split("this.cacheGeneration !== acceptedGeneration || this.cacheFile !== requestedFile").length - 1 < 3
+  ) {
+    problems.push("loadDiskCache must join an accepted clear before reading and bind every commit to its generation");
+  }
+  if (!source.includes("if (this.cacheFileValue !== null) return this.cacheFileValue;")) {
+    problems.push(
+      "default cache-path erasure resolution must preserve a setter that wins while resolution is suspended"
+    );
+  }
+  if (!loadText.includes("cacheSourceReceiptsEqual(cacheSourceReceipt(s), entry.sourceReceipt)")) {
+    problems.push("loadDiskCache must reject persisted bodies from a different source receipt");
+  }
+  const readText = readPolicyMethod.getText(sourceFile);
+  if (
+    !readText.includes("const acceptedGeneration = this.cacheGeneration;") ||
+    !readText.includes("if (useCache && this.cacheGeneration === acceptedGeneration) this.cacheSet(abs, entry);")
+  ) {
+    problems.push("readNoteWithCachePolicy must not populate a cache generation retired while its read was suspended");
+  }
+  if (
+    !readText.includes("cacheSourceReceiptsEqual(cached.sourceReceipt, sourceReceipt)") ||
+    !readText.includes("cacheSourceReceiptsEqual(sourceReceipt, cacheSourceReceipt(afterStat))")
+  ) {
+    problems.push("readNoteWithCachePolicy must bind both cache hits and newly read bytes to a full source receipt");
+  }
+  const freshClone = readText.indexOf("const detached = cloneCachedNote(entry);");
+  const freshCache = readText.indexOf("this.cacheSet(abs, entry);", freshClone);
+  const freshReturn = readText.indexOf("return detached;", freshCache);
+  if (
+    !readText.includes("return cloneCachedNote(cached);") ||
+    !(freshClone >= 0 && freshClone < freshCache && freshCache < freshReturn)
+  ) {
+    problems.push("readNoteWithCachePolicy must return detached snapshots on both cache-hit and fresh-read paths");
+  }
+  if (
+    !source.includes("parsed: cloneBoundedParsedNote(entry.parsed)") ||
+    source.includes("structuredClone(entry.parsed)") ||
+    !source.includes('if (active.has(value)) throw new Error("Parsed note contains a cyclic value");') ||
+    !source.includes("const prior = clones.get(value);") ||
+    !source.includes("inspectedValues > MAX_DISK_CACHE_JSON_VALUES")
+  ) {
+    problems.push("detached parsed-note clones must be bounded, alias-preserving, and cycle-rejecting");
+  }
   return problems;
 }
 
@@ -607,20 +2544,82 @@ function sqliteNativeOpenProblems(overrides: ReadonlyMap<string, string> = new M
   }
 
   let diskConstructors = 0;
-  let memoryProbes = 0;
-  for (const file of ["src/fts5.ts", "src/embed-db.ts"] as const) {
-    const source = overrides.get(file) ?? readFileSync(path.join(repoRoot, file), "utf8");
+  let bindingProbes = 0;
+  let diagnosticSnapshots = 0;
+  let literalImports = 0;
+  let sharedLoaderCalls = 0;
+  const unexpectedConstructors: string[] = [];
+  for (const { file, source } of productionTypeScriptSources(overrides)) {
     const sourceFile = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+    const databaseBindings = new Set<string>();
+    if (file === "src/fts5.ts" || file === "src/embed-db.ts") {
+      databaseBindings.add("Ctor");
+      databaseBindings.add("Database");
+    }
+    let addedBinding = true;
+    while (addedBinding) {
+      addedBinding = false;
+      const collectAliases = (node: ts.Node): void => {
+        if (
+          ts.isVariableDeclaration(node) &&
+          ts.isIdentifier(node.name) &&
+          node.initializer &&
+          ts.isIdentifier(node.initializer) &&
+          databaseBindings.has(node.initializer.text) &&
+          !databaseBindings.has(node.name.text)
+        ) {
+          databaseBindings.add(node.name.text);
+          addedBinding = true;
+        }
+        ts.forEachChild(node, collectAliases);
+      };
+      collectAliases(sourceFile);
+    }
+    const allowedDiskConstructors = new Set(
+      SQLITE_NATIVE_OPEN_ROUTES.filter((route) => route.file === file).map((route) => route.constructorNeedle)
+    );
     const visit = (node: ts.Node): void => {
+      if (
+        ts.isImportDeclaration(node) &&
+        ts.isStringLiteral(node.moduleSpecifier) &&
+        node.moduleSpecifier.text === "better-sqlite3"
+      ) {
+        literalImports += 1;
+      }
+      if (
+        ts.isCallExpression(node) &&
+        node.expression.kind === ts.SyntaxKind.ImportKeyword &&
+        node.arguments[0] &&
+        ts.isStringLiteral(node.arguments[0]) &&
+        node.arguments[0].text === "better-sqlite3"
+      ) {
+        literalImports += 1;
+      }
+      if (ts.isIdentifier(node) && node.text === "loadBetterSqlite") {
+        if (ts.isFunctionDeclaration(node.parent) && node.parent.name === node) {
+          // Canonical loader declaration.
+        } else if (ts.isCallExpression(node.parent) && node.parent.expression === node) {
+          sharedLoaderCalls += 1;
+        } else {
+          unexpectedConstructors.push(`${file}: loadBetterSqlite binding escapes a direct call`);
+        }
+      }
       if (ts.isNewExpression(node)) {
         const constructorText = node.expression.getText(sourceFile);
         const firstArgument = node.arguments?.[0]?.getText(sourceFile);
-        if (constructorText === "ctor" && firstArgument === '":memory:"') memoryProbes += 1;
-        if (
-          (constructorText === "Ctor" || constructorText === "Database") &&
-          (firstArgument === "file" || firstArgument === "this.file")
+        if (databaseBindings.has(constructorText)) {
+          if (allowedDiskConstructors.has(node.getText(sourceFile))) diskConstructors += 1;
+          else unexpectedConstructors.push(`${file}:${node.getText(sourceFile)}`);
+        } else if (constructorText === "ctor" && firstArgument === '":memory:"') {
+          bindingProbes += 1;
+        } else if (
+          file === "src/doctor.ts" &&
+          constructorText === "Database" &&
+          (firstArgument === '":memory:"' || firstArgument === "sourceBytes")
         ) {
-          diskConstructors += 1;
+          diagnosticSnapshots += 1;
+        } else if (constructorText === "ctor") {
+          unexpectedConstructors.push(`${file}:${constructorText}(${firstArgument ?? ""})`);
         }
       }
       ts.forEachChild(node, visit);
@@ -628,7 +2627,13 @@ function sqliteNativeOpenProblems(overrides: ReadonlyMap<string, string> = new M
     visit(sourceFile);
   }
   if (diskConstructors !== 7) problems.push(`SQLite disk-constructor census expected 7, found ${diskConstructors}`);
-  if (memoryProbes !== 2) problems.push(`SQLite :memory: probe census expected 2, found ${memoryProbes}`);
+  if (bindingProbes !== 2) problems.push(`SQLite binding-probe census expected 2, found ${bindingProbes}`);
+  if (diagnosticSnapshots !== 2) {
+    problems.push(`SQLite diagnostic-snapshot census expected 2, found ${diagnosticSnapshots}`);
+  }
+  if (literalImports !== 6) problems.push(`SQLite literal-import census expected 6, found ${literalImports}`);
+  if (sharedLoaderCalls !== 4) problems.push(`SQLite shared-loader census expected 4, found ${sharedLoaderCalls}`);
+  problems.push(...unexpectedConstructors.map((site) => `SQLite unexpected constructor ${site}`));
   return problems;
 }
 
@@ -903,40 +2908,7 @@ describe("erasure-completeness invariant (rc.36, P-2 class)", () => {
     }
   );
 
-  it.for([
-    {
-      id: "parse-cache load",
-      file: "src/vault.ts",
-      member: "loadDiskCache",
-      calls: 1,
-      exactCall: "readSensitiveArtifactText(file, this.maxDiskCacheBytes)",
-      directArgument: "file"
-    },
-    {
-      id: "feedback load",
-      file: "src/feedback.ts",
-      member: "open",
-      calls: 1,
-      exactCall: "readSensitiveArtifactText(file, MAX_FEEDBACK_FILE_BYTES)",
-      directArgument: "file"
-    },
-    {
-      id: "HNSW pointer read",
-      file: "src/hnsw.ts",
-      member: "readHnswMetaPointer",
-      calls: 1,
-      exactCall: "readSensitiveArtifactText(metaFile, MAX_HNSW_META_BYTES)",
-      directArgument: "metaFile"
-    },
-    {
-      id: "HNSW load receipt",
-      file: "src/hnsw.ts",
-      member: "loadHnswFromDisk",
-      calls: 2,
-      exactCall: "readSensitiveArtifactText(metaFile, MAX_HNSW_META_BYTES)",
-      directArgument: "metaFile"
-    }
-  ])(
+  it.for(SENSITIVE_READER_INVENTORY)(
     "$id routes every sensitive text read through the shared no-follow reader",
     ({ file, member, calls, exactCall, directArgument }) => {
       const source = readFileSync(path.join(repoRoot, file), "utf8");
@@ -957,6 +2929,14 @@ describe("erasure-completeness invariant (rc.36, P-2 class)", () => {
       expect(sensitiveReaderRouteProblems(unboundedSource, file, member, calls, exactCall)).not.toEqual([]);
     }
   );
+
+  it("bounds a held-descriptor sensitive-artifact hash before processing oversized bytes", async () => {
+    const file = path.join(cacheDir, "bounded-hash.bin");
+    await fs.writeFile(file, "ABCD");
+    await expect(sha256SensitiveArtifact(file, 3)).rejects.toThrow(/bounded hash limit/);
+    await expect(sha256SensitiveArtifact(file, 4)).resolves.toMatch(/^[0-9a-f]{64}$/);
+    await expect(sha256SensitiveArtifact(file, -1)).rejects.toThrow(RangeError);
+  });
 
   it.each([
     ["cache artifact", "LF", "\n"],
@@ -1690,24 +3670,867 @@ describe("erasure-completeness invariant (rc.36, P-2 class)", () => {
       expect(publisherInventoryProblems()).toEqual([]);
     });
 
-    it.each(["saveDiskCacheOnce"])("%s snapshots cache membership synchronously before its first await", () => {
+    it.each(["all enumerated shared sensitive-artifact helper call sites"])("helper-route census accepts %s", () => {
+      expect(sensitiveArtifactHelperCensusProblems()).toEqual([]);
+    });
+
+    it.each([
+      {
+        file: "src/feedback.ts",
+        helper: "publisher",
+        addition:
+          '\nexport async function unlistedSensitivePublisher(file: string): Promise<void> { await publishSensitiveArtifact(file, "bytes"); }\n',
+        expected: "publishSensitiveArtifact:src/feedback.ts#unlistedSensitivePublisher"
+      },
+      {
+        file: "src/feedback.ts",
+        helper: "reader",
+        addition:
+          "\nexport async function unlistedSensitiveReader(file: string): Promise<string> { return readSensitiveArtifactText(file, 1); }\n",
+        expected: "readSensitiveArtifactText:src/feedback.ts#unlistedSensitiveReader"
+      },
+      {
+        file: "src/hnsw.ts",
+        helper: "held-descriptor inspector",
+        addition:
+          "\nasync function unlistedSensitiveInspector(file: string): Promise<bigint> { return inspectSensitiveArtifact(file, 1, async (_handle, size) => size); }\n",
+        expected: "inspectSensitiveArtifact:src/hnsw.ts#unlistedSensitiveInspector"
+      },
+      {
+        file: "src/hnsw.ts",
+        helper: "bounded hasher",
+        addition:
+          "\nasync function unlistedSensitiveHasher(file: string): Promise<string> { return sha256SensitiveArtifact(file, 1); }\n",
+        expected: "sha256SensitiveArtifact:src/hnsw.ts#unlistedSensitiveHasher"
+      }
+    ])("helper-route census rejects a future unlisted $helper", ({ file, addition, expected }) => {
+      const source = readFileSync(path.join(repoRoot, file), "utf8");
+      const problems = sensitiveArtifactHelperCensusProblems(new Map([[file, `${source}${addition}`]]));
+      expect(problems.some((problem) => problem.startsWith(`${expected}: inventory expected 0`))).toBe(true);
+    });
+
+    it.each([
+      { file: "src/hnsw.ts", helper: "inspectSensitiveArtifact" },
+      { file: "src/feedback.ts", helper: "publishSensitiveArtifact" },
+      { file: "src/feedback.ts", helper: "readSensitiveArtifactText" },
+      { file: "src/hnsw.ts", helper: "sha256SensitiveArtifact" }
+    ] as const)("helper-route census rejects a $helper binding escape", ({ file, helper }) => {
+      const source = readFileSync(path.join(repoRoot, file), "utf8");
+      const addition = `\nexport function escapedSensitiveHelper(): unknown { const alias = ${helper}; return alias; }\n`;
+      const problems = sensitiveArtifactHelperCensusProblems(new Map([[file, `${source}${addition}`]]));
+      expect(problems.some((problem) => problem.includes(`${helper} escapes a direct helper call`))).toBe(true);
+    });
+
+    it("HNSW persistence binds held-descriptor preflight, exact caps, and native-load order", () => {
+      const source = readFileSync(path.join(repoRoot, "src/hnsw.ts"), "utf8");
+      expect(hnswArtifactBoundaryProblems(source)).toEqual([]);
+      expect(hnswPublisherBoundaryProblems(source)).toEqual([]);
+    });
+
+    it.each([
+      {
+        mutant: "preflight loses the exact generation cap",
+        apply: (source: string) =>
+          replaceExactly(
+            source,
+            "inspectSensitiveArtifact(file, MAX_HNSW_GENERATION_BYTES, async (handle, fileSize) =>",
+            "inspectSensitiveArtifact(file, Number.MAX_SAFE_INTEGER, async (handle, fileSize) =>"
+          )
+      },
+      {
+        mutant: "header parsing escapes the inspector-held descriptor",
+        apply: (source: string) =>
+          replaceExactly(
+            source,
+            "readHeldBytes(handle, HNSW_NATIVE_HEADER_BYTES, 0)",
+            'readHeldBytes(await fs.open(file, "r"), HNSW_NATIVE_HEADER_BYTES, 0)'
+          )
+      },
+      {
+        mutant: "pre-native path hash is unbounded",
+        apply: (source: string) =>
+          replaceExactly(
+            source,
+            "sha256SensitiveArtifact(binFile, MAX_HNSW_GENERATION_BYTES)",
+            "sha256SensitiveArtifact(binFile, Number.MAX_SAFE_INTEGER)",
+            2
+          )
+      },
+      {
+        mutant: "held-descriptor digest no longer authorizes the path bytes",
+        apply: (source: string) => replaceExactly(source, "digestBefore !== admittedHeader.sha256", "false")
+      },
+      {
+        mutant: "native reader bypasses the admitted private snapshot",
+        apply: (source: string) =>
+          replaceExactly(
+            source,
+            "ctor.readIndex(admittedHeader.nativeSnapshotPath, /* allowReplaceDeleted */ true)",
+            "ctor.readIndex(binFile, /* allowReplaceDeleted */ true)"
+          )
+      },
+      {
+        mutant: "private snapshot is hidden under an unrecognized child name",
+        apply: (source: string) =>
+          replaceExactly(
+            source,
+            'path.join(nativeSnapshotDirectory, "artifact")',
+            'path.join(nativeSnapshotDirectory, "generation.bin")'
+          )
+      },
+      {
+        mutant: "loader strands the admitted private snapshot",
+        apply: (source: string) =>
+          replaceExactly(
+            source,
+            "await removeHnswNativeSnapshot(admittedHeader).catch(() => {});",
+            "await Promise.resolve(admittedHeader);"
+          )
+      },
+      {
+        mutant: "inspector post-callback rejection strands its snapshot",
+        apply: (source: string) =>
+          replaceExactly(
+            source,
+            "if (admittedSnapshot) await removeHnswNativeSnapshot(admittedSnapshot).catch(() => {});",
+            "if (admittedSnapshot) await Promise.resolve(admittedSnapshot);"
+          )
+      },
+      {
+        mutant: "native preflight loses DB-canonical vector authority",
+        apply: (source: string) =>
+          replaceExactly(
+            source,
+            "      expectedLabels,\n      expectedVectorsByLabel\n    );",
+            "      expectedLabels,\n      new Map()\n    );"
+          )
+      },
+      {
+        mutant: "native semantic admission ignores accumulated angular drift",
+        apply: (source: string) =>
+          replaceExactly(source, "Math.sqrt(dbDistanceSquared) > HNSW_DB_VECTOR_L2_TOLERANCE", "dbDistanceSquared < 0")
+      },
+      {
+        mutant: "native loader omits decoded trusted vectors from its combined envelope",
+        apply: (source: string) => replaceExactly(source, "trustedVectorBytes * 3n +", "0n +")
+      }
+    ])("HNSW artifact-boundary invariant rejects $mutant", ({ apply }) => {
+      const source = readFileSync(path.join(repoRoot, "src/hnsw.ts"), "utf8");
+      expect(hnswArtifactBoundaryProblems(source)).toEqual([]);
+      expect(hnswArtifactBoundaryProblems(apply(source))).not.toEqual([]);
+    });
+
+    it.each([
+      {
+        mutant: "native generation publisher drops its exact cap",
+        apply: (source: string) =>
+          replaceExactly(
+            source,
+            "              MAX_HNSW_GENERATION_BYTES\n            );",
+            "              Number.MAX_SAFE_INTEGER\n            );"
+          )
+      },
+      {
+        mutant: "metadata pointer publisher drops its exact cap",
+        apply: (source: string) =>
+          replaceExactly(
+            source,
+            "publishSensitiveArtifact(metaFile, serializedMeta, MAX_HNSW_META_BYTES)",
+            "publishSensitiveArtifact(metaFile, serializedMeta)"
+          )
+      },
+      {
+        mutant: "metadata pre-measurement uses a different limit",
+        apply: (source: string) =>
+          replaceExactly(
+            source,
+            'Buffer.byteLength(projectedSerializedMeta, "utf8") > MAX_HNSW_META_BYTES',
+            'Buffer.byteLength(projectedSerializedMeta, "utf8") > Number.MAX_SAFE_INTEGER'
+          )
+      },
+      {
+        mutant: "v4 pointer reintroduces raw row metadata",
+        apply: (source: string) =>
+          replaceExactly(
+            source,
+            "            writtenAt\n          };",
+            "            writtenAt,\n            rowsByLabel\n          };"
+          )
+      },
+      {
+        mutant: "v4 pointer drops the physical DB generation",
+        apply: (source: string) =>
+          replaceExactly(
+            source,
+            "dbInstanceUuid: generationAuthority.dbInstanceUuid",
+            'dbInstanceUuid: "00000000000000000000000000000000"'
+          )
+      },
+      {
+        mutant: "v4 pointer drops the durable DB epoch",
+        apply: (source: string) =>
+          replaceExactly(source, "dbMutationEpoch: generationAuthority.dbMutationEpoch", "dbMutationEpoch: 1")
+      }
+    ])("HNSW publisher invariant rejects $mutant", ({ apply }) => {
+      const source = readFileSync(path.join(repoRoot, "src/hnsw.ts"), "utf8");
+      expect(hnswPublisherBoundaryProblems(source)).toEqual([]);
+      expect(hnswPublisherBoundaryProblems(apply(source))).not.toEqual([]);
+    });
+
+    it("server publishes HNSW only from receipt-matched database snapshots", () => {
+      const source = readFileSync(path.join(repoRoot, "src/server.ts"), "utf8");
+      expect(hnswServerAtomicityProblems(source)).toEqual([]);
+    });
+
+    it.each([
+      {
+        mutant: "load row authority is captured by a second SQLite snapshot",
+        apply: (source: string) =>
+          replaceExactly(
+            source,
+            "expectedRowsByLabel: beforeLoad.rowsByLabel",
+            "expectedRowsByLabel: db.captureHnswReceiptSnapshot().rowsByLabel"
+          )
+      },
+      {
+        mutant: "load vector authority is captured by a second SQLite snapshot",
+        apply: (source: string) =>
+          replaceExactly(
+            source,
+            "expectedVectorsByLabel: beforeLoad.vectorsByLabel",
+            "expectedVectorsByLabel: db.captureHnswLoadSnapshot().vectorsByLabel"
+          )
+      },
+      {
+        mutant: "load UUID authority is captured by a second SQLite snapshot",
+        apply: (source: string) =>
+          replaceExactly(
+            source,
+            "expectedDbInstanceUuid: beforeLoad.receipt.dbInstanceUuid",
+            "expectedDbInstanceUuid: db.captureHnswReceiptSnapshot().receipt.dbInstanceUuid"
+          )
+      },
+      {
+        mutant: "load epoch authority is captured by a second SQLite snapshot",
+        apply: (source: string) =>
+          replaceExactly(
+            source,
+            "expectedDbMutationEpoch: beforeLoad.receipt.dbMutationEpoch",
+            "expectedDbMutationEpoch: db.captureHnswReceiptSnapshot().receipt.dbMutationEpoch"
+          )
+      },
+      {
+        mutant: "build vectors are captured by a second SQLite snapshot",
+        apply: (source: string) =>
+          replaceExactly(
+            source,
+            "const rows = buildSnapshot.vectors;",
+            "const rows = db.captureHnswBuildSnapshot().vectors;"
+          )
+      },
+      {
+        mutant: "loaded candidate trusts sidecar row metadata",
+        apply: (source: string) =>
+          replaceExactly(source, "rowByLabel: afterLoad.rowsByLabel", "rowByLabel: loadResult.rowsByLabel")
+      },
+      {
+        mutant: "loaded candidate bypasses its post-load receipt compare",
+        apply: (source: string) =>
+          replaceExactly(source, "if (sameHnswPersistenceReceipt(beforeLoad.receipt, afterLoad.receipt))", "if (true)")
+      },
+      {
+        mutant: "built candidate bypasses its post-build receipt compare",
+        apply: (source: string) =>
+          replaceExactly(
+            source,
+            "if (!sameHnswPersistenceReceipt(buildSnapshot.receipt, afterAsync.receipt))",
+            "if (false)"
+          )
+      },
+      {
+        mutant: "built candidate bypasses its post-persist receipt compare",
+        apply: (source: string) =>
+          replaceExactly(
+            source,
+            "if (sameHnswPersistenceReceipt(afterAsync.receipt, afterPersist.receipt))",
+            "if (true)"
+          )
+      },
+      {
+        mutant: "persisted pointer uses a stale pre-build DB generation",
+        apply: (source: string) =>
+          replaceExactly(
+            source,
+            "dbInstanceUuid: afterAsync.receipt.dbInstanceUuid",
+            "dbInstanceUuid: buildSnapshot.receipt.dbInstanceUuid"
+          )
+      },
+      {
+        mutant: "published context omits the receipt epoch",
+        apply: (source: string) =>
+          replaceExactly(source, "dbMutationEpoch: candidate.receipt.dbMutationEpoch", "dbMutationEpoch: undefined")
+      },
+      {
+        mutant: "built candidate suspends after its final receipt check",
+        apply: (source: string) =>
+          replaceExactly(
+            source,
+            "if (sameHnswPersistenceReceipt(afterAsync.receipt, afterPersist.receipt)) {",
+            "if (sameHnswPersistenceReceipt(afterAsync.receipt, afterPersist.receipt)) {\n                  await Promise.resolve();"
+          )
+      }
+    ])("server HNSW atomicity invariant rejects $mutant", ({ apply }) => {
+      const source = readFileSync(path.join(repoRoot, "src/server.ts"), "utf8");
+      expect(hnswServerAtomicityProblems(source)).toEqual([]);
+      expect(hnswServerAtomicityProblems(apply(source))).not.toEqual([]);
+    });
+
+    it("watcher sends DB-canonical vectors to HNSW for Markdown and PDF generations", () => {
+      const source = readFileSync(path.join(repoRoot, "src/watcher.ts"), "utf8");
+      expect(watcherCanonicalVectorProblems(source)).toEqual([]);
+    });
+
+    it("watcher canonical-vector invariant rejects an input-vector regression", () => {
+      const source = readFileSync(path.join(repoRoot, "src/watcher.ts"), "utf8");
+      const bodies = runtimeMemberBodies(source, "src/watcher.ts", "upsertEmbedAndSyncHnsw");
+      expect(bodies).toHaveLength(1);
+      const body = bodies[0] ?? "";
+      const mutantBody = replaceExactly(
+        body,
+        "zipHnswAddPoints(rows, mutation.newIds, mutation.newVectors)",
+        "zipHnswAddPoints(rows, mutation.newIds, rows.map((row) => row.vector))"
+      );
+      const mutant = replaceExactly(source, body, mutantBody);
+      expect(watcherCanonicalVectorProblems(source)).toEqual([]);
+      expect(watcherCanonicalVectorProblems(mutant)).not.toEqual([]);
+    });
+
+    it.each([
+      { kind: "Markdown", member: "commitMarkdownGeneration" },
+      { kind: "PDF", member: "commitPdfGeneration" }
+    ])("watcher canonical-vector invariant rejects bypassing the $kind helper", ({ member }) => {
+      const source = readFileSync(path.join(repoRoot, "src/watcher.ts"), "utf8");
+      const bodies = runtimeMemberBodies(source, "src/watcher.ts", member);
+      expect(bodies).toHaveLength(1);
+      const body = bodies[0] ?? "";
+      const mutantBody = replaceExactly(
+        body,
+        "this.upsertEmbedAndSyncHnsw(",
+        "this.embedDb.upsertNoteWithCanonicalVectors("
+      );
+      const mutant = replaceExactly(source, body, mutantBody);
+      expect(watcherCanonicalVectorProblems(source)).toEqual([]);
+      expect(watcherCanonicalVectorProblems(mutant)).not.toEqual([]);
+    });
+
+    it("EmbedDb captures HNSW labels, payload bytes, and receipt in one transaction", () => {
+      const source = readFileSync(path.join(repoRoot, "src/embed-db.ts"), "utf8");
+      expect(embedHnswSnapshotProblems(source)).toEqual([]);
+    });
+
+    it("EmbedDb generation identity has exact current admission and complete mutation-trigger coverage", () => {
+      const source = readFileSync(path.join(repoRoot, "src/embed-db.ts"), "utf8");
+      const schemaSource = readFileSync(path.join(repoRoot, "src/schema-contract.ts"), "utf8");
+      expect(embedDbGenerationIdentityProblems(source, schemaSource)).toEqual([]);
+    });
+
+    it.each([
+      {
+        mutant: "one durable table leaves the mutation-trigger class",
+        apply: (source: string) =>
+          replaceExactly(
+            source,
+            'const MUTATION_EPOCH_TABLES = ["embeddings", "source_state", "source_quarantine", "source_revision"] as const;',
+            'const MUTATION_EPOCH_TABLES = ["embeddings", "source_state", "source_quarantine"] as const;'
+          )
+      },
+      {
+        mutant: "DELETE leaves the mutation-trigger class",
+        apply: (source: string) =>
+          replaceExactly(
+            source,
+            'const MUTATION_EPOCH_OPERATIONS = ["INSERT", "UPDATE", "DELETE"] as const;',
+            'const MUTATION_EPOCH_OPERATIONS = ["INSERT", "UPDATE"] as const;'
+          )
+      },
+      {
+        mutant: "overflow stops aborting the payload transaction",
+        apply: (source: string) =>
+          replaceExactly(
+            source,
+            "THEN RAISE(ABORT, 'embedding mutation epoch is invalid or exhausted') END",
+            "THEN 0 END"
+          )
+      },
+      {
+        mutant: "current schema stops requiring the complete epoch-trigger inventory",
+        apply: (source: string) => replaceExactly(source, "        ...MUTATION_EPOCH_TRIGGER_NAMES\n", "")
+      },
+      {
+        mutant: "reopen rotates the current generation",
+        apply: (source: string) => replaceExactly(source, "if (!requiresBootstrap) return;", "if (false) return;")
+      },
+      {
+        mutant: "new databases receive a fixed UUID",
+        apply: (source: string) =>
+          replaceExactly(
+            source,
+            'instance_uuid: randomBytes(16).toString("hex")',
+            'instance_uuid: "00000000000000000000000000000000"'
+          )
+      }
+    ])("EmbedDb generation invariant rejects $mutant", ({ apply }) => {
+      const source = readFileSync(path.join(repoRoot, "src/embed-db.ts"), "utf8");
+      const schemaSource = readFileSync(path.join(repoRoot, "src/schema-contract.ts"), "utf8");
+      expect(embedDbGenerationIdentityProblems(source, schemaSource)).toEqual([]);
+      expect(embedDbGenerationIdentityProblems(apply(source), schemaSource)).not.toEqual([]);
+    });
+
+    it.each([
+      {
+        mutant: "capture callback is no longer a SQLite transaction",
+        apply: (source: string) => replaceExactly(source, "const capture = db.transaction(", "const capture = (")
+      },
+      {
+        mutant: "live-label manifest hashes a path instead of the native label",
+        apply: (source: string) =>
+          replaceExactly(
+            source,
+            "updateManifestValue(liveLabelHash, label)",
+            "updateManifestValue(liveLabelHash, metadata.rel_path)"
+          )
+      },
+      {
+        mutant: "payload manifest omits raw vector bytes",
+        apply: (source: string) =>
+          replaceExactly(
+            source,
+            "updateManifestValue(payloadHash, row.vector)",
+            "updateManifestValue(payloadHash, metadata.text_preview)"
+          )
+      },
+      {
+        mutant: "source completeness query stops counting physical chunks",
+        apply: (source: string) => replaceExactly(source, "COUNT(e.id) AS actual_count", "MAX(e.id) AS actual_count")
+      },
+      {
+        mutant: "authority envelope stops validating source-state scalar cells",
+        apply: (source: string) =>
+          replaceExactly(
+            source,
+            "FROM source_state) AS state_invalid_count",
+            "FROM source_state) AS ignored_state_cells"
+          )
+      },
+      {
+        mutant: "source completeness accepts a missing chunk",
+        apply: (source: string) =>
+          replaceExactly(source, "state.actual_count !== state.n_chunks", "state.actual_count < 0")
+      },
+      {
+        mutant: "source generation cardinality leaves the payload receipt",
+        apply: (source: string) =>
+          replaceExactly(
+            source,
+            "updateManifestValue(payloadHash, state.n_chunks as number)",
+            "updateManifestValue(payloadHash, state.rel_path)"
+          )
+      },
+      {
+        mutant: "source revision leaves the payload receipt",
+        apply: (source: string) =>
+          replaceExactly(
+            source,
+            "updateManifestValue(payloadHash, state.revision as number)",
+            "updateManifestValue(payloadHash, state.rel_path)"
+          )
+      },
+      {
+        mutant: "aggregate query stops rejecting malformed vector blobs",
+        apply: (source: string) =>
+          replaceExactly(
+            source,
+            "CASE WHEN typeof(e.vector) <> 'blob' OR length(e.vector) <> ? THEN 1 ELSE 0 END",
+            "CASE WHEN length(e.vector) < 0 THEN 1 ELSE 0 END"
+          )
+      },
+      {
+        mutant: "combined working-set envelope omits encoded vector BLOB bytes",
+        apply: (source: string) => replaceExactly(source, "BigInt(aggregate.vector_bytes as number) +", "0n +")
+      },
+      {
+        mutant: "combined working-set envelope omits native graph capacity",
+        apply: (source: string) =>
+          replaceExactly(source, "BigInt(nativeCapacity) * BigInt(nativeBytesPerElement) +", "0n +")
+      },
+      {
+        mutant: "combined working-set cap is disabled",
+        apply: (source: string) =>
+          replaceExactly(
+            source,
+            "combinedWorkingSetBytes > BigInt(MAX_HNSW_COMBINED_WORKING_SET_BYTES)",
+            "combinedWorkingSetBytes < 0n"
+          )
+      },
+      {
+        mutant: "atomic load snapshot drops its DB-canonical vector map",
+        apply: (source: string) =>
+          replaceExactly(source, 'if (mode === "load") vectorsByLabel.set(label, vector);', "void vectorsByLabel;")
+      },
+      {
+        mutant: "aggregate scalar manifest is no longer fail-closed",
+        apply: (source: string) =>
+          replaceExactly(source, "aggregate.invalid_scalar_count !== 0", "aggregate.invalid_scalar_count < 0")
+      },
+      {
+        mutant: "receipt exposes a constant instead of its live-label digest",
+        apply: (source: string) =>
+          replaceExactly(
+            source,
+            "        liveLabelSha256,\n        dbPayloadSha256",
+            '        liveLabelSha256: "stale",\n        dbPayloadSha256'
+          )
+      },
+      {
+        mutant: "receipt comparator ignores the raw-payload digest",
+        apply: (source: string) => replaceExactly(source, "left.dbPayloadSha256 === right.dbPayloadSha256", "true")
+      },
+      {
+        mutant: "receipt comparator ignores the physical DB generation",
+        apply: (source: string) => replaceExactly(source, "left.dbInstanceUuid === right.dbInstanceUuid", "true")
+      },
+      {
+        mutant: "receipt comparator ignores the durable DB epoch",
+        apply: (source: string) => replaceExactly(source, "left.dbMutationEpoch === right.dbMutationEpoch", "true")
+      }
+    ])("EmbedDb HNSW snapshot invariant rejects $mutant", ({ apply }) => {
+      const source = readFileSync(path.join(repoRoot, "src/embed-db.ts"), "utf8");
+      expect(embedHnswSnapshotProblems(source)).toEqual([]);
+      expect(embedHnswSnapshotProblems(apply(source))).not.toEqual([]);
+    });
+
+    it.each([
+      {
+        mutant: "unready save bypasses initialization",
+        apply: (source: string) => {
+          const bodies = runtimeMemberBodies(source, "src/vault.ts", "saveDiskCacheOperation");
+          expect(bodies).toHaveLength(1);
+          const body = bodies[0] ?? "";
+          const mutantBody = replaceExactly(
+            body,
+            "if (!this.ready) await this.ensureExists();",
+            "if (!this.ready) return;"
+          );
+          return replaceExactly(source, body, mutantBody);
+        }
+      },
+      {
+        mutant: "await inside snapshot initializer",
+        apply: (source: string) =>
+          replaceExactly(
+            source,
+            "Array.from(this.cache, ([abs, source]) => ({ abs, source }))",
+            "Array.from(await Promise.resolve(this.cache), ([abs, source]) => ({ abs, source }))"
+          )
+      },
+      {
+        mutant: "snapshot admission clones every cached parsed graph",
+        apply: (source: string) =>
+          replaceExactly(
+            source,
+            "Array.from(this.cache, ([abs, source]) => ({ abs, source }))",
+            "Array.from(this.cache, ([abs, source]) => ({ abs, source: structuredClone(source) }))"
+          )
+      },
+      {
+        mutant: "standalone suspension before snapshot",
+        apply: (source: string) =>
+          replaceExactly(
+            source,
+            "const publishedEpoch = this.cacheEpoch;",
+            "await Promise.resolve();\n    const publishedEpoch = this.cacheEpoch;"
+          )
+      },
+      {
+        mutant: "non-terminal pending-clear barrier",
+        apply: (source: string) =>
+          replaceExactly(source, "await pendingClear.promise;\n      return;", "await pendingClear.promise;")
+      },
+      {
+        mutant: "queued snapshot bypasses its accepted clear",
+        apply: (source: string) =>
+          replaceExactly(
+            source,
+            "if (pendingClear) await pendingClear.promise;\n      await this.saveDiskCacheOnce({ requestedFile: file, publishedEpoch, cacheSnapshot });",
+            "await this.saveDiskCacheOnce({ requestedFile: file, publishedEpoch, cacheSnapshot });"
+          )
+      },
+      {
+        mutant: "disk load trusts restored mtime without the source receipt",
+        apply: (source: string) =>
+          replaceExactly(
+            source,
+            "cacheSourceReceiptsEqual(cacheSourceReceipt(s), entry.sourceReceipt)",
+            "s.mtimeMs === entry.mtimeMs"
+          )
+      },
+      {
+        mutant: "disk save trusts restored mtime without the source receipt",
+        apply: (source: string) =>
+          replaceExactly(
+            source,
+            "cacheSourceReceiptsEqual(cacheSourceReceipt(liveStat), cached.sourceReceipt)",
+            "liveStat.mtimeMs === cached.mtimeMs"
+          )
+      },
+      {
+        mutant: "memory hit trusts restored mtime without the source receipt",
+        apply: (source: string) =>
+          replaceExactly(
+            source,
+            "cacheSourceReceiptsEqual(cached.sourceReceipt, sourceReceipt)",
+            "cached.mtimeMs === sourceReceipt.mtimeMs"
+          )
+      },
+      ...(["dev", "ino", "size", "mtimeMs", "ctimeMs"] as const).map((field) => ({
+        mutant: `source-receipt comparator ignores ${field}`,
+        apply: (source: string) => {
+          const comparatorOffset = source.indexOf("function cacheSourceReceiptsEqual");
+          expect(comparatorOffset).toBeGreaterThanOrEqual(0);
+          const prefix = source.slice(0, comparatorOffset);
+          const comparatorAndTail = source.slice(comparatorOffset);
+          return `${prefix}${replaceExactly(comparatorAndTail, `left.${field} === right.${field}`, "true")}`;
+        }
+      })),
+      {
+        mutant: "oversized snapshot reports success without erasing the retired disk generation",
+        apply: (source: string) =>
+          replaceExactly(
+            source,
+            "await this.clearDiskCacheCoordinated({ requestedFile });\n      throw new Error(",
+            "return;\n      throw new Error("
+          )
+      },
+      {
+        mutant: "worker materializes the whole cache before the byte cap",
+        apply: (source: string) =>
+          replaceExactly(
+            source,
+            "const writtenAt = new Date().toISOString();",
+            "JSON.stringify(cacheSnapshot);\n    const writtenAt = new Date().toISOString();"
+          )
+      },
+      {
+        mutant: "entry graph is serialized before its bounded-tree preflight",
+        apply: (source: string) =>
+          replaceExactly(
+            source,
+            "const measurement = measureBoundedDiskCacheJson(entry, this.maxDiskCacheBytes - serializedBytes - delimiterBytes);",
+            "const fragment = JSON.stringify(entry);\n      const measurement = measureBoundedDiskCacheJson(entry, this.maxDiskCacheBytes - serializedBytes - delimiterBytes);"
+          )
+      },
+      {
+        mutant: "JSON graph preflight accepts repeated alias identities",
+        apply: (source: string) =>
+          replaceExactly(source, 'if (seen.has(value)) return "invalid";', 'if (false) return "invalid";')
+      },
+      {
+        mutant: "entry bytes are retained without enforcing the cumulative cap",
+        apply: (source: string) =>
+          replaceExactly(
+            source,
+            "if (serializedBytes + fragmentBytes > this.maxDiskCacheBytes)",
+            "if (false && serializedBytes + fragmentBytes > this.maxDiskCacheBytes)"
+          )
+      },
+      {
+        mutant: "byte overflow stops before later stale cleanup",
+        apply: (source: string) =>
+          replaceExactly(
+            source,
+            'if (measurement.kind === "over-budget") {\n        oversized = true;\n        continue;\n      }',
+            'if (measurement.kind === "over-budget") {\n        oversized = true;\n        break;\n      }'
+          )
+      },
+      {
+        mutant: "entry byte measurement ignores the remaining persistence budget",
+        apply: (source: string) =>
+          replaceExactly(
+            source,
+            "measureBoundedDiskCacheJson(entry, this.maxDiskCacheBytes - serializedBytes - delimiterBytes)",
+            "measureBoundedDiskCacheJson(entry, Number.MAX_SAFE_INTEGER)"
+          )
+      },
+      {
+        mutant: "entry cap counts UTF-16 code units instead of UTF-8 bytes",
+        apply: (source: string) => replaceExactly(source, 'Buffer.byteLength(fragment, "utf8")', "fragment.length")
+      },
+      {
+        mutant: "string byte meter ignores JSON escaping and UTF-8 width",
+        apply: (source: string) =>
+          replaceExactly(
+            source,
+            "const measured = measureJsonStringBytes(value, maxBytes - bytes);",
+            "const measured = value.length + 2;"
+          )
+      },
+      {
+        mutant: "wide arrays allocate traversal work beyond the value budget",
+        apply: (source: string) =>
+          replaceExactly(
+            source,
+            'if (value.length > MAX_DISK_CACHE_JSON_VALUES - inspectedValues) return "invalid";',
+            'if (false) return "invalid";'
+          )
+      },
+      {
+        mutant: "clear keeps the retired memory map",
+        apply: (source: string) => replaceExactly(source, "this.cache = new Map();", "this.cache.clear();")
+      },
+      {
+        mutant: "disk load loses one generation receipt",
+        apply: (source: string) =>
+          replaceExactly(
+            source,
+            "this.cacheGeneration !== acceptedGeneration || this.cacheFile !== requestedFile",
+            "this.cacheFile !== requestedFile",
+            3
+          )
+      },
+      {
+        mutant: "disk load bypasses an accepted clear",
+        apply: (source: string) =>
+          replaceExactly(
+            source,
+            "if (pendingClear) {\n      await pendingClear.promise;\n      if (this.cacheGeneration !== acceptedGeneration || this.cacheFile !== requestedFile) return 0;\n    }",
+            "if (pendingClear) return 0;"
+          )
+      },
+      {
+        mutant: "known cache target suspends through the erasure resolver",
+        apply: (source: string) =>
+          replaceExactly(
+            source,
+            "let file = this.cacheFile;\n    if (!file) file = await this.cacheFileForErasure();",
+            "const file = await this.cacheFileForErasure();"
+          )
+      },
+      {
+        mutant: "cache-file setter preserves a lexical alias",
+        apply: (source: string) =>
+          replaceExactly(
+            source,
+            "const normalized = file === null ? null : path.resolve(file);",
+            "const normalized = file;"
+          )
+      },
+      {
+        mutant: "failed erasure deletes its fail-closed tombstone",
+        apply: (source: string) =>
+          replaceExactly(
+            source,
+            "// Keep the rejected barrier as a fail-closed tombstone.",
+            "// Keep the rejected barrier as a fail-closed tombstone.\n        this.pendingCacheClears.delete(file);"
+          )
+      },
+      {
+        mutant: "an earlier successful clear deletes a later same-family barrier",
+        apply: (source: string) =>
+          replaceExactly(
+            source,
+            "if (this.pendingCacheClears.get(file)?.request === request) this.pendingCacheClears.delete(file);",
+            "this.pendingCacheClears.delete(file);"
+          )
+      },
+      {
+        mutant: "default cache resolution overwrites a concurrent explicit retarget",
+        apply: (source: string) =>
+          replaceExactly(source, "if (this.cacheFileValue !== null) return this.cacheFileValue;", "")
+      },
+      {
+        mutant: "pending cache-save admission is unbounded",
+        apply: (source: string) =>
+          replaceExactly(source, "if (this.pendingCacheSaveRequests >= MAX_PENDING_DISK_CACHE_SAVES)", "if (false)")
+      },
+      {
+        mutant: "completed cache saves retain their admission slot",
+        apply: (source: string) => replaceExactly(source, "this.pendingCacheSaveRequests -= 1;", "")
+      },
+      {
+        mutant: "readNote bypasses the cached-policy delegate",
+        apply: (source: string) =>
+          replaceExactly(
+            source,
+            "return this.readNoteWithCachePolicy(relOrAbs, knownMtimeMs, true);",
+            "return this.readNoteWithCachePolicy(relOrAbs, knownMtimeMs, false);"
+          )
+      },
+      {
+        mutant: "read populates a retired generation",
+        apply: (source: string) =>
+          replaceExactly(
+            source,
+            "if (useCache && this.cacheGeneration === acceptedGeneration) this.cacheSet(abs, entry);",
+            "if (useCache) this.cacheSet(abs, entry);"
+          )
+      },
+      {
+        mutant: "cache hit exposes the mutable internal entry",
+        apply: (source: string) => replaceExactly(source, "return cloneCachedNote(cached);", "return cached;")
+      },
+      {
+        mutant: "fresh read exposes the entry stored in the cache",
+        apply: (source: string) =>
+          replaceExactly(source, "const detached = cloneCachedNote(entry);", "const detached = entry;")
+      },
+      {
+        mutant: "detached parsed-note clone expands YAML aliases through structuredClone",
+        apply: (source: string) =>
+          replaceExactly(
+            source,
+            "parsed: cloneBoundedParsedNote(entry.parsed)",
+            "parsed: structuredClone(entry.parsed)"
+          )
+      },
+      {
+        mutant: "detached parsed-note clone accepts cyclic aliases",
+        apply: (source: string) =>
+          replaceExactly(
+            source,
+            'if (active.has(value)) throw new Error("Parsed note contains a cyclic value");',
+            'if (false) throw new Error("Parsed note contains a cyclic value");'
+          )
+      }
+    ])("cache persistence census rejects $mutant", ({ apply }) => {
       const vaultFile = "src/vault.ts";
       const source = readFileSync(path.join(repoRoot, vaultFile), "utf8");
       expect(cacheSnapshotProblems(source)).toEqual([]);
-      const mutant = replaceExactly(
-        source,
-        "const cacheSnapshot = [...this.cache];",
-        "const cacheSnapshot = await Promise.resolve([...this.cache]);"
-      );
-      expect(cacheSnapshotProblems(mutant)).not.toEqual([]);
+      expect(cacheSnapshotProblems(apply(source))).not.toEqual([]);
     });
 
-    it.each(["7 disk opens plus 2 in-memory dependency probes"])(
-      "SQLite family-preflight census accepts exactly %s",
+    it.each(["7 disk opens, 2 binding probes, and 2 path-free diagnostic snapshots"])(
+      "SQLite family-preflight closed-world census accepts exactly %s",
       () => {
         expect(sqliteNativeOpenProblems()).toEqual([]);
       }
     );
+
+    it.each([
+      {
+        route: "shared loader alias",
+        addition:
+          "\nasync function unlistedSqliteLoaderRoute(file: string): Promise<unknown> { const SQLite = await loadBetterSqlite(); return new SQLite(file); }\n"
+      },
+      {
+        route: "literal import alias",
+        addition:
+          '\nasync function unlistedSqliteImportRoute(file: string): Promise<unknown> { const SQLite = (await import("better-sqlite3")).default; return new SQLite(file); }\n'
+      }
+    ])("SQLite census rejects a future unlisted $route", ({ addition }) => {
+      const file = "src/fts5.ts";
+      const source = readFileSync(path.join(repoRoot, file), "utf8");
+      expect(sqliteNativeOpenProblems(new Map([[file, `${source}${addition}`]]))).not.toEqual([]);
+    });
 
     it.each(SQLITE_NATIVE_OPEN_ROUTES)(
       "SQLite census rejects $id when its constructor-adjacent preflight is removed",
@@ -1735,7 +4558,11 @@ describe("erasure-completeness invariant (rc.36, P-2 class)", () => {
         const bodies = runtimeMemberBodies(source, file, member);
         expect(bodies).toHaveLength(1);
         const body = bodies[0] ?? "";
-        const replacement = needle.replace(/[A-Za-z_$][A-Za-z0-9_$]*(?=[^A-Za-z0-9_$]*$)/, "__erasure_mutant__");
+        const identifierReplacement = needle.replace(
+          /[A-Za-z_$][A-Za-z0-9_$]*(?=[^A-Za-z0-9_$]*$)/,
+          "__erasure_mutant__"
+        );
+        const replacement = identifierReplacement === needle ? "void __erasure_mutant__;" : identifierReplacement;
         const offsets: number[] = [];
         for (let offset = body.indexOf(needle); offset >= 0; offset = body.indexOf(needle, offset + needle.length)) {
           offsets.push(offset);
@@ -1754,14 +4581,22 @@ describe("erasure-completeness invariant (rc.36, P-2 class)", () => {
       }
     );
 
-    it.each(["await planCachePruneOnDisk(cacheDir, entries, keepHash)"])(
-      "CLI prune routes destructive selection through %s",
+    it.each(["await executeCachePrune(cacheDir, keepHash)", "await previewCachePrune(cacheDir, keepHash)"])(
+      "CLI prune routes exact execution mode through %s",
       (route) => {
         const cliSource = readFileSync(path.join(repoRoot, "src/cli.ts"), "utf8");
         expect(cliSource).toContain(route);
         expect(replaceExactly(cliSource, route, "await planCachePrune(entries, keepHash)")).not.toContain(route);
       }
     );
+
+    it("shared prune helpers route both bounded snapshots through on-disk admission", () => {
+      const source = readFileSync(path.join(repoRoot, "src/cache-prune.ts"), "utf8");
+      const route = "await planCachePruneOnDisk(canonicalDir, entries, keepHash)";
+      expect(source.split(route)).toHaveLength(3);
+      const mutant = source.replace(route, "await planCachePrune(entries, keepHash)");
+      expect(mutant.split(route)).toHaveLength(2);
+    });
 
     it.each(["hnsw.bin"])("CLI prune help names the erasable legacy %s family", (legacySuffix) => {
       const cliSource = readFileSync(path.join(repoRoot, "src/cli.ts"), "utf8");
@@ -1866,7 +4701,9 @@ describe("erasure-completeness invariant (rc.36, P-2 class)", () => {
         entries.filter((e) => PRE_RC37.test(e) && !e.startsWith(`${keep}.`));
       expect(buggyPrune([`${OTHER}.json`], KEEP)).toEqual([]); // leak: parse cache survives prune
       expect(planCachePrune([`${OTHER}.json`], KEEP)).toEqual([`${OTHER}.json`]); // rc.37: erased
-      expect(planCachePrune([`${OTHER}.embed.db.watcher-activation.guard`], KEEP)).toEqual([]);
+      expect(() => planCachePrune([`${OTHER}.embed.db`, `${OTHER}.embed.db.watcher-activation.guard`], KEEP)).toThrow(
+        /watcher activation guard is present/
+      );
     });
   });
 

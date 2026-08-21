@@ -198,8 +198,12 @@ describe("T-2 — obsidian_get_communities E2E (v3.8.5)", () => {
       expect(Array.isArray(c.members)).toBe(true);
       expect(typeof c.representative).toBe("string");
     }
-    // Membership keys cover all 6 notes (or close — some may be filtered if min_size > 1).
-    expect(Object.keys(parsed.membership).length).toBeGreaterThanOrEqual(6);
+    // Membership is encoded once in the bounded community member arrays; the
+    // former duplicate full path→id map is deliberately omitted.
+    expect(parsed.membership).toBeUndefined();
+    expect(parsed.membership_map_omitted).toBe(true);
+    expect(parsed.returned_member_count).toBe(6);
+    expect(parsed.truncated).toBe(false);
   });
 
   it("min_size filter drops singletons (NEGATIVE control — exercises min_size arg path)", async () => {

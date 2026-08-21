@@ -17,7 +17,7 @@
 [![CI](https://github.com/oomkapwn/enquire-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/oomkapwn/enquire-mcp/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/@oomkapwn/enquire-mcp.svg?label=npm&color=cb3837)](https://www.npmjs.com/package/@oomkapwn/enquire-mcp)
 [![downloads](https://img.shields.io/npm/dm/@oomkapwn/enquire-mcp.svg?color=cb3837)](https://www.npmjs.com/package/@oomkapwn/enquire-mcp)
-[![tests](https://img.shields.io/badge/tests-1807%20contracts-brightgreen.svg)](#️-vertrauen)
+[![tests](https://img.shields.io/badge/tests-2207%20contracts-brightgreen.svg)](#️-vertrauen)
 [![stable](https://img.shields.io/badge/v3.11.x-stable-brightgreen.svg)](./STABILITY.md)
 [![build provenance](https://img.shields.io/badge/build_provenance-SLSA_L2-blue.svg)](https://slsa.dev/spec/v1.0/levels#build-l2)
 [![MCP](https://img.shields.io/badge/MCP-2026--07--28-8A2BE2.svg)](https://modelcontextprotocol.io/)
@@ -55,7 +55,7 @@ Ihr Obsidian-Vault wird zum **persistenten, abfragbaren Langzeitgedächtnis** f�
 > 3. **Keine von enquire initiierten ausgehenden Netzwerkaufrufe während `serve`.** Das q8-Embedding-Modell läuft **auf Ihrem Rechner** und indexiert das von **Ihnen** geschriebene Markdown — deshalb ist es ein expliziter einmaliger lokaler Download (~118 MB), kein Cloud-API-Schlüssel. Inhalte werden nur an den verbundenen MCP-Client zurückgegeben; dessen oder eines Tunnels Umgang mit den Daten ist dessen eigene Vertrauensgrenze ([erzwungen](./SECURITY.md), nicht nur angestrebt).
 > 4. **Frischebewusster Abruf.** Jeder Treffer meldet, wie alt die Notiz ist; das optionale Reranking nach Aktualität erlaubt es einem Agenten, frisches Wissen zu bevorzugen und veraltete Fakten zur erneuten Überprüfung zu markieren — die vergessensbewusste Front, aufgebaut auf der `mtime`, die Ihre Dateien bereits besitzen.
 
-**46 Tools · 19 MCP-Prompts · 1807+ Unit-Tests · 50+ Sprachen · v3.11.x stable · semver-gebunden · MIT · npm-Build-Provenienz (SLSA L2).**
+**46 Tools · 19 MCP-Prompts · 2207+ Unit-Tests · 50+ Sprachen · v3.11.x stable · semver-gebunden · MIT · npm-Build-Provenienz (SLSA L2).**
 
 ---
 
@@ -74,7 +74,7 @@ Ihr Obsidian-Vault wird zum **persistenten, abfragbaren Langzeitgedächtnis** f�
 | **Die gesamte Obsidian-Wissensoberfläche** | ✅ Markdown, Wikilinks, Frontmatter, Canvas, Bases, PDF und OCR |
 | **Agentischer Abruf für schwierige Fragen** | ✅ HyDE, Unterfragenzerlegung, Context Packs, GraphRAG-light und 19 MCP-Prompts |
 | **Skalierung ohne Kontrollverlust** | ✅ HNSW-Live-Updates, Persistenz, adaptives Refill und int8-Quantisierung |
-| **Produktionsvertrauen** | ✅ Standardmäßig read-only, Privacy-Filter, authentifiziertes HTTP, Semver-Verträge, 1807 Tests, 12 Release-Gates und SLSA-L2-Provenienz |
+| **Produktionsvertrauen** | ✅ Standardmäßig read-only, Privacy-Filter, authentifiziertes HTTP, Semver-Verträge, 2207 Tests, 13 Release-Gates und SLSA-L2-Provenienz |
 
 **Ein Vault. Alle Agenten. Der vollständige Stack. Kein Cloud-Lock-in.**
 
@@ -104,7 +104,7 @@ In jeden MCP-Client einklinken:
 
 ### Ein prüfbares Desktop-Bundle? MCPB Basic
 
-Das [GitHub Release `v4.0.0-rc.3`](https://github.com/oomkapwn/enquire-mcp/releases/tag/v4.0.0-rc.3) stellt `enquire-mcp-basic-4.0.0-rc.3.mcpb` samt Prüfsumme, Inventar, SBOM, Hinweisen und Herkunftsnachweis bereit. Das Bundle enthält Server-JavaScript und gewöhnliche Abhängigkeiten; ein kompatibler MCPB-Host muss Node.js 22.13 oder neuer bereitstellen.
+Das [GitHub Release `v4.0.0-rc.4`](https://github.com/oomkapwn/enquire-mcp/releases/tag/v4.0.0-rc.4) stellt `enquire-mcp-basic-4.0.0-rc.4.mcpb` samt Prüfsumme, Inventar, SBOM, Hinweisen und Herkunftsnachweis bereit. Das Bundle enthält Server-JavaScript und gewöhnliche Abhängigkeiten; ein kompatibler MCPB-Host muss Node.js 22.13 oder neuer bereitstellen.
 
 Basic ist auf **13 schreibgeschützte Tools** und **0 Prompts** festgelegt: keine Schreibzugriffe, persistenten Indizes, Modelle, PDF/OCR oder Watcher. Reale Desktop-GUI-, Signatur-, Verzeichnisfreigabe- und Katalogtests durch den Maintainer stehen noch aus. enquire führt beim Serving keine ausgehenden Aufrufe aus; angeforderter Notiztext gelangt jedoch zum verbundenen MCP-Client und unterliegt dessen Datenschutzbedingungen.
 
@@ -113,7 +113,7 @@ Basic ist auf **13 schreibgeschützte Tools** und **0 Prompts** festgelegt: kein
 **Möchten Sie die volle Hybrid-Power?** Schließen Sie den Hybrid-Preflight ab und starten Sie dann den Server:
 
 ```bash
-npm install -g @oomkapwn/enquire-mcp@4.0.0-rc.3      # exact prerelease package
+npm install -g @oomkapwn/enquire-mcp@4.0.0-rc.4      # exact prerelease package
 enquire-mcp --version
 # recommended: preview first, then explicitly apply the same package-coherent plan
 enquire-mcp first-run --tier hybrid --client claude-desktop --vault <path>
@@ -285,8 +285,8 @@ Plus 3 MCP-Ressourcen (`obsidian://vault/info`, `obsidian://note/{path}`, `obsid
 | **HTTP-Transport** | Bearer-Auth (konstantzeitiges SHA-256 + `timingSafeEqual`), Rate-Limit pro Token, striktes CORS |
 | **Frontmatter** | `js-yaml@5` `load` (YAML-1.2-Core-Schema, standardmäßig sicher) — keine Code-Ausführung |
 | **Cache- + Indexdateien** | Enquire setzt für vertrauliche Dateien nach Möglichkeit `0600`, sofern POSIX-Modi unterstützt werden; ein von Enquire erstelltes Elternverzeichnis startet mit `0700`, ein vorhandenes/benutzerdefiniertes bleibt vom Betreiber verwaltet |
-| **1807 Unit-Tests · 12 release-erforderliche CI-Checks · aktuell 7 branch-geschützt** | Aktuell verifizierte Release-Posture; die operativen Details sind unten fixiert. |
-| **CI** | `release.yml` zählt direkt **12 Release-Gates** auf, die alle auf jedem PR laufen: `lint`, `test (22)`, `test (24)`, `smoke`, `audit`, `coverage`, `version-consistency`, `docs`, `oia`, `protocol-conformance`, `package-consumer` und `mcpb-basic`. Der gepinnte Windows-Hostile-Filesystem-Job `test-windows` ist ein zusätzlicher benannter Check-Run, der transitiv als blockierende Voraussetzung von `smoke` erzwungen wird. Die Branch-Protection erzwingt derzeit nur **7** davon; `docs`, `oia`, `protocol-conformance`, `package-consumer` und `mcpb-basic` sind für Releases erforderlich, aber ungeschützt (Branch-Protection-Snapshot live verifiziert am 2026-07-23). `test-macos` ist der einzige beratende Job mit `continue-on-error`. `docker` kann den CI-Workflow fehlschlagen lassen, ist aber ungeschützt; CodeQL führt über das [GitHub Default Setup](https://docs.github.com/code-security/code-scanning/automatically-scanning-your-code-for-vulnerabilities-and-errors/configuring-default-setup-for-code-scanning) zwei getrennte ungeschützte Analysen aus. Vor dem npm publish prüft `release.yml` die 12 direkt aufgezählten Gates auf dem getaggten SHA erneut. |
+| **2207 Unit-Tests · 13 release-erforderliche CI-Checks · alle 13 aktuell branch-geschützt** | Aktuell verifizierte Release-Posture; die operativen Details sind unten fixiert. |
+| **CI** | `release.yml` zählt direkt **13 Release-Gates** auf, die alle auf jedem PR laufen: `lint`, `test (22)`, `test (24)`, `smoke`, `audit`, `coverage`, `version-consistency`, `docs`, `oia`, `protocol-conformance`, `package-consumer`, `mcpb-basic` und `docker`. Der gepinnte Windows-Hostile-Filesystem-Job `test-windows` ist ein zusätzlicher benannter Check-Run, der transitiv als blockierende Voraussetzung von `smoke` erzwungen wird. Die Branch-Protection erzwingt jetzt alle **13** davon (Branch-Protection-Snapshot live verifiziert am 2026-08-21). `test-macos` ist der einzige beratende Job mit `continue-on-error`. Das `docker`-Gate baut das Image und führt begrenzte CLI- und MCP-Introspektionsproben aus; CodeQL führt über das [GitHub Default Setup](https://docs.github.com/code-security/code-scanning/automatically-scanning-your-code-for-vulnerabilities-and-errors/configuring-default-setup-for-code-scanning) zwei getrennte ungeschützte Analysen aus. Vor dem npm publish prüft `release.yml` die 13 direkt aufgezählten Gates auf dem getaggten SHA erneut. |
 | **Coverage** | Zeilen ≥86 % · Statements ≥82 % · Funktionen ≥75 % · Branches ≥74 % (abgesichert) |
 | **Releases** | npm + GitHub-Release pro Tag · semver · **signierte Build-Provenienz** (npm + Sigstore, SLSA Build L2; L3-Generator auf der Roadmap) |
 | **Stabilität** | v3.0+ semver-gebunden — jedes CLI-Flag, jeder Tool-Name, jede MCP-Ressource, jeder Prompt und jedes exportierte Symbol ist Vertrag |
@@ -326,7 +326,7 @@ Kanal: `npm install @oomkapwn/enquire-mcp` → neueste stabile Version (`@latest
 ```bash
 git clone https://github.com/oomkapwn/enquire-mcp.git
 cd enquire-mcp && npm install
-npm test       # vollständige Suite (1807 Tests)
+npm test       # vollständige Suite (2207 Tests)
 npm run lint   # null Warnungen
 npm run build  # tsc → dist/
 ```

@@ -13,10 +13,10 @@ import {
 import { iterateBodyLines } from "../structure.js";
 import type { FileEntry, Vault } from "../vault.js";
 import { stripTrailingLineEnds } from "../wildcard-match.js";
-import { capScanEntries } from "./limits.js";
+import { listExactScanEntries } from "./limits.js";
 import { getBacklinks, getRecentEdits, listTags } from "./read.js";
 import { type SearchHybridHit, searchHybrid } from "./search.js";
-import { resolveTarget, suggestSimilar } from "./write.js";
+import { resolveTarget } from "./write.js";
 
 // ─── obsidian_validate_note_proposal (v0.12 anti-slop validator) ─────────────
 // Closes the #1 user-pain finding: LLM-generated notes arrive structurally
@@ -80,6 +80,58 @@ export interface ValidateProposalResult {
   };
 }
 
+const MAX_VALIDATE_CONTENT_CODE_UNITS = 1_000_000;
+const MAX_VALIDATE_WIKILINKS = 10_000;
+const MAX_VALIDATE_SUGGESTION_COMPARISONS = 50_000;
+
+interface ValidationSuggestionBatch {
+  byTarget: Map<string, string[]>;
+  truncated: boolean;
+  candidatesPerTarget: number;
+}
+
+/** Rank typo hints for every distinct broken target under one shared budget. */
+function validationSuggestions(entries: readonly FileEntry[], targets: readonly string[]): ValidationSuggestionBatch {
+  const uniqueTargets = [...new Set(targets)];
+  const byTarget = new Map<string, string[]>();
+  if (uniqueTargets.length === 0) return { byTarget, truncated: false, candidatesPerTarget: entries.length };
+
+  // Candidate folding is O(vault) once, not once per broken target.
+  const candidates = entries.map((entry, order) => ({
+    path: entry.relPath,
+    base: foldName(stripMd(entry.basename)),
+    rel: foldName(entry.relPath),
+    order
+  }));
+  const candidatesPerTarget = Math.min(
+    candidates.length,
+    Math.floor(MAX_VALIDATE_SUGGESTION_COMPARISONS / uniqueTargets.length)
+  );
+
+  for (const target of uniqueTargets) {
+    const lower = foldName(target.replace(/\.md$/iu, ""));
+    const top: Array<{ path: string; score: number; order: number }> = [];
+    for (let index = 0; index < candidatesPerTarget; index++) {
+      const candidate = candidates[index];
+      if (!candidate) continue;
+      let score = 0;
+      if (candidate.base === lower) score = 100;
+      else if (candidate.base.startsWith(lower) || lower.startsWith(candidate.base)) score = 70;
+      else if (candidate.base.includes(lower) || lower.includes(candidate.base)) score = 50;
+      else if (candidate.rel.includes(lower)) score = 30;
+      if (score === 0) continue;
+      top.push({ path: candidate.path, score, order: candidate.order });
+      top.sort((left, right) => right.score - left.score || left.order - right.order);
+      if (top.length > 3) top.pop();
+    }
+    byTarget.set(
+      target,
+      top.map((candidate) => candidate.path)
+    );
+  }
+  return { byTarget, truncated: candidatesPerTarget < candidates.length, candidatesPerTarget };
+}
+
 /**
  * Pre-write validator — lint an LLM-proposed note against the live vault
  * before writing.
@@ -120,6 +172,9 @@ export interface ValidateProposalResult {
  */
 export async function validateNoteProposal(vault: Vault, args: ValidateProposalArgs): Promise<ValidateProposalResult> {
   await vault.ensureExists();
+  if (args.content.length > MAX_VALIDATE_CONTENT_CODE_UNITS) {
+    throw new RangeError(`content exceeds ${MAX_VALIDATE_CONTENT_CODE_UNITS} UTF-16 code units`);
+  }
   const mode = args.mode ?? "create";
   const errors: Array<{ kind: string; message: string }> = [];
   const warnings: Array<{ kind: string; message: string; suggestion?: string }> = [];
@@ -204,21 +259,14 @@ export async function validateNoteProposal(vault: Vault, args: ValidateProposalA
   // as a real (broken-link / proposed-tag) finding — a false positive vs Obsidian semantics.
   const sanitizedBodyAfterFm = stripCodeAndInline(bodyAfterFm);
 
-  // 3. Wikilink resolution against the live vault.
-  const all = await vault.listMarkdown();
-  const wikilinks: ValidateProposalResult["wikilinks"] = [];
-  // v3.10.0-rc.67 (round-3 re-sweep, DoS) — memoize suggestions per broken target so a body
-  // packed with thousands of distinct (or repeated) broken `[[...]]` targets does not re-rank
-  // (and, pre-rc.67, re-WALK the whole vault) once per link. Combined with passing the shared
-  // `all` listing into suggestSimilar, the per-link cost drops from a fresh filesystem walk to a
-  // single cached O(N) in-memory rank, and repeats are O(1). Closes the O(broken-links × vault)
-  // serve-http amplifier (the rc.65 readCanvas resource-bound-escape class).
-  const suggestionCache = new Map<string, string[]>();
-  // v3.11.0-rc.17 (rc.16 re-audit, HIGH ReDoS) — was a BYTE-IDENTICAL hand-copy of
-  // parser.ts's O(n²) lazy-quantifier wikilink regex (the rc.10 INLINE_TAG_RE
-  // copy-class). Routed through the shared linear scanner; `raw` reconstructs the
-  // full `[[…]]` match (the former `m[0]`) faithfully since inner excludes `]`/`\n`.
+  // 3. Wikilink resolution against one exact, walker-bounded vault snapshot.
+  const all = await listExactScanEntries(vault, undefined, "obsidian_validate_note_proposal");
+  const pendingLinks: Array<{ raw: string; target: string; match: FileEntry | null }> = [];
+  const missingTargets: string[] = [];
   for (const innerRaw of scanWikilinkInners(sanitizedBodyAfterFm, false)) {
+    if (pendingLinks.length >= MAX_VALIDATE_WIKILINKS) {
+      throw new RangeError(`proposal exceeds ${MAX_VALIDATE_WIKILINKS} wikilinks`);
+    }
     const raw = `[[${innerRaw}]]`;
     const inner = innerRaw.trim();
     if (!inner) continue;
@@ -228,6 +276,25 @@ export async function validateNoteProposal(vault: Vault, args: ValidateProposalA
     const target = beforeHash.split("^")[0]?.trim() ?? "";
     if (!target) continue;
     const match = findBestMatch(all, target, normalizedPath);
+    pendingLinks.push({ raw, target, match });
+    if (!match) missingTargets.push(target);
+  }
+
+  // Fold candidate identities once and share one hard comparison budget across
+  // every distinct miss. This prevents K attacker-chosen broken links from
+  // triggering K complete vault reranks while preserving exact resolution.
+  const suggestionBatch = validationSuggestions(all, missingTargets);
+  if (suggestionBatch.truncated) {
+    warnings.push({
+      kind: "suggestion-budget",
+      message:
+        `Did-you-mean search inspected ${suggestionBatch.candidatesPerTarget} candidates per distinct broken target ` +
+        `(shared ${MAX_VALIDATE_SUGGESTION_COMPARISONS}-comparison budget); link resolution remains exact but suggestions may be incomplete.`
+    });
+  }
+
+  const wikilinks: ValidateProposalResult["wikilinks"] = [];
+  for (const { raw, target, match } of pendingLinks) {
     if (match) {
       wikilinks.push({
         raw,
@@ -237,11 +304,7 @@ export async function validateNoteProposal(vault: Vault, args: ValidateProposalA
         suggestions: []
       });
     } else {
-      let suggestions = suggestionCache.get(target);
-      if (suggestions === undefined) {
-        suggestions = await suggestSimilar(vault, target, all); // reuse the single listing (rc.67)
-        suggestionCache.set(target, suggestions);
-      }
+      const suggestions = suggestionBatch.byTarget.get(target) ?? [];
       wikilinks.push({
         raw,
         target,
@@ -252,7 +315,7 @@ export async function validateNoteProposal(vault: Vault, args: ValidateProposalA
       warnings.push({
         kind: "broken-wikilink",
         message: `[[${target}]] does not resolve to any existing note`,
-        suggestion: suggestions.length ? `Closest matches: ${suggestions.join(", ")}` : undefined
+        ...(suggestions.length ? { suggestion: `Closest matches: ${suggestions.join(", ")}` } : {})
       });
     }
   }
@@ -304,7 +367,8 @@ export async function validateNoteProposal(vault: Vault, args: ValidateProposalA
     } catch {
       // Path doesn't exist — try title collision (an existing note at a different path).
       const titleFromBasename = stripMd(path.basename(normalizedPath));
-      const existing = await vault.findByTitle(titleFromBasename);
+      const foldedTitle = foldName(titleFromBasename);
+      const existing = all.find((entry) => foldName(stripMd(entry.basename)) === foldedTitle) ?? null;
       if (existing && existing.relPath !== normalizedPath) {
         warnings.push({
           kind: "title-collision",
@@ -664,6 +728,79 @@ export const MAX_QUESTION_PATTERN_LEN = 200;
  *   residual the rc.36 re-sweep surfaced).
  */
 export const MAX_QUESTION_SCAN_MS = 5000;
+
+/**
+ * Closed resource envelope for one {@link getOpenQuestions} execution.
+ *
+ * Every limit is charged before the corresponding source text, line, candidate,
+ * worker batch, or result is retained. The optional execution override accepted
+ * by {@link getOpenQuestions} may only NARROW these defaults, which gives tests a
+ * small causal seam without letting programmatic callers weaken production
+ * admission.
+ */
+export interface OpenQuestionAdmissionLimits {
+  /** Maximum markdown notes admitted by the incremental vault walker. */
+  maxNotes: number;
+  /** Maximum directory entries inspected by the incremental vault walker. */
+  maxVisitedEntries: number;
+  /** Maximum UTF-8 bytes in one decoded note. */
+  maxNoteUtf8Bytes: number;
+  /** Maximum aggregate UTF-8 bytes across decoded notes. */
+  maxTextUtf8Bytes: number;
+  /** Maximum number of body lines inspected. */
+  maxLines: number;
+  /** Maximum UTF-8 bytes in one line sent to either matcher. */
+  maxSingleLineUtf8Bytes: number;
+  /** Maximum aggregate UTF-8 bytes across inspected body lines. */
+  maxLineUtf8Bytes: number;
+  /** Maximum number of non-fenced, non-heading candidate lines. */
+  maxCandidates: number;
+  /** Maximum aggregate UTF-8 bytes retained/processed as candidate metadata. */
+  maxCandidateUtf8Bytes: number;
+  /** Maximum candidate lines cloned into one regex worker. */
+  maxWorkerBatchCandidates: number;
+  /** Maximum aggregate line bytes cloned into one regex worker. */
+  maxWorkerBatchUtf8Bytes: number;
+  /** Maximum serialized UTF-8 bytes retained in the exact top-K result heap. */
+  maxResultUtf8Bytes: number;
+}
+
+/**
+ * Production resource envelope for {@link getOpenQuestions}.
+ *
+ * The vault walk itself stops before materializing more than 50k notes; all
+ * later dimensions are independently bounded so many tiny lines, a few huge
+ * lines, repeated heading metadata, regex-worker cloning, and the response heap
+ * cannot substitute for one another.
+ */
+export const DEFAULT_OPEN_QUESTION_ADMISSION_LIMITS: Readonly<OpenQuestionAdmissionLimits> = Object.freeze({
+  maxNotes: 50_000,
+  maxVisitedEntries: 200_000,
+  maxNoteUtf8Bytes: 32 * 1024 * 1024,
+  maxTextUtf8Bytes: 256 * 1024 * 1024,
+  maxLines: 2_000_000,
+  maxSingleLineUtf8Bytes: 1024 * 1024,
+  maxLineUtf8Bytes: 256 * 1024 * 1024,
+  maxCandidates: 1_000_000,
+  maxCandidateUtf8Bytes: 256 * 1024 * 1024,
+  maxWorkerBatchCandidates: 1024,
+  maxWorkerBatchUtf8Bytes: 2 * 1024 * 1024,
+  maxResultUtf8Bytes: 8 * 1024 * 1024
+});
+
+/**
+ * Internal execution seams for {@link getOpenQuestions}.
+ *
+ * MCP callers cannot provide this object (the registered input schema is
+ * strict). Tests use it to shrink admission limits and observe worker batches
+ * without allocating production-sized fixtures or starting native workloads.
+ */
+export interface OpenQuestionExecutionOptions {
+  /** Optional limits; every supplied value must be no larger than production. */
+  limits?: Partial<OpenQuestionAdmissionLimits>;
+  /** Optional batch matcher used by bounded unit tests. */
+  matchBatch?: (pattern: string, lines: readonly string[], budgetMs: number) => Promise<{ idx: number; q: string }[]>;
+}
 
 /**
  * Read the regex quantifier (if any) starting at `pos` in `src`. Returns
@@ -1421,6 +1558,13 @@ export function matchLinesBounded(
   lines: readonly string[],
   budgetMs: number
 ): Promise<{ idx: number; q: string }[]> {
+  if (typeof pattern !== "string") throw new TypeError("pattern must be a string");
+  if (!Array.isArray(lines) || lines.some((line) => typeof line !== "string")) {
+    throw new TypeError("lines must be an array of strings");
+  }
+  if (!Number.isSafeInteger(budgetMs) || budgetMs < 1 || budgetMs > MAX_QUESTION_SCAN_MS) {
+    throw new RangeError(`budgetMs must be a positive safe integer <= ${MAX_QUESTION_SCAN_MS}`);
+  }
   return new Promise((resolve, reject) => {
     const worker = new Worker(
       "const{parentPort,workerData}=require('node:worker_threads');" +
@@ -1434,8 +1578,9 @@ export function matchLinesBounded(
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      void worker.terminate();
-      fn();
+      // Join termination before resolving/rejecting so sequential batches apply
+      // real worker backpressure instead of briefly overlapping worker teardown.
+      void worker.terminate().then(fn, fn);
     };
     const timer = setTimeout(
       () =>
@@ -1459,6 +1604,188 @@ export function matchLinesBounded(
   });
 }
 
+function narrowOpenQuestionLimit(
+  value: number | undefined,
+  production: number,
+  name: keyof OpenQuestionAdmissionLimits
+): number {
+  if (value === undefined) return production;
+  if (!Number.isSafeInteger(value) || value < 1 || value > production) {
+    throw new RangeError(
+      `obsidian_open_questions: ${name} must be a positive safe integer no greater than ${production}`
+    );
+  }
+  return value;
+}
+
+function normalizeOpenQuestionLimits(
+  overrides: Partial<OpenQuestionAdmissionLimits> | undefined
+): OpenQuestionAdmissionLimits {
+  const d = DEFAULT_OPEN_QUESTION_ADMISSION_LIMITS;
+  return {
+    maxNotes: narrowOpenQuestionLimit(overrides?.maxNotes, d.maxNotes, "maxNotes"),
+    maxVisitedEntries: narrowOpenQuestionLimit(overrides?.maxVisitedEntries, d.maxVisitedEntries, "maxVisitedEntries"),
+    maxNoteUtf8Bytes: narrowOpenQuestionLimit(overrides?.maxNoteUtf8Bytes, d.maxNoteUtf8Bytes, "maxNoteUtf8Bytes"),
+    maxTextUtf8Bytes: narrowOpenQuestionLimit(overrides?.maxTextUtf8Bytes, d.maxTextUtf8Bytes, "maxTextUtf8Bytes"),
+    maxLines: narrowOpenQuestionLimit(overrides?.maxLines, d.maxLines, "maxLines"),
+    maxSingleLineUtf8Bytes: narrowOpenQuestionLimit(
+      overrides?.maxSingleLineUtf8Bytes,
+      d.maxSingleLineUtf8Bytes,
+      "maxSingleLineUtf8Bytes"
+    ),
+    maxLineUtf8Bytes: narrowOpenQuestionLimit(overrides?.maxLineUtf8Bytes, d.maxLineUtf8Bytes, "maxLineUtf8Bytes"),
+    maxCandidates: narrowOpenQuestionLimit(overrides?.maxCandidates, d.maxCandidates, "maxCandidates"),
+    maxCandidateUtf8Bytes: narrowOpenQuestionLimit(
+      overrides?.maxCandidateUtf8Bytes,
+      d.maxCandidateUtf8Bytes,
+      "maxCandidateUtf8Bytes"
+    ),
+    maxWorkerBatchCandidates: narrowOpenQuestionLimit(
+      overrides?.maxWorkerBatchCandidates,
+      d.maxWorkerBatchCandidates,
+      "maxWorkerBatchCandidates"
+    ),
+    maxWorkerBatchUtf8Bytes: narrowOpenQuestionLimit(
+      overrides?.maxWorkerBatchUtf8Bytes,
+      d.maxWorkerBatchUtf8Bytes,
+      "maxWorkerBatchUtf8Bytes"
+    ),
+    maxResultUtf8Bytes: narrowOpenQuestionLimit(
+      overrides?.maxResultUtf8Bytes,
+      d.maxResultUtf8Bytes,
+      "maxResultUtf8Bytes"
+    )
+  };
+}
+
+function addOpenQuestionBudget(label: string, used: number, amount: number, limit: number): number {
+  if (!Number.isSafeInteger(amount) || amount < 0 || used > limit - amount) {
+    throw new RangeError(`obsidian_open_questions: ${label} exceeds the complete-scan limit of ${limit}`);
+  }
+  return used + amount;
+}
+
+function utf8Bytes(value: string): number {
+  return Buffer.byteLength(value, "utf8");
+}
+
+interface OpenQuestionCandidate {
+  text: string;
+  relPath: string;
+  basename: string;
+  lineNo: number;
+  heading: string | null;
+  mtimeMs: number;
+}
+
+interface OpenQuestionRank {
+  mtimeMs: number;
+  sequence: number;
+}
+
+interface RankedOpenQuestion extends OpenQuestionRank {
+  value: OpenQuestion;
+  serializedBytes: number;
+}
+
+function compareOpenQuestionRank(a: OpenQuestionRank, b: OpenQuestionRank): number {
+  if (a.mtimeMs !== b.mtimeMs) return a.mtimeMs - b.mtimeMs;
+  return a.sequence - b.sequence;
+}
+
+function siftWorstOpenQuestionUp(heap: RankedOpenQuestion[], index: number): void {
+  let child = index;
+  while (child > 0) {
+    const parent = Math.floor((child - 1) / 2);
+    const parentValue = heap[parent];
+    const childValue = heap[child];
+    if (!parentValue || !childValue || compareOpenQuestionRank(parentValue, childValue) >= 0) return;
+    heap[parent] = childValue;
+    heap[child] = parentValue;
+    child = parent;
+  }
+}
+
+function siftWorstOpenQuestionDown(heap: RankedOpenQuestion[], index: number): void {
+  let parent = index;
+  while (true) {
+    const left = parent * 2 + 1;
+    const right = left + 1;
+    let worst = parent;
+    const worstValue = heap[worst];
+    const leftValue = heap[left];
+    if (worstValue && leftValue && compareOpenQuestionRank(leftValue, worstValue) > 0) worst = left;
+    const candidateWorst = heap[worst];
+    const rightValue = heap[right];
+    if (candidateWorst && rightValue && compareOpenQuestionRank(rightValue, candidateWorst) > 0) worst = right;
+    if (worst === parent) return;
+    const parentValue = heap[parent];
+    const swapValue = heap[worst];
+    if (!parentValue || !swapValue) return;
+    heap[parent] = swapValue;
+    heap[worst] = parentValue;
+    parent = worst;
+  }
+}
+
+function retainOldestOpenQuestion(
+  heap: RankedOpenQuestion[],
+  item: Omit<RankedOpenQuestion, "serializedBytes">,
+  limit: number,
+  retainedBytes: number,
+  maxResultUtf8Bytes: number
+): number {
+  const worst = heap[0];
+  if (heap.length >= limit && worst && compareOpenQuestionRank(item, worst) >= 0) {
+    return retainedBytes;
+  }
+  const serializedBytes = utf8Bytes(JSON.stringify(item.value));
+  const replacedBytes = heap.length >= limit && worst ? worst.serializedBytes : 0;
+  const nextBytes = retainedBytes - replacedBytes;
+  if (serializedBytes > maxResultUtf8Bytes - nextBytes) {
+    throw new RangeError(
+      `obsidian_open_questions: exact top-${limit} result exceeds ${maxResultUtf8Bytes} serialized UTF-8 bytes`
+    );
+  }
+  const retained: RankedOpenQuestion = { ...item, serializedBytes };
+  if (heap.length < limit) {
+    heap.push(retained);
+    siftWorstOpenQuestionUp(heap, heap.length - 1);
+  } else {
+    heap[0] = retained;
+    siftWorstOpenQuestionDown(heap, 0);
+  }
+  return nextBytes + serializedBytes;
+}
+
+function validateOpenQuestionMatches(
+  matches: readonly { idx: number; q: string }[],
+  batchLength: number
+): { idx: number; q: string }[] {
+  if (!Array.isArray(matches) || matches.length > batchLength) {
+    throw new Error("obsidian_open_questions: regex worker returned an invalid match batch");
+  }
+  const seen = new Set<number>();
+  const admitted: { idx: number; q: string }[] = [];
+  for (const match of matches) {
+    if (
+      typeof match !== "object" ||
+      match === null ||
+      !Number.isSafeInteger(match.idx) ||
+      match.idx < 0 ||
+      match.idx >= batchLength ||
+      typeof match.q !== "string" ||
+      seen.has(match.idx)
+    ) {
+      throw new Error("obsidian_open_questions: regex worker returned an invalid match batch");
+    }
+    seen.add(match.idx);
+    admitted.push({ idx: match.idx, q: match.q });
+  }
+  admitted.sort((a, b) => a.idx - b.idx);
+  return admitted;
+}
+
 /**
  * Surface unresolved threads — `Open question:` / `Q:` / `TODO?` / `??`
  * markers across the vault.
@@ -1476,7 +1803,10 @@ export function matchLinesBounded(
  * @param vault - The vault.
  * @param args - All optional. `folder` restricts the scan. `limit`
  *   defaults to 100. `pattern` overrides the default matcher regex.
- * @returns Sorted `OpenQuestion[]` (oldest-first by `age_days`).
+ * @param execution - Internal narrowing/matcher seams for bounded tests. MCP
+ *   callers cannot provide this strict-schema-excluded argument.
+ * @returns Sorted `OpenQuestion[]` (oldest first by exact mtime, with stable
+ *   scan-order ties); throws instead of returning a partial inventory.
  * @throws {VaultPathError} If `folder` resolves outside the vault.
  * @example
  * ```ts
@@ -1488,10 +1818,21 @@ export function matchLinesBounded(
  */
 export async function getOpenQuestions(
   vault: Vault,
-  args: { folder?: string; limit?: number; pattern?: string; scanBudgetMs?: number }
+  args: { folder?: string; limit?: number; pattern?: string; scanBudgetMs?: number },
+  execution: OpenQuestionExecutionOptions = {}
 ): Promise<OpenQuestion[]> {
+  const limits = normalizeOpenQuestionLimits(execution.limits);
   await vault.ensureExists();
   const limit = args.limit ?? 100;
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 500) {
+    throw new RangeError("obsidian_open_questions: limit must be a positive safe integer <= 500");
+  }
+  const scanBudgetMs = args.scanBudgetMs ?? MAX_QUESTION_SCAN_MS;
+  if (!Number.isSafeInteger(scanBudgetMs) || scanBudgetMs < 1 || scanBudgetMs > MAX_QUESTION_SCAN_MS) {
+    throw new RangeError(
+      `obsidian_open_questions: scanBudgetMs must be a positive safe integer <= ${MAX_QUESTION_SCAN_MS}`
+    );
+  }
   // Default pattern: "Open question:" / "Open question -" / "Q:" / "TODO?" / "??"
   // followed by space + question text. Anchored at line start (with optional
   // list-bullet / quote / heading prefix).
@@ -1512,6 +1853,9 @@ export async function getOpenQuestions(
   // undecidable; a rc.36 re-sweep confirmed a residual tail) can never hang the
   // event loop. See MAX_QUESTION_SCAN_MS. The worker compiles the pattern itself.
   if (args.pattern !== undefined) {
+    if (typeof args.pattern !== "string") {
+      throw new TypeError("obsidian_open_questions: pattern must be a string");
+    }
     if (args.pattern.length > MAX_QUESTION_PATTERN_LEN) {
       throw new Error(
         `obsidian_open_questions: pattern too long (${args.pattern.length} > ${MAX_QUESTION_PATTERN_LEN} chars). ` +
@@ -1527,88 +1871,186 @@ export async function getOpenQuestions(
     }
   }
 
-  // v3.10.0-rc.16 (audit M5) — collect ALL matches across the (capped) scan,
-  // THEN sort oldest-first + slice. The prior code broke at `limit` in vault-
-  // WALK order and only then sorted, so on a vault with > `limit` questions it
-  // returned an arbitrary limit-subset, NOT the documented oldest-first. The
-  // scan is capped (capScanEntries) so a pathological vault can't drive
-  // unbounded readNote I/O — defense-in-depth, same posture as the graph tools.
-  const entries = capScanEntries(await vault.listMarkdown(args.folder), "obsidian_open_questions");
+  // The legacy materialize-then-truncate path bounded only the already-built
+  // result inventory. The incremental walker bounds traversal + inventory
+  // BEFORE allocation and carries an explicit completeness receipt. Returning
+  // a partial "oldest" set would be a lie, so every incomplete walk fails closed.
+  const listing = await vault.listFilesByExtensionsBounded(
+    [".md"],
+    limits.maxNotes,
+    limits.maxVisitedEntries,
+    args.folder
+  );
+  if (!listing.complete) {
+    throw new Error(
+      `obsidian_open_questions: exact results require a complete vault inventory; ` +
+        `bounded walk stopped within ${limits.maxNotes} notes / ${limits.maxVisitedEntries} visited entries`
+    );
+  }
+  if (listing.entries.length > limits.maxNotes) {
+    throw new Error("obsidian_open_questions: bounded vault walker returned too many notes");
+  }
+
+  // Production entries carry byte sizes, so reject an impossible aggregate
+  // before the first note read. Synthetic FileEntry callers may omit sizeBytes;
+  // the decoded-content charge below remains authoritative for every note.
+  let listedTextBytes = 0;
+  for (const entry of listing.entries) {
+    if (entry.sizeBytes === undefined) continue;
+    if (!Number.isSafeInteger(entry.sizeBytes) || entry.sizeBytes < 0) {
+      throw new Error("obsidian_open_questions: bounded vault walker returned an invalid note size");
+    }
+    if (entry.sizeBytes > limits.maxNoteUtf8Bytes) {
+      throw new RangeError(
+        `obsidian_open_questions: one note exceeds the ${limits.maxNoteUtf8Bytes} UTF-8 byte scan limit`
+      );
+    }
+    listedTextBytes = addOpenQuestionBudget(
+      "listed note text",
+      listedTextBytes,
+      entry.sizeBytes,
+      limits.maxTextUtf8Bytes
+    );
+  }
+
   const now = Date.now();
-  // Collect candidate lines (skipping heading lines — never question hits) with
-  // their resolved metadata, FLAT across notes, so the regex matching can run as one
-  // bounded pass (in a worker for a caller pattern). Scan parsed.body so frontmatter
-  // lines (which can contain "Q:"-ish tokens) don't pollute results.
-  type Candidate = {
-    line: string;
-    relPath: string;
-    basename: string;
-    lineNo: number;
-    heading: string | null;
-    mtimeMs: number;
+  const defaultMatcher = new RegExp(defaultPat, "i");
+  const matchBatch = execution.matchBatch ?? matchLinesBounded;
+  const matchDeadline = args.pattern === undefined ? 0 : Date.now() + scanBudgetMs;
+  const heap: RankedOpenQuestion[] = [];
+  let retainedResultBytes = 0;
+  let sequence = 0;
+  let textBytes = 0;
+  let lineCount = 0;
+  let lineBytes = 0;
+  let candidateCount = 0;
+  let candidateBytes = 0;
+  let batchBytes = 0;
+  const batch: OpenQuestionCandidate[] = [];
+
+  const retainMatch = (candidate: OpenQuestionCandidate, question: string): void => {
+    const value: OpenQuestion = {
+      question: question.trim(),
+      source_path: candidate.relPath,
+      source_title: stripMd(candidate.basename),
+      context_heading: candidate.heading,
+      line: candidate.lineNo,
+      age_days: Math.round((now - candidate.mtimeMs) / (24 * 3600 * 1000)),
+      mtime: new Date(candidate.mtimeMs).toISOString()
+    };
+    retainedResultBytes = retainOldestOpenQuestion(
+      heap,
+      { value, mtimeMs: candidate.mtimeMs, sequence },
+      limit,
+      retainedResultBytes,
+      limits.maxResultUtf8Bytes
+    );
+    sequence += 1;
   };
-  const candidates: Candidate[] = [];
-  for (const e of entries) {
-    const { parsed, mtimeMs } = await vault.readNote(e.absPath, e.mtimeMs);
-    // v3.11.6-rc.2 — the fence-aware line walk + ATX-heading parse now come from the canonical
-    // structure iterator (src/structure.ts): `l.text` === the former `splitLines(parsed.body)[i]`,
-    // `l.line` === `bodyStartLine + i`, and `l.heading` mirrors the old headingMatch (a degenerate
-    // `# ###` yields `l.heading` with empty text, so it still `continue`s as a non-hit heading line).
+
+  const matchingTimeout = (): Error =>
+    new Error(
+      `obsidian_open_questions: pattern rejected — matching exceeded the ${scanBudgetMs}ms safe budget ` +
+        "(likely catastrophic backtracking / ReDoS). Simplify the pattern or omit it to use the safe default."
+    );
+
+  const flushCandidateBatch = async (): Promise<void> => {
+    if (batch.length === 0 || args.pattern === undefined) return;
+    const remaining = Math.floor(matchDeadline - Date.now());
+    if (remaining < 1) throw matchingTimeout();
+    const batchLines = batch.map((candidate) => candidate.text);
+    const rawMatches = await matchBatch(args.pattern, batchLines, Math.min(scanBudgetMs, remaining));
+    if (Date.now() > matchDeadline) throw matchingTimeout();
+    for (const match of validateOpenQuestionMatches(rawMatches, batch.length)) {
+      const candidate = batch[match.idx];
+      if (!candidate) throw new Error("obsidian_open_questions: regex worker returned an invalid match index");
+      retainMatch(candidate, match.q);
+    }
+    batch.length = 0;
+    batchBytes = 0;
+  };
+
+  for (const entry of listing.entries) {
+    if (args.pattern !== undefined && Date.now() >= matchDeadline) throw matchingTimeout();
+    const { content, parsed, mtimeMs } = await vault.readNoteUncached(entry.absPath, entry.mtimeMs);
+    if (!Number.isFinite(mtimeMs) || Number.isNaN(new Date(mtimeMs).getTime())) {
+      throw new Error("obsidian_open_questions: note has an invalid modification time");
+    }
+    const noteBytes = utf8Bytes(content);
+    if (noteBytes > limits.maxNoteUtf8Bytes) {
+      throw new RangeError(
+        `obsidian_open_questions: one note exceeds the ${limits.maxNoteUtf8Bytes} UTF-8 byte scan limit`
+      );
+    }
+    textBytes = addOpenQuestionBudget("note text", textBytes, noteBytes, limits.maxTextUtf8Bytes);
+
+    // The canonical structure iterator excludes frontmatter and reports fence +
+    // heading state. Every line is charged before inspection; every candidate is
+    // charged before either inline matching or bounded-batch retention.
     let currentHeading: string | null = null;
-    for (const l of iterateBodyLines(parsed)) {
-      if (l.inFence) continue;
-      if (l.heading) {
-        if (l.heading.text) currentHeading = l.heading.text; // heading lines set context, aren't hits
+    for (const line of iterateBodyLines(parsed)) {
+      const text = stripTrailingLineEnds(line.text);
+      const currentLineBytes = utf8Bytes(text);
+      lineCount = addOpenQuestionBudget("body line count", lineCount, 1, limits.maxLines);
+      if (currentLineBytes > limits.maxSingleLineUtf8Bytes) {
+        throw new RangeError(
+          `obsidian_open_questions: one body line exceeds ${limits.maxSingleLineUtf8Bytes} UTF-8 bytes`
+        );
+      }
+      lineBytes = addOpenQuestionBudget("body line text", lineBytes, currentLineBytes, limits.maxLineUtf8Bytes);
+      if (line.inFence) continue;
+      if (line.heading) {
+        if (line.heading.text) currentHeading = line.heading.text;
         continue;
       }
-      candidates.push({
-        line: l.text,
-        relPath: e.relPath,
-        basename: e.basename,
-        lineNo: l.line,
+
+      const currentCandidateBytes =
+        currentLineBytes +
+        utf8Bytes(entry.relPath) +
+        utf8Bytes(entry.basename) +
+        (currentHeading === null ? 0 : utf8Bytes(currentHeading));
+      candidateCount = addOpenQuestionBudget("candidate count", candidateCount, 1, limits.maxCandidates);
+      candidateBytes = addOpenQuestionBudget(
+        "candidate metadata",
+        candidateBytes,
+        currentCandidateBytes,
+        limits.maxCandidateUtf8Bytes
+      );
+      const candidate: OpenQuestionCandidate = {
+        text,
+        relPath: entry.relPath,
+        basename: entry.basename,
+        lineNo: line.line,
         heading: currentHeading,
         mtimeMs
-      });
+      };
+
+      if (args.pattern === undefined) {
+        const match = defaultMatcher.exec(text);
+        if (match?.[1] !== undefined) retainMatch(candidate, match[1]);
+        continue;
+      }
+      if (currentLineBytes > limits.maxWorkerBatchUtf8Bytes) {
+        throw new RangeError(
+          `obsidian_open_questions: one regex candidate exceeds the ${limits.maxWorkerBatchUtf8Bytes} UTF-8 byte worker-batch limit`
+        );
+      }
+      if (
+        batch.length >= limits.maxWorkerBatchCandidates ||
+        currentLineBytes > limits.maxWorkerBatchUtf8Bytes - batchBytes
+      ) {
+        await flushCandidateBatch();
+      }
+      batch.push(candidate);
+      batchBytes += currentLineBytes;
     }
   }
-  // Match. A CALLER pattern runs on a worker thread with a hard wall-clock budget
-  // (the rc.39 ReDoS sink-bound — the main event loop can never hang, any pattern);
-  // the safe default runs inline (zero overhead). Each match yields the FIRST capture
-  // group as the question text (the `re.exec(line)?.[1]` contract).
-  // v3.11.0-rc.19 (rc.17 external audit, Cursor MED-1 — the 4th CRLF-blind `(.+)$` site
-  // the rc.17 heading fix missed). `c.line` is a raw `parsed.body.split("\n")` line, so on
-  // a CRLF note it keeps a trailing `\r` that JS `.`/`$` (no `s`/`m`) won't cross — the
-  // default `…(.+)$` question pattern (and any caller pattern) then matched NOTHING on
-  // every CRLF line, silently dropping a Windows note's open questions. Strip the trailing
-  // line terminator before matching (covers BOTH the worker and inline paths below).
-  const lineTexts = candidates.map((c) => stripTrailingLineEnds(c.line));
-  let matches: { idx: number; q: string }[];
-  if (args.pattern !== undefined) {
-    matches = await matchLinesBounded(args.pattern, lineTexts, args.scanBudgetMs ?? MAX_QUESTION_SCAN_MS);
-  } else {
-    matches = [];
-    const re = new RegExp(defaultPat, "i");
-    for (let i = 0; i < lineTexts.length; i++) {
-      const m = re.exec(lineTexts[i] ?? "");
-      if (m?.[1] != null) matches.push({ idx: i, q: m[1] });
-    }
-  }
-  const out: OpenQuestion[] = matches.map(({ idx, q }) => {
-    const c = candidates[idx] as Candidate;
-    return {
-      question: q.trim(),
-      source_path: c.relPath,
-      source_title: stripMd(c.basename),
-      context_heading: c.heading,
-      line: c.lineNo,
-      age_days: Math.round((now - c.mtimeMs) / (24 * 3600 * 1000)),
-      mtime: new Date(c.mtimeMs).toISOString()
-    };
-  });
-  // Sort oldest-first so things aging out surface first, THEN return the
-  // `limit` genuinely-oldest — not an arbitrary walk-order subset (audit M5).
-  out.sort((a, b) => b.age_days - a.age_days);
-  return out.slice(0, limit);
+  await flushCandidateBatch();
+
+  // A max-heap retained only the genuinely oldest K while the complete scan
+  // proceeded. Final sorting is bounded by `limit` (<=500), not vault size.
+  heap.sort(compareOpenQuestionRank);
+  return heap.map((item) => item.value);
 }
 
 // ─── obsidian_paper_audit (v1.5 — verify #paper notes have citations) ────────

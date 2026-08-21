@@ -56,8 +56,9 @@ import { replaceExactly } from "./helpers/exact-source-mutation.js";
 // Class B invariant (post-v4.0.0-rc.2 hardening) — two repository-integrity
 // tests are intentionally omitted only from the redundant V8-instrumented
 // rerun. They remain mandatory in both unfiltered Node test legs. The exact
-// package command, workflow prerequisites, production coverage set, timeout
-// ceilings and reviewed direct-loader value-import closure are one fail-closed contract:
+// package command, workflow prerequisites, same-run coverage evidence handoff,
+// production coverage set, timeout ceilings and reviewed direct-loader
+// value-import closure are one fail-closed contract:
 // a wildcard, third omission, filtered prerequisite or production import
 // makes this lightweight test fail before the coverage job can qualify.
 
@@ -76,6 +77,8 @@ const EXPECTED_PREPUBLISH_ONLY_SCRIPT =
   "node scripts/check-changelog-coverage.mjs && node scripts/check-per-file-coverage.mjs";
 const EXPECTED_CHECKOUT_ACTION = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1";
 const EXPECTED_SETUP_NODE_ACTION = "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020";
+const EXPECTED_UPLOAD_ARTIFACT_ACTION = "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a";
+const EXPECTED_DOWNLOAD_ARTIFACT_ACTION = "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c";
 const EXPECTED_COVERAGE_CLOSURE_FILES = [
   "scripts/check-release-integrity.mjs",
   "scripts/lib/entrypoint.mjs",
@@ -84,9 +87,11 @@ const EXPECTED_COVERAGE_CLOSURE_FILES = [
   "scripts/npm-ci-with-retry.mjs",
   "tests/helpers/exact-source-mutation.ts",
   "tests/meta-invariant-coverage.test.ts",
+  "tests/npm-ci-workflow-contract-fixtures.ts",
   "tests/release-integrity.test.ts",
   "tests/release-mutation-identity-audit.ts",
-  "tests/release-mutation-plan.ts"
+  "tests/release-mutation-plan.ts",
+  "tests/release-split-contract-fixtures.ts"
 ] as const;
 const EXPECTED_COVERAGE_EXTERNAL_MODULES = new Set([
   "@modelcontextprotocol/client",
@@ -126,7 +131,14 @@ const EXPECTED_COVERAGE_STEP_FINGERPRINTS = [
   "3bfd312da192922a8ddd4c6e7e5e3473d3ddc2743dbc73e40281975dd9848268",
   "e69e201d4b1395014e59ae019d60395c73b33f3fe3dd112653fb524f5d34fd55",
   "0effe396ca2ba4507989894b9b011d618cef92a4ce40fe0db03fd898590475d9",
-  "93e6549b49a134b1e02785af9934a318e8de73ae596618a20914030487359002"
+  "3cf86138c09850122bcbb0ecd64eedbc3f69b03dbd552b6ee7ac16f6974cc875"
+] as const;
+const EXPECTED_OIA_STEP_FINGERPRINTS = [
+  "3ef4af68ef144f12dd555f182fb78c286413a5c20503a3491c8a1a7ea3554af7",
+  "2873c30795c24c8e23b779c04f85e269a194d6d7f89baddd3888d1f619855563",
+  "338e29c470a015d92698b8184b65ee481976a1a24ad813eab912c20460a2a937",
+  "1b0717ee04319d167e0837f827d565e709c377f5f7f126c52e74eb84391653ff",
+  "6d17292384f49a212eddf1e626f36f87d22853089bdbd2218692cebbf0e84056"
 ] as const;
 const FORBIDDEN_TEST_LIFECYCLE_SCRIPTS = ["pretest", "posttest", "pretest:coverage", "posttest:coverage"] as const;
 
@@ -235,6 +247,47 @@ function hasExactDefineConfigImport(statement: ts.Statement | undefined): boolea
   );
 }
 
+function hasExactCoveragePolicyImport(statement: ts.Statement | undefined): boolean {
+  if (statement === undefined || !ts.isImportDeclaration(statement)) return false;
+  if (
+    stringLiteralValue(statement.moduleSpecifier) !== "./scripts/lib/coverage-policy.mjs" ||
+    statement.attributes !== undefined
+  ) {
+    return false;
+  }
+  const clause = statement.importClause;
+  if (
+    clause === undefined ||
+    clause.isTypeOnly ||
+    clause.name !== undefined ||
+    clause.namedBindings === undefined ||
+    !ts.isNamedImports(clause.namedBindings) ||
+    clause.namedBindings.elements.length !== 1
+  ) {
+    return false;
+  }
+  const binding = clause.namedBindings.elements[0];
+  return (
+    binding !== undefined &&
+    !binding.isTypeOnly &&
+    binding.propertyName === undefined &&
+    binding.name.text === "COVERAGE_EXCLUDE_PATTERNS"
+  );
+}
+
+function isExactCoveragePolicySpread(expression: ts.Expression | undefined): boolean {
+  if (expression === undefined || !ts.isArrayLiteralExpression(expression) || expression.elements.length !== 1) {
+    return false;
+  }
+  const element = expression.elements[0];
+  return (
+    element !== undefined &&
+    ts.isSpreadElement(element) &&
+    ts.isIdentifier(element.expression) &&
+    element.expression.text === "COVERAGE_EXCLUDE_PATTERNS"
+  );
+}
+
 function packageCoverageProblems(source: string): string[] {
   const problems: string[] = [];
   let parsed: unknown;
@@ -309,6 +362,7 @@ function ciCoverageProblems(source: string): string[] {
   const jobs = asRecord(workflow.jobs);
   const testJob = asRecord(jobs?.test);
   const coverageJob = asRecord(jobs?.coverage);
+  const oiaJob = asRecord(jobs?.oia);
   if (testJob === undefined) {
     problems.push("CI must retain the blocking test matrix job");
   } else {
@@ -443,6 +497,76 @@ function ciCoverageProblems(source: string): string[] {
     if (!exactOnce || !exactGateShapes) {
       problems.push("CI coverage must retain contiguous fail-capable build, coverage and floor gates");
     }
+    const measurementIndex = steps?.findIndex((step) => step.run === "npm run test:coverage") ?? -1;
+    const uploadIndexes =
+      steps
+        ?.map((step, index) => (step.uses === EXPECTED_UPLOAD_ARTIFACT_ACTION ? index : -1))
+        .filter((index) => index >= 0) ?? [];
+    const uploadIndex = uploadIndexes.length === 1 ? uploadIndexes[0] : undefined;
+    const uploadStep = uploadIndex === undefined ? undefined : steps?.[uploadIndex];
+    const uploadWith = asRecord(uploadStep?.with);
+    if (
+      uploadIndex === undefined ||
+      uploadStep === undefined ||
+      !recordHasExactKeys(uploadStep, ["uses", "with"]) ||
+      !isDeepStrictEqual(uploadWith, {
+        name: "coverage-report",
+        path: "coverage/",
+        "if-no-files-found": "error"
+      }) ||
+      measurementIndex < 0 ||
+      uploadIndex <= measurementIndex ||
+      jobHasOverride(uploadStep)
+    ) {
+      problems.push("CI coverage must publish one non-empty pinned same-run coverage-report after measurement");
+    }
+  }
+
+  if (oiaJob === undefined) {
+    problems.push("CI must retain the blocking OIA job");
+  } else {
+    if (
+      !recordHasExactKeys(oiaJob, ["runs-on", "timeout-minutes", "needs", "steps"]) ||
+      oiaJob["runs-on"] !== "ubuntu-latest" ||
+      oiaJob["timeout-minutes"] !== 10 ||
+      oiaJob.needs !== "coverage"
+    ) {
+      problems.push("CI OIA must retain its exact coverage-dependent 10-minute job boundary");
+    }
+    const steps = workflowSteps(oiaJob);
+    if (!isDeepStrictEqual(workflowStepFingerprints(steps), EXPECTED_OIA_STEP_FINGERPRINTS)) {
+      problems.push("CI OIA must retain the exact reviewed step sequence");
+    }
+    const downloadIndexes =
+      steps
+        ?.map((step, index) => (step.uses === EXPECTED_DOWNLOAD_ARTIFACT_ACTION ? index : -1))
+        .filter((index) => index >= 0) ?? [];
+    const downloadIndex = downloadIndexes.length === 1 ? downloadIndexes[0] : undefined;
+    const downloadStep = downloadIndex === undefined ? undefined : steps?.[downloadIndex];
+    const downloadWith = asRecord(downloadStep?.with);
+    const checkIndexes =
+      steps?.map((step, index) => (step.run === "npm run check:oia" ? index : -1)).filter((index) => index >= 0) ?? [];
+    const checkIndex = checkIndexes.length === 1 ? checkIndexes[0] : undefined;
+    const checkStep = checkIndex === undefined ? undefined : steps?.[checkIndex];
+    if (
+      oiaJob.needs !== "coverage" ||
+      downloadIndex === undefined ||
+      downloadStep === undefined ||
+      !recordHasExactKeys(downloadStep, ["name", "uses", "with"]) ||
+      !isDeepStrictEqual(downloadWith, {
+        name: "coverage-report",
+        path: "coverage",
+        "digest-mismatch": "error"
+      }) ||
+      checkIndex === undefined ||
+      checkStep === undefined ||
+      !recordHasExactKeys(checkStep, ["run"]) ||
+      downloadIndex >= checkIndex ||
+      jobHasOverride(downloadStep) ||
+      jobHasOverride(checkStep)
+    ) {
+      problems.push("CI OIA must consume the exact pinned current-run coverage-report before checking");
+    }
   }
   return problems;
 }
@@ -453,8 +577,11 @@ function vitestCoverageProblems(source: string, configFiles: readonly string[]):
     problems.push("the repository must retain one canonical vitest.config.ts");
   }
   const sourceFile = ts.createSourceFile("vitest.config.ts", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
-  if (sourceFile.statements.length !== 2 || !hasExactDefineConfigImport(sourceFile.statements[0])) {
+  if (!hasExactDefineConfigImport(sourceFile.statements[0])) {
     problems.push("vitest config must retain the exact unaliased defineConfig import");
+  }
+  if (sourceFile.statements.length !== 3 || !hasExactCoveragePolicyImport(sourceFile.statements[1])) {
+    problems.push("vitest config must retain the exact centralized coverage-policy import");
   }
   const exportAssignments = sourceFile.statements.filter(ts.isExportAssignment);
   const exportAssignment = exportAssignments.length === 1 ? exportAssignments[0] : undefined;
@@ -521,13 +648,8 @@ function vitestCoverageProblems(source: string, configFiles: readonly string[]):
   if (!isDeepStrictEqual(stringLiteralArray(objectProperty(coverage, "include")), ["src/**/*.ts"])) {
     problems.push("vitest coverage.include must remain exact src/**/*.ts");
   }
-  if (
-    !isDeepStrictEqual(stringLiteralArray(objectProperty(coverage, "exclude")), [
-      "src/{index,cli,server,tool-registry,prompts,tool-manifest}.ts",
-      "**/*.test.ts"
-    ])
-  ) {
-    problems.push("vitest production coverage exclusions must remain the reviewed exact pair");
+  if (!isExactCoveragePolicySpread(objectProperty(coverage, "exclude"))) {
+    problems.push("vitest production coverage exclusions must use the exact centralized policy spread");
   }
   const thresholdsExpression = objectProperty(coverage, "thresholds");
   if (thresholdsExpression === undefined || !ts.isObjectLiteralExpression(thresholdsExpression)) {
@@ -1156,6 +1278,39 @@ describe("Class A invariant — no test imports value from registration boilerpl
     expect(ciCoverageProblems(ciWithPrependedCoverageStep)).toContain(
       "CI coverage must retain the exact reviewed step sequence"
     );
+    const ciWithoutFailClosedCoverageUpload = mutableWorkflow(current.ciWorkflow, (workflow) => {
+      const upload = mutableUsesStep(mutableWorkflowJob(workflow, "coverage"), EXPECTED_UPLOAD_ARTIFACT_ACTION);
+      const uploadWith = asRecord(upload.with);
+      if (uploadWith === undefined) throw new Error("expected coverage artifact upload inputs");
+      delete uploadWith["if-no-files-found"];
+    });
+    expect(ciCoverageProblems(ciWithoutFailClosedCoverageUpload)).toContain(
+      "CI coverage must publish one non-empty pinned same-run coverage-report after measurement"
+    );
+    const ciWithoutFreshOiaPrerequisite = mutableWorkflow(current.ciWorkflow, (workflow) => {
+      mutableWorkflowJob(workflow, "oia").needs = "test";
+    });
+    expect(ciCoverageProblems(ciWithoutFreshOiaPrerequisite)).toContain(
+      "CI OIA must consume the exact pinned current-run coverage-report before checking"
+    );
+    const ciWithoutFailClosedOiaDownload = mutableWorkflow(current.ciWorkflow, (workflow) => {
+      const download = mutableUsesStep(mutableWorkflowJob(workflow, "oia"), EXPECTED_DOWNLOAD_ARTIFACT_ACTION);
+      const downloadWith = asRecord(download.with);
+      if (downloadWith === undefined) throw new Error("expected OIA artifact download inputs");
+      delete downloadWith["digest-mismatch"];
+    });
+    expect(ciCoverageProblems(ciWithoutFailClosedOiaDownload)).toContain(
+      "CI OIA must consume the exact pinned current-run coverage-report before checking"
+    );
+    const ciWithCrossRunOiaDownload = mutableWorkflow(current.ciWorkflow, (workflow) => {
+      const download = mutableUsesStep(mutableWorkflowJob(workflow, "oia"), EXPECTED_DOWNLOAD_ARTIFACT_ACTION);
+      const downloadWith = asRecord(download.with);
+      if (downloadWith === undefined) throw new Error("expected OIA artifact download inputs");
+      downloadWith["run-id"] = 123;
+    });
+    expect(ciCoverageProblems(ciWithCrossRunOiaDownload)).toContain(
+      "CI OIA must consume the exact pinned current-run coverage-report before checking"
+    );
 
     const vitestWithGlobalExclusion = replaceExactly(
       current.vitestConfig,
@@ -1207,6 +1362,29 @@ describe("Class A invariant — no test imports value from registration boilerpl
     );
     expect(currentVitestProblems(vitestWithAliasedDefineConfig)).toContain(
       "vitest config must retain the exact unaliased defineConfig import"
+    );
+    const vitestWithAliasedCoveragePolicy = replaceExactly(
+      replaceExactly(
+        current.vitestConfig,
+        'import { COVERAGE_EXCLUDE_PATTERNS } from "./scripts/lib/coverage-policy.mjs";',
+        'import { COVERAGE_EXCLUDE_PATTERNS as hidden } from "./scripts/lib/coverage-policy.mjs";'
+      ),
+      "exclude: [...COVERAGE_EXCLUDE_PATTERNS]",
+      "exclude: [...hidden]"
+    );
+    expect(currentVitestProblems(vitestWithAliasedCoveragePolicy)).toContain(
+      "vitest config must retain the exact centralized coverage-policy import"
+    );
+    expect(currentVitestProblems(vitestWithAliasedCoveragePolicy)).toContain(
+      "vitest production coverage exclusions must use the exact centralized policy spread"
+    );
+    const vitestWithExtraCoverageExclusion = replaceExactly(
+      current.vitestConfig,
+      "exclude: [...COVERAGE_EXCLUDE_PATTERNS]",
+      'exclude: [...COVERAGE_EXCLUDE_PATTERNS, "src/vault.ts"]'
+    );
+    expect(currentVitestProblems(vitestWithExtraCoverageExclusion)).toContain(
+      "vitest production coverage exclusions must use the exact centralized policy spread"
     );
     const vitestWithExportEquals = replaceExactly(
       current.vitestConfig,

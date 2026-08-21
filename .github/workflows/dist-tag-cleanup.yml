@@ -5,9 +5,10 @@ name: Cleanup stale npm dist-tags
 # `beta → 2.0.0-beta.4`). After v2.0.0 stable shipped, these channels stopped
 # moving — the maintainer doesn't ship from prerelease tracks anymore.
 #
-# Trigger manually via the Actions tab. Uses the same NPM_TOKEN secret the
-# release-to-npm workflow uses, so no separate auth setup. Idempotent —
-# `npm dist-tag rm` returns 0 even if the tag is already gone.
+# Trigger manually via the Actions tab from `main`. The protected
+# `npm-maintenance` environment is the authorization boundary for NPM_TOKEN.
+# A strict preflight makes an already-absent tag idempotent without masking a
+# failed registry mutation, and a fresh parsed observation gates completion.
 
 on:
   workflow_dispatch:
@@ -17,34 +18,57 @@ on:
         required: true
         type: string
 
-permissions:
-  contents: read
-  # v3.10.0-rc.40 (#14) — dropped unused `id-token: write`: no step here mints an
-  # OIDC token (dist-tag rm auths via NPM_TOKEN). Least-privilege; the OIDC grant
-  # lives only in release.yml (npm --provenance) + publish-docs.yml (deploy-pages).
+permissions: {}
 
 jobs:
   cleanup:
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    if: ${{ inputs.confirm == 'REMOVE' }}
+    if: ${{ github.ref == 'refs/heads/main' && inputs.confirm == 'REMOVE' }}
+    permissions:
+      contents: read
+    environment:
+      name: npm-maintenance
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: 22
           registry-url: "https://registry.npmjs.org"
-      - name: Show current dist-tags (before)
-        run: npm view @oomkapwn/enquire-mcp dist-tags
-      - name: Remove stale alpha tag
+      - name: Classify current dist-tags
+        id: preflight
+        working-directory: ${{ runner.temp }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm view @oomkapwn/enquire-mcp dist-tags --json --registry=https://registry.npmjs.org/ \
+            --prefer-online --fetch-retries=0 --fetch-timeout=60000 \
+            --cache="$RUNNER_TEMP/npm-dist-tag-preflight-cache" |
+            node "$GITHUB_WORKSPACE/scripts/npm-dist-tag-policy.mjs" classify >> "$GITHUB_OUTPUT"
+      - name: Remove stale alpha dist-tag
+        if: ${{ steps.preflight.outputs.alpha_present == 'true' }}
+        working-directory: ${{ runner.temp }}
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        # `|| true` because npm dist-tag rm exits non-zero when the tag
-        # doesn't exist; we want this idempotent.
-        run: npm dist-tag rm @oomkapwn/enquire-mcp alpha || true
-      - name: Remove stale beta tag
+        run: >-
+          npm dist-tag rm @oomkapwn/enquire-mcp alpha --registry=https://registry.npmjs.org/
+          --fetch-retries=0 --fetch-timeout=60000
+      - name: Remove stale beta dist-tag
+        if: ${{ steps.preflight.outputs.beta_present == 'true' }}
+        working-directory: ${{ runner.temp }}
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm dist-tag rm @oomkapwn/enquire-mcp beta || true
-      - name: Show current dist-tags (after)
-        run: npm view @oomkapwn/enquire-mcp dist-tags
+        run: >-
+          npm dist-tag rm @oomkapwn/enquire-mcp beta --registry=https://registry.npmjs.org/
+          --fetch-retries=0 --fetch-timeout=60000
+      - name: Verify stale dist-tags are absent
+        working-directory: ${{ runner.temp }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm view @oomkapwn/enquire-mcp dist-tags --json --registry=https://registry.npmjs.org/ \
+            --prefer-online --fetch-retries=0 --fetch-timeout=60000 \
+            --cache="$RUNNER_TEMP/npm-dist-tag-postcondition-cache" |
+            node "$GITHUB_WORKSPACE/scripts/npm-dist-tag-policy.mjs" assert-absent

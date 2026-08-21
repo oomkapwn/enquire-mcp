@@ -30,7 +30,7 @@
 //
 // Exit codes:
 //   0 — all per-file floors met
-//   1 — at least one file dropped below its floor
+//   1 — a floor was violated or a required file/metric is missing
 //   2 — coverage-summary.json missing (skipped with warning)
 
 import { existsSync, readFileSync } from "node:fs";
@@ -221,7 +221,10 @@ if (failing.length > 0) {
   process.exit(1);
 }
 
-if (!hasError) {
-  console.log(`\n[per-file-coverage] OK — all ${passing.length} per-file coverage floors met.`);
-  process.exit(0);
+if (hasError) {
+  console.error("\n[per-file-coverage] Coverage summary is incomplete; refusing to pass the gate.");
+  process.exit(1);
 }
+
+console.log(`\n[per-file-coverage] OK — all ${passing.length} per-file coverage floors met.`);
+process.exit(0);

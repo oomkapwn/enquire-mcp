@@ -246,13 +246,18 @@ export async function embedSinglePdf(
      * and uses the supplied text directly. Each page needs `pageNumber`
      * + `text`. Caller is responsible for the source — common case is
      * `extractPdfWithOcr()` for image-only / scanned PDFs that pdfjs
-     * can't read text from but Tesseract can.
+     * can't read text from but Tesseract can. A supplied `failed` status is
+     * rejected before chunking so incomplete evidence cannot be embedded.
      *
      * Supplying this for a PDF that pdfjs CAN read text from is also
      * valid (e.g. an explicit OCR re-pass for higher-quality
      * embeddings); we don't second-guess the caller.
      */
-    preExtractedPages?: ReadonlyArray<{ pageNumber: number; text: string }>;
+    preExtractedPages?: ReadonlyArray<{
+      pageNumber: number;
+      text: string;
+      status?: "ok" | "empty" | "failed";
+    }>;
   } = {}
 ): Promise<{ chunks: number; rows: EmbedRow[] } | null> {
   const contextChars = opts.lateChunkContext ?? 0;
@@ -262,11 +267,22 @@ export async function embedSinglePdf(
   let pagesForEmbed: ReadonlyArray<{ pageNumber: number; text: string }>;
   if (opts.preExtractedPages) {
     if (opts.preExtractedPages.length === 0) return null;
+    const failedPages = opts.preExtractedPages
+      .filter((page) => page.status === "failed")
+      .map((page) => page.pageNumber);
+    if (failedPages.length > 0) {
+      throw new Error(
+        `enquire PDF embed: incomplete pre-extracted page evidence; failed page(s): ${failedPages
+          .slice(0, 8)
+          .join(", ")}`
+      );
+    }
     pagesForEmbed = opts.preExtractedPages;
   } else {
-    const { extractPdfText } = await import("./pdf.js");
+    const { assertPdfPagesComplete, extractPdfText } = await import("./pdf.js");
     const buf = await vault.readBinaryFile(entry.absPath);
     const extracted = await extractPdfText(buf);
+    assertPdfPagesComplete(extracted.pages);
     if (!extracted.hasText) return null; // image-only scan — caller drops rows
     pagesForEmbed = extracted.pages;
   }

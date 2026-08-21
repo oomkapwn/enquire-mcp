@@ -105,12 +105,12 @@ const PRODUCTION_FILE_PINS: Readonly<Record<string, ProductionFilePin>> = {
       "./tool-registry.js|parseQuantizationMode|parseQuantizationMode"
     ],
     k1Opens: 6,
-    sha256: "bb90731bac4a91e4afed847704d17f181cd1a892c4a0fcd32e028a2318f7cde6"
+    sha256: "c1d90ddfbb102b94820b2fb299b606c515fc0305c94fc9fe4f8a2800a0f53c30"
   },
   "src/server.ts": {
-    constructors: { EmbedDb: 2, FtsIndex: 1 },
+    constructors: { EmbedDb: 3, FtsIndex: 1 },
     discoveries: {
-      discoverEmbedDbConfig: 2,
+      discoverEmbedDbConfig: 3,
       discoverEmbedDbConfigCached: 0,
       discoverFtsIndexConfig: 1
     },
@@ -123,8 +123,8 @@ const PRODUCTION_FILE_PINS: Readonly<Record<string, ProductionFilePin>> = {
       "./fts5.js|assertTokenizeMode|assertTokenizeMode",
       "./fts5.js|discoverFtsIndexConfig|discoverFtsIndexConfig"
     ],
-    k1Opens: 3,
-    sha256: "e0d6ac190ca01243f441dd1c586d6b519f900914d8ed39c436fb54aaa2c790a4"
+    k1Opens: 4,
+    sha256: "4900fd46c7030128737cedc4740d4b99ade92aa3485ba9db5f1c89768bcba114"
   },
   "src/tools/search.ts": {
     constructors: { EmbedDb: 1, FtsIndex: 0 },
@@ -140,7 +140,7 @@ const PRODUCTION_FILE_PINS: Readonly<Record<string, ProductionFilePin>> = {
       "../embeddings.js|resolveStoredEmbeddingConfiguration|resolveStoredEmbeddingConfiguration"
     ],
     k1Opens: 1,
-    sha256: "a4cf7412186f5ef9c045cffe6b562a12bc6c15401673c2ffeda2b8ea9405d43f"
+    sha256: "f4c4717e0d36ce9fbe242f84b4329ad952f1255ecd79112ae4e32ebc1b2e8f11"
   }
 };
 
@@ -2793,6 +2793,35 @@ async function discoverEmbedDbConfigCached(file, vaultRoot) {
     const pinnedMutationViolations = analyzeSource(pinnedCliPath, destructuringAfterDiscovery, false, true);
     expect(pinnedMutationViolations).toHaveLength(1);
     expect(pinnedMutationViolations[0]?.reason).toMatch(/source hash mismatch/);
+
+    // Recompute the pin over a semantic server mutant so the independent AST
+    // census — rather than the byte hash alone — must reject a lost awaited
+    // discovery-bound open. This keeps a future legitimate pin refresh from
+    // accidentally laundering a changed K-1 construction/open inventory.
+    const pinnedServerPath = path.join(process.cwd(), "src/server.ts");
+    const pinnedServer = await fs.readFile(pinnedServerPath, "utf8");
+    const missingServerOpen = replaceExactly(
+      pinnedServer,
+      "      await integrityDb.open(discovered);",
+      "      void integrityDb;"
+    );
+    const serverPin = PRODUCTION_FILE_PINS["src/server.ts"];
+    expect(serverPin).toBeDefined();
+    if (serverPin === undefined) throw new Error("src/server.ts K-1 production pin is missing");
+    const missingServerOpenSource = ts.createSourceFile(
+      pinnedServerPath,
+      missingServerOpen,
+      ts.ScriptTarget.Latest,
+      true
+    );
+    const semanticServerMutationViolations = analyzePinnedProductionSource(
+      pinnedServerPath,
+      missingServerOpen,
+      missingServerOpenSource,
+      { ...serverPin, sha256: sourceSha256(missingServerOpen) }
+    );
+    expect(semanticServerMutationViolations).toHaveLength(1);
+    expect(semanticServerMutationViolations[0]?.reason).toMatch(/constructor\/discovery\/open census drifted/);
 
     const unpinnedAliasSite = `
 import { discoverEmbedDbConfig as discover, EmbedDb as E } from "./embed-db.js";

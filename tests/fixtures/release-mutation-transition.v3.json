@@ -1,0 +1,2697 @@
+{
+  "schemaVersion": 3,
+  "normalizer": "release-mutation-transition-v3",
+  "historicalFixtureSha256": "8205d24e6d42dd4cb8986368611514131abe701434beb30150e33ea08f4b1288",
+  "unchangedSources": [
+    {
+      "id": "fragment.github-release-transaction-tail"
+    },
+    {
+      "id": "fragment.mcpb-actions-artifact-download"
+    },
+    {
+      "id": "fragment.npm-provenance-audit-command"
+    },
+    {
+      "id": "fragment.npm-provenance-evaluator-command"
+    },
+    {
+      "id": "fragment.release-visibility-duplicate-guard"
+    },
+    {
+      "id": "fragment.release-visibility-poll"
+    },
+    {
+      "id": "fragment.release-visibility-timeout-guard"
+    },
+    {
+      "id": "fragment.release-visibility-wait"
+    },
+    {
+      "id": "script.mcpb-build"
+    },
+    {
+      "id": "script.mcpb-consumer"
+    },
+    {
+      "id": "script.protocol-conformance"
+    }
+  ],
+  "sourceChanges": [
+    {
+      "id": "document.api",
+      "allowedChanges": [
+        "/contentSha256"
+      ],
+      "reason": "reviewed source bytes changed while catalogue identity stayed fixed",
+      "witness": {
+        "from": "sha256:5b0eff418ec0c12fb950512904762ca5afc9c71c8c09968325c2c08fddbf94de",
+        "to": "sha256:0484d4495e732542a8b8eda21f7ba90cac465158c75bd22eb0b84c3f1b9573bf"
+      }
+    },
+    {
+      "id": "fixture.release-workflow",
+      "allowedChanges": [
+        "/contentSha256"
+      ],
+      "reason": "reviewed source bytes changed while catalogue identity stayed fixed",
+      "witness": {
+        "from": "sha256:e882e1a1df7376efff6464b63fa3cb561af6d03a635bf709ddb310b71d73faab",
+        "to": "sha256:f2c576cfd8220c688fe84988bf04d57c5ee4cb111076d829849cf75ba8f1efbd"
+      }
+    },
+    {
+      "id": "manifest.mcpb",
+      "allowedChanges": [
+        "/contentSha256"
+      ],
+      "reason": "reviewed source bytes changed while catalogue identity stayed fixed",
+      "witness": {
+        "from": "sha256:1837edea6d26a56809da3d2ffd894b680fe1b8603e05d8600f9c4020c34a7177",
+        "to": "sha256:0c11934ba6510c17ef3796973a06cd65a0036450280c502b5da53cc43dbfe7b8"
+      }
+    },
+    {
+      "id": "manifest.package-lock",
+      "allowedChanges": [
+        "/contentSha256"
+      ],
+      "reason": "reviewed source bytes changed while catalogue identity stayed fixed",
+      "witness": {
+        "from": "sha256:7f2f2986eb158994ec66c45e70d85d62545b1f5803797287bcd735cda9be2abd",
+        "to": "sha256:e76c0958faaad06d448d3a859e197c4979ea8967613866814b18eefebd6b14be"
+      }
+    },
+    {
+      "id": "manifest.package-json",
+      "allowedChanges": [
+        "/contentSha256"
+      ],
+      "reason": "reviewed source bytes changed while catalogue identity stayed fixed",
+      "witness": {
+        "from": "sha256:21a5263ce68c6bb3055324205f1c514309f93e52d16bf6f971730ad4b170a591",
+        "to": "sha256:22dbda748dee482e65f87003905d5039ed943d03922523211f824d36db497b00"
+      }
+    },
+    {
+      "id": "script.package-consumer",
+      "allowedChanges": [
+        "/contentSha256"
+      ],
+      "reason": "reviewed source bytes changed while catalogue identity stayed fixed",
+      "witness": {
+        "from": "sha256:0fe9ff724a126501f65788b3f729f5fb943a215c7650091350e601bc58be299f",
+        "to": "sha256:15c0688f1e6c0f1afeccb2c36c39b480a39da0cfbb32f472a348ee38f77550c4"
+      }
+    },
+    {
+      "id": "script.release-integrity",
+      "allowedChanges": [
+        "/contentSha256"
+      ],
+      "reason": "reviewed source bytes changed while catalogue identity stayed fixed",
+      "witness": {
+        "from": "sha256:341a29c390302b009be6a97411c42d7b357c482c73c48f0f094198c87c3b746d",
+        "to": "sha256:20752e44a179378dc2ac8799537734975977dcaaded2d4d005148d6edf97e809"
+      }
+    },
+    {
+      "id": "script.release-transaction",
+      "allowedChanges": [
+        "/contentSha256"
+      ],
+      "reason": "reviewed source bytes changed while catalogue identity stayed fixed",
+      "witness": {
+        "from": "sha256:d40e66028c0407d45b05759f698cee4c55bd99311d4c1af92ee3ad90b3c843f3",
+        "to": "sha256:dc17806bb554a03abcf843a4d207ae1270f09b35ebc18d2cd71e0f8aee3ddce5"
+      }
+    },
+    {
+      "id": "script.version-consistency",
+      "allowedChanges": [
+        "/contentSha256"
+      ],
+      "reason": "reviewed source bytes changed while catalogue identity stayed fixed",
+      "witness": {
+        "from": "sha256:db2c28e6fb4485618f84141f9f86112a8029828e627c5c80e844acc706c7a146",
+        "to": "sha256:cc1b2daade7bfa5e8ada465b0cfbda29c5f02ba6b77cc8a1d5917c3bac472f3c"
+      }
+    },
+    {
+      "id": "script.version-sync",
+      "allowedChanges": [
+        "/contentSha256"
+      ],
+      "reason": "reviewed source bytes changed while catalogue identity stayed fixed",
+      "witness": {
+        "from": "sha256:f7741882ae11b21bc73d86b7292f59fc7538b2adabc5d6be1e3ce346b0589e9e",
+        "to": "sha256:a15fd0bee06bc8c535de01e5ee57f4f8451a978bd66696fce3cddeb5cfde665f"
+      }
+    },
+    {
+      "id": "source.cli",
+      "allowedChanges": [
+        "/contentSha256"
+      ],
+      "reason": "reviewed source bytes changed while catalogue identity stayed fixed",
+      "witness": {
+        "from": "sha256:1b4a7f3a9fa91765083c3a89d38e4ff8e74c9cbef0478207c06f4f4a31edbf33",
+        "to": "sha256:06b27bedc5bf07e6af1b5c33e00795c6490615f8141fdfb5156d9c934611cfe9"
+      }
+    },
+    {
+      "id": "source.cli-help",
+      "allowedChanges": [
+        "/contentSha256"
+      ],
+      "reason": "reviewed source bytes changed while catalogue identity stayed fixed",
+      "witness": {
+        "from": "sha256:43e0bfd7c6918af70fc7978d1001b8bd470b6a797c59139bda44a40f1e9fb63c",
+        "to": "sha256:c26b36ee786bb7b6318f62f2d6da69662e7984c641a882a5961391a03fc5fc91"
+      }
+    },
+    {
+      "id": "source.server-ts",
+      "allowedChanges": [
+        "/contentSha256"
+      ],
+      "reason": "reviewed source bytes changed while catalogue identity stayed fixed",
+      "witness": {
+        "from": "sha256:c2a1b4125ec2836e34c38160ceff4676ea584e86acbe86edd1a0705dbb63c65e",
+        "to": "sha256:50c1e173b5c7382158273cd29ab344582e6338975d7a9b638bd67edba77159ee"
+      }
+    },
+    {
+      "id": "workflow.ci",
+      "allowedChanges": [
+        "/contentSha256"
+      ],
+      "reason": "reviewed source bytes changed while catalogue identity stayed fixed",
+      "witness": {
+        "from": "sha256:ccccb48bf5cf1d24ae9c64d4bb8eac7b7ded90fcbb7453dbb72b3dea981e12ea",
+        "to": "sha256:3732f38cb8c472b27bf23861ba153f7c3137b81812c605c601a7c55d33d1bbd1"
+      }
+    },
+    {
+      "id": "workflow.release-raw",
+      "allowedChanges": [
+        "/contentSha256"
+      ],
+      "reason": "reviewed source bytes changed while catalogue identity stayed fixed",
+      "witness": {
+        "from": "sha256:001f653fdea304f167faeeb80fc9c512053a964a236b831bbadf0afc1fa2f4e0",
+        "to": "sha256:4a6a7f85b0dd7d2167a8207fe5bbea64f4300f7892900b0c19283275a7a3e73e"
+      }
+    },
+    {
+      "id": "workflow.registry-publish-step",
+      "allowedChanges": [
+        "/contentSha256"
+      ],
+      "reason": "reviewed source bytes changed while catalogue identity stayed fixed",
+      "witness": {
+        "from": "sha256:21ff58a09ad3c1fe00d621f3b85bb524e2c10e5b358736941280408ef49dfd01",
+        "to": "sha256:3d65e8a677a82675f7d688196dcdb99245c559b5b12e98d932945575bb666607"
+      }
+    }
+  ],
+  "retiredSources": [
+    {
+      "oldId": "fragment.npm-pack-command",
+      "reason": "release publication now consumes the canonical CI-built npm artifact",
+      "witness": "sha256:e6c5159887f7399e9194f94d26be1c47a71c233ca240a39c36b12621376ff343"
+    },
+    {
+      "oldId": "fragment.github-create-channel",
+      "reason": "GitHub publication now derives the channel from the reviewed release environment handoff",
+      "witness": "sha256:4609749a4e0d699dea1982d8a58f849cde13e5e185c5b0d130ffb87d2638091c"
+    },
+    {
+      "oldId": "fragment.npm-publish-command",
+      "reason": "npm publication gained an explicit provenance environment and CLI-precedence contract",
+      "witness": "sha256:4e1a3d9b4169d18fb7d3a54d5baa6091f45459d4e69bb5bae110593a0522379c"
+    }
+  ],
+  "sourceSuccessors": [],
+  "newSources": [
+    {
+      "id": "fragment.github-create-channel-v4",
+      "reason": "current GitHub create-channel bytes have a new semantic source identity",
+      "witness": "sha256:1fb32b589a079400f317f114bdbbd79053ede7371abf140cf76755911b39d50b"
+    },
+    {
+      "id": "fragment.npm-publish-command-v4",
+      "reason": "current npm publish bytes enforce provenance through both environment and explicit CLI precedence",
+      "witness": "sha256:32db7f8171ab4115d7a41260c1eb151f8b35cb28c10196b6eb49f32097e8afe0"
+    },
+    {
+      "id": "fragment.npm-tarball-assignment",
+      "reason": "canonical tarball assignment is a new direct dependency source",
+      "witness": "sha256:ec7c6c0c08e61bd03385f1886cb7d3cc78cf04989109f9098c7dd45e3f91d996"
+    },
+    {
+      "id": "fragment.npm-manifest-assignment",
+      "reason": "canonical manifest assignment is a new direct dependency source",
+      "witness": "sha256:138eb8711eb45351a1d0598c0b35fa4be4691f750c883500a6997bab9aa2e0f5"
+    },
+    {
+      "id": "script.entrypoint",
+      "reason": "split privileged jobs now consume the reviewed entrypoint source directly",
+      "witness": "sha256:50e894e7a812e2f97041625805eec212bef379c614db4996a6710315b8a163bd"
+    },
+    {
+      "id": "script.npm-artifact",
+      "reason": "split privileged jobs now consume the reviewed npm artifact source directly",
+      "witness": "sha256:27aa3c93ac1e2cc0869fe0c6f238b0e44cc8249321fdf2e5d83b1f569dbe1448"
+    }
+  ],
+  "unchangedIdentities": [
+    {
+      "id": "release.m002"
+    },
+    {
+      "id": "release.m003"
+    },
+    {
+      "id": "release.m004"
+    },
+    {
+      "id": "release.m005"
+    },
+    {
+      "id": "release.m006"
+    },
+    {
+      "id": "release.m007"
+    },
+    {
+      "id": "release.m008"
+    },
+    {
+      "id": "release.m009"
+    },
+    {
+      "id": "release.m010"
+    },
+    {
+      "id": "release.m011"
+    },
+    {
+      "id": "release.m012"
+    },
+    {
+      "id": "release.m013"
+    },
+    {
+      "id": "release.m014"
+    },
+    {
+      "id": "release.m015"
+    },
+    {
+      "id": "release.m016"
+    },
+    {
+      "id": "release.m017"
+    },
+    {
+      "id": "release.m018"
+    },
+    {
+      "id": "release.m019"
+    },
+    {
+      "id": "release.m020"
+    },
+    {
+      "id": "release.m021"
+    },
+    {
+      "id": "release.m022"
+    },
+    {
+      "id": "release.m023"
+    },
+    {
+      "id": "release.m024"
+    },
+    {
+      "id": "release.m025"
+    },
+    {
+      "id": "release.m026"
+    },
+    {
+      "id": "release.m027"
+    },
+    {
+      "id": "release.m028"
+    },
+    {
+      "id": "release.m029"
+    },
+    {
+      "id": "release.m030"
+    },
+    {
+      "id": "release.m031"
+    },
+    {
+      "id": "release.m032"
+    },
+    {
+      "id": "release.m033"
+    },
+    {
+      "id": "release.m034"
+    },
+    {
+      "id": "release.m035"
+    },
+    {
+      "id": "release.m036"
+    },
+    {
+      "id": "release.m037"
+    },
+    {
+      "id": "release.m038"
+    },
+    {
+      "id": "release.m039"
+    },
+    {
+      "id": "release.m040"
+    },
+    {
+      "id": "release.m041"
+    },
+    {
+      "id": "release.m042"
+    },
+    {
+      "id": "release.m043"
+    },
+    {
+      "id": "release.m044"
+    },
+    {
+      "id": "release.m045"
+    },
+    {
+      "id": "release.m047"
+    },
+    {
+      "id": "release.m048"
+    },
+    {
+      "id": "release.m049"
+    },
+    {
+      "id": "release.m050"
+    },
+    {
+      "id": "release.m051"
+    },
+    {
+      "id": "release.m052"
+    },
+    {
+      "id": "release.m053"
+    },
+    {
+      "id": "release.m054"
+    },
+    {
+      "id": "release.m055"
+    },
+    {
+      "id": "release.m056"
+    },
+    {
+      "id": "release.m057"
+    },
+    {
+      "id": "release.m058"
+    },
+    {
+      "id": "release.m059"
+    },
+    {
+      "id": "release.m060"
+    },
+    {
+      "id": "release.m061"
+    },
+    {
+      "id": "release.m062"
+    },
+    {
+      "id": "release.m063"
+    },
+    {
+      "id": "release.m064"
+    },
+    {
+      "id": "release.m065"
+    },
+    {
+      "id": "release.m066"
+    },
+    {
+      "id": "release.m067"
+    },
+    {
+      "id": "release.m068"
+    },
+    {
+      "id": "release.m069"
+    },
+    {
+      "id": "release.m070"
+    },
+    {
+      "id": "release.m071"
+    },
+    {
+      "id": "release.m072"
+    },
+    {
+      "id": "release.m073"
+    },
+    {
+      "id": "release.m074"
+    },
+    {
+      "id": "release.m075"
+    },
+    {
+      "id": "release.m076"
+    },
+    {
+      "id": "release.m077"
+    },
+    {
+      "id": "release.m078"
+    },
+    {
+      "id": "release.m079"
+    },
+    {
+      "id": "release.m080"
+    },
+    {
+      "id": "release.m081"
+    },
+    {
+      "id": "release.m082"
+    },
+    {
+      "id": "release.m083"
+    },
+    {
+      "id": "release.m084"
+    },
+    {
+      "id": "release.m085"
+    },
+    {
+      "id": "release.m086"
+    },
+    {
+      "id": "release.m087"
+    },
+    {
+      "id": "release.m088"
+    },
+    {
+      "id": "release.m089"
+    },
+    {
+      "id": "release.m090"
+    },
+    {
+      "id": "release.m091"
+    },
+    {
+      "id": "release.m092"
+    },
+    {
+      "id": "release.m093"
+    },
+    {
+      "id": "release.m094"
+    },
+    {
+      "id": "release.m095"
+    },
+    {
+      "id": "release.m096"
+    },
+    {
+      "id": "release.m097"
+    },
+    {
+      "id": "release.m098"
+    },
+    {
+      "id": "release.m099"
+    },
+    {
+      "id": "release.m100"
+    },
+    {
+      "id": "release.m101"
+    },
+    {
+      "id": "release.m102"
+    },
+    {
+      "id": "release.m103"
+    },
+    {
+      "id": "release.m104"
+    },
+    {
+      "id": "release.m105"
+    },
+    {
+      "id": "release.m106"
+    },
+    {
+      "id": "release.m107"
+    },
+    {
+      "id": "release.m108"
+    },
+    {
+      "id": "release.m109"
+    },
+    {
+      "id": "release.m110"
+    },
+    {
+      "id": "release.m111"
+    },
+    {
+      "id": "release.m112"
+    },
+    {
+      "id": "release.m113"
+    },
+    {
+      "id": "release.m114"
+    },
+    {
+      "id": "release.m115"
+    },
+    {
+      "id": "release.m116"
+    },
+    {
+      "id": "release.m117"
+    },
+    {
+      "id": "release.m118"
+    },
+    {
+      "id": "release.m125"
+    },
+    {
+      "id": "release.m126"
+    },
+    {
+      "id": "release.m127"
+    },
+    {
+      "id": "release.m128"
+    },
+    {
+      "id": "release.m129"
+    },
+    {
+      "id": "release.m130"
+    },
+    {
+      "id": "release.m131"
+    },
+    {
+      "id": "release.m132"
+    },
+    {
+      "id": "release.m133"
+    },
+    {
+      "id": "release.m134"
+    },
+    {
+      "id": "release.m135"
+    },
+    {
+      "id": "release.m136"
+    },
+    {
+      "id": "release.m137"
+    },
+    {
+      "id": "release.m138"
+    },
+    {
+      "id": "release.m139"
+    },
+    {
+      "id": "release.m140"
+    },
+    {
+      "id": "release.m141"
+    },
+    {
+      "id": "release.m142"
+    },
+    {
+      "id": "release.m143"
+    },
+    {
+      "id": "release.m144"
+    },
+    {
+      "id": "release.m145"
+    },
+    {
+      "id": "release.m146"
+    },
+    {
+      "id": "release.m147"
+    },
+    {
+      "id": "release.m148"
+    },
+    {
+      "id": "release.m149"
+    },
+    {
+      "id": "release.m150"
+    },
+    {
+      "id": "release.m152"
+    },
+    {
+      "id": "release.m153"
+    },
+    {
+      "id": "release.m154"
+    },
+    {
+      "id": "release.m155"
+    },
+    {
+      "id": "release.m156"
+    },
+    {
+      "id": "release.m157"
+    },
+    {
+      "id": "release.m158"
+    },
+    {
+      "id": "release.m159"
+    },
+    {
+      "id": "release.m160"
+    },
+    {
+      "id": "release.m161"
+    },
+    {
+      "id": "release.m162"
+    },
+    {
+      "id": "release.m163"
+    },
+    {
+      "id": "release.m164"
+    },
+    {
+      "id": "release.m165"
+    },
+    {
+      "id": "release.m166"
+    },
+    {
+      "id": "release.m167"
+    },
+    {
+      "id": "release.m168"
+    },
+    {
+      "id": "release.m169"
+    },
+    {
+      "id": "release.m170"
+    },
+    {
+      "id": "release.m171"
+    },
+    {
+      "id": "release.m172"
+    },
+    {
+      "id": "release.m173"
+    },
+    {
+      "id": "release.m174"
+    },
+    {
+      "id": "release.m175"
+    },
+    {
+      "id": "release.m176"
+    },
+    {
+      "id": "release.m177"
+    },
+    {
+      "id": "release.m178"
+    },
+    {
+      "id": "release.m179"
+    },
+    {
+      "id": "release.m180"
+    },
+    {
+      "id": "release.m181"
+    },
+    {
+      "id": "release.m182"
+    },
+    {
+      "id": "release.m183"
+    },
+    {
+      "id": "release.m184"
+    },
+    {
+      "id": "release.m185"
+    },
+    {
+      "id": "release.m186"
+    },
+    {
+      "id": "release.m187"
+    },
+    {
+      "id": "release.m188"
+    },
+    {
+      "id": "release.m189"
+    },
+    {
+      "id": "release.m190"
+    },
+    {
+      "id": "release.m191"
+    },
+    {
+      "id": "release.m192"
+    },
+    {
+      "id": "release.m193"
+    },
+    {
+      "id": "release.m194"
+    },
+    {
+      "id": "release.m196"
+    },
+    {
+      "id": "release.m197"
+    },
+    {
+      "id": "release.m198"
+    },
+    {
+      "id": "release.m199"
+    },
+    {
+      "id": "release.m201"
+    },
+    {
+      "id": "release.m202"
+    },
+    {
+      "id": "release.m203"
+    },
+    {
+      "id": "release.m204"
+    },
+    {
+      "id": "release.m205"
+    },
+    {
+      "id": "release.m206"
+    },
+    {
+      "id": "release.m207"
+    },
+    {
+      "id": "release.m208"
+    },
+    {
+      "id": "release.m209"
+    },
+    {
+      "id": "release.m210"
+    },
+    {
+      "id": "release.m211"
+    },
+    {
+      "id": "release.m212"
+    },
+    {
+      "id": "release.m213"
+    },
+    {
+      "id": "release.m214"
+    },
+    {
+      "id": "release.m215"
+    },
+    {
+      "id": "release.m216"
+    },
+    {
+      "id": "release.m217"
+    },
+    {
+      "id": "release.m218"
+    },
+    {
+      "id": "release.m220"
+    },
+    {
+      "id": "release.m221"
+    },
+    {
+      "id": "release.m222"
+    },
+    {
+      "id": "release.m223"
+    },
+    {
+      "id": "release.m224"
+    },
+    {
+      "id": "release.m225"
+    },
+    {
+      "id": "release.m226"
+    },
+    {
+      "id": "release.m227"
+    },
+    {
+      "id": "release.m231"
+    },
+    {
+      "id": "release.m233"
+    },
+    {
+      "id": "release.m234"
+    },
+    {
+      "id": "release.m235"
+    },
+    {
+      "id": "release.m236"
+    },
+    {
+      "id": "release.m237"
+    },
+    {
+      "id": "release.m238"
+    },
+    {
+      "id": "release.m239"
+    },
+    {
+      "id": "release.m240"
+    },
+    {
+      "id": "release.m241"
+    },
+    {
+      "id": "release.m242"
+    },
+    {
+      "id": "release.m243"
+    },
+    {
+      "id": "release.m244"
+    },
+    {
+      "id": "release.m245"
+    },
+    {
+      "id": "release.m246"
+    },
+    {
+      "id": "release.m255"
+    },
+    {
+      "id": "release.m266"
+    },
+    {
+      "id": "release.m267"
+    },
+    {
+      "id": "release.m268"
+    },
+    {
+      "id": "release.m269"
+    },
+    {
+      "id": "release.m272"
+    },
+    {
+      "id": "release.m273"
+    },
+    {
+      "id": "release.m274"
+    },
+    {
+      "id": "release.m275"
+    },
+    {
+      "id": "release.m276"
+    },
+    {
+      "id": "release.m277"
+    },
+    {
+      "id": "release.m278"
+    },
+    {
+      "id": "release.m279"
+    },
+    {
+      "id": "release.m280"
+    },
+    {
+      "id": "release.m281"
+    },
+    {
+      "id": "release.m282"
+    },
+    {
+      "id": "release.m283"
+    },
+    {
+      "id": "release.m284"
+    },
+    {
+      "id": "release.m285"
+    },
+    {
+      "id": "release.m286"
+    },
+    {
+      "id": "release.m287"
+    },
+    {
+      "id": "release.m288"
+    },
+    {
+      "id": "release.m292"
+    },
+    {
+      "id": "release.m293"
+    },
+    {
+      "id": "release.m299"
+    },
+    {
+      "id": "release.m300"
+    },
+    {
+      "id": "release.m301"
+    },
+    {
+      "id": "release.m302"
+    },
+    {
+      "id": "release.m303"
+    },
+    {
+      "id": "release.m304"
+    },
+    {
+      "id": "release.m305"
+    },
+    {
+      "id": "release.m306"
+    },
+    {
+      "id": "release.m307"
+    },
+    {
+      "id": "release.m308"
+    },
+    {
+      "id": "release.m309"
+    },
+    {
+      "id": "release.m310"
+    },
+    {
+      "id": "release.m311"
+    },
+    {
+      "id": "release.m312"
+    },
+    {
+      "id": "release.m313"
+    },
+    {
+      "id": "release.m314"
+    },
+    {
+      "id": "release.m315"
+    },
+    {
+      "id": "release.m316"
+    },
+    {
+      "id": "release.m317"
+    },
+    {
+      "id": "release.m318"
+    },
+    {
+      "id": "release.m319"
+    },
+    {
+      "id": "release.m320"
+    },
+    {
+      "id": "release.m321"
+    },
+    {
+      "id": "release.m322"
+    },
+    {
+      "id": "release.m323"
+    },
+    {
+      "id": "release.m324"
+    },
+    {
+      "id": "release.m325"
+    },
+    {
+      "id": "release.m326"
+    },
+    {
+      "id": "release.m327"
+    },
+    {
+      "id": "release.m328"
+    },
+    {
+      "id": "release.m329"
+    },
+    {
+      "id": "release.m330"
+    },
+    {
+      "id": "release.m331"
+    },
+    {
+      "id": "release.m332"
+    },
+    {
+      "id": "release.m333"
+    },
+    {
+      "id": "release.m334"
+    },
+    {
+      "id": "release.m335"
+    },
+    {
+      "id": "release.m336"
+    },
+    {
+      "id": "release.m337"
+    },
+    {
+      "id": "release.m338"
+    },
+    {
+      "id": "release.m339"
+    },
+    {
+      "id": "release.m340"
+    },
+    {
+      "id": "release.m341"
+    },
+    {
+      "id": "release.m342"
+    },
+    {
+      "id": "release.m343"
+    },
+    {
+      "id": "release.m344"
+    },
+    {
+      "id": "release.m345"
+    },
+    {
+      "id": "release.m346"
+    },
+    {
+      "id": "release.m347"
+    },
+    {
+      "id": "release.m348"
+    },
+    {
+      "id": "release.m349"
+    },
+    {
+      "id": "release.m350"
+    },
+    {
+      "id": "release.m351"
+    },
+    {
+      "id": "release.m353"
+    },
+    {
+      "id": "release.m360"
+    },
+    {
+      "id": "release.m366"
+    },
+    {
+      "id": "release.m368"
+    },
+    {
+      "id": "release.m371"
+    },
+    {
+      "id": "release.m372"
+    },
+    {
+      "id": "release.m373"
+    },
+    {
+      "id": "release.m374"
+    },
+    {
+      "id": "release.m375"
+    },
+    {
+      "id": "release.m376"
+    },
+    {
+      "id": "release.m377"
+    },
+    {
+      "id": "release.m378"
+    },
+    {
+      "id": "release.m379"
+    },
+    {
+      "id": "release.m380"
+    },
+    {
+      "id": "release.m381"
+    },
+    {
+      "id": "release.m382"
+    },
+    {
+      "id": "release.m385"
+    },
+    {
+      "id": "release.m387"
+    },
+    {
+      "id": "release.m388"
+    },
+    {
+      "id": "release.m389"
+    },
+    {
+      "id": "release.m390"
+    },
+    {
+      "id": "release.m391"
+    },
+    {
+      "id": "release.m392"
+    },
+    {
+      "id": "release.m393"
+    },
+    {
+      "id": "release.m394"
+    },
+    {
+      "id": "release.m395"
+    },
+    {
+      "id": "release.m396"
+    },
+    {
+      "id": "release.m397"
+    },
+    {
+      "id": "release.m398"
+    },
+    {
+      "id": "release.m399"
+    },
+    {
+      "id": "release.m400"
+    },
+    {
+      "id": "release.m401"
+    },
+    {
+      "id": "release.m402"
+    },
+    {
+      "id": "release.m403"
+    },
+    {
+      "id": "release.m404"
+    },
+    {
+      "id": "release.m405"
+    },
+    {
+      "id": "release.m406"
+    },
+    {
+      "id": "release.m407"
+    },
+    {
+      "id": "release.m408"
+    },
+    {
+      "id": "release.m409"
+    },
+    {
+      "id": "release.m410"
+    },
+    {
+      "id": "release.m411"
+    },
+    {
+      "id": "release.m412"
+    },
+    {
+      "id": "release.m413"
+    },
+    {
+      "id": "release.m414"
+    },
+    {
+      "id": "release.m415"
+    },
+    {
+      "id": "release.m416"
+    },
+    {
+      "id": "release.m417"
+    },
+    {
+      "id": "release.m418"
+    },
+    {
+      "id": "release.m419"
+    },
+    {
+      "id": "release.m420"
+    },
+    {
+      "id": "release.m421"
+    },
+    {
+      "id": "release.m422"
+    },
+    {
+      "id": "release.m423"
+    },
+    {
+      "id": "release.m424"
+    },
+    {
+      "id": "release.m425"
+    },
+    {
+      "id": "release.m426"
+    },
+    {
+      "id": "release.m427"
+    },
+    {
+      "id": "release.m428"
+    },
+    {
+      "id": "release.m429"
+    },
+    {
+      "id": "release.m430"
+    },
+    {
+      "id": "release.m431"
+    },
+    {
+      "id": "release.m432"
+    },
+    {
+      "id": "release.m433"
+    },
+    {
+      "id": "release.m434"
+    },
+    {
+      "id": "release.m435"
+    },
+    {
+      "id": "release.m439"
+    },
+    {
+      "id": "release.m440"
+    },
+    {
+      "id": "release.m441"
+    },
+    {
+      "id": "release.m442"
+    },
+    {
+      "id": "release.m443"
+    },
+    {
+      "id": "release.m444"
+    },
+    {
+      "id": "release.m445"
+    },
+    {
+      "id": "release.m446"
+    },
+    {
+      "id": "release.m447"
+    },
+    {
+      "id": "release.m448"
+    },
+    {
+      "id": "release.m449"
+    },
+    {
+      "id": "release.m450"
+    },
+    {
+      "id": "release.m451"
+    },
+    {
+      "id": "release.m452"
+    },
+    {
+      "id": "release.m453"
+    },
+    {
+      "id": "release.m454"
+    },
+    {
+      "id": "release.m455"
+    },
+    {
+      "id": "release.m456"
+    },
+    {
+      "id": "release.m457"
+    },
+    {
+      "id": "release.m458"
+    },
+    {
+      "id": "release.m459"
+    },
+    {
+      "id": "release.m460"
+    },
+    {
+      "id": "release.m461"
+    },
+    {
+      "id": "release.m462"
+    },
+    {
+      "id": "release.m463"
+    },
+    {
+      "id": "release.m464"
+    },
+    {
+      "id": "release.m465"
+    },
+    {
+      "id": "release.m466"
+    },
+    {
+      "id": "release.m467"
+    },
+    {
+      "id": "release.m468"
+    },
+    {
+      "id": "release.m469"
+    },
+    {
+      "id": "release.m470"
+    },
+    {
+      "id": "release.m471"
+    },
+    {
+      "id": "release.m474"
+    },
+    {
+      "id": "release.m475"
+    },
+    {
+      "id": "release.m476"
+    },
+    {
+      "id": "release.m477"
+    },
+    {
+      "id": "release.m478"
+    },
+    {
+      "id": "release.m479"
+    },
+    {
+      "id": "release.m480"
+    },
+    {
+      "id": "release.m481"
+    },
+    {
+      "id": "release.m482"
+    },
+    {
+      "id": "release.m483"
+    },
+    {
+      "id": "release.m484"
+    },
+    {
+      "id": "release.m485"
+    },
+    {
+      "id": "release.m486"
+    },
+    {
+      "id": "release.m487"
+    },
+    {
+      "id": "release.m488"
+    },
+    {
+      "id": "release.m489"
+    },
+    {
+      "id": "release.m490"
+    },
+    {
+      "id": "release.m491"
+    },
+    {
+      "id": "release.m492"
+    },
+    {
+      "id": "release.m493"
+    },
+    {
+      "id": "release.m494"
+    },
+    {
+      "id": "release.m495"
+    },
+    {
+      "id": "release.m496"
+    },
+    {
+      "id": "release.m497"
+    },
+    {
+      "id": "release.m498"
+    },
+    {
+      "id": "release.m499"
+    },
+    {
+      "id": "release.m500"
+    },
+    {
+      "id": "release.m501"
+    },
+    {
+      "id": "release.m502"
+    },
+    {
+      "id": "release.m503"
+    },
+    {
+      "id": "release.m505"
+    },
+    {
+      "id": "release.m506"
+    },
+    {
+      "id": "release.m507"
+    },
+    {
+      "id": "release.m509"
+    },
+    {
+      "id": "release.m510"
+    },
+    {
+      "id": "release.m511"
+    },
+    {
+      "id": "release.m512"
+    },
+    {
+      "id": "release.m513"
+    },
+    {
+      "id": "release.m514"
+    },
+    {
+      "id": "release.m515"
+    },
+    {
+      "id": "release.m516"
+    },
+    {
+      "id": "release.m517"
+    },
+    {
+      "id": "release.m518"
+    },
+    {
+      "id": "release.m519"
+    },
+    {
+      "id": "release.m521"
+    },
+    {
+      "id": "release.m522"
+    },
+    {
+      "id": "release.m523"
+    },
+    {
+      "id": "release.m524"
+    },
+    {
+      "id": "release.m525"
+    },
+    {
+      "id": "release.m526"
+    },
+    {
+      "id": "release.m527"
+    },
+    {
+      "id": "release.m528"
+    },
+    {
+      "id": "release.m530"
+    },
+    {
+      "id": "release.m531"
+    },
+    {
+      "id": "release.m532"
+    },
+    {
+      "id": "release.m533"
+    },
+    {
+      "id": "release.m534"
+    },
+    {
+      "id": "release.m535"
+    },
+    {
+      "id": "release.m537"
+    },
+    {
+      "id": "release.m538"
+    },
+    {
+      "id": "release.m539"
+    },
+    {
+      "id": "release.m540"
+    },
+    {
+      "id": "release.m541"
+    },
+    {
+      "id": "release.m542"
+    },
+    {
+      "id": "release.m546"
+    },
+    {
+      "id": "release.m547"
+    },
+    {
+      "id": "release.m548"
+    },
+    {
+      "id": "release.m549"
+    },
+    {
+      "id": "release.m550"
+    },
+    {
+      "id": "release.m551"
+    },
+    {
+      "id": "release.m552"
+    },
+    {
+      "id": "release.m553"
+    },
+    {
+      "id": "release.m554"
+    },
+    {
+      "id": "release.m555"
+    },
+    {
+      "id": "release.m556"
+    },
+    {
+      "id": "release.m557"
+    },
+    {
+      "id": "release.m558"
+    },
+    {
+      "id": "release.m559"
+    },
+    {
+      "id": "release.m560"
+    }
+  ],
+  "identityTransitions": [
+    {
+      "oldId": "release.m219",
+      "newId": "release.m563",
+      "reason": "version synchronization now mutates the structural JSON pointer",
+      "witness": {
+        "from": "sha256:b82e6549986f0092fbb96d698dc99f0a496eae03d1e7facbec980cc4e655e29b",
+        "to": "sha256:71d6510ccea1f05bd1ab76919939ff503d063d974201a90a0705f615141a1605"
+      }
+    },
+    {
+      "oldId": "release.m232",
+      "newId": "release.m564",
+      "reason": "candidate invocation now binds its exact physical line",
+      "witness": {
+        "from": "sha256:7427ab58301530d324bd94a6e47bf587b97c2fc6a51c553f07eca94aa7f5016a",
+        "to": "sha256:cac3368647c9b18df2f122ca9e866ff5b1cd1ccb02f843fcdc777366ff83442f"
+      }
+    },
+    {
+      "oldId": "release.m247",
+      "newId": "release.m565",
+      "reason": "npm pack root became the canonical tarball assignment root",
+      "witness": {
+        "from": "sha256:0ee3ddff3f2d5951f84c969ecc11f1ed2f8a7fa24457ed653bbc658877c42ba0",
+        "to": "sha256:7715b23ce49a73f73d98a1433d55ef0cf10dbd62f2bbd7c31b5c48c5062aef8d"
+      }
+    },
+    {
+      "oldId": "release.m248",
+      "newId": "release.m566",
+      "reason": "npm pack timeout dependency became the tarball basename dependency",
+      "witness": {
+        "from": "sha256:e1997ed9c34df5a399fd6477ffb47ca476032234ff42cf91141203db817b2cb7",
+        "to": "sha256:35d909625ebb583f2d546d7c4bcfcd0cd74bd10e377a6094390d101683d25e5b"
+      }
+    },
+    {
+      "oldId": "release.m249",
+      "newId": "release.m567",
+      "reason": "npm pack lifecycle root became the canonical manifest assignment root",
+      "witness": {
+        "from": "sha256:2baacf3054dd2c9bc5e0987f2b0fd2214119acbc30d5fcb07b011eb9f6b56042",
+        "to": "sha256:4859db83af9d7f04b8c5f6cfe8db73d2d3661500f2b9f0611309a156cb7d5bf9"
+      }
+    },
+    {
+      "oldId": "release.m250",
+      "newId": "release.m568",
+      "reason": "npm pack lifecycle dependency became the manifest basename dependency",
+      "witness": {
+        "from": "sha256:fb10e088af5e4e30f8d078068a57dccdd5962534e96bff7443499599086d6227",
+        "to": "sha256:e036f3c047a04c807f3be79698e1a87558bf4ad3ce6e8709cf9b2e25292a5e2d"
+      }
+    },
+    {
+      "oldId": "release.m251",
+      "newId": "release.m569",
+      "reason": "duplicate packing control became artifact receipt command substitution",
+      "witness": {
+        "from": "sha256:d470d10333c6b3c2b956766e7b1fed853af0abc7c3e9aee8e52d5f18a74079d3",
+        "to": "sha256:4407c5fa53fa5dfcbc25e156db8dbd7a0c910f6934e54092cc085151cd8081c7"
+      }
+    },
+    {
+      "oldId": "release.m252",
+      "newId": "release.m570",
+      "reason": "pack manifest control became artifact receipt source SHA binding",
+      "witness": {
+        "from": "sha256:1974738883620a16045057bde89bdfdf18fc16c1e58a7444dda5355d13fdb32e",
+        "to": "sha256:237527247c2784898b6ec73a04050ea457bcabf5241a28c9a12172b463b7cb38"
+      }
+    },
+    {
+      "oldId": "release.m253",
+      "newId": "release.m571",
+      "reason": "pack member control became artifact receipt run identity binding",
+      "witness": {
+        "from": "sha256:d4c9d2d0b3def2ede9c88736b45e68314a5506346472411265698af6844e8770",
+        "to": "sha256:e5d8dc899702c19669934ceb0ef96d64fd429b49cfc815e694e48b910afd16e0"
+      }
+    },
+    {
+      "oldId": "release.m254",
+      "newId": "release.m572",
+      "reason": "reported integrity control became strict receipt integrity parsing",
+      "witness": {
+        "from": "sha256:709ab06412ed37472381dc5f0813531babf9efe3cf154e0379af344d705e0a22",
+        "to": "sha256:b875a110dea2860a5b9f989ec6f012c00845135fd8188713c8d6a37992c7daac"
+      }
+    },
+    {
+      "oldId": "release.m472",
+      "newId": "release.m573",
+      "reason": "Node floor mutation now covers the added package consumer matrix job",
+      "witness": {
+        "from": "sha256:813d7651d14f526c5998cd747c20a43388741a56b759dc5ed772ef0346acd76d",
+        "to": "sha256:12caad531370de8d67fda780778b168e6f7fb6397b779088216fe72cab4d055d"
+      }
+    },
+    {
+      "oldId": "release.m473",
+      "newId": "release.m574",
+      "reason": "engine strict mutation now covers the added package consumer matrix job",
+      "witness": {
+        "from": "sha256:4f9895b1a96ee41776e550c0d161198cf46e7299785ab8eef0fe954b63fb8ede",
+        "to": "sha256:56c5ac0b96ef2044ae1a5875dd6128be2de72cf6702cbfa8b810bd9d22d583db"
+      }
+    },
+    {
+      "oldId": "release.m508",
+      "newId": "release.m575",
+      "reason": "package consumer mutation now scopes its exact multiline command",
+      "witness": {
+        "from": "sha256:2c0ba602ffce2ebe82e0552951dd1d4b5aba23fd294025392d179b145ee65aed",
+        "to": "sha256:c40d41b744d8026dac2d03db1888c57968288fe3e35f69d53504a91e8446ca28"
+      }
+    },
+    {
+      "oldId": "release.m520",
+      "newId": "release.m576",
+      "reason": "BASH ENV injection now scopes the exact job environment block",
+      "witness": {
+        "from": "sha256:c3169f243c17a38ebf768962bec23bd25428edba83c0460615840494080726ea",
+        "to": "sha256:e275cfee09a0d76f06f5dccb7a17d15a696bf66ac9518fdc7243d160083fb4ad"
+      }
+    },
+    {
+      "oldId": "release.m529",
+      "newId": "release.m577",
+      "reason": "default shell injection now binds the contents permission boundary",
+      "witness": {
+        "from": "sha256:1c4f9c8b193c37a50220dc24a58051eed8e13fe37c77019e201bbfbdc840e405",
+        "to": "sha256:13539f9cfee2001a36af6a62acff172fd28552cb72f30657b3bc1183216414df"
+      }
+    },
+    {
+      "oldId": "release.m536",
+      "newId": "release.m578",
+      "reason": "early exit mutation now binds the artifact identity guard",
+      "witness": {
+        "from": "sha256:147386305af204aaabe5fb3d08087bcf545f8a7f8d244de1afef920dc4b121b8",
+        "to": "sha256:6dc8e9a42526cc41e6317a2d4ebea22d834ad27b79a1bae918c3049e1592fe39"
+      }
+    },
+    {
+      "oldId": "release.m543",
+      "newId": "release.m579",
+      "reason": "floating action mutation now scopes the canonical Linux download step",
+      "witness": {
+        "from": "sha256:01cea55845f0908de8dffbfcf27a1c28229d65934488371b16a38d8baba75d9f",
+        "to": "sha256:065b123624c99385ee667d99bb26d5a69eb5f260edca496d773c98e8c1729729"
+      }
+    },
+    {
+      "oldId": "release.m544",
+      "newId": "release.m580",
+      "reason": "digest downgrade mutation now scopes the path and digest pair",
+      "witness": {
+        "from": "sha256:a43bbdf1597f24acec4a6dbb7ac4ae9f4217b1766c829e7dfe8a632343e24e9b",
+        "to": "sha256:2a756ba62bce07a8e97d80f4c03f6336864e313124287f982771348b019785f7"
+      }
+    },
+    {
+      "oldId": "release.m545",
+      "newId": "release.m581",
+      "reason": "artifact path mutation now scopes the path and digest pair",
+      "witness": {
+        "from": "sha256:b9299b625910f551b0f5087ac878bf21088ecae392ee72ca316b4a5c1174aade",
+        "to": "sha256:0a5da3083cce0de5cb421374757eb728cc680c6c56577e3483a0e9cbc44ad82b"
+      }
+    },
+    {
+      "oldId": "release.m001",
+      "newId": "release.m628",
+      "reason": "version placeholder mutation now uses the current exact JSON fragments",
+      "witness": {
+        "from": "sha256:c3bfa14f74677382ca4a17a5d212847311f400f17751add8d468a75c96edc277",
+        "to": "sha256:6df669da5cd1e47b7cc6fedc12579be7199067f3d04808178109012278f9f623"
+      }
+    },
+    {
+      "oldId": "release.m046",
+      "newId": "release.m629",
+      "reason": "package-lock placeholder mutation now uses the current exact JSON fragments",
+      "witness": {
+        "from": "sha256:26c2e86049d2f319a11801f6e326890157f95b5257ce928c0b24cf469692adc7",
+        "to": "sha256:42c1a7d87b12b7afd7524dc848bff58d644a4d83f286bbdcf7b2f11a9133285c"
+      }
+    },
+    {
+      "oldId": "release.m119",
+      "newId": "release.m630",
+      "reason": "declarative publish dependency mutation now targets the current needs.verify edge",
+      "witness": {
+        "from": "sha256:c441a0347fb0d38176a85cdc0b781124ccb45b8c14b0a94cfe135d77d11bc695",
+        "to": "sha256:bcb6197f65d7af0df5dc57f2c8c4327ce5ffedb06b3aab1118cfeec64b32ca99"
+      }
+    },
+    {
+      "oldId": "release.m120",
+      "newId": "release.m631",
+      "reason": "declarative YAML empty-scalar mutation now preserves the current exact quoting bytes",
+      "witness": {
+        "from": "sha256:7cb7bb3c74f679e35553889e80e8a18c51e3eb132931ad30711a04e9c605f4c9",
+        "to": "sha256:b858914f20f745a1cbbc21e70411490e1aa38880d44868acab69db712fea0e32"
+      }
+    },
+    {
+      "oldId": "release.m121",
+      "newId": "release.m632",
+      "reason": "declarative workflow-call scalar mutation now targets the current exact YAML bytes",
+      "witness": {
+        "from": "sha256:c73c164cea2d2c23529c2757bb12bf14611fb22718324c929da068efdc9cffdd",
+        "to": "sha256:06a80079489488d5ff62f6e2f401e33996a08b64d000b326d6c53d697ca13120"
+      }
+    },
+    {
+      "oldId": "release.m122",
+      "newId": "release.m633",
+      "reason": "declarative workflow-call ref mutation now targets the current exact YAML bytes",
+      "witness": {
+        "from": "sha256:af561b1aa8c074e7ae1bd7f2316905d1ed8233593f6a0848f3b188374c07f7ea",
+        "to": "sha256:974ce5435a76173d4bedcc9557fd69433d7d92f5347e36aa211063f016b2050a"
+      }
+    },
+    {
+      "oldId": "release.m123",
+      "newId": "release.m634",
+      "reason": "declarative workflow-call permission mutation now targets the current exact YAML bytes",
+      "witness": {
+        "from": "sha256:1453f942d5905f63051fe12c35132fb07c34fca6534787586a4e38dc88bde0fa",
+        "to": "sha256:17cfa827731bca0f892bff4aa649b95d1fe45073de336408c0eeace2af03d25a"
+      }
+    },
+    {
+      "oldId": "release.m124",
+      "newId": "release.m635",
+      "reason": "declarative workflow-call secret mutation now targets the current exact YAML bytes",
+      "witness": {
+        "from": "sha256:12de47be022d09e2f9640157dcd4b17f69a6c3a7653f904e4a6a1cdbebba3cc9",
+        "to": "sha256:52fbe5f576651a6236390b38ab9bd9631472ff915eaa7419233ae17a98201543"
+      }
+    },
+    {
+      "oldId": "release.m151",
+      "newId": "release.m636",
+      "reason": "declarative npm publish mutation now targets the current defense-in-depth provenance command",
+      "witness": {
+        "from": "sha256:ae46f75a19f1d9233df998aedfcd30cb262836812f6defe2b8c8c79b29b64d0e",
+        "to": "sha256:ef3dec803b960e2edc4205d2db87ea694983ccb24cbf43efc23a2a7a111d6b4a"
+      }
+    },
+    {
+      "oldId": "release.m195",
+      "newId": "release.m637",
+      "reason": "consumer metadata mutation now uses the current two-occurrence cardinality",
+      "witness": {
+        "from": "sha256:2334417a5f45059aa856f4cc161e77732f7c6d2c4043f64bbba7f13ff043ef54",
+        "to": "sha256:93c64ce1adbda21b0154997c15374c5022b2103dc63d966e5de68121087fd74b"
+      }
+    },
+    {
+      "oldId": "release.m200",
+      "newId": "release.m638",
+      "reason": "consumer permission mutation now uses the current four-occurrence cardinality",
+      "witness": {
+        "from": "sha256:f25d025073c21bf783487e79af3aa2cea6b845193e222e48309d37703445b76f",
+        "to": "sha256:42a70261774ba87c27ca22b604f5fab62a60e10b25b694ec3b30b166908ad9fe"
+      }
+    },
+    {
+      "oldId": "release.m228",
+      "newId": "release.m639",
+      "reason": "release-check command mutation is now an independently asserted root",
+      "witness": {
+        "from": "sha256:f6d5c3f34789d2ae426d9477668d2847cd51793271f9e32e8f4b25be04c8b151",
+        "to": "sha256:dc82bb39518f0d236f12b24b1b5786f13b98d5dea46cebc6024fbfa0894682ab"
+      }
+    },
+    {
+      "oldId": "release.m229",
+      "newId": "release.m640",
+      "reason": "release-check execution mutation is now an independently asserted root",
+      "witness": {
+        "from": "sha256:523dd790d3db5116864b89c979df36266241cd26ece22c4d5c729cd3a5a85924",
+        "to": "sha256:7c2396d7062b1f64708894145ce29b24509e616ddc618442da58e06edb10fe38"
+      }
+    },
+    {
+      "oldId": "release.m230",
+      "newId": "release.m641",
+      "reason": "release-check failure mutation now depends on the current execution root",
+      "witness": {
+        "from": "sha256:ef64fbf9de662fe78bf2a03eef8ff900946cfc8247885098f046cc72ea9277bd",
+        "to": "sha256:b3e62e7faf284d623ff92ae6b3b037be262727c3b4f62c0e30538f352f4b0642"
+      }
+    },
+    {
+      "oldId": "release.m256",
+      "newId": "release.m642",
+      "reason": "npm artifact download mutation now targets the current exact action step",
+      "witness": {
+        "from": "sha256:aa8d3e657cfd3d93bc016027803f597a2a892ae594350975f575a26660eaec71",
+        "to": "sha256:306291b3fdfd2c010e9c1d70ce7badd8d480d89235077a69c24254c4e236b040"
+      }
+    },
+    {
+      "oldId": "release.m257",
+      "newId": "release.m643",
+      "reason": "npm publish mutation now references the successor publish-command source identity",
+      "witness": {
+        "from": "sha256:3190e8ee3e9405b0db4611b60f8ad03c6bd0408fe6644d97a0653c9bd9739523",
+        "to": "sha256:8c9ec114339c3589e8d314b00e7954d3cfd2c5a77be211c508acb47f6f13ee89"
+      }
+    },
+    {
+      "oldId": "release.m258",
+      "newId": "release.m644",
+      "reason": "npm channel mutation now uses the current exact shell fragment",
+      "witness": {
+        "from": "sha256:25aa30c63c960d20582e051e07a16b9e3ac84e1eed696ab6fd21efa026c5f364",
+        "to": "sha256:e504f1663edb8acf537a2eb79a78fb14273ebb8faac18707ff2094f27f0c171f"
+      }
+    },
+    {
+      "oldId": "release.m259",
+      "newId": "release.m645",
+      "reason": "npm artifact path mutation now uses the current exact shell fragment",
+      "witness": {
+        "from": "sha256:93cc4264dd3c52934037df558b06ba5a0426bfc6952b95efc4b3e8f060cc9d71",
+        "to": "sha256:c2ee2da53c46888d985a310a1de86e12a3f15e6cb8b9d47619a60305206095bc"
+      }
+    },
+    {
+      "oldId": "release.m260",
+      "newId": "release.m646",
+      "reason": "npm package-integrity mutation now uses the current exact shell fragment",
+      "witness": {
+        "from": "sha256:49f98a01ab68d90b6a64282b9a70928549412d752191f0303ed110e0bf8289b5",
+        "to": "sha256:7696b24ba5cdc3dad744de30c38da3127514ebce10fb6a7e6c167e7e8debc3a8"
+      }
+    },
+    {
+      "oldId": "release.m261",
+      "newId": "release.m647",
+      "reason": "npm provenance-integrity mutation now uses the current exact shell fragment",
+      "witness": {
+        "from": "sha256:1517befad0a54dcc822313d95a17f7ce4eb3617abeacc70ff1f9d4445e2b031e",
+        "to": "sha256:048b269cd5c5a685ba0d89b24c069eada269baf909484aac24637a3eb62cbc17"
+      }
+    },
+    {
+      "oldId": "release.m262",
+      "newId": "release.m648",
+      "reason": "npm publish dry-run mutation now targets the current exact command",
+      "witness": {
+        "from": "sha256:a86523d56ef7969c04a54e4614507a9b03e63fa7c986536e1476f474684fd264",
+        "to": "sha256:7b44294c5a7e9f7aba2dbe63b85a6f8d3ee978651ab9d10ad478bd1530aa4ed4"
+      }
+    },
+    {
+      "oldId": "release.m263",
+      "newId": "release.m649",
+      "reason": "npm publish provenance mutation now references the successor publish-command source identity",
+      "witness": {
+        "from": "sha256:59fc0c93e0c284e08edf9214a80000e9c934a97079c7d76541d84902475fe90d",
+        "to": "sha256:9a5c4b64f996b72b7d90379733f7859be0b8bb8867faac37d70583d5770370c3"
+      }
+    },
+    {
+      "oldId": "release.m264",
+      "newId": "release.m650",
+      "reason": "npm publish access mutation now targets the current exact command",
+      "witness": {
+        "from": "sha256:62cd2b4a6a30799d971121b5c48363d993a37c7f52d5c078a1e6073bfd234d23",
+        "to": "sha256:793cbf4436efd1a7c092f403114888a0ce6d46db869a0e1c1665a2604677917c"
+      }
+    },
+    {
+      "oldId": "release.m265",
+      "newId": "release.m651",
+      "reason": "npm publish tag mutation now references the successor publish-command source identity",
+      "witness": {
+        "from": "sha256:26927e679d7897f5672df535b6f38566e5edd30c5f0dab934552589ee17c4978",
+        "to": "sha256:79c5d851a0ad7cea1f851c6f4d08d1cc063f218eeac2dece0d363de63b202687"
+      }
+    },
+    {
+      "oldId": "release.m270",
+      "newId": "release.m652",
+      "reason": "npm publication receipt mutation now uses the current exact shell fragments",
+      "witness": {
+        "from": "sha256:ab6efe3b0bc52a65ce0af0b01c74e28e17ad04856277cad099b43b96a7aa48e2",
+        "to": "sha256:8fdd62b0580cff681394b5ac413355604a362438f8144970409b9d0dbee257b7"
+      }
+    },
+    {
+      "oldId": "release.m271",
+      "newId": "release.m653",
+      "reason": "npm publication receipt guard now uses the current exact shell fragments",
+      "witness": {
+        "from": "sha256:09d82d45bac1a64a27033ed14bd9e224ea9428385e1eb6b4a4ff59b128e820cf",
+        "to": "sha256:b62ddc882089071144ee0af05ca88a1c6afa94fd3bc393df783c9542b83431ad"
+      }
+    },
+    {
+      "oldId": "release.m289",
+      "newId": "release.m654",
+      "reason": "registry publication mutation now targets the current exact command",
+      "witness": {
+        "from": "sha256:5967c8cec52d639a394e6d597be2bc89b817f1b9999f6ccb82c313d734fb13fa",
+        "to": "sha256:0b851566ad526c8efea8e41dc5e9c6ae429d69baf44fc759b032715d76640a0b"
+      }
+    },
+    {
+      "oldId": "release.m291",
+      "newId": "release.m655",
+      "reason": "registry publication guard now targets the current exact command",
+      "witness": {
+        "from": "sha256:fbd0b1e9fb4c4861e4767d872b08753405b08d539643877e1e627ec9fb007397",
+        "to": "sha256:a86a605fd9ee22723402c586495531dce6561aed2660affbe08ef424a76d6f63"
+      }
+    },
+    {
+      "oldId": "release.m290",
+      "newId": "release.m694",
+      "reason": "registry publication retry root now references the successor guard identity",
+      "witness": {
+        "from": "sha256:a76ffd5f6df7d588ddce46b086daa0c8bb43faed7e7aa1ce4fe79ab388555c70",
+        "to": "sha256:6aa8de71b621c9c64b54ee356bc5ca20b083137a679ef77c33b87ba142f1981b"
+      }
+    },
+    {
+      "oldId": "release.m294",
+      "newId": "release.m656",
+      "reason": "registry receipt mutation now uses the current exact shell fragments",
+      "witness": {
+        "from": "sha256:c19c7848e2aa8636430155dd40cb68f0782ba379e8615586b333710b8e68f641",
+        "to": "sha256:a35f43c41a19bcf77c33870e5ce27e570bab5fc2e9fb643d990646a24ddd30b9"
+      }
+    },
+    {
+      "oldId": "release.m295",
+      "newId": "release.m657",
+      "reason": "registry receipt channel mutation now uses the current exact shell fragments",
+      "witness": {
+        "from": "sha256:767445caf03211325a18b0c957270ace877e9f7d734bfad4213622121df6541e",
+        "to": "sha256:dd90b0329b5105410e37189cafc1898c6d5e74cabe9dec94609eabdf97108a02"
+      }
+    },
+    {
+      "oldId": "release.m296",
+      "newId": "release.m658",
+      "reason": "registry receipt version mutation now uses the current exact shell fragments",
+      "witness": {
+        "from": "sha256:3f095a517deeea3880bfb593adb74568d9fa5b3a2630634d39b696b37c661bd9",
+        "to": "sha256:1f81bfd254366bd7999773f1e07cff9b2197c196c8f465ce511cb7b1a7b4e257"
+      }
+    },
+    {
+      "oldId": "release.m297",
+      "newId": "release.m659",
+      "reason": "registry receipt digest mutation now uses the current exact shell fragments",
+      "witness": {
+        "from": "sha256:d1bebd0d1f1d698e7226bf327515ff5c0408cb1c1870ab5beaecf88e7072d84f",
+        "to": "sha256:70521961a8ebb0847af9ad082179c7183c93bc36a1334acd692766906f6a00ba"
+      }
+    },
+    {
+      "oldId": "release.m298",
+      "newId": "release.m660",
+      "reason": "registry receipt integrity mutation now uses the current exact shell fragments",
+      "witness": {
+        "from": "sha256:a10208f6c8c16b3da4b127a4d3b3d8784b67193c9033075bd81b180658f08d1b",
+        "to": "sha256:e81701ad04fa33288f274573d0979202af53f02b651aa86ce3017233ee83f59a"
+      }
+    },
+    {
+      "oldId": "release.m352",
+      "newId": "release.m661",
+      "reason": "release visibility mutation now uses the current eleven-occurrence cardinality",
+      "witness": {
+        "from": "sha256:cd5a5da2489486d32fbafa953482a9e59a3967b17b9588192069011073fb6ecb",
+        "to": "sha256:1039ba6ff0cc39d6fc14c892b0ffdeef39c025c6667500c120c86322fbc677d2"
+      }
+    },
+    {
+      "oldId": "release.m354",
+      "newId": "release.m662",
+      "reason": "release visibility polling mutation now uses the current exact command fragments",
+      "witness": {
+        "from": "sha256:a58305a4a1294df735ca210e6ee667469d4349b8d4cf6ea9dab0a45fa3180c09",
+        "to": "sha256:5263b8c2944d052ad02496f410fe28e431806b585c607a02d90b10e30479297e"
+      }
+    },
+    {
+      "oldId": "release.m355",
+      "newId": "release.m663",
+      "reason": "release visibility polling guard now uses the current exact command fragments",
+      "witness": {
+        "from": "sha256:21bfb4e5b87a088da230e7e700683dc8906aabf82a18c61d8cc7991162f54e97",
+        "to": "sha256:17afa50968eaa99530e08cee49f5db0931179492baaa13d03160404df4b8322e"
+      }
+    },
+    {
+      "oldId": "release.m356",
+      "newId": "release.m664",
+      "reason": "release visibility polling timeout now uses the current exact command fragments",
+      "witness": {
+        "from": "sha256:71f341d6cfd26e529e8f151a402433719604985206c76515978f45a8a75d6562",
+        "to": "sha256:3ca9c9c65af52eef780ee96d68dbf6e103e3a6cf22cf4d9fc03d432ce9f7409d"
+      }
+    },
+    {
+      "oldId": "release.m357",
+      "newId": "release.m665",
+      "reason": "release visibility success mutation now uses the current exact command fragments",
+      "witness": {
+        "from": "sha256:919fb6729980655b6f99d79d24c83457ff9bbc1924d9a7263616d2dc098a3915",
+        "to": "sha256:1162a2a1f5486d4c10b5dcc76b93d9011c014a0f13aefed73c0bb047ce607c73"
+      }
+    },
+    {
+      "oldId": "release.m358",
+      "newId": "release.m666",
+      "reason": "release visibility failure mutation now uses the current exact command fragments",
+      "witness": {
+        "from": "sha256:6b5227affb4a0770bd338dd3fc6720b0b12e1c9c4f4274ef0d1de7676f163e0a",
+        "to": "sha256:11e7812858c3137853da03d3a6ba7891c68ef235fc4ba9ab3ec31f34d358762c"
+      }
+    },
+    {
+      "oldId": "release.m359",
+      "newId": "release.m667",
+      "reason": "release visibility wait mutation now uses the current fifteen-occurrence cardinality",
+      "witness": {
+        "from": "sha256:77710d37ccd8445db2c9be86e9747aee336beea2d0f5ec91e491393bda7a0272",
+        "to": "sha256:98f4c51caec7530baaaa2a5403f442e9255440991212d415213d4f1eccee83bb"
+      }
+    },
+    {
+      "oldId": "release.m361",
+      "newId": "release.m668",
+      "reason": "release visibility attempt mutation now uses the current exact expression bytes",
+      "witness": {
+        "from": "sha256:d658b769372391cd0316530b1fdde0d1f4cde710bcbc31a6fd8072d65b59d213",
+        "to": "sha256:7f99c676edc674584160be188a1df58de71e363bfb9dec4e0f19c4634f043682"
+      }
+    },
+    {
+      "oldId": "release.m362",
+      "newId": "release.m669",
+      "reason": "release visibility condition mutation now uses the current three-occurrence cardinality",
+      "witness": {
+        "from": "sha256:d0bb11209643985189f789e84d6785a0cc5aebdf69b2c6601905bacd414e2a3f",
+        "to": "sha256:a7ff424ed9cf2ab5df39edd69e3030baea73b8e32c77e17f08fb566134b64bdb"
+      }
+    },
+    {
+      "oldId": "release.m363",
+      "newId": "release.m670",
+      "reason": "release visibility sleep mutation now uses the current three-occurrence cardinality",
+      "witness": {
+        "from": "sha256:f32ee1ffdd577a02b7d232223cbaa64de9a6977467b863196638b64cfe997b32",
+        "to": "sha256:3f05afa3d08dda89809082c4886ac497a66e646684d0fbb426c4ba7a9fe0489f"
+      }
+    },
+    {
+      "oldId": "release.m364",
+      "newId": "release.m671",
+      "reason": "release visibility counter mutation now uses the current three-occurrence cardinality",
+      "witness": {
+        "from": "sha256:75c2cc71278ce00e76955b7c8ab84d93d1badb1ac8c4a6818db54c1db4f37caa",
+        "to": "sha256:8ddce04bdc96c6dad5ba3d4e19866d0b9807768fd3a406f7c7eeb379f0eb09d6"
+      }
+    },
+    {
+      "oldId": "release.m365",
+      "newId": "release.m672",
+      "reason": "release visibility status mutation now uses the current four-occurrence cardinality",
+      "witness": {
+        "from": "sha256:a32f2619629686113c790b15de2a033dc5256a399c959051778602b40d5c74b3",
+        "to": "sha256:4e93dc8886dd1a5c602ce26ca28847c39dbc51b63b3684a94a136dce0535ac46"
+      }
+    },
+    {
+      "oldId": "release.m367",
+      "newId": "release.m673",
+      "reason": "release visibility channel mutation now targets the current exact fragment",
+      "witness": {
+        "from": "sha256:1038f697b45b12869d338ead2ffdf30c74693228e0abbd0667184ad0cb223408",
+        "to": "sha256:5e9e77bfd04ef8ad33ac4a335e710d584eeaf9d68a0389537c115bd163593e1d"
+      }
+    },
+    {
+      "oldId": "release.m369",
+      "newId": "release.m674",
+      "reason": "release visibility timeout mutation now uses the current exact command fragments",
+      "witness": {
+        "from": "sha256:4b3fecfdea50a9a0427b3700de4fdef7bf1ac4178c82c6e2978da45c889a00cd",
+        "to": "sha256:263fc028c2520f14c9d9bbc46fa97479fd6cd40d2da1aa87f4b5ed3211be2628"
+      }
+    },
+    {
+      "oldId": "release.m370",
+      "newId": "release.m675",
+      "reason": "release visibility terminal guard now uses the current all-mode three-occurrence contract",
+      "witness": {
+        "from": "sha256:bdeb48916ad1b435b182abf6dd3720d89f7178b3a618467bb7565c4905b7a51f",
+        "to": "sha256:c51b48203d3bd69b5593ba201af76f5e42d6d7d60ffe051bb710291367b6fdfd"
+      }
+    },
+    {
+      "oldId": "release.m383",
+      "newId": "release.m676",
+      "reason": "GitHub channel mutation now targets the current exact environment handoff",
+      "witness": {
+        "from": "sha256:e7203ee4bbc96d1e3d867f88b7ed1f75fbac3fff60716fbbc986a5c6a37e7127",
+        "to": "sha256:3c9c523a285c779a05d2d776278bbfd60be53564a627e5098ab4918bc613472c"
+      }
+    },
+    {
+      "oldId": "release.m384",
+      "newId": "release.m677",
+      "reason": "GitHub channel invocation now references the successor create-channel source identity",
+      "witness": {
+        "from": "sha256:acb27adb1f62c4f178bda94207786bf5e8e3fb30828e9e90a8949f7ca0b6a76f",
+        "to": "sha256:390b8827b6269a9594d20ccede64ee62bbaf35bec260385f27580e62466f417a"
+      }
+    },
+    {
+      "oldId": "release.m386",
+      "newId": "release.m678",
+      "reason": "GitHub release visibility mutation now uses the current exact command fragments",
+      "witness": {
+        "from": "sha256:fe9946a8163273aba4612c4625aaa307b7b930a214e4fe1a86d8d914c18f86ad",
+        "to": "sha256:6494f0060d7800b75825ea7e4a6ec012fb6a31e88d45f068d2afe1a0a26a4c36"
+      }
+    },
+    {
+      "oldId": "release.m436",
+      "newId": "release.m679",
+      "reason": "GitHub release transaction mutation now uses the current fifteen-occurrence cardinality",
+      "witness": {
+        "from": "sha256:be83ea167030d89c8a5603985d50e1694916a4f5ad2d39c62ba1dec9a8ded9d7",
+        "to": "sha256:c229e46b57e457461b4ef3f4c92acd1c172431845ac683c0f29f0b8a914ef8cc"
+      }
+    },
+    {
+      "oldId": "release.m437",
+      "newId": "release.m680",
+      "reason": "GitHub channel transaction mutation now targets the current exact environment handoff",
+      "witness": {
+        "from": "sha256:5bfdfea280b2696f10fd54b5d1d2f7476cad030739ca5f232738c4c12f1dd695",
+        "to": "sha256:3f6010076e1ef4fe718dc9233226fc098c4c9c1222bfd0b9a6a50b8e4b42f1ba"
+      }
+    },
+    {
+      "oldId": "release.m438",
+      "newId": "release.m681",
+      "reason": "GitHub channel transaction now references the successor create-channel source identity",
+      "witness": {
+        "from": "sha256:3e6b30f3a1109948553f077b56fb3761fc56003395f861b583b35447d3904323",
+        "to": "sha256:00f543a3efe34de6c821dabf415e2d1c892fed8725cc16165c17e746e4f0c5df"
+      }
+    },
+    {
+      "oldId": "release.m504",
+      "newId": "release.m684",
+      "reason": "package consumer command mutation now uses the current exact command fragments",
+      "witness": {
+        "from": "sha256:8ea563d1644852b0a0f8a7fe5ec50551d68dcd54fb2dcbfce12bcd892dbe6762",
+        "to": "sha256:72d2d235b3dd4796020f9aa967c3a5754898fafbdf420f6940c2987124847cd3"
+      }
+    }
+  ],
+  "newIdentities": [
+    {
+      "id": "release.m561",
+      "reason": "installed npm bin shim execution gained a causal negative root",
+      "witness": "sha256:25aaf45bc5f80d7bce3e92bd2d8f6af191f8702aba100c1d3871107e8d5c7c30"
+    },
+    {
+      "id": "release.m562",
+      "reason": "optional dependency loadability gained a causal negative root",
+      "witness": "sha256:7beaef7bb4cecf991cb9d7c1d9363b93ef887cb420b42beb7a52678c1ca9e4d1"
+    },
+    {
+      "id": "release.m582",
+      "reason": "split workflow gained an unexpected legacy publish-job negative root",
+      "witness": "sha256:d28ba2fae602253cfee39b6a8ac5eadb27b3801914283e8b888d717a86c6b848"
+    },
+    {
+      "id": "release.m583",
+      "reason": "split workflow gained an npm job-identity negative root",
+      "witness": "sha256:b2ba6dfcd87c7b7cdd04a10ccf5febb6700c1d718f974f2068513973935ade18"
+    },
+    {
+      "id": "release.m584",
+      "reason": "split workflow gained an npm publication-step identity negative root",
+      "witness": "sha256:30218f3ed06e6f97c19e736bf3c92544f27151ae61a4a18b796e4f455b93ae62"
+    },
+    {
+      "id": "release.m585",
+      "reason": "split workflow gained an npm verify-dependency negative root",
+      "witness": "sha256:02571da9e0a52dcc477f634668c5d87b0b3a582af44c295832c52e0fb06c215f"
+    },
+    {
+      "id": "release.m586",
+      "reason": "split workflow gained a GitHub-after-npm dependency negative root",
+      "witness": "sha256:a04b66e114cc46a8aecc4efd9fc41715bf5e841768e33d402af0f4fe503273a6"
+    },
+    {
+      "id": "release.m587",
+      "reason": "split workflow gained a registry-after-GitHub dependency negative root",
+      "witness": "sha256:119a24f7c03270c2c6735655432dbd808cd1faf8eb9e234029cd04fee0d869f8"
+    },
+    {
+      "id": "release.m588",
+      "reason": "split workflow gained a stable-only registry condition negative root",
+      "witness": "sha256:1f79546233106f1a57476f8aaf034fbfa591345a585f33cf72844173d27351f6"
+    },
+    {
+      "id": "release.m589",
+      "reason": "split workflow gained a protected npm environment identity negative root",
+      "witness": "sha256:ef1853494c38483e5575c933eafa977ed5f29e7acfcffaa0225fe9664fddf2e4"
+    },
+    {
+      "id": "release.m590",
+      "reason": "split workflow gained a root-permissions closure negative root",
+      "witness": "sha256:643d4fdd48ee7869f2d018f871db316cb048a93212b834724e72c7f45d37255b"
+    },
+    {
+      "id": "release.m591",
+      "reason": "split handoff gained a digest-comparison direction negative root",
+      "witness": "sha256:f337edc8e05e86df237d9b6f06d7721f59de58d73094e0dbb8687583be66aefb"
+    },
+    {
+      "id": "release.m592",
+      "reason": "split handoff gained an inner-checksum bypass negative root",
+      "witness": "sha256:c96114077e175c266e81de85d6d0a98eefa93253b6b54e2e07abd774a2cd450c"
+    },
+    {
+      "id": "release.m593",
+      "reason": "split handoff gained a closed-inventory negative root",
+      "witness": "sha256:d44f71148ca1296594b7484d0bc7bd498681ae3a35e9b55f5debaf68e40995d7"
+    },
+    {
+      "id": "release.m594",
+      "reason": "privileged split jobs gained a checkout-prohibition negative root",
+      "witness": "sha256:86fa85f62159209a0426d0001905bb36d0d8c4f2b061f066c663783c24d7f957"
+    },
+    {
+      "id": "release.m595",
+      "reason": "privileged split jobs gained an unreviewed-command negative root",
+      "witness": "sha256:b25e94b682d8d1c5411d2ac369a298dcf44b85041001d869a3b4365d113f993d"
+    },
+    {
+      "id": "release.m596",
+      "reason": "privileged split jobs gained a reviewed-source digest negative root",
+      "witness": "sha256:340a6d74b62b8da34b0084cd8aecaf8b7ad7e6bf74680b438d6ee5578127481e"
+    },
+    {
+      "id": "release.m597",
+      "reason": "privileged split jobs gained an exact-shell negative root",
+      "witness": "sha256:c611efd143e46f4d55a7513929e01a6320b5cc21b5d152891e7e852dde650aa1"
+    },
+    {
+      "id": "release.m598",
+      "reason": "privileged split jobs gained a conditional-skip negative root",
+      "witness": "sha256:dd90ffe49fcca997bba7efac1c1ff0d5a7e708e784399051c966ac7628418337"
+    },
+    {
+      "id": "release.m599",
+      "reason": "Trusted Publishing gained a static npm-token negative root",
+      "witness": "sha256:cb0a22cf90484219c59ce45d9f8e70166da81bd2f21a4c901b525b7e0dd7569f"
+    },
+    {
+      "id": "release.m685",
+      "reason": "Trusted Publishing gained an explicit provenance-flag negative root",
+      "witness": "sha256:a06fedb6addd8dd0db2b301ca333012a35e049f64820ce6b476d257615faea0a"
+    },
+    {
+      "id": "release.m686",
+      "reason": "Trusted Publishing gained a provenance-environment downgrade negative root",
+      "witness": "sha256:eb40fa6a7c2dd76af09f12dd45338428f91b82b4b578ba85262645577a211340"
+    },
+    {
+      "id": "release.m687",
+      "reason": "Trusted Publishing gained an NPM identity-token unset negative root",
+      "witness": "sha256:e1e354dbe591a13820557c4961bd9ec558f7d45fa5588784dd9fc3108ee397cb"
+    },
+    {
+      "id": "release.m688",
+      "reason": "Trusted Publishing gained an NPM identity-token step-environment negative root",
+      "witness": "sha256:b7f83780aa8380b9207821884558eb1b4464ae9c0542924893d57f0658ee7a3c"
+    },
+    {
+      "id": "release.m689",
+      "reason": "Trusted Publishing gained a Sigstore identity-token unset negative root",
+      "witness": "sha256:67785189b2d63e2e220f4bbeafcf69917cfaa3a213e4e62cea37d1f0fbb1a0c6"
+    },
+    {
+      "id": "release.m690",
+      "reason": "Trusted Publishing gained a Sigstore identity-token step-environment negative root",
+      "witness": "sha256:df03bf9a96cc92dfff47c3d5e3490c0fb02f03530af5b95d769772f66476a7b5"
+    },
+    {
+      "id": "release.m691",
+      "reason": "Trusted Publishing gained a GitLab CI provider-carrier unset negative root",
+      "witness": "sha256:37920656fdc60ccbd26b408b1307f0ba8f136f57a101cafb4aa81d0454cd103c"
+    },
+    {
+      "id": "release.m692",
+      "reason": "Trusted Publishing gained a GitLab CI provider-carrier step-environment negative root",
+      "witness": "sha256:79c9595f39c7c058d81b690ba4719238363ed76c249bd596881aa2cf07c53770"
+    },
+    {
+      "id": "release.m693",
+      "reason": "Trusted Publishing gained a provenance-config scrub negative root",
+      "witness": "sha256:a30a36f0147a00f188bb1d4d57e96f33e5a7abb402b4fe8e45af9bbb6f302852"
+    },
+    {
+      "id": "release.m600",
+      "reason": "Trusted Publishing gained a provenance-file config scrub negative root",
+      "witness": "sha256:81bfb70486c0c7ac66c566df46522042d436e2708991f18d3743b1d3cf0e5a3e"
+    },
+    {
+      "id": "release.m601",
+      "reason": "Trusted Publishing gained an ignore-scripts negative root",
+      "witness": "sha256:3bdd875b2a0b82354188c58db3a6bfb943c1570ac0092bc35c516648438790d6"
+    },
+    {
+      "id": "release.m602",
+      "reason": "Trusted Publishing gained an absolute tarball-path negative root",
+      "witness": "sha256:e8477daab0293908ee9d75ff3a670ebfac15ba64df2a1862ab76c66d862d11d3"
+    },
+    {
+      "id": "release.m603",
+      "reason": "Trusted Publishing gained a single-publish negative root",
+      "witness": "sha256:0a3e4b4c378413aabb13793c5a6c85fd7dbc74ff9a70349ac25c50a88dec88ec"
+    },
+    {
+      "id": "release.m604",
+      "reason": "MCP Registry publication gained a publisher-digest negative root",
+      "witness": "sha256:fa957edf8f96ea552f08ad607f3086a91d31b1d4794a0795eb891ec4d6549985"
+    },
+    {
+      "id": "release.m605",
+      "reason": "MCP Registry publication gained an OIDC-registry identity negative root",
+      "witness": "sha256:2386420844e963efa2abd62a001dc608ae459454635abcca0a0bc5d36a8975df"
+    },
+    {
+      "id": "release.m606",
+      "reason": "MCP Registry publication gained a convergence-phase negative root",
+      "witness": "sha256:b26bd96b1d4511e0950b13bca64f20cac756e1610aacc1ad5517273b83a3cea5"
+    },
+    {
+      "id": "release.m607",
+      "reason": "GitHub publication gained a job-level condition negative root",
+      "witness": "sha256:665700e39943c3c06bbd7a42b9f88aa69b9a529f94e3c5e5eecac55800417514"
+    },
+    {
+      "id": "release.m608",
+      "reason": "GitHub publication gained a continue-on-error negative root",
+      "witness": "sha256:4a655845c83aa685fb9ca617aa26f1b74f818aa377c23714b3ecfae9b0f6ab5d"
+    },
+    {
+      "id": "release.m609",
+      "reason": "MCP Registry publication gained a continue-on-error negative root",
+      "witness": "sha256:97a838e0f37fcfc624f7fd1ce64fd50401e884bf2892c8b4977e7aeac79f2e5c"
+    },
+    {
+      "id": "release.m610",
+      "reason": "npm publication gained a hosted-runner negative root",
+      "witness": "sha256:eb32204902eeda1138bd3bfc089bb69728c1cdc1fec3a0ef7f590b2edce29222"
+    },
+    {
+      "id": "release.m611",
+      "reason": "all split handoffs gained a digest-comparison negative root",
+      "witness": "sha256:543254da2cdac33cc5b8d6725bc8cbb464a75f0354d123dcf70ecd87d62a5dcc"
+    },
+    {
+      "id": "release.m612",
+      "reason": "all split handoffs gained an inner-checksum negative root",
+      "witness": "sha256:40f3bc80e6057a1431f7a98cba141e814aa7700f84929e0a3ec3ed43adb8a7f7"
+    },
+    {
+      "id": "release.m613",
+      "reason": "all split handoffs gained a zip-inventory negative root",
+      "witness": "sha256:50f41a447dfbc7d9914b9fe33b77897fefcc8a4a95fbdbe6162fc4428b80178a"
+    },
+    {
+      "id": "release.m614",
+      "reason": "split handoff inventory gained a source-dependent extra-file negative root",
+      "witness": "sha256:e2100a3403167123e3a5023d04ea25a36f28462a4846da598dcff7c04db32e89"
+    },
+    {
+      "id": "release.m615",
+      "reason": "split handoff inventory gained an injected-file source dependency",
+      "witness": "sha256:88c7d50538871f4e7bce5c3cdc42f5dfcb53f5b0197ad0030e19096f3270e425"
+    },
+    {
+      "id": "release.m616",
+      "reason": "npm publication gained an immutable npm-binary negative root",
+      "witness": "sha256:45aa3e61f86223ae033fbd9d52ab6ac9fe269b452df4a9c0755e39fb4da7ea83"
+    },
+    {
+      "id": "release.m617",
+      "reason": "npm publication gained an immutable tarball-binding negative root",
+      "witness": "sha256:c9332bcc69b7b29fa77ac35dce0cb88e8c7184ce4c9783d91948f2bd283f22a1"
+    },
+    {
+      "id": "release.m618",
+      "reason": "handoff assembly gained a post-assembly mutation negative root",
+      "witness": "sha256:386141adea86a370bbe795933c78204f669917a4cb721f86cf1ce351b3db7f4d"
+    },
+    {
+      "id": "release.m619",
+      "reason": "all privileged network steps gained a GitHub-host negative root",
+      "witness": "sha256:d2fe91d7452a09d093a46c9c9a2969a11bb1d73769fa7b3b8333570295867f14"
+    },
+    {
+      "id": "release.m620",
+      "reason": "GitHub publication gained an enterprise-token injection negative root",
+      "witness": "sha256:5eaacefa8cca213cd8ce729b95d8f1fed85af286e319d40c39534d71a5c0a9eb"
+    },
+    {
+      "id": "release.m621",
+      "reason": "Basic MCPB re-verification gained a continue-on-error negative root",
+      "witness": "sha256:4fa29ed9096af77d548f52a07a6a65313230992645548958ab79d60b8a8eb0d2"
+    },
+    {
+      "id": "release.m622",
+      "reason": "source verification gained an exact-shell negative root",
+      "witness": "sha256:c547127e499787c7be1c189188fbeb3b9403263ab694f50d33168642555e72c9"
+    },
+    {
+      "id": "release.m623",
+      "reason": "release root gained a defaults-shell injection negative root",
+      "witness": "sha256:d7108cfb2803413aa14ff922b13fb79890dabb69df264c70f4d13cf6467f6bb3"
+    },
+    {
+      "id": "release.m624",
+      "reason": "release root gained an environment injection negative root",
+      "witness": "sha256:195a832be1e5078f19d14ee163e7871ad8d369488ed7dd3456417edacc1fe59e"
+    },
+    {
+      "id": "release.m625",
+      "reason": "release concurrency gained a cancellation negative root",
+      "witness": "sha256:8ab27b690525077943998f84adaef7d98f5402065eac1ed4dd0693917b1fd294"
+    },
+    {
+      "id": "release.m626",
+      "reason": "npm setup-node gained an environment injection negative root",
+      "witness": "sha256:63172714c51049c48cd0c9d1b663bce22bc07b0011bd3b6034fb90c04629c6d2"
+    },
+    {
+      "id": "release.m627",
+      "reason": "split handoff gained a transaction-source digest negative root",
+      "witness": "sha256:1f45c310493dc15ad29d2e598e27a426a9263e40e7f2224424cc33064b9dcea3"
+    }
+  ],
+  "current": {
+    "matrixSourceSha256": "148f8de15c51947cb572de090301b0253ddc093006dd80c11a318c517ac329fe",
+    "matrixSliceSha256": "91c6a9441c76195643e1b8d1990f6a088c0a417517bf1d2c820aba161b5b8756",
+    "legacyCount": 523,
+    "declarativeCount": 94,
+    "sourceCount": 33,
+    "identityCount": 617
+  }
+}

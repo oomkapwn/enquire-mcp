@@ -49,7 +49,7 @@ const KNOWN_WRITE_HANDLERS = new Set([
   // v3.11.0 — `obsidian_mark_useful`'s handler. A STATE mutator (writes the
   // per-vault feedback-store cache sidecar), NOT a vault writer — so it's gated
   // by `--feedback-weight` rather than `--enable-write` and lives in
-  // tool-registry.ts (not write.ts/read.ts, so it's NOT in the rc.42 F2
+  // feedback-admission.ts (not write.ts/read.ts, so it's NOT in the rc.42 F2
   // fsMutatingExports derive-set — that's a SUPERSET check, extras are allowed).
   // Listed here so the WRITE-annotated tool satisfies "wires to a known handler".
   "markUseful"

@@ -63,6 +63,28 @@ describe("planCachePrune (rc.14 — Issue 8 cache GC)", () => {
     expect(planCachePrune(entries, KEEP)).toEqual([`${OTHER}.fts5.db`]);
   });
 
+  it("refuses every selected stem when its watcher activation guard is visible", () => {
+    expect(() =>
+      planCachePrune(
+        [`${OTHER}.embed.db`, `${OTHER}.hnsw.meta.json`, `${OTHER}.embed.db.watcher-activation.guard`],
+        KEEP
+      )
+    ).toThrow(/watcher activation guard is present.*bbbbbbbbbbbb/);
+  });
+
+  it("does not treat the kept stem's guard or a malformed decoy as deletion authority", () => {
+    expect(
+      planCachePrune(
+        [
+          `${KEEP}.embed.db.watcher-activation.guard`,
+          `${OTHER}.embed.db.watcher-activation.guard.extra`,
+          `${OTHER}.fts5.db`
+        ],
+        KEEP
+      )
+    ).toEqual([`${OTHER}.fts5.db`]);
+  });
+
   it("NEGATIVE control: ignores names outside the reserved artifact namespace", () => {
     // A user note, another app's cache, a wrong-shaped hash, a bare hash, a
     // wrong extension — NONE may ever be selected for deletion. Only the single

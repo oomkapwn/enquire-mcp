@@ -1559,6 +1559,16 @@ windowsDescribe("Windows hostile-filesystem contracts", () => {
         error: /reserved Windows device basename/
       },
       {
+        hazard: "DOS device basename with an ignored trailing space",
+        file: `C:\\Enquire\\CON ${suffix}`,
+        error: /reserved Windows device basename/
+      },
+      {
+        hazard: "numbered DOS device basename with an ignored trailing space",
+        file: `C:\\Enquire\\COM1 ${suffix}`,
+        error: /reserved Windows device basename/
+      },
+      {
         hazard: "trailing-dot component",
         file: `C:\\Enquire.\\Vault${suffix}`,
         error: /trailing-dot or trailing-space path component/

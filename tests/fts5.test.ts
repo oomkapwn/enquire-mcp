@@ -1,4 +1,4 @@
-import { promises as fs } from "node:fs";
+import { promises as fs, readFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -84,8 +84,33 @@ describe("safeFts5Query", () => {
 });
 
 describe("chunkContent", () => {
+  const logicalTerminators = [
+    ["LF", "\n"],
+    ["CRLF", "\r\n"],
+    ["CR", "\r"],
+    ["LS", "\u2028"],
+    ["PS", "\u2029"]
+  ] as const;
+
   it("returns empty array for empty content", () => {
     expect(chunkContent("")).toEqual([]);
+  });
+
+  it.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, 1.5, Number.MAX_SAFE_INTEGER + 1])(
+    "rejects non-progressing or non-integral maxChars=%s before chunking",
+    (maxChars) => {
+      expect(() => chunkContent("non-empty content", maxChars)).toThrow(
+        new RangeError("maxChars must be a positive safe integer")
+      );
+      expect(() => chunkContent("", maxChars)).toThrow(RangeError);
+    }
+  );
+
+  it("accepts the one-unit boundary and reconstructs ASCII content exactly", () => {
+    const content = "abcd";
+    const chunks = chunkContent(content, 1);
+    expect(chunks.map((chunk) => chunk.text)).toEqual(["a", "b", "c", "d"]);
+    expect(chunks.map((chunk) => chunk.text).join("")).toBe(content);
   });
 
   it("splits on blank-line paragraphs", () => {
@@ -150,6 +175,110 @@ describe("chunkContent", () => {
     expect(chunks[0]?.lineStart).toBe(1);
     expect(chunks[1]?.lineStart).toBeGreaterThan(1);
     expect(chunks[2]?.lineStart).toBeGreaterThan(chunks[1]?.lineStart ?? 0);
+  });
+
+  it.each(logicalTerminators)(
+    "splits %s blank-line paragraphs with exact monotonic logical-line coordinates",
+    (_name, end) => {
+      const chunks = chunkContent(`first${end}${end}second${end}${end}third`);
+      expect(chunks.map((chunk) => chunk.text)).toEqual(["first", "second", "third"]);
+      expect(chunks.map((chunk) => [chunk.lineStart, chunk.lineEnd])).toEqual([
+        [1, 1],
+        [3, 3],
+        [5, 5]
+      ]);
+    }
+  );
+
+  it("treats adjacent mixed logical terminators as one paragraph boundary", () => {
+    expect(chunkContent("first\r\n\u2028second")).toEqual([
+      { text: "first", lineStart: 1, lineEnd: 1, breadcrumb: "" },
+      { text: "second", lineStart: 3, lineEnd: 3, breadcrumb: "" }
+    ]);
+  });
+
+  it.each(logicalTerminators)(
+    "packs %s-separated lines at the exact maxChars boundary without normalizing bytes",
+    (_name, end) => {
+      const firstChunk = `aa${end}bb`;
+      const content = `${firstChunk}${end}cccc`;
+      const chunks = chunkContent(content, firstChunk.length);
+      expect(chunks.map((chunk) => chunk.text)).toEqual([firstChunk, "cccc"]);
+      expect(chunks.map((chunk) => [chunk.lineStart, chunk.lineEnd])).toEqual([
+        [1, 2],
+        [3, 3]
+      ]);
+      expect(chunks.every((chunk) => chunk.text.length <= firstChunk.length)).toBe(true);
+    }
+  );
+
+  it.each(logicalTerminators)(
+    "updates breadcrumbs and line coordinates after %s-separated headings inside one oversize paragraph",
+    (_name, end) => {
+      const content = `# A${end}body${end}## B${end}tail`;
+      const chunks = chunkContent(content, 4);
+      expect(chunks.map((chunk) => chunk.text)).toEqual(["# A", "body", "## B", "tail"]);
+      expect(chunks.map((chunk) => chunk.breadcrumb)).toEqual(["A", "A", "A > B", "A > B"]);
+      expect(chunks.map((chunk) => [chunk.lineStart, chunk.lineEnd])).toEqual([
+        [1, 1],
+        [2, 2],
+        [3, 3],
+        [4, 4]
+      ]);
+    }
+  );
+
+  it("preserves a mixed logical-terminator paragraph byte-for-byte when it fits", () => {
+    const content = "a\r\nb\rc\u2028d\u2029e\nf";
+    expect(chunkContent(content, content.length)).toEqual([
+      { text: content, lineStart: 1, lineEnd: 6, breadcrumb: "" }
+    ]);
+  });
+
+  it("keeps every mixed-terminator chunk an ordered exact source substring with coordinate-derived ranges", () => {
+    const countLogicalBreaks = (text: string): number => text.match(/\r\n|[\n\r\u2028\u2029]/gu)?.length ?? 0;
+    for (const [, firstEnd] of logicalTerminators) {
+      for (const [, secondEnd] of logicalTerminators) {
+        const content = `# H${firstEnd}aa${secondEnd}## S${firstEnd}bb`;
+        const chunks = chunkContent(content, 6);
+        let sourceCursor = 0;
+        let previousLineEnd = 0;
+        for (const chunk of chunks) {
+          const sourceOffset = content.indexOf(chunk.text, sourceCursor);
+          expect(
+            sourceOffset,
+            `${JSON.stringify(chunk.text)} must be an ordered exact source substring`
+          ).toBeGreaterThanOrEqual(sourceCursor);
+          const expectedStart = countLogicalBreaks(content.slice(0, sourceOffset)) + 1;
+          const expectedEnd = expectedStart + countLogicalBreaks(chunk.text);
+          expect([chunk.lineStart, chunk.lineEnd]).toEqual([expectedStart, expectedEnd]);
+          expect(chunk.lineStart).toBeGreaterThanOrEqual(previousLineEnd);
+          sourceCursor = sourceOffset + chunk.text.length;
+          previousLineEnd = chunk.lineEnd;
+        }
+      }
+    }
+  });
+
+  it("NEGATIVE mutation control — the legacy LF-only boundary misses CR paragraphs that canonical chunking finds", () => {
+    const content = "first\r\rsecond";
+    const legacyParagraphs = content.split(/\n{2,}/);
+    expect(legacyParagraphs).toEqual([content]);
+    expect(chunkContent(content).map((chunk) => chunk.text)).toEqual(["first", "second"]);
+  });
+
+  it("structurally routes chunk boundaries through the canonical logical-line authority", () => {
+    const source = readFileSync(path.resolve(__dirname, "../src/fts5.ts"), "utf8");
+    const chunkStart = source.indexOf("export function chunkContent");
+    const chunkEnd = source.indexOf("export function computeBreadcrumbsByLine", chunkStart);
+    const body = source.slice(chunkStart, chunkEnd);
+    const hasLfOnlyBoundary = (candidate: string): boolean =>
+      /splitWithLines\([^,]+,\s*\/\\n(?:\{2,\})?\//u.test(candidate);
+    expect(body).toContain("chunkLogicalLines(content)");
+    expect(source).not.toContain("function splitWithLines");
+    expect(hasLfOnlyBoundary(source)).toBe(false);
+    expect(hasLfOnlyBoundary("splitWithLines(content, /\\n{2,}/)")).toBe(true);
+    expect(hasLfOnlyBoundary("splitWithLines(paragraph, /\\n/)")).toBe(true);
   });
 
   // v2.1.0: heading breadcrumb propagation
@@ -273,7 +402,7 @@ describe("FtsIndex — exact namespace admission and bounded erasure", () => {
         try {
           await expect(index.open()).rejects.toThrow(/artifact family could not be admitted/);
         } finally {
-          index.close();
+          await index.closeAndRelease();
         }
       }
     },
@@ -358,12 +487,14 @@ describe("FtsIndex — exact namespace admission and bounded erasure", () => {
     await fs.writeFile(shm, "SHM_SENTINEL");
     await fs.writeFile(journal, "JOURNAL_SENTINEL");
     const idx = new FtsIndex({ file: dbFile, vaultRoot: "/v" });
+    const canonicalDbFile = path.join(await fs.realpath(dbDir), path.basename(dbFile));
+    const canonicalWal = `${canonicalDbFile}-wal`;
     const denied = Object.assign(new Error("injected access denial"), { code: "EACCES" });
 
     if (phase === "inspection") {
       const realLstat = fs.lstat.bind(fs);
       const spy = vi.spyOn(fs, "lstat").mockImplementation(async (candidate) => {
-        if (String(candidate) === wal) throw denied;
+        if (String(candidate) === canonicalWal) throw denied;
         return realLstat(candidate);
       });
       try {
@@ -374,7 +505,7 @@ describe("FtsIndex — exact namespace admission and bounded erasure", () => {
     } else {
       const realUnlink = fs.unlink.bind(fs);
       const spy = vi.spyOn(fs, "unlink").mockImplementation(async (candidate) => {
-        if (String(candidate) === dbFile) throw denied;
+        if (String(candidate) === canonicalDbFile) throw denied;
         return realUnlink(candidate);
       });
       try {
@@ -445,7 +576,7 @@ describe("FtsIndex — full lifecycle", () => {
       expect(productivityHits.length).toBe(1);
       expect(productivityHits[0]?.rel_path).toBe("notes/alpha.md");
     } finally {
-      idx.close();
+      await idx.closeAndRelease();
     }
   });
 
@@ -472,7 +603,7 @@ describe("FtsIndex — full lifecycle", () => {
       // After dropFile + only b.md present in live, a.md is gone from state too
       expect(diff2.unchanged).toEqual(["b.md"]);
     } finally {
-      idx.close();
+      await idx.closeAndRelease();
     }
 
     await assertDurableQuarantineLifecycle();
@@ -517,7 +648,7 @@ describe("FtsIndex — full lifecycle", () => {
           firstHit.indexed_revision
         )
     ).toBe(true);
-    first.close();
+    await first.closeAndRelease();
 
     // Migration control: both tables/triggers are additive. A same-schema
     // database made before this fix has neither; reopening must backfill a
@@ -686,7 +817,7 @@ describe("FtsIndex — full lifecycle", () => {
     expect(visibleControl).toHaveLength(1);
     expect(visibleControl[0]?.indexed_mtime_ms).toBe(1000);
     expect(visibleControl[0]?.indexed_revision).toBe(control?.indexed_revision);
-    quarantined.close();
+    await quarantined.closeAndRelease();
 
     // The exclusion survives a restart; a successful replacement publishes
     // the new generation and atomically clears the quarantine marker.
@@ -743,7 +874,7 @@ describe("FtsIndex — full lifecycle", () => {
           )
       ).toBe(true);
     } finally {
-      reopened.close();
+      await reopened.closeAndRelease();
     }
   }
 
@@ -765,7 +896,7 @@ describe("FtsIndex — full lifecycle", () => {
       expect(source).not.toContain("DELETE FROM chunks WHERE rel_path = ?");
       expect(source.match(/DELETE FROM chunks WHERE chunks MATCH \? AND rel_path = \?/g)).toHaveLength(3);
     } finally {
-      idx.close();
+      await idx.closeAndRelease();
     }
   });
 
@@ -796,7 +927,7 @@ describe("FtsIndex — full lifecycle", () => {
       const message = rejection instanceof Error ? rejection.message : "";
       expect(message).toMatch(pattern);
       for (const value of forbidden) expect(message).not.toContain(value);
-      idx.close();
+      await idx.closeAndRelease();
     };
 
     // Positive boundary: a pre-existing SQLite container with no logical
@@ -807,7 +938,7 @@ describe("FtsIndex — full lifecycle", () => {
     await empty.open();
     expect(empty.totalFiles()).toBe(0);
     expect(empty.totalChunks()).toBe(0);
-    empty.close();
+    await empty.closeAndRelease();
 
     // Real FTS ownership with a different root must be refused, not treated as
     // a caller-authorized rebuild. The ordered logical schema + cells are the
@@ -816,7 +947,7 @@ describe("FtsIndex — full lifecycle", () => {
     await idx1.open();
     idx1.reindexFile("a.md", 1000, "marker-A");
     expect(idx1.totalFiles()).toBe(1);
-    idx1.close();
+    await idx1.closeAndRelease();
     const foreignPolicy = new Database(dbFile);
     foreignPolicy.pragma("journal_mode = DELETE");
     foreignPolicy.close();
@@ -857,7 +988,7 @@ describe("FtsIndex — full lifecycle", () => {
     });
     await configASeed.open();
     configASeed.reindexFile("a.md", 1, "config-a-marker");
-    configASeed.close();
+    await configASeed.closeAndRelease();
     const expectedConfigA = await discoverFtsIndexConfig(configRaceFile, "/tmp/config-race");
     expect(expectedConfigA.kind).toBe("owned");
 
@@ -868,7 +999,7 @@ describe("FtsIndex — full lifecycle", () => {
     });
     await configBWriter.open();
     configBWriter.reindexFile("b.md", 2, "config-b-marker");
-    configBWriter.close();
+    await configBWriter.closeAndRelease();
     const expectedConfigB = await discoverFtsIndexConfig(configRaceFile, "/tmp/config-race");
     expect(expectedConfigB.kind).toBe("owned");
     const beforeStaleConfigOpen = snapshot(configRaceFile, ftsQueries);
@@ -886,7 +1017,7 @@ describe("FtsIndex — full lifecycle", () => {
       () => null,
       (error: unknown) => error
     );
-    staleConfigOpen.close();
+    await staleConfigOpen.closeAndRelease();
     expect(staleError).toBeInstanceOf(Error);
     const staleMessage = staleError instanceof Error ? staleError.message : "";
     expect(staleMessage).toBe("FTS index configuration changed before open");
@@ -903,7 +1034,7 @@ describe("FtsIndex — full lifecycle", () => {
     });
     await currentConfigOpen.open(expectedConfigB);
     expect(currentConfigOpen.search("config-b-marker")).toHaveLength(1);
-    currentConfigOpen.close();
+    await currentConfigOpen.closeAndRelease();
 
     // Paired positive: the expected A snapshot still authorizes an explicit
     // writer override when the live database remains A.
@@ -915,7 +1046,7 @@ describe("FtsIndex — full lifecycle", () => {
     });
     await explicitASeed.open();
     explicitASeed.reindexFile("old.md", 3, "old-config-marker");
-    explicitASeed.close();
+    await explicitASeed.closeAndRelease();
     const expectedExplicitA = await discoverFtsIndexConfig(explicitOverrideFile, "/tmp/config-override");
     expect(expectedExplicitA.kind).toBe("owned");
     const explicitBWriter = new FtsIndex({
@@ -925,7 +1056,7 @@ describe("FtsIndex — full lifecycle", () => {
     });
     await explicitBWriter.open(expectedExplicitA);
     expect(explicitBWriter.totalChunks()).toBe(0);
-    explicitBWriter.close();
+    await explicitBWriter.closeAndRelease();
     const explicitBDiscovery = await discoverFtsIndexConfig(explicitOverrideFile, "/tmp/config-override");
     expect(explicitBDiscovery.kind === "owned" && explicitBDiscovery.meta.tokenize_mode).toBe("trigram");
 
@@ -963,7 +1094,7 @@ describe("FtsIndex — full lifecycle", () => {
     const missingRootSeed = new FtsIndex({ file: missingRootFile, vaultRoot: "/tmp/vault-A" });
     await missingRootSeed.open();
     missingRootSeed.reindexFile("missing.md", 1001, "missing-root-marker");
-    missingRootSeed.close();
+    await missingRootSeed.closeAndRelease();
     const missingRootRaw = new Database(missingRootFile);
     missingRootRaw.prepare("DELETE FROM meta WHERE key = 'vault_root'").run();
     missingRootRaw.close();
@@ -1050,7 +1181,7 @@ describe("FtsIndex — full lifecycle", () => {
     const cohabitingSeed = new FtsIndex({ file: cohabitingFile, vaultRoot: "/tmp/vault-A" });
     await cohabitingSeed.open();
     cohabitingSeed.reindexFile("owned.md", 1001, "owned-marker");
-    cohabitingSeed.close();
+    await cohabitingSeed.closeAndRelease();
     const cohabitingRaw = new Database(cohabitingFile);
     cohabitingRaw.exec("CREATE TABLE foreign_payload (id TEXT PRIMARY KEY, body BLOB NOT NULL)");
     cohabitingRaw.prepare("INSERT INTO foreign_payload VALUES (?, ?)").run("keep", Buffer.from([255, 0, 127, 1]));
@@ -1076,7 +1207,7 @@ describe("FtsIndex — full lifecycle", () => {
     });
     await malformedShadowSeed.open();
     malformedShadowSeed.reindexFile("shadow.md", 1001, "shadow-class-marker");
-    malformedShadowSeed.close();
+    await malformedShadowSeed.closeAndRelease();
     const malformedShadowRaw = new Database(malformedShadowFile);
     try {
       const shadowSchema = malformedShadowRaw
@@ -1139,7 +1270,7 @@ describe("FtsIndex — full lifecycle", () => {
     const likeBypassSeed = new FtsIndex({ file: likeBypassFile, vaultRoot: "/tmp/vault-A" });
     await likeBypassSeed.open();
     likeBypassSeed.reindexFile("owned.md", 1001, "sqlite-like-owned-marker");
-    likeBypassSeed.close();
+    await likeBypassSeed.closeAndRelease();
     const likeBypassRaw = new Database(likeBypassFile);
     likeBypassRaw.exec("CREATE TABLE sqliteXpayload (id TEXT PRIMARY KEY, body BLOB NOT NULL)");
     likeBypassRaw.prepare("INSERT INTO sqliteXpayload VALUES (?, ?)").run("keep", Buffer.from([0, 255, 1, 127]));
@@ -1160,7 +1291,7 @@ describe("FtsIndex — full lifecycle", () => {
     const oversizedOwnerSeed = new FtsIndex({ file: oversizedOwnerFile, vaultRoot: "/tmp/vault-A" });
     await oversizedOwnerSeed.open();
     oversizedOwnerSeed.reindexFile("oversized.md", 1002, "oversized-owner-marker");
-    oversizedOwnerSeed.close();
+    await oversizedOwnerSeed.closeAndRelease();
     const oversizedOwner = "x".repeat(8_193);
     const oversizedOwnerRaw = new Database(oversizedOwnerFile);
     oversizedOwnerRaw.prepare("UPDATE meta SET value = ? WHERE key = 'vault_root'").run(oversizedOwner);
@@ -1211,7 +1342,7 @@ describe("FtsIndex — full lifecycle", () => {
     const malformedMetaSeed = new FtsIndex({ file: malformedMetaFile, vaultRoot: "/tmp/vault-A" });
     await malformedMetaSeed.open();
     malformedMetaSeed.reindexFile("meta.md", 1002, "malformed-meta-marker");
-    malformedMetaSeed.close();
+    await malformedMetaSeed.closeAndRelease();
     const malformedMetaRaw = new Database(malformedMetaFile);
     malformedMetaRaw.exec(`
       DROP TABLE meta;
@@ -1243,7 +1374,7 @@ describe("FtsIndex — full lifecycle", () => {
     });
     await contradictorySeed.open();
     contradictorySeed.reindexFile("contradiction.md", 1002, "physical-trigram-marker");
-    contradictorySeed.close();
+    await contradictorySeed.closeAndRelease();
     const contradictoryRaw = new Database(contradictoryFile);
     contradictoryRaw.prepare("UPDATE meta SET value = 'unicode61' WHERE key = 'tokenize_mode'").run();
     contradictoryRaw.close();
@@ -1265,7 +1396,7 @@ describe("FtsIndex — full lifecycle", () => {
     });
     await malformedRevisionSeed.open();
     malformedRevisionSeed.reindexFile("ledger.md", 1003, "malformed-ledger-marker");
-    malformedRevisionSeed.close();
+    await malformedRevisionSeed.closeAndRelease();
     const malformedRevisionRaw = new Database(malformedRevisionFile);
     malformedRevisionRaw.exec(`
       DROP TRIGGER source_state_revision_insert;
@@ -1303,7 +1434,7 @@ describe("FtsIndex — full lifecycle", () => {
     });
     await uppercaseLiteralSeed.open();
     uppercaseLiteralSeed.reindexFile("uppercase.md", 1004, "uppercase-literal-marker");
-    uppercaseLiteralSeed.close();
+    await uppercaseLiteralSeed.closeAndRelease();
     const uppercaseLiteralRaw = new Database(uppercaseLiteralFile);
     uppercaseLiteralRaw.exec(`
       DROP TRIGGER source_state_revision_insert;
@@ -1343,7 +1474,7 @@ describe("FtsIndex — full lifecycle", () => {
     });
     await malformedSourceStateSeed.open();
     malformedSourceStateSeed.reindexFile("state.md", 1004, "malformed-state-marker");
-    malformedSourceStateSeed.close();
+    await malformedSourceStateSeed.closeAndRelease();
     const malformedSourceStateRaw = new Database(malformedSourceStateFile);
     malformedSourceStateRaw.exec(`
       DROP TABLE source_state;
@@ -1374,7 +1505,7 @@ describe("FtsIndex — full lifecycle", () => {
     const raceSeed = new FtsIndex({ file: raceFile, vaultRoot: "/tmp/vault-A" });
     await raceSeed.open();
     raceSeed.reindexFile("race.md", 1005, "root-race-marker");
-    raceSeed.close();
+    await raceSeed.closeAndRelease();
     const raceRaw = new Database(raceFile);
     raceRaw.exec(`
       DROP TRIGGER source_state_revision_insert;
@@ -1448,8 +1579,9 @@ describe("FtsIndex — full lifecycle", () => {
     // Structural half: pin the same-handle two-guard order and prove the
     // detector kills both a missing transactional recheck and a deferred
     // (non-IMMEDIATE) bootstrap mutant.
-    const expectedDiscoveryAssertionLine = "      assertExpectedFtsDiscovery(expected, fileExisted, initialAdmission);";
-    const bootstrapCallLine = "      this.bootstrapSchema(initialAdmission);";
+    const expectedDiscoveryAssertionLine =
+      "        assertExpectedFtsDiscovery(expected, fileExisted, initialAdmission);";
+    const bootstrapCallLine = "        this.bootstrapSchema(initialAdmission);";
     const admissionProblems = (source: string): string[] => {
       const problems: string[] = [];
       const calls = [...source.matchAll(/this\.inspectAdmission\(\)/g)].map((match) => match.index);
@@ -1458,7 +1590,7 @@ describe("FtsIndex — full lifecycle", () => {
       const openStart = source.indexOf("  async open(expectedDiscovery?: FtsIndexDiscovery): Promise<void> {");
       const expectedDiscoveryAssertion = source.indexOf(expectedDiscoveryAssertionLine, openStart);
       const bootstrapCall = source.indexOf(bootstrapCallLine, openStart);
-      const firstPersistentPragma = source.indexOf('      this.db.pragma("journal_mode = WAL");', openStart);
+      const firstPersistentPragma = source.indexOf('        this.db.pragma("journal_mode = WAL");', openStart);
       if (
         openStart < 0 ||
         bootstrapCall < 0 ||
@@ -1537,7 +1669,7 @@ describe("FtsIndex — full lifecycle", () => {
       const seed = new FtsIndex({ file: dbFile, vaultRoot: "/v" });
       await seed.open();
       seed.reindexFile("sentinel.md", 1000, "absolute-end-schema-sentinel");
-      seed.close();
+      await seed.closeAndRelease();
 
       const queries = [
         "SELECT type, name, tbl_name, sql FROM sqlite_master WHERE name NOT GLOB 'sqlite_*' ORDER BY type, name",
@@ -1569,7 +1701,7 @@ describe("FtsIndex — full lifecycle", () => {
 
       const refused = new FtsIndex({ file: dbFile, vaultRoot: "/v" });
       await expect(refused.open()).rejects.toThrow(/malformed ownership metadata/i);
-      refused.close();
+      await refused.closeAndRelease();
       expect(snapshot()).toEqual(before);
     }
   );
@@ -1582,12 +1714,12 @@ describe("FtsIndex — full lifecycle", () => {
     await idx1.open();
     idx1.reindexFile("a.md", 1000, "tokenize-mode-marker");
     expect(idx1.totalFiles()).toBe(1);
-    idx1.close();
+    await idx1.closeAndRelease();
 
     const idx2 = new FtsIndex({ file: dbFile, vaultRoot: "/tmp/v", tokenize: "trigram" });
     await idx2.open();
     expect(idx2.totalFiles()).toBe(0);
-    idx2.close();
+    await idx2.closeAndRelease();
   });
 
   it("appends a wikilink_targets meta-line so out-link recall hits", async () => {
@@ -1601,7 +1733,80 @@ describe("FtsIndex — full lifecycle", () => {
       expect(apolloHits.length).toBe(1);
       expect(apolloHits[0]?.rel_path).toBe("daily.md");
     } finally {
-      idx.close();
+      await idx.closeAndRelease();
+    }
+  });
+
+  it("indexes deduplicated wikilink metadata on chunk 0 only", async () => {
+    if (!canRunFts5) return;
+    const idx = new FtsIndex({ file: dbFile, vaultRoot: "/tmp/v" });
+    await idx.open();
+    try {
+      idx.reindexFile(
+        "multi.md",
+        1000,
+        "First paragraph about gears.\n\nSecond paragraph about cogs.\n\nThird paragraph about springs.",
+        ["Apollo", "Apollo"]
+      );
+      const hits = idx.search("Apollo", { limit: 20 });
+      expect(hits.map((hit) => [hit.rel_path, hit.chunk_index])).toEqual([["multi.md", 0]]);
+    } finally {
+      await idx.closeAndRelease();
+    }
+  });
+
+  it("rejects over-limit note metadata before replacing the prior FTS generation", async () => {
+    if (!canRunFts5) return;
+    const idx = new FtsIndex({ file: dbFile, vaultRoot: "/tmp/v" });
+    await idx.open();
+    try {
+      idx.reindexFile("bounded.md", 1000, "preserved-generation-marker");
+
+      expect(() =>
+        idx.reindexFile(
+          "bounded.md",
+          2000,
+          "replacement-marker",
+          Array.from({ length: 257 }, (_, index) => `Target-${index}`)
+        )
+      ).toThrow(/wikilinkTargets exceeds the 256-unique-item admission limit/);
+      expect(() =>
+        idx.reindexFile(
+          "bounded.md",
+          2000,
+          "replacement-marker",
+          [],
+          Array.from({ length: 129 }, (_, index) => `tag-${index}`)
+        )
+      ).toThrow(/tags exceeds the 128-unique-item admission limit/);
+      expect(() => idx.reindexFile("bounded.md", 2000, "replacement-marker", ["x".repeat(1025)])).toThrow(
+        /wikilinkTargets contains an item larger than 1024 UTF-8 bytes/
+      );
+
+      expect(idx.search("preserved-generation-marker").map((hit) => hit.rel_path)).toEqual(["bounded.md"]);
+      expect(idx.search("replacement-marker")).toEqual([]);
+    } finally {
+      await idx.closeAndRelease();
+    }
+  });
+
+  it("keeps exact tag filtering on later chunks at the admitted metadata boundary", async () => {
+    if (!canRunFts5) return;
+    const idx = new FtsIndex({ file: dbFile, vaultRoot: "/tmp/v" });
+    await idx.open();
+    try {
+      const tags = Array.from({ length: 128 }, (_, index) => `tag-${index}`);
+      idx.reindexFile(
+        "tagged.md",
+        1000,
+        "First paragraph about gears.\n\nSecond paragraph about cogs.\n\nThird paragraph has terminal-marker.",
+        [],
+        tags
+      );
+      expect(idx.search("terminal-marker", { tag: "tag-127" }).map((hit) => hit.rel_path)).toEqual(["tagged.md"]);
+      expect(idx.search("terminal-marker", { tag: "not-present" })).toEqual([]);
+    } finally {
+      await idx.closeAndRelease();
     }
   });
 
@@ -1621,7 +1826,7 @@ describe("FtsIndex — full lifecycle", () => {
       // But the search index DOES find Apollo through the enrichment.
       expect(idx.search("Apollo").length).toBe(1);
     } finally {
-      idx.close();
+      await idx.closeAndRelease();
     }
   });
 
@@ -1649,7 +1854,7 @@ describe("FtsIndex — full lifecycle", () => {
       // become user-searchable content or affect BM25 relevance.
       expect(idx.search(ftsPathToken("projects/a.md"))).toEqual([]);
     } finally {
-      idx.close();
+      await idx.closeAndRelease();
     }
   });
 
@@ -1666,7 +1871,7 @@ describe("FtsIndex — full lifecycle", () => {
       const hits = idx.search("emoji-folder-marker", { folder: "📚Books" });
       expect(hits.map((h) => h.rel_path)).toEqual(["📚Books/a.md"]);
     } finally {
-      idx.close();
+      await idx.closeAndRelease();
     }
   });
 
@@ -1688,7 +1893,7 @@ describe("FtsIndex — full lifecycle", () => {
       const star = idx.search("specials-marker", { folder: "star*folder" });
       expect(star.map((h) => h.rel_path)).toEqual(["star*folder/x.md"]);
     } finally {
-      idx.close();
+      await idx.closeAndRelease();
     }
   });
 
@@ -1710,7 +1915,7 @@ describe("FtsIndex — full lifecycle", () => {
       const all = idx.search("shared-marker");
       expect(all.length).toBe(3);
     } finally {
-      idx.close();
+      await idx.closeAndRelease();
     }
   });
 
@@ -1730,7 +1935,7 @@ describe("FtsIndex — full lifecycle", () => {
       const sinceFuture = idx.search("deadline-marker", { sinceMtimeMs: Date.parse("2027-01-01T00:00:00Z") });
       expect(sinceFuture).toEqual([]);
     } finally {
-      idx.close();
+      await idx.closeAndRelease();
     }
   });
 
@@ -1753,7 +1958,7 @@ describe("FtsIndex — full lifecycle", () => {
       // missing path returns null
       expect(idx.getChunk("nonexistent.md", 0)).toBeNull();
     } finally {
-      idx.close();
+      await idx.closeAndRelease();
     }
   });
 
@@ -1776,7 +1981,7 @@ describe("FtsIndex — full lifecycle", () => {
       // Only projects/x.md satisfies all three filters.
       expect(r.map((h) => h.rel_path)).toEqual(["projects/x.md"]);
     } finally {
-      idx.close();
+      await idx.closeAndRelease();
     }
 
     await assertFailSoftQuarantineRetry();
@@ -1822,7 +2027,7 @@ describe("FtsIndex — full lifecycle", () => {
       expect(idx.getChunkWithReceipt("stale.md", 0)?.indexed_mtime_ms).toBe(liveMtime);
       expect(idx.auditKind("md").mismatched_files).toBe(0);
     } finally {
-      idx.close();
+      await idx.closeAndRelease();
     }
   }
 });
@@ -1860,7 +2065,7 @@ describe("FtsIndex — PDF chunks (v2.8.0)", () => {
       idx.reindexPdfFile("paper.pdf", 3000, [{ pageNumber: 1, text: "Alpha replacement page" }]);
       expect(idx.searchWithReceipts("Alpha").find((hit) => hit.kind === "pdf")?.indexed_mtime_ms).toBe(3000);
     } finally {
-      idx.close();
+      await idx.closeAndRelease();
     }
   });
 
@@ -1878,7 +2083,7 @@ describe("FtsIndex — PDF chunks (v2.8.0)", () => {
       // Snippet should include the [page: 7] marker we injected.
       expect(hits[0]?.snippet).toContain("page: 7");
     } finally {
-      idx.close();
+      await idx.closeAndRelease();
     }
   });
 
@@ -1913,7 +2118,7 @@ describe("FtsIndex — PDF chunks (v2.8.0)", () => {
         mismatched_files: 0
       });
     } finally {
-      idx.close();
+      await idx.closeAndRelease();
     }
   });
 
@@ -1931,7 +2136,7 @@ describe("FtsIndex — PDF chunks (v2.8.0)", () => {
       ]);
       expect(all.unchanged.sort()).toEqual(["a.md", "b.pdf"]);
     } finally {
-      idx.close();
+      await idx.closeAndRelease();
     }
 
     const { default: Database } = await import("better-sqlite3");
@@ -2070,7 +2275,7 @@ describe("FtsIndex — PDF chunks (v2.8.0)", () => {
       raw.prepare("DELETE FROM source_state WHERE rel_path = 'bad-state.md'").run();
       expectMismatches(0, 0);
     } finally {
-      audited.close();
+      await audited.closeAndRelease();
       raw.close();
     }
 
@@ -2137,7 +2342,7 @@ describe("FtsIndex — PDF chunks (v2.8.0)", () => {
       expect(syncIndex.search("indexable")).toEqual([]);
       expect(syncIndex.totalFiles()).toBe(0);
     } finally {
-      syncIndex.close();
+      await syncIndex.closeAndRelease();
     }
   });
 
@@ -2153,7 +2358,7 @@ describe("FtsIndex — PDF chunks (v2.8.0)", () => {
       const hits2 = idx.search("new");
       expect(hits2.length).toBe(1);
     } finally {
-      idx.close();
+      await idx.closeAndRelease();
     }
   });
 
@@ -2214,14 +2419,14 @@ describe("FtsIndex — PDF chunks (v2.8.0)", () => {
       const rebuilt = new FtsIndex({ file: legacyFile, vaultRoot: "/v" });
       await rebuilt.open();
       expect(rebuilt.totalChunks(), `v${version} rebuild must discard legacy rows`).toBe(0);
-      rebuilt.close();
+      await rebuilt.closeAndRelease();
       expect((await peekFtsMetaSafe(legacyFile))?.schema_version).toBe(String(FTS_SCHEMA_VERSION));
     }
 
     const futureSeed = new FtsIndex({ file: dbFile, vaultRoot: "/v" });
     await futureSeed.open();
     futureSeed.reindexFile("future-marker.md", 2000, "uniquefuturemarker content");
-    futureSeed.close();
+    await futureSeed.closeAndRelease();
 
     // The opposite mismatch is not a migration invitation. Opening code from
     // an older Enquire version must not destructively downgrade a future DB.
@@ -2288,7 +2493,7 @@ describe("FtsIndex — PDF chunks (v2.8.0)", () => {
       }).toEqual(beforeFuture);
     } finally {
       futureAfter.close();
-      future.close();
+      await future.closeAndRelease();
     }
   });
 
@@ -2300,12 +2505,12 @@ describe("FtsIndex — PDF chunks (v2.8.0)", () => {
     await idx.open();
     idx.reindexFile("keep.md", 1000, "preserved content");
     expect(idx.totalChunks()).toBeGreaterThan(0);
-    idx.close();
+    await idx.closeAndRelease();
 
     const idx2 = new FtsIndex({ file: dbFile, vaultRoot: "/v" });
     await idx2.open();
     expect(idx2.totalChunks(), "matching schema must preserve rows").toBeGreaterThan(0);
-    idx2.close();
+    await idx2.closeAndRelease();
   });
 });
 
@@ -2373,7 +2578,7 @@ describe("peekFtsMetaSafe (v3.6.2 — meta peek without bootstrap)", () => {
         () => null,
         (caught: unknown) => caught
       );
-      index.close();
+      await index.closeAndRelease();
       expect(error).toBeInstanceOf(Error);
       const message = error instanceof Error ? error.message : "";
       expect(message).toBe("FTS index configuration changed before open");
@@ -2415,7 +2620,7 @@ describe("peekFtsMetaSafe (v3.6.2 — meta peek without bootstrap)", () => {
     const matchingMissingDiscovery = await discoverFtsIndexConfig(matchingMissing, "/v");
     const missingInitializer = new FtsIndex({ file: matchingMissing, vaultRoot: "/v" });
     await missingInitializer.open(matchingMissingDiscovery);
-    missingInitializer.close();
+    await missingInitializer.closeAndRelease();
     expect((await discoverFtsIndexConfig(matchingMissing, "/v")).kind).toBe("owned");
 
     const matchingEmpty = path.join(dbDir, "matching-empty.fts5.db");
@@ -2423,7 +2628,7 @@ describe("peekFtsMetaSafe (v3.6.2 — meta peek without bootstrap)", () => {
     const matchingEmptyDiscovery = await discoverFtsIndexConfig(matchingEmpty, "/v");
     const emptyInitializer = new FtsIndex({ file: matchingEmpty, vaultRoot: "/v" });
     await emptyInitializer.open(matchingEmptyDiscovery);
-    emptyInitializer.close();
+    await emptyInitializer.closeAndRelease();
     expect((await discoverFtsIndexConfig(matchingEmpty, "/v")).kind).toBe("owned");
 
     // Paired negative: an existing populated non-FTS SQLite file is refused,
@@ -2460,7 +2665,7 @@ describe("peekFtsMetaSafe (v3.6.2 — meta peek without bootstrap)", () => {
     const idx = new FtsIndex({ file: dbFile, vaultRoot: "/v", tokenize: "trigram" });
     await idx.open();
     idx.reindexFile("a.md", 1000, "content");
-    idx.close();
+    await idx.closeAndRelease();
 
     const meta = await peekFtsMetaSafe(dbFile);
     expect(meta).not.toBeNull();
@@ -2510,7 +2715,7 @@ describe("peekFtsMetaSafe (v3.6.2 — meta peek without bootstrap)", () => {
     const idx = new FtsIndex({ file: dbFile, vaultRoot: "/v" });
     await idx.open();
     idx.reindexFile("a.md", 1000, "content");
-    idx.close();
+    await idx.closeAndRelease();
     expect((await peekFtsMetaSafe(dbFile))?.tokenize_mode).toBe("unicode61");
 
     // Runtime input must fail synchronously, before open() can prepare a path.
@@ -2564,7 +2769,7 @@ describe("peekFtsMetaSafe (v3.6.2 — meta peek without bootstrap)", () => {
       }).toEqual(before);
     } finally {
       afterRaw.close();
-      invalidStored.close();
+      await invalidStored.closeAndRelease();
     }
   });
 });
@@ -2621,7 +2826,7 @@ describe("FTS5 alias + title columns (v3.11.6-rc.6 C-3)", () => {
         // NEGATIVE control — a note with no such alias is NOT surfaced.
         expect(hits.map((h) => h.rel_path)).not.toContain("Unrelated.md");
       } finally {
-        idx.close();
+        await idx.closeAndRelease();
       }
     })();
   });
@@ -2645,7 +2850,7 @@ describe("FTS5 alias + title columns (v3.11.6-rc.6 C-3)", () => {
         const hits = idx.search("Photosynthesis");
         expect(hits[0]?.rel_path).toBe("Photosynthesis.md");
       } finally {
-        idx.close();
+        await idx.closeAndRelease();
       }
     })();
   });
@@ -2672,7 +2877,7 @@ describe("FTS5 alias + title columns (v3.11.6-rc.6 C-3)", () => {
         // The title-match note ranks first thanks to the 10× title weight.
         expect(hits[0]?.rel_path).toBe("Mitochondria.md");
       } finally {
-        idx.close();
+        await idx.closeAndRelease();
       }
     })();
   });
@@ -2700,7 +2905,7 @@ describe("FTS5 alias + title columns (v3.11.6-rc.6 C-3)", () => {
         expect(widgetRows.length).toBe(1);
         expect(widgetRows[0]?.chunk_index).toBe(0);
       } finally {
-        idx.close();
+        await idx.closeAndRelease();
       }
     })();
   });
@@ -2724,7 +2929,7 @@ describe("FTS5 alias + title columns (v3.11.6-rc.6 C-3)", () => {
         expect(hits[0]?.snippet).toMatch(/productivity/i);
         expect(hits[0]?.snippet).not.toContain("MyAlias");
       } finally {
-        idx.close();
+        await idx.closeAndRelease();
       }
     })();
   });

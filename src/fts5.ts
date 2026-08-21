@@ -3,7 +3,7 @@
 //
 // Architecture credit: external user feedback in issue #10 — concrete schema,
 // tokenize choice (`unicode61 remove_diacritics 2`), source_state mtime-tracking
-// pattern, paragraph-level chunking with `\n\n → \n → hardcut` fallback,
+// pattern, paragraph-level chunking with `blank logical line → logical line → hardcut` fallback,
 // `_safeFts5Query` escaping for hyphenated identifiers. Their reference Python
 // implementation handles a 1771-chunk / 368-file corpus in 50–100ms BM25 top-10.
 //
@@ -15,8 +15,15 @@ import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { lookupFoldedKey } from "./name-fold.js";
+import { foldName, lookupFoldedKey } from "./name-fold.js";
 import { optionalDepDetail } from "./optional-dep.js";
+import {
+  acquirePersistenceFamilyLease,
+  acquirePersistenceFamilyLeaseInScopes,
+  type PersistenceFamilyLeaseHandle,
+  type PersistenceFamilyScopes
+} from "./persistence-coordination.js";
+import { revalidatePersistenceLeaseScope } from "./persistence-lease.js";
 import { assertFtsIndexFilePath } from "./persistence-path.js";
 import { FTS_SCHEMA_VERSION } from "./schema-contract.js";
 import {
@@ -26,8 +33,8 @@ import {
   sensitiveArtifactFinalBasename
 } from "./sensitive-artifact.js";
 import { iterateContentLines } from "./structure.js";
-import type { Vault } from "./vault.js";
-import { countLineBreaks, stripTrailingSlashes } from "./wildcard-match.js";
+import { MAX_INDEX_SYNC_FILES, MAX_INDEX_SYNC_VISITED_ENTRIES, type Vault } from "./vault.js";
+import { stripTrailingSlashes } from "./wildcard-match.js";
 
 function errnoCode(err: unknown): string | undefined {
   if (typeof err !== "object" || err === null || !("code" in err)) return undefined;
@@ -46,6 +53,22 @@ const BM25_WEIGHT_TITLE = 10.0;
 const BM25_WEIGHT_ALIASES = 5.0;
 const MAX_SOURCE_REVISION = Number.MAX_SAFE_INTEGER;
 const MAX_SOURCE_RECEIPT_BATCH = 512;
+const FTS_PERSISTENCE_FAMILY = "fts5-v1";
+const FTS_LEASE_GATE_TIMEOUT_MS = 2_000;
+const FTS_LEASE_GATE_POLL_MS = 10;
+
+function ftsPersistenceLeaseTarget(file: string): string {
+  const absolute = path.resolve(file);
+  // The lease is keyed by an ABSENT synthetic sibling, not by the SQLite main
+  // leaf. That keeps clear-index able to unlink an admitted symlink leaf
+  // without making the coordination layer follow it. The folded basename hash
+  // deliberately over-coordinates case/NFC variants on case-sensitive hosts
+  // and necessarily converges aliases that address one entry on APFS/NTFS.
+  const basenameDigest = createHash("sha256")
+    .update(`fts5-v1\0${foldName(path.basename(absolute))}`, "utf8")
+    .digest("hex");
+  return path.join(path.dirname(absolute), `.enquire-mcp-fts5-${basenameDigest}`);
+}
 
 /**
  * Extract the searchable alias strings from a note's frontmatter. Obsidian
@@ -60,6 +83,57 @@ const MAX_SOURCE_RECEIPT_BATCH = 512;
 const MAX_ALIASES = 64;
 const MAX_ALIAS_LEN = 256;
 const MAX_FTS_TITLE_LEN = 512;
+// Note-derived metadata is multiplied by the chunk count when stored beside
+// every FTS row. Keep that multiplier independent of the source-file size:
+// link targets are indexed once (chunk 0), while the tag filter blob is capped
+// to 4 KiB before it is repeated. The occurrence cap also rejects a caller
+// that hands the public `reindexFile()` API an already-materialized huge array
+// of duplicates without walking it first.
+const MAX_FTS_LINK_OCCURRENCES = 4096;
+const MAX_FTS_LINK_TARGETS = 256;
+const MAX_FTS_LINK_TARGET_BYTES = 1024;
+const MAX_FTS_LINK_BYTES = 32 * 1024;
+const MAX_FTS_TAG_OCCURRENCES = 1024;
+const MAX_FTS_TAGS = 128;
+const MAX_FTS_TAG_BYTES = 256;
+const MAX_FTS_TAG_BLOB_BYTES = 4 * 1024;
+
+function admitFtsMetadata(
+  values: readonly string[],
+  options: Readonly<{
+    label: string;
+    maxOccurrences: number;
+    maxUnique: number;
+    maxItemBytes: number;
+    maxTotalBytes: number;
+  }>
+): string[] {
+  if (!Array.isArray(values)) throw new TypeError(`${options.label} must be an array of strings`);
+  if (values.length > options.maxOccurrences) {
+    throw new RangeError(`${options.label} exceeds the ${options.maxOccurrences}-occurrence admission limit`);
+  }
+  const admitted: string[] = [];
+  const seen = new Set<string>();
+  let totalBytes = 0;
+  for (const value of values) {
+    if (typeof value !== "string") throw new TypeError(`${options.label} must contain only strings`);
+    if (value.length === 0 || seen.has(value)) continue;
+    const bytes = Buffer.byteLength(value, "utf8");
+    if (bytes > options.maxItemBytes) {
+      throw new RangeError(`${options.label} contains an item larger than ${options.maxItemBytes} UTF-8 bytes`);
+    }
+    if (admitted.length >= options.maxUnique) {
+      throw new RangeError(`${options.label} exceeds the ${options.maxUnique}-unique-item admission limit`);
+    }
+    if (totalBytes + bytes > options.maxTotalBytes) {
+      throw new RangeError(`${options.label} exceeds the ${options.maxTotalBytes}-byte admission limit`);
+    }
+    seen.add(value);
+    admitted.push(value);
+    totalBytes += bytes;
+  }
+  return admitted;
+}
 
 export function extractAliases(frontmatter: Record<string, unknown> | undefined | null): string[] {
   if (!frontmatter) return [];
@@ -890,12 +964,22 @@ function updateManifestValue(hash: ReturnType<typeof createHash>, value: string 
  * await idx.open();
  * idx.reindexFile(relPath, mtimeMs, content, wikilinkTargets, tags);
  * const hits = idx.search("vector retrieval", { limit: 25 });
- * idx.close();
+ * await idx.closeAndRelease();
  * ```
  */
 export class FtsIndex {
   private db: Db | null = null;
-  private readonly file: string;
+  private closeAttempt: Promise<void> | undefined;
+  private closeAttemptFailed = false;
+  private closeRequestToken: object = {};
+  private closeRequested = false;
+  private file: string;
+  private readonly indexBasename: string;
+  private readonly leaseTarget: string;
+  private lifetime: PersistenceFamilyLeaseHandle | null = null;
+  private openAttempt: Promise<void> | undefined;
+  private pinnedScopes: PersistenceFamilyScopes | null = null;
+  private readonly requestedFile: string;
   private readonly tokenize: TokenizeMode;
   private readonly vaultRoot: string;
 
@@ -907,6 +991,9 @@ export class FtsIndex {
   constructor(opts: { file: string; vaultRoot: string; tokenize?: TokenizeMode }) {
     assertFtsIndexFilePath(opts.file);
     this.file = opts.file;
+    this.indexBasename = path.basename(path.resolve(opts.file));
+    this.leaseTarget = ftsPersistenceLeaseTarget(opts.file);
+    this.requestedFile = opts.file;
     this.vaultRoot = opts.vaultRoot;
     this.tokenize = assertTokenizeMode(opts.tokenize === undefined ? "unicode61" : opts.tokenize);
   }
@@ -931,64 +1018,128 @@ export class FtsIndex {
    *   ownership with a supported non-future schema.
    */
   async open(expectedDiscovery?: FtsIndexDiscovery): Promise<void> {
-    if (this.db) return;
-    // Copy the caller's preflight result before the first await. A caller may
-    // retain and mutate its object; that must not widen later bootstrap
-    // authority while this open is waiting on filesystem/native work.
+    if (this.db && !this.closeRequested) return;
+    if (this.openAttempt !== undefined && !this.closeRequested && this.closeAttempt === undefined) {
+      return this.openAttempt;
+    }
+    // A genuinely new attempt may have to wait for a prior close. Snapshot
+    // caller-owned authority before that first await: the retained discovery
+    // object must not be mutable while the old lifetime drains.
     const expected = cloneFtsIndexDiscovery(expectedDiscovery);
-    let fileExisted: boolean;
-    try {
-      fileExisted = await preflightSqliteArtifactFamily(this.file);
-    } catch {
-      throw new Error("FTS index artifact family could not be admitted");
+    if (this.closeRequested || this.closeAttempt !== undefined) {
+      const observedCloseRequest = this.closeRequestToken;
+      await this.finishCloseAndRelease();
+      if (this.closeRequestToken !== observedCloseRequest) {
+        throw new Error("FTS index reopen was superseded by a later close request");
+      }
+      this.closeAttempt = undefined;
+      this.closeAttemptFailed = false;
+      this.closeRequested = false;
     }
-    const Ctor = await loadBetterSqlite();
-    if (!fileExisted) {
-      // Parent creation is the narrow fresh-file exception. Recursive mkdir
-      // applies 0700 subject only to a more-restrictive umask and never chmods
-      // an existing/custom parent after a racy ownership probe.
-      const parentDir = path.dirname(this.file);
-      await fs.mkdir(parentDir, { recursive: true, mode: 0o700 });
-    }
+    // Multiple reopen callers can join the same close attempt. The first one
+    // to resume installs the new single-flight open; every later continuation
+    // must join it instead of acquiring a second shared lifetime.
+    if (this.openAttempt !== undefined) return this.openAttempt;
+    const attempt = this.openOnce(expected);
+    this.openAttempt = attempt;
     try {
-      fileExisted = await preflightSqliteArtifactFamily(this.file);
-      this.db = new Ctor(this.file) as Db;
-    } catch {
-      throw new Error("FTS index could not be opened");
+      await attempt;
+    } finally {
+      if (this.openAttempt === attempt) this.openAttempt = undefined;
     }
-    // v3.10.0-rc.70 (round-3 re-sweep, reserve-before-try) — close-on-throw: release the handle if
-    // admission/bootstrap/pragma throws on a corrupt or unowned index, so no caller can leak it (mirrors
-    // EmbedDb.open()). The serve call site already wraps this in a catch, but self-cleaning here
-    // makes the contract hold for every caller (CLI build paths, future ones).
+  }
+
+  private async openOnce(expected: FtsIndexDiscovery | null): Promise<void> {
+    let acquired: PersistenceFamilyLeaseHandle | null = null;
     try {
-      // AH-2: this same-handle read is authoritative admission, not the
-      // caller-level fail-soft peek. bootstrapSchema repeats it as the first
-      // action inside its IMMEDIATE transaction before any schema mutation.
-      const initialAdmission = this.inspectAdmission();
-      assertExpectedFtsDiscovery(expected, fileExisted, initialAdmission);
-      this.bootstrapSchema(initialAdmission);
-      this.db.pragma("journal_mode = WAL");
-      this.db.pragma("synchronous = NORMAL");
-    } catch (e) {
-      // Preserve the admission/bootstrap failure as the public error. A
-      // native close failure must neither replace that bounded diagnostic nor
-      // leave a closed handle installed so the next open() becomes a stale
-      // no-op.
+      acquired = await acquirePersistenceFamilyLease({
+        targetPath: this.leaseTarget,
+        familyKey: FTS_PERSISTENCE_FAMILY,
+        role: "shared",
+        gateTimeoutMs: FTS_LEASE_GATE_TIMEOUT_MS,
+        gatePollMs: FTS_LEASE_GATE_POLL_MS
+      });
+      this.lifetime = acquired;
+      this.pinnedScopes = acquired.scopes;
+      this.file = path.join(acquired.scopes.family.canonicalParent, this.indexBasename);
+
+      let fileExisted: boolean;
+      try {
+        fileExisted = await preflightSqliteArtifactFamily(this.file);
+      } catch {
+        throw new Error("FTS index artifact family could not be admitted");
+      }
+      const Ctor = await loadBetterSqlite();
+      if (!fileExisted) {
+        // Parent creation is the narrow fresh-file exception. Recursive mkdir
+        // applies 0700 subject only to a more-restrictive umask and never chmods
+        // an existing/custom parent after a racy ownership probe.
+        const parentDir = path.dirname(this.file);
+        await fs.mkdir(parentDir, { recursive: true, mode: 0o700 });
+      }
+      try {
+        fileExisted = await preflightSqliteArtifactFamily(this.file);
+        this.db = new Ctor(this.file) as Db;
+      } catch {
+        throw new Error("FTS index could not be opened");
+      }
+      // v3.10.0-rc.70 (round-3 re-sweep, reserve-before-try) — close-on-throw: release the handle if
+      // admission/bootstrap/pragma throws on a corrupt or unowned index, so no caller can leak it (mirrors
+      // EmbedDb.open()). The serve call site already wraps this in a catch, but self-cleaning here
+      // makes the contract hold for every caller (CLI build paths, future ones).
+      try {
+        // AH-2: this same-handle read is authoritative admission, not the
+        // caller-level fail-soft peek. bootstrapSchema repeats it as the first
+        // action inside its IMMEDIATE transaction before any schema mutation.
+        const initialAdmission = this.inspectAdmission();
+        assertExpectedFtsDiscovery(expected, fileExisted, initialAdmission);
+        this.bootstrapSchema(initialAdmission);
+        this.db.pragma("journal_mode = WAL");
+        this.db.pragma("synchronous = NORMAL");
+      } catch (e) {
+        // Preserve the admission/bootstrap failure as the public error. A
+        // native close failure must neither replace that bounded diagnostic nor
+        // leave a closed handle installed so the next open() becomes a stale
+        // no-op.
+        const failedDb = this.db;
+        this.db = null;
+        try {
+          failedDb?.close();
+        } catch {
+          // best-effort cleanup; the original failure remains authoritative
+        }
+        throw e;
+      }
+      // Best-effort: tighten perms on the DB and its WAL/SHM sidecar files to
+      // 0600. The index stores chunked note content so it deserves the same
+      // privacy posture as the persistent parse cache (see SECURITY.md).
+      await Promise.all(
+        [this.file, `${this.file}-wal`, `${this.file}-shm`].map((p) => fs.chmod(p, 0o600).catch(() => {}))
+      );
+    } catch (error) {
       const failedDb = this.db;
       this.db = null;
       try {
         failedDb?.close();
       } catch {
-        // best-effort cleanup; the original failure remains authoritative
+        // The admission/open failure remains authoritative; the lifetime
+        // rollback below still prevents a destructive peer from proceeding.
       }
-      throw e;
+      if (acquired !== null) {
+        try {
+          await acquired.release();
+          if (this.lifetime === acquired) this.lifetime = null;
+        } catch (rollbackError) {
+          // Do not let a second open overwrite the exact lifetime whose
+          // rollback failed. The next open is forced through
+          // closeAndRelease(), which retries this same core handle and remains
+          // fail-closed if the core reports a terminal integrity failure.
+          this.closeRequested = true;
+          throw new AggregateError([error, rollbackError], "FTS open failed and lifetime rollback was incomplete");
+        }
+      }
+      throw error;
     }
-    // Best-effort: tighten perms on the DB and its WAL/SHM sidecar files to
-    // 0600. The index stores chunked note content so it deserves the same
-    // privacy posture as the persistent parse cache (see SECURITY.md).
-    await Promise.all(
-      [this.file, `${this.file}-wal`, `${this.file}-shm`].map((p) => fs.chmod(p, 0o600).catch(() => {}))
-    );
   }
 
   /**
@@ -1000,41 +1151,194 @@ export class FtsIndex {
    * @throws {Error} If any main/WAL/SHM/rollback-journal leaf is unsafe or a non-ENOENT operation fails.
    */
   async clearOnDisk(): Promise<boolean> {
-    this.close();
-    const targets = [this.file, `${this.file}-wal`, `${this.file}-shm`, `${this.file}-journal`];
-    for (const target of targets) {
-      let entry: import("node:fs").Stats;
+    const pinnedScopes = this.pinnedScopes;
+    await this.closeAndRelease();
+
+    if (pinnedScopes === null) {
       try {
-        entry = await fs.lstat(target);
-      } catch (err) {
-        if (errnoCode(err) === "ENOENT") continue;
-        throw new Error("Unable to inspect FTS index artifacts before clearing", { cause: err });
-      }
-      if (!entry.isFile() && !entry.isSymbolicLink()) {
-        throw new Error("Refusing to clear an unsafe FTS index artifact");
+        await fs.lstat(path.dirname(path.resolve(this.requestedFile)));
+      } catch (error) {
+        if (errnoCode(error) === "ENOENT") return false;
+        throw new Error("Unable to inspect the FTS index parent before clearing", { cause: error });
       }
     }
+
+    const eraser =
+      pinnedScopes === null
+        ? await acquirePersistenceFamilyLease({
+            targetPath: this.leaseTarget,
+            familyKey: FTS_PERSISTENCE_FAMILY,
+            role: "eraser",
+            gateTimeoutMs: FTS_LEASE_GATE_TIMEOUT_MS,
+            gatePollMs: FTS_LEASE_GATE_POLL_MS
+          })
+        : await acquirePersistenceFamilyLeaseInScopes(pinnedScopes, {
+            role: "eraser",
+            gateTimeoutMs: FTS_LEASE_GATE_TIMEOUT_MS,
+            gatePollMs: FTS_LEASE_GATE_POLL_MS
+          });
+    let operationError: unknown;
     let removed = false;
-    for (const target of targets) {
-      try {
-        await fs.unlink(target);
-        removed = true;
-      } catch (err) {
-        if (errnoCode(err) !== "ENOENT") {
-          throw new Error("Unable to remove FTS index artifact", { cause: err });
+    try {
+      const canonicalFile = path.join(eraser.scopes.family.canonicalParent, this.indexBasename);
+      const targets = [canonicalFile, `${canonicalFile}-wal`, `${canonicalFile}-shm`, `${canonicalFile}-journal`];
+      for (const target of targets) {
+        await this.revalidateEraser(eraser.scopes);
+        let entry: import("node:fs").Stats;
+        try {
+          entry = await fs.lstat(target);
+        } catch (err) {
+          if (errnoCode(err) === "ENOENT") continue;
+          throw new Error("Unable to inspect FTS index artifacts before clearing", { cause: err });
+        }
+        if (!entry.isFile() && !entry.isSymbolicLink()) {
+          throw new Error("Refusing to clear an unsafe FTS index artifact");
         }
       }
+      await this.revalidateEraser(eraser.scopes);
+      for (const target of targets) {
+        await this.revalidateEraser(eraser.scopes);
+        try {
+          await fs.unlink(target);
+          removed = true;
+        } catch (err) {
+          if (errnoCode(err) !== "ENOENT") {
+            throw new Error("Unable to remove FTS index artifact", { cause: err });
+          }
+        }
+      }
+      await this.revalidateEraser(eraser.scopes);
+    } catch (error) {
+      operationError = error;
     }
+    let releaseError: unknown;
+    try {
+      await eraser.release();
+    } catch (error) {
+      releaseError = error;
+    }
+    if (operationError !== undefined && releaseError !== undefined) {
+      throw new AggregateError([operationError, releaseError], "FTS clear failed and eraser release was incomplete");
+    }
+    if (operationError !== undefined) throw operationError;
+    if (releaseError !== undefined) throw releaseError;
     return removed;
   }
 
-  /** Close the underlying SQLite handle. Idempotent. Call before process
-   *  exit to flush WAL. */
+  /**
+   * Close the underlying SQLite handle synchronously and begin best-effort
+   * asynchronous lifetime release. This preserves the historical synchronous
+   * API; callers that own process shutdown must await {@link closeAndRelease}
+   * to prove both lease markers are gone. A release rejection is observed here
+   * (never unhandled), retained, and retried by a later awaited close.
+   */
   close(): void {
-    if (this.db) {
-      this.db.close();
-      this.db = null;
+    this.requestClose();
+    let closeError: unknown;
+    try {
+      this.closeDatabase();
+    } catch (error) {
+      closeError = error;
     }
+    const attempt = this.beginCloseAttempt();
+    void attempt.catch(() => {});
+    if (closeError !== undefined) throw closeError;
+  }
+
+  /**
+   * Close SQLite without reopening it and await exact family-then-namespace
+   * lifetime release. If a previous best-effort close failed, this call makes
+   * one new attempt through the same core handle; terminal integrity failures
+   * remain fail-closed while retryable failures can complete.
+   *
+   * @returns Only after the SQLite handle is closed and both markers are gone.
+   */
+  async closeAndRelease(): Promise<void> {
+    this.requestClose();
+    await this.finishCloseAndRelease();
+  }
+
+  private requestClose(): void {
+    this.closeRequested = true;
+    this.closeRequestToken = {};
+  }
+
+  private async finishCloseAndRelease(): Promise<void> {
+    const errors: unknown[] = [];
+    try {
+      this.closeDatabase();
+    } catch (error) {
+      errors.push(error);
+    }
+    if (this.closeAttempt !== undefined && this.closeAttemptFailed) {
+      this.closeAttempt = undefined;
+      this.closeAttemptFailed = false;
+    }
+    try {
+      await this.beginCloseAttempt();
+    } catch (error) {
+      errors.push(error);
+    }
+    if (errors.length === 1) throw errors[0];
+    if (errors.length > 1) {
+      throw new AggregateError(errors, "FTS native close and persistence release both failed");
+    }
+  }
+
+  private beginCloseAttempt(): Promise<void> {
+    if (this.closeAttempt !== undefined) return this.closeAttempt;
+    const opening = this.openAttempt;
+    const close = async (): Promise<void> => {
+      if (opening !== undefined) {
+        try {
+          await opening;
+        } catch {
+          // openOnce owns its rollback and error. Close still retries any
+          // exact lifetime handle retained by an incomplete rollback.
+        }
+      }
+      const errors: unknown[] = [];
+      try {
+        this.closeDatabase();
+      } catch (error) {
+        errors.push(error);
+      }
+      const lifetime = this.lifetime;
+      if (lifetime !== null) {
+        try {
+          await lifetime.release();
+          if (this.lifetime === lifetime) this.lifetime = null;
+        } catch (error) {
+          errors.push(error);
+        }
+      }
+      if (errors.length === 1) throw errors[0];
+      if (errors.length > 1) {
+        throw new AggregateError(errors, "FTS native close and persistence release both failed");
+      }
+    };
+    const attempt = close();
+    this.closeAttempt = attempt;
+    this.closeAttemptFailed = false;
+    void attempt.then(
+      () => undefined,
+      () => {
+        if (this.closeAttempt === attempt) this.closeAttemptFailed = true;
+      }
+    );
+    return attempt;
+  }
+
+  private closeDatabase(): void {
+    if (this.db === null) return;
+    const db = this.db;
+    this.db = null;
+    db.close();
+  }
+
+  private async revalidateEraser(scopes: PersistenceFamilyScopes): Promise<void> {
+    await revalidatePersistenceLeaseScope(scopes.namespace);
+    await revalidatePersistenceLeaseScope(scopes.family);
   }
 
   private bootstrapSchema(initialAdmission: FtsAdmission): void {
@@ -1991,8 +2295,22 @@ export class FtsIndex {
     aliases: string[] = []
   ): number {
     const db = this.requireDb();
+    const admittedLinkTargets = admitFtsMetadata(wikilinkTargets, {
+      label: "wikilinkTargets",
+      maxOccurrences: MAX_FTS_LINK_OCCURRENCES,
+      maxUnique: MAX_FTS_LINK_TARGETS,
+      maxItemBytes: MAX_FTS_LINK_TARGET_BYTES,
+      maxTotalBytes: MAX_FTS_LINK_BYTES
+    });
+    const admittedTags = admitFtsMetadata(tags, {
+      label: "tags",
+      maxOccurrences: MAX_FTS_TAG_OCCURRENCES,
+      maxUnique: MAX_FTS_TAGS,
+      maxItemBytes: MAX_FTS_TAG_BYTES,
+      maxTotalBytes: MAX_FTS_TAG_BLOB_BYTES
+    });
     const chunks = chunkContent(content);
-    const tagsSerialized = tags.length ? tags.join(",") : "";
+    const tagsSerialized = admittedTags.length ? admittedTags.join(",") : "";
     const aliasesSerialized = aliases.length ? aliases.join(" ") : "";
     const scopeTokens = ftsScopeTokens(relPath);
     const txn = db.transaction(() => {
@@ -2004,18 +2322,22 @@ export class FtsIndex {
         "INSERT INTO chunks (content, title, aliases, scope_tokens, rel_path, chunk_index, line_start, line_end, tags, raw_content, kind) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'md')"
       );
       // `tags` is a comma-delimited list so the filter LIKE pattern can wrap it
-      // with leading/trailing commas for exact-tag matching at query time.
+      // with leading/trailing commas for exact-tag matching at query time. It is
+      // repeated because filtering is row-local, but admission above bounds the
+      // blob to 4 KiB independently of source size and chunk count.
       chunks.forEach((c, i) => {
         // FTS5 column `content` carries an enriched form: original text + a
-        // synthetic `[wikilink_targets: …]` meta-line so a search for a link
-        // target name recalls notes that link out without naming it inline.
+        // synthetic `[wikilink_targets: …]` meta-line on chunk 0 so a search for
+        // a link target name recalls notes that link out without multiplying the
+        // same metadata across every chunk.
         // v2.1.0: also prepend the heading breadcrumb so BM25 search hits
         // notes where the section heading matches a query term even when the
         // body doesn't repeat it. The unindexed `raw_content` keeps the
         // *original* chunk so the `obsidian://chunk/{n}/{path}` resource
         // can return verbatim text.
         const breadcrumbPrefix = c.breadcrumb ? `[section: ${c.breadcrumb}]\n` : "";
-        const linksSuffix = wikilinkTargets.length ? `\n[wikilink_targets: ${wikilinkTargets.join(", ")}]` : "";
+        const linksSuffix =
+          i === 0 && admittedLinkTargets.length ? `\n[wikilink_targets: ${admittedLinkTargets.join(", ")}]` : "";
         const enriched = `${breadcrumbPrefix}${c.text}${linksSuffix}`;
         // v3.11.6-rc.6 re-sweep fix: store title/aliases ONLY on chunk 0, not
         // every chunk. Repeating them per-chunk made a title/alias-matching query
@@ -2413,19 +2735,32 @@ export async function syncFtsIndex(
   opts: { mode?: FtsSyncMode } = {}
 ): Promise<FtsSyncReport> {
   const mode = opts.mode ?? "fail-soft";
-  const entries = await vault.listMarkdown();
+  const listing = await vault.listFilesByExtensionsBounded(
+    [".md"],
+    MAX_INDEX_SYNC_FILES,
+    MAX_INDEX_SYNC_VISITED_ENTRIES
+  );
+  if (!listing.complete) {
+    throw new Error(
+      `FTS Markdown source inventory is incomplete within ${MAX_INDEX_SYNC_FILES} files / ${MAX_INDEX_SYNC_VISITED_ENTRIES} visited entries; refusing to infer deletions`
+    );
+  }
+  const entries = listing.entries;
   const live = entries.map((entry) => ({ relPath: entry.relPath, mtimeMs: entry.mtimeMs }));
   const diff = idx.diff(live, "md");
   const entriesByPath = new Map(entries.map((entry) => [entry.relPath, entry]));
   const addedPaths = new Set(diff.added);
+  const changedEntries = [...diff.added, ...diff.updated].map((relPath) => {
+    const entry = entriesByPath.get(relPath);
+    if (!entry) throw new Error(`FTS diff returned a path outside the admitted Markdown inventory: ${relPath}`);
+    return { relPath, entry };
+  });
   let added = 0;
   let updated = 0;
   let empty = 0;
   let failed = 0;
   let processed = diff.unchanged.length;
-  for (const relPath of [...diff.added, ...diff.updated]) {
-    const entry = entriesByPath.get(relPath);
-    if (!entry) continue;
+  for (const { relPath, entry } of changedEntries) {
     try {
       const note = await vault.readNote(entry.absPath, entry.mtimeMs);
       if (chunkContent(note.content).length === 0) {
@@ -2461,7 +2796,11 @@ export async function syncFtsIndex(
       );
     }
   }
-  for (const relPath of diff.deleted) idx.dropFile(relPath);
+  let deleted = 0;
+  for (const relPath of diff.deleted) {
+    idx.dropFile(relPath);
+    deleted += 1;
+  }
   const audited = mode === "strict";
   const audit: FtsKindAudit = audited
     ? idx.auditKind("md")
@@ -2488,7 +2827,7 @@ export async function syncFtsIndex(
     audited,
     added,
     updated,
-    deleted: diff.deleted.length,
+    deleted,
     unchanged: diff.unchanged.length,
     total_chunks: idx.totalChunks(),
     total_files: entries.length,
@@ -2505,6 +2844,122 @@ export async function syncFtsIndex(
     );
   }
   return report;
+}
+
+/** Evidence-bearing counters from one PDF-to-FTS synchronization. */
+export interface PdfFtsSyncReport {
+  /** Newly indexed PDF sources whose replacement transaction committed. */
+  added: number;
+  /** Previously known PDF sources whose replacement transaction committed. */
+  updated: number;
+  /** Missing PDF sources whose retained rows were actually dropped. */
+  deleted: number;
+  /** Live PDF sources whose admitted mtime matched their retained generation. */
+  unchanged: number;
+  /** Complete, readable PDFs with no extractable text; no indexed generation was retained. */
+  skipped: number;
+  /** PDF sources whose read, extraction, page admission, or indexing failed. */
+  failed: number;
+  /** Total physical chunks across Markdown and PDF kinds after this sync. */
+  total_chunks: number;
+  /** True when the inventory was complete and every changed source either committed or was authoritatively empty. */
+  complete: boolean;
+}
+
+/**
+ * Synchronize PDF chunks into an opened FTS5 index.
+ *
+ * The complete bounded PDF inventory is diffed against retained PDF source
+ * state. Each changed source is extracted and admitted independently; failed
+ * or partial page evidence quarantines that source while preserving its prior
+ * coherent generation. A complete textless PDF authoritatively clears stale
+ * rows. The optional PDF module is resolved before any destructive diff work.
+ *
+ * @param vault - Vault whose complete admitted PDF inventory is synchronized.
+ * @param idx - Open FTS index receiving committed PDF generations.
+ * @returns Counters for actual commits, authoritative textless skips, and failures.
+ * @throws {Error} When the bounded source inventory is incomplete, the
+ *   optional extraction module cannot load, or deletion itself fails.
+ * @example
+ * ```ts
+ * const report = await syncPdfFtsIndex(vault, index);
+ * if (!report.complete) process.stderr.write(`PDF failures: ${report.failed}\n`);
+ * ```
+ */
+export async function syncPdfFtsIndex(vault: Vault, idx: FtsIndex): Promise<PdfFtsSyncReport> {
+  const listing = await vault.listFilesByExtensionsBounded(
+    [".pdf"],
+    MAX_INDEX_SYNC_FILES,
+    MAX_INDEX_SYNC_VISITED_ENTRIES
+  );
+  if (!listing.complete) {
+    throw new Error(
+      `FTS PDF source inventory is incomplete within ${MAX_INDEX_SYNC_FILES} files / ${MAX_INDEX_SYNC_VISITED_ENTRIES} visited entries; refusing to infer deletions`
+    );
+  }
+  const pdfEntries = listing.entries;
+  const live = pdfEntries.map((entry) => ({ relPath: entry.relPath, mtimeMs: entry.mtimeMs }));
+  const diff = idx.diff(live, "pdf");
+  const entriesByPath = new Map(pdfEntries.map((entry) => [entry.relPath, entry]));
+  const updatedSet = new Set(diff.updated);
+  const addedSet = new Set(diff.added);
+  const changedEntries = [...diff.added, ...diff.updated].map((relPath) => {
+    const entry = entriesByPath.get(relPath);
+    if (!entry) throw new Error(`FTS diff returned a path outside the admitted PDF inventory: ${relPath}`);
+    return { relPath, entry };
+  });
+  const pdfModule = changedEntries.length > 0 ? await import("./pdf.js") : null;
+  let added = 0;
+  let updated = 0;
+  let deleted = 0;
+  let skipped = 0;
+  let failed = 0;
+  for (const relPath of diff.deleted) {
+    idx.dropFile(relPath);
+    deleted += 1;
+  }
+  for (const { relPath, entry } of changedEntries) {
+    try {
+      if (!pdfModule) throw new Error("PDF extraction module was not loaded for a changed source");
+      const buf = await vault.readBinaryFile(entry.absPath);
+      const result = await pdfModule.extractPdfText(buf);
+      pdfModule.assertPdfPagesComplete(result.pages);
+      if (!result.hasText) {
+        idx.dropFile(relPath);
+        skipped += 1;
+        if (updatedSet.has(relPath)) {
+          process.stderr.write(
+            `enquire: dropping stale rows for ${relPath} during pdf-fts5 sync — PDF is now image-only / scanned (previous text-extracted chunks removed)\n`
+          );
+        } else {
+          process.stderr.write(
+            `enquire: skipping ${relPath} during pdf-fts5 sync — image-only / scanned (no extractable text; use OCR via v2.9+)\n`
+          );
+        }
+        continue;
+      }
+      const indexedChunks = idx.reindexPdfFile(relPath, entry.mtimeMs, result.pages);
+      if (indexedChunks <= 0) throw new Error(`${relPath} produced zero PDF FTS chunks after validation`);
+      if (addedSet.has(relPath)) added += 1;
+      else updated += 1;
+    } catch (error) {
+      idx.quarantineFile(relPath, "pdf");
+      failed += 1;
+      process.stderr.write(
+        `enquire: skipping ${relPath} during pdf-fts5 sync — ${error instanceof Error ? error.message : String(error)}\n`
+      );
+    }
+  }
+  return {
+    added,
+    updated,
+    deleted,
+    unchanged: diff.unchanged.length,
+    skipped,
+    failed,
+    total_chunks: idx.totalChunks(),
+    complete: failed === 0
+  };
 }
 
 /**
@@ -2564,77 +3019,197 @@ interface ContentChunk {
 
 const MAX_CHUNK_CHARS = 4096;
 
+interface ChunkLogicalLine {
+  text: string;
+  end: string;
+  line: number;
+  breadcrumb: string;
+  textEndOffset: number;
+  endOffset: number;
+}
+
+interface ChunkParagraphSpan {
+  startOffset: number;
+  endOffset: number;
+  startLineIndex: number;
+  endLineIndex: number;
+}
+
+function chunkLogicalLines(content: string): ChunkLogicalLine[] {
+  const lines: ChunkLogicalLine[] = [];
+  let offset = 0;
+  for (const logical of iterateContentLines(content)) {
+    const startOffset = offset;
+    const textEndOffset = startOffset + logical.text.length;
+    const endOffset = textEndOffset + logical.end.length;
+    lines.push({
+      text: logical.text,
+      end: logical.end,
+      line: logical.line,
+      breadcrumb: logical.breadcrumb.join(" > "),
+      textEndOffset,
+      endOffset
+    });
+    offset = endOffset;
+  }
+  if (offset !== content.length) throw new Error("Logical-line iterator did not consume the complete FTS source");
+  return lines;
+}
+
+function chunkParagraphSpans(content: string, lines: readonly ChunkLogicalLine[]): ChunkParagraphSpan[] {
+  const spans: ChunkParagraphSpan[] = [];
+  let paragraphStartOffset = 0;
+  let paragraphStartLineIndex = 0;
+  let lineIndex = 0;
+  while (lineIndex < lines.length) {
+    const first = lines[lineIndex];
+    if (!first || first.end === "") {
+      lineIndex += 1;
+      continue;
+    }
+
+    // A paragraph delimiter is two or more ADJACENT logical terminators.
+    // The first terminator belongs to `first`; every continuation appears as
+    // an empty logical line with its own terminator. This treats CRLF as one
+    // terminator and supports mixed LF/CRLF/CR/LS/PS runs without a regex
+    // rescan or byte normalization.
+    let runEnd = lineIndex;
+    while (true) {
+      const next = lines[runEnd + 1];
+      if (next?.text !== "" || next.end === "") break;
+      runEnd += 1;
+    }
+    if (runEnd === lineIndex) {
+      lineIndex += 1;
+      continue;
+    }
+
+    spans.push({
+      startOffset: paragraphStartOffset,
+      endOffset: first.textEndOffset,
+      startLineIndex: paragraphStartLineIndex,
+      endLineIndex: lineIndex
+    });
+    const lastDelimiterLine = lines[runEnd];
+    if (!lastDelimiterLine) throw new Error("Logical paragraph delimiter ended outside the FTS source");
+    paragraphStartOffset = lastDelimiterLine.endOffset;
+    paragraphStartLineIndex = runEnd + 1;
+    lineIndex = runEnd + 1;
+  }
+
+  if (paragraphStartOffset < content.length) {
+    spans.push({
+      startOffset: paragraphStartOffset,
+      endOffset: content.length,
+      startLineIndex: paragraphStartLineIndex,
+      endLineIndex: lines.length - 1
+    });
+  }
+  return spans;
+}
+
+function hardCutChunkLine(line: ChunkLogicalLine, maxChars: number, chunks: ContentChunk[]): void {
+  for (let start = 0; start < line.text.length; ) {
+    let end = Math.min(start + maxChars, line.text.length);
+    if (end < line.text.length) {
+      const code = line.text.charCodeAt(end - 1);
+      if (code >= 0xd800 && code <= 0xdbff && end - 1 > start) end -= 1;
+    }
+    chunks.push({
+      text: line.text.slice(start, end),
+      lineStart: line.line,
+      lineEnd: line.line,
+      breadcrumb: line.breadcrumb
+    });
+    start = end;
+  }
+}
+
 /**
- * Paragraph-first chunker with `\n\n → \n → hardcut` fallback. Each chunk
- * carries 1-based line offsets so callers can quote precise locations.
+ * Paragraph-first chunker with `blank logical line → logical line → hardcut`
+ * fallback. The canonical line authority treats LF, CRLF, CR, U+2028, and
+ * U+2029 as terminators. Returned chunk text is always an exact source slice
+ * or exact concatenation across the source's own unchanged terminators; no
+ * newline spelling is synthesized. Each chunk carries 1-based line offsets so
+ * callers can quote precise locations.
  *
  * v2.1.0: also attaches a heading breadcrumb to each chunk (the H1>H2>H3
  * path in effect at chunk start). Preserves Obsidian markdown structure
  * for downstream retrievers without a custom parser. ATX headings only —
  * fenced code blocks (where `#` is shell prompt, not heading) are skipped.
+ *
+ * @param content - Markdown content to split.
+ * @param maxChars - Positive safe-integer UTF-16-unit target per chunk.
+ * @returns Non-empty chunks with source-line and breadcrumb metadata.
+ * @throws {RangeError} If `maxChars` is not a positive safe integer.
  */
 export function chunkContent(content: string, maxChars = MAX_CHUNK_CHARS): ContentChunk[] {
+  if (!Number.isSafeInteger(maxChars) || maxChars <= 0) {
+    throw new RangeError("maxChars must be a positive safe integer");
+  }
   if (!content) return [];
 
-  // v2.1.0: pre-compute heading hierarchy per line. Walk the source once,
-  // tracking ATX headings and code-fence state, so each line gets the
-  // "Section > Subsection" breadcrumb in scope at that line.
-  const breadcrumbByLine = computeBreadcrumbsByLine(content);
-
-  const paragraphs = splitWithLines(content, /\n{2,}/);
+  // One canonical structure walk supplies exact terminators, absolute logical
+  // line numbers, fence-aware headings, and breadcrumbs. Paragraph and line
+  // fallback stages consume this same authority rather than rescanning with
+  // LF-only regular expressions.
+  const lines = chunkLogicalLines(content);
+  const paragraphs = chunkParagraphSpans(content, lines);
   const chunks: ContentChunk[] = [];
   for (const p of paragraphs) {
-    if (!p.breadcrumb) {
-      p.breadcrumb = breadcrumbByLine[p.lineStart - 1] ?? "";
-    }
-    if (p.text.length <= maxChars) {
-      chunks.push(p);
+    const firstLine = lines[p.startLineIndex];
+    const lastLine = lines[p.endLineIndex];
+    if (!firstLine || !lastLine) throw new Error("FTS paragraph span refers to a missing logical line");
+    if (p.endOffset - p.startOffset <= maxChars) {
+      chunks.push({
+        text: content.slice(p.startOffset, p.endOffset),
+        lineStart: firstLine.line,
+        lineEnd: lastLine.line,
+        breadcrumb: firstLine.breadcrumb
+      });
       continue;
     }
-    // Paragraph too big — try line splits. Each split inherits the
-    // paragraph's breadcrumb (a single oversize paragraph stays under one
-    // section by definition — paragraph boundaries don't span headings).
-    const lines = splitWithLines(p.text, /\n/, p.lineStart);
-    let buf: ContentChunk | null = null;
-    for (const ln of lines) {
-      if (ln.text.length > maxChars) {
+
+    // Paragraph too big — pack exact logical lines. A new buffer receives the
+    // breadcrumb in scope at ITS start line, so a heading change inside one
+    // oversize no-blank-line paragraph cannot leave later chunks stale.
+    let buf: (ContentChunk & { lastLineIndex: number }) | null = null;
+    for (let currentIndex = p.startLineIndex; currentIndex <= p.endLineIndex; currentIndex += 1) {
+      const line = lines[currentIndex];
+      if (!line) throw new Error("FTS paragraph line range escaped the logical-line inventory");
+      if (line.text.length > maxChars) {
         if (buf) {
           chunks.push(buf);
           buf = null;
         }
-        // Single line too long: hard-cut at maxChars boundaries.
-        // v3.10.0-rc.55 (CHUNK-SURROGATE-SPLIT) — `slice` works on UTF-16 code
-        // UNITS, so a cut landing between a surrogate pair (e.g. mid-emoji) emits a
-        // lone surrogate → a corrupt code point in the indexed chunk. If the unit at
-        // the boundary is a high surrogate, back the cut off by one so the whole pair
-        // moves to the next chunk (a chunk may end up maxChars-1 units in that case).
-        for (let i = 0; i < ln.text.length; ) {
-          let end = Math.min(i + maxChars, ln.text.length);
-          if (end < ln.text.length) {
-            const code = ln.text.charCodeAt(end - 1);
-            if (code >= 0xd800 && code <= 0xdbff && end - 1 > i) end -= 1;
-          }
-          chunks.push({
-            text: ln.text.slice(i, end),
-            lineStart: ln.lineStart,
-            lineEnd: ln.lineEnd,
-            breadcrumb: p.breadcrumb
-          });
-          i = end;
-        }
+        hardCutChunkLine(line, maxChars, chunks);
         continue;
       }
       if (!buf) {
-        buf = { text: ln.text, lineStart: ln.lineStart, lineEnd: ln.lineEnd, breadcrumb: p.breadcrumb };
+        buf = {
+          text: line.text,
+          lineStart: line.line,
+          lineEnd: line.line,
+          breadcrumb: line.breadcrumb,
+          lastLineIndex: currentIndex
+        };
         continue;
       }
-      const tentative = `${buf.text}\n${ln.text}`;
-      if (tentative.length > maxChars) {
+      const prior = lines[buf.lastLineIndex];
+      if (!prior) throw new Error("FTS line buffer lost its preceding logical line");
+      if (buf.text.length + prior.end.length + line.text.length > maxChars) {
         chunks.push(buf);
-        buf = { text: ln.text, lineStart: ln.lineStart, lineEnd: ln.lineEnd, breadcrumb: p.breadcrumb };
+        buf = {
+          text: line.text,
+          lineStart: line.line,
+          lineEnd: line.line,
+          breadcrumb: line.breadcrumb,
+          lastLineIndex: currentIndex
+        };
       } else {
-        buf.text = tentative;
-        buf.lineEnd = ln.lineEnd;
+        buf.text += prior.end + line.text;
+        buf.lineEnd = line.line;
+        buf.lastLineIndex = currentIndex;
       }
     }
     if (buf) chunks.push(buf);
@@ -2658,27 +3233,6 @@ export function computeBreadcrumbsByLine(content: string): string[] {
   // (a heading line includes itself; a degenerate `# ###` pushes empty), so this is byte-identical
   // to the former hand-rolled walk — pinned by the fence-toggle + breadcrumb behavioral tests.
   return [...iterateContentLines(content)].map((l) => l.breadcrumb.join(" > "));
-}
-
-function splitWithLines(text: string, separator: RegExp, baseLine = 1): ContentChunk[] {
-  const out: ContentChunk[] = [];
-  const re = new RegExp(separator.source, separator.flags.includes("g") ? separator.flags : `${separator.flags}g`);
-  let lastIndex = 0;
-  let lastLine = baseLine;
-  for (const match of text.matchAll(re)) {
-    const start = match.index ?? 0;
-    const slice = text.slice(lastIndex, start);
-    const linesInSlice = countLineBreaks(slice);
-    out.push({ text: slice, lineStart: lastLine, lineEnd: lastLine + linesInSlice, breadcrumb: "" });
-    lastLine += linesInSlice + countLineBreaks(match[0]);
-    lastIndex = start + match[0].length;
-  }
-  const tail = text.slice(lastIndex);
-  if (tail) {
-    const linesInTail = countLineBreaks(tail);
-    out.push({ text: tail, lineStart: lastLine, lineEnd: lastLine + linesInTail, breadcrumb: "" });
-  }
-  return out;
 }
 
 /**
@@ -2729,6 +3283,7 @@ export function defaultIndexFile(vaultRoot: string): string {
 const ENQUIRE_CACHE_ARTIFACT =
   /^[0-9a-f]{12}\.(?:(?:feedback\.json|json)(?:\.tmp)?|(?:fts5|embed)\.db(?:-wal|-shm|-journal)?|hnsw\.bin|hnsw\.meta\.json|hnsw\.[0-9a-f]{48}\.bin)(?![\s\S])/;
 const VAULT_ROUTING_KEY = /^[0-9a-f]{12}(?![\s\S])/;
+const WATCHER_ACTIVATION_GUARD = /^([0-9a-f]{12})\.embed\.db\.watcher-activation\.guard(?![\s\S])/;
 
 function canonicalCacheArtifactBasename(entry: string): string | null {
   const ownedFinal = sensitiveArtifactFinalBasename(entry) ?? entry;
@@ -2742,19 +3297,31 @@ function canonicalCacheArtifactBasename(entry: string): string | null {
  * reserved-name subset under OTHER routing keys. Pure and side-effect-free,
  * so the destructive `prune` CLI can preview before touching disk and the
  * safety invariant (never selects outside the reserved namespace or the kept
- * routing key) is unit-testable. It does not prove who created a matching entry
- * or distinguish roots that collide on the truncated key.
+ * routing key) is unit-testable. A visible watcher-activation guard for any
+ * selected stem vetoes the whole plan; pruning around an in-progress derived
+ * generation would make the plan's commit truth unknowable. It does not prove
+ * who created a matching entry or distinguish roots that collide on the
+ * truncated key.
  *
  * @param entries Filenames (basenames) present in the cache directory.
  * @param keepHash The 12-hex legacy routing key to preserve (from `defaultIndexFile`).
  * @returns Recognized reserved basenames eligible for removal, never `keepHash`.
  * @throws {TypeError} If `keepHash` is not exactly 12 lowercase hexadecimal characters.
+ * @throws {Error} If a selected stem has a visible watcher-activation guard.
  * @example planCachePrune(["aaaaaaaaaaaa.fts5.db", "bbbbbbbbbbbb.fts5.db", "notes.md"], "aaaaaaaaaaaa")
  *   // → ["bbbbbbbbbbbb.fts5.db"]   (keeps aaaa…, ignores notes.md)
  */
 export function planCachePrune(entries: readonly string[], keepHash: string): string[] {
   if (!VAULT_ROUTING_KEY.test(keepHash)) {
     throw new TypeError("Cache prune keep key must be exactly 12 lowercase hexadecimal characters");
+  }
+  for (const entry of entries) {
+    const guard = WATCHER_ACTIVATION_GUARD.exec(entry);
+    if (guard?.[1] !== undefined && guard[1] !== keepHash) {
+      throw new Error(
+        `Refusing cache prune: watcher activation guard is present for selected routing stem ${guard[1]}`
+      );
+    }
   }
   return entries.filter((entry) => {
     // Random publisher temps/stages encode their exact final basename. Unwrap

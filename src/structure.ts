@@ -17,7 +17,7 @@
 // enumerable field would inflate every cached row + force a DISK_CACHE_VERSION bump that
 // invalidates every user's persisted cache. Free functions keep ParsedNote's 6 fields
 // byte-identical → zero cache impact, no version bump.
-import { advanceFence, type FenceChar } from "./fence.js";
+import { advanceFence, type FenceState } from "./fence.js";
 import type { ParsedNote } from "./parser.js";
 import { splitLinesWithEnds, stripTrailingHashes, stripTrailingLineEnds } from "./wildcard-match.js";
 
@@ -63,7 +63,7 @@ export interface StructLine {
  */
 function* iterateLines(text: string, base: number): Generator<StructLine> {
   const { lines, ends } = splitLinesWithEnds(text);
-  let marker: FenceChar | null = null;
+  let marker: FenceState | null = null;
   const stack: string[] = []; // index = depth-1, value = heading text (fts5-exact)
   for (let i = 0; i < lines.length; i++) {
     const t = lines[i] ?? "";

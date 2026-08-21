@@ -12,9 +12,9 @@
 // communities (rc.35), then findSimilar/getNoteNeighbors (rc.36) each surfaced
 // later. This invariant ends that recursion: it discovers EVERY always-on
 // whole-vault scanner and fails CI unless each is explicitly classified —
-//   • CAP   — builds a vault-sized GRAPH / PAIRWISE structure with heuristic
-//             top-K output ⇒ must reference a bounding constant (capScanEntries
-//             / MAX_VISITED / MAX_GRAPH_NODES). Partial scan only trims the tail.
+//   • CAP   — builds a vault-sized GRAPH / PAIRWISE structure ⇒ discovery must
+//             be bounded inside the walker and reject an incomplete prefix
+//             (listExactScanEntries / MAX_VISITED / MAX_GRAPH_NODES).
 //   • EXEMPT — inherent single-pass O(N) (search / aggregation / exhaustive
 //             enumeration) whose memory is bounded by output or distinct-keys,
 //             NOT by an N×N graph. Capping would silently corrupt results, so a
@@ -27,7 +27,6 @@
 import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
-import { capScanEntries, MAX_SCAN_NOTES } from "../src/tools/limits.js";
 
 const repoRoot = path.resolve(__dirname, "..");
 
@@ -44,20 +43,12 @@ const SCANNER_SOURCES = ["src/tools/read.ts", "src/tools/search.ts", "src/tools/
 const CAPPED: Record<string, { capToken: string; why: string }> = {
   findPath: { capToken: "MAX_VISITED", why: "BFS graph traversal; rc.34 R-5." },
   findSimilar: {
-    capToken: "capScanEntries",
+    capToken: "listExactScanEntries",
     why: "builds vault-sized metas + inboundFor maps, scores pairwise; rc.36 F-4."
   },
   getNoteNeighbors: {
-    capToken: "capScanEntries",
+    capToken: "listExactScanEntries",
     why: "two whole-vault readNote passes building an inbound-count map; rc.36 F-5."
-  },
-  runDql: {
-    capToken: "capScanEntries",
-    why: "obsidian_dataview_query whole-vault readNote+parse scan, bearer-reachable; defense-in-depth cap (linear query, partial on >MAX_SCAN_NOTES, logged); rc.18 M4."
-  },
-  getOpenQuestions: {
-    capToken: "capScanEntries",
-    why: "exhaustive question scan; rc.16 (M5) added capScanEntries to bound the collect-all-then-sort. Was EXEMPT; reclassified CAPPED here (manifest lagged the rc.16 cap)."
   }
 };
 
@@ -92,7 +83,7 @@ function functionBody(src: string, name: string): string {
 }
 
 /** All top-level exported functions in `src` that do a whole-vault readNote
- *  scan: body references `.listMarkdown(` AND `.readNote(` AND a `for (` loop.
+ *  scan: body references a vault inventory, `.readNote(`, and an iteration.
  *  Requiring all three keeps pure helpers (ngrams, indexFor) out. */
 function discoverScanners(src: string): string[] {
   const out: string[] = [];
@@ -109,7 +100,8 @@ function discoverScanners(src: string): string[] {
       /for\s+await\b/.test(body) ||
       /\.map\(\s*async\b/.test(body) ||
       /Promise\.all\(/.test(body);
-    if (/\.listMarkdown\(/.test(body) && /\.readNote\(/.test(body) && iterates) {
+    const discoversVault = /\.listMarkdown\(/.test(body) || /listExactScanEntries\(/.test(body);
+    if (discoversVault && /\.readNote\(/.test(body) && iterates) {
       out.push(m[1] as string);
     }
   }
@@ -131,7 +123,7 @@ describe("resource-bound completeness invariant (rc.36, R-5/AS#5 class)", () => 
     expect(
       unclassified,
       `Unclassified always-on whole-vault scanner(s): ${unclassified.join(", ")}. ` +
-        "Add each to CAPPED (call capScanEntries — it builds a vault-sized graph/pairwise structure) " +
+        "Add each to CAPPED (use bounded, complete discovery for a vault-sized graph/pairwise structure) " +
         "or EXEMPT (with a reason — it's inherent single-pass O(N) where capping breaks correctness)."
     ).toEqual([]);
   });
@@ -148,22 +140,109 @@ describe("resource-bound completeness invariant (rc.36, R-5/AS#5 class)", () => 
     expect(offenders, offenders.join("; ")).toEqual([]);
   });
 
-  it("communities.buildWikilinkGraph still references MAX_GRAPH_NODES (rc.35 AS#5)", () => {
-    const src = readFileSync(path.join(repoRoot, "src/communities.ts"), "utf8");
-    expect(src).toContain("MAX_GRAPH_NODES");
-    expect(src).toMatch(/slice\(0,\s*MAX_GRAPH_NODES\)/);
+  it("searchText discovers an exact bounded corpus and matches all tokens in one body pass", () => {
+    const source = readFileSync(path.join(repoRoot, "src/tools/search.ts"), "utf8");
+    const body = functionBody(source, "searchText");
+    expect(body, "searchText not found").not.toBe("");
+    expect(body).toContain("listExactScanEntries(");
+    expect(body).toContain("matchFoldedPatterns(lower, lowerTokens)");
+    expect(body).not.toContain("listMarkdown(");
+    expect(body).not.toContain("lower.indexOf(lowerT");
+
+    const mutant = body.replace("matchFoldedPatterns(lower, lowerTokens)", "{ counts: [], firstStarts: [] }");
+    expect(mutant).not.toContain("matchFoldedPatterns(lower, lowerTokens)");
+  });
+
+  it("communities.buildWikilinkGraph uses a bounded inventory and refuses incomplete graphs", () => {
+    const body = functionBody(readFileSync(path.join(repoRoot, "src/communities.ts"), "utf8"), "buildWikilinkGraph");
+    expect(body, "buildWikilinkGraph not found in communities.ts").not.toBe("");
+    expect(body).toContain("listFilesByExtensionsBounded(");
+    expect(body).toContain("if (!listing.complete");
+    expect(body).not.toContain("listFilesByExtension(");
+    expect(body).not.toMatch(/slice\(0,\s*MAX_GRAPH_NODES\)/);
+  });
+
+  it("every destructive bulk index sync rejects an incomplete bounded source inventory", () => {
+    const ftsSource = readFileSync(path.join(repoRoot, "src/fts5.ts"), "utf8");
+    const embedSource = readFileSync(path.join(repoRoot, "src/embed-sync.ts"), "utf8");
+    for (const [label, body] of [
+      ["syncFtsIndex", functionBody(ftsSource, "syncFtsIndex")],
+      ["syncPdfFtsIndex", functionBody(ftsSource, "syncPdfFtsIndex")]
+    ] as const) {
+      expect(body, `${label} not found`).not.toBe("");
+      expect(body).toContain("listFilesByExtensionsBounded(");
+      expect(body).toContain("if (!listing.complete)");
+      expect(body).not.toContain("listMarkdown(");
+      expect(body).not.toContain("listFilesByExtension(");
+    }
+
+    const helperStart = embedSource.indexOf("async function completeIndexInventory(");
+    const helperEnd = embedSource.indexOf("/** Raw per-file counters", helperStart);
+    const helper = helperStart >= 0 && helperEnd > helperStart ? embedSource.slice(helperStart, helperEnd) : "";
+    expect(helper, "completeIndexInventory not found").not.toBe("");
+    expect(helper).toContain("listFilesByExtensionsBounded(");
+    expect(helper).toContain("if (!listing.complete)");
+    for (const name of ["syncEmbedDb", "syncPdfEmbedDb"] as const) {
+      const body = functionBody(embedSource, name);
+      expect(body, `${name} not found`).not.toBe("");
+      expect(body).toContain("completeIndexInventory(");
+      expect(body).not.toContain("listMarkdown(");
+      expect(body).not.toContain("listFilesByExtension(");
+    }
   });
 
   // v3.10.0-rc.24 (audit L) — `obsidian_query_base` (bases.ts `queryBase`) is an
   // always-on, bearer-reachable whole-vault CONTENT scanner, but it uses
   // `listFilesByExtension(".md")` + `readFile` (not `listMarkdown` + `readNote`),
   // so `discoverScanners` can't see it and `bases.ts` is outside SCANNER_SOURCES.
-  // Assert its cap separately (mirrors buildWikilinkGraph above), so a refactor
-  // that drops the cap fails CI even though the heuristic doesn't reach it.
-  it("bases.queryBase caps its whole-vault scan via capScanEntries (rc.24)", () => {
+  // Assert its incremental bounded inventory + completeness refusal separately,
+  // so a refactor cannot reintroduce materialize-then-cap or partial totals even
+  // though the scanner heuristic does not reach this implementation shape.
+  it("bases.queryBase uses a bounded inventory and rejects incomplete exact totals", () => {
     const body = functionBody(readFileSync(path.join(repoRoot, "src/bases.ts"), "utf8"), "queryBase");
     expect(body, "queryBase not found in bases.ts").not.toBe("");
-    expect(body).toContain("capScanEntries(");
+    expect(body).toContain("listFilesByExtensionsBounded(");
+    expect(body).toContain("MAX_SCAN_NOTES");
+    expect(body).toContain("if (!listing.complete)");
+    expect(body).not.toContain("listFilesByExtension(");
+  });
+
+  // DQL used to materialize the complete legacy listing and then trim it. That
+  // bounded retained rows but not traversal/allocation and
+  // silently made exact query results partial.  Keep the stronger class fix:
+  // admission happens in the walker and an incomplete inventory is an error.
+  it("dql.runDql uses a bounded inventory and rejects incomplete query results", () => {
+    const body = functionBody(readFileSync(path.join(repoRoot, "src/dql.ts"), "utf8"), "runDql");
+    expect(body, "runDql not found in dql.ts").not.toBe("");
+    expect(body).toContain("listFilesByExtensionsBounded(");
+    expect(body).toContain("MAX_DQL_SCAN_FILES");
+    expect(body).toContain("MAX_DQL_VISITED_ENTRIES");
+    expect(body).toContain("if (!listing.complete)");
+    expect(body).not.toContain("listMarkdown(");
+    expect(body).not.toContain("capScanEntries(");
+  });
+
+  it("meta.getOpenQuestions bounds discovery, collection, regex batches, and retained top-K", () => {
+    const body = functionBody(readFileSync(path.join(repoRoot, "src/tools/meta.ts"), "utf8"), "getOpenQuestions");
+    expect(body, "getOpenQuestions not found in meta.ts").not.toBe("");
+    for (const token of [
+      "listFilesByExtensionsBounded(",
+      "if (!listing.complete)",
+      "maxNotes",
+      "maxVisitedEntries",
+      "maxTextUtf8Bytes",
+      "maxLines",
+      "maxLineUtf8Bytes",
+      "maxCandidates",
+      "maxCandidateUtf8Bytes",
+      "flushCandidateBatch",
+      "retainOldestOpenQuestion"
+    ]) {
+      expect(body, `getOpenQuestions lost resource admission token ${token}`).toContain(token);
+    }
+    expect(body).not.toContain("capScanEntries(");
+    expect(body).not.toMatch(/const\s+candidates\s*=/u);
+    expect(body).not.toMatch(/const\s+lineTexts\s*=/u);
   });
 
   // v3.10.0-rc.65 (round-3 audit) — `obsidian_read_canvas` (media.ts `readCanvas`) is an
@@ -189,14 +268,12 @@ describe("resource-bound completeness invariant (rc.36, R-5/AS#5 class)", () => 
     expect(missing, `CAPPED tools no longer detected as whole-vault scanners: ${missing.join(", ")}`).toEqual([]);
   });
 
-  // capScanEntries behavioral coverage (the cap mechanism itself).
-  it("capScanEntries truncates above MAX_SCAN_NOTES and passes through below", () => {
-    const under = Array.from({ length: 10 }, (_, i) => i);
-    expect(capScanEntries(under, "t")).toBe(under); // identity below cap
-    const over = Array.from({ length: MAX_SCAN_NOTES + 5 }, (_, i) => i);
-    const capped = capScanEntries(over, "t-over");
-    expect(capped.length).toBe(MAX_SCAN_NOTES);
-    expect(capped[0]).toBe(0);
+  it("legacy materialize-then-cap helper is absent from production", () => {
+    const limits = readFileSync(path.join(repoRoot, "src/tools/limits.ts"), "utf8");
+    expect(limits).not.toContain("function capScanEntries");
+    for (const file of SCANNER_SOURCES) {
+      expect(readFileSync(path.join(repoRoot, file), "utf8")).not.toContain("capScanEntries(");
+    }
   });
 
   // NEGATIVE control: a brand-new uncapped scanner MUST be discovered (so the
@@ -242,9 +319,9 @@ describe("resource-bound completeness invariant (rc.36, R-5/AS#5 class)", () => 
   });
 
   // NEGATIVE control: the cap-token check must FLAG a capped function that drops
-  // its bounding constant (e.g. a refactor removes capScanEntries).
+  // bounded, complete discovery.
   it("NEGATIVE control — cap-token check flags a CAPPED body that lost its constant", () => {
     const buggyBody = "export async function findSimilar(v) {\n  const entries = await v.listMarkdown();\n}";
-    expect(buggyBody.includes("capScanEntries")).toBe(false); // would be reported as an offender
+    expect(buggyBody.includes("listExactScanEntries")).toBe(false); // would be reported as an offender
   });
 });

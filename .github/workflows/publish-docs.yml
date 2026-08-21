@@ -13,13 +13,9 @@ on:
   # source commit. Useful when toggling GH Pages on for the first time.
   workflow_dispatch:
 
-# Minimum permissions for the deploy-pages action. `contents: read` to
-# checkout, `pages: write` to publish, `id-token: write` to mint the
-# OIDC token deploy-pages exchanges for an upload URL.
-permissions:
-  contents: read
-  pages: write
-  id-token: write
+# Deny by default. The source-building job receives only read access; Pages
+# write/OIDC authority exists only inside the protected deployment job.
+permissions: {}
 
 # Only one Pages deploy at a time, but don't cancel an in-flight deploy
 # (an aborted upload would leave the site in a partial state).
@@ -31,8 +27,13 @@ jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    if: ${{ github.ref == 'refs/heads/main' }}
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: 22
@@ -65,15 +66,23 @@ jobs:
       - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6
       - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5
         with:
+          name: pages-${{ github.sha }}
           path: .pages-dist
+          retention-days: 1
 
   deploy:
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    if: ${{ github.ref == 'refs/heads/main' }}
+    permissions:
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - id: deployment
         uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5
+        with:
+          artifact_name: pages-${{ github.sha }}

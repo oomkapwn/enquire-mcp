@@ -136,25 +136,14 @@ describe("CLI parity — serve and serve-http accept the same retrieval flags (v
 // existed to prevent this (ENABLE_WRITE_HELP, PERSISTENT_INDEX_HELP, etc.)
 // but only a few flags were lifted into it. New flags went inline.
 //
-// Structural fix: rc.11 lifted 8 more shared flags into cli-help.ts (now 12
-// constants total) and replaced both inline literals with the constant. This
+// Structural fix: shared flag text lives in cli-help.ts and both transports
+// reference the same constants. This
 // invariant pins the structural property: every flag that appears in BOTH
 // serve and serve-http with inline help text must have IDENTICAL text. The
-// only exception is short-form cross-references where serve-http says
-// "(same semantics as `serve`)" — those are explicitly allowlisted.
-//
 // If a future PR adds a new shared flag with inline text and the texts
 // differ, this test fails before merge.
 
 describe("CLI parity — serve and serve-http shared-flag help text equality (v3.8.0-rc.11 M-1)", () => {
-  /**
-   * Flags where serve-http intentionally uses a short cross-reference like
-   * "(same semantics as `serve`)" instead of repeating the long serve text.
-   * Adding to this allowlist must be a deliberate design decision documented
-   * in the CHANGELOG.
-   */
-  const INTENTIONAL_SHORT_FORM = new Set(["--exclude-glob", "--read-paths"]);
-
   /** Extract `.option("--flag", "literal text")` pairs from a block.
    *  Constants (UPPER_SNAKE_CASE identifiers as second arg) are normalized
    *  to the marker `:CONSTANT:<NAME>` so identical constant usage is
@@ -198,7 +187,6 @@ describe("CLI parity — serve and serve-http shared-flag help text equality (v3
 
     const drifts: string[] = [];
     for (const flag of sharedFlags) {
-      if (INTENTIONAL_SHORT_FORM.has(flag)) continue;
       const s = serveHelp.get(flag) ?? "";
       const h = httpHelp.get(flag) ?? "";
       if (s !== h) {
@@ -210,30 +198,83 @@ describe("CLI parity — serve and serve-http shared-flag help text equality (v3
 
     expect(
       drifts,
-      `${drifts.length} flag(s) drifted between serve and serve-http. Fix: lift the help text into src/cli-help.ts as a constant and use it in both .option() calls. If the asymmetry is intentional (cross-reference short-form), add the flag to INTENTIONAL_SHORT_FORM allowlist.\n\n${drifts.join("\n\n")}`
+      `${drifts.length} flag(s) drifted between serve and serve-http. Fix: lift the help text into src/cli-help.ts as a constant and use it in both .option() calls.\n\n${drifts.join("\n\n")}`
     ).toEqual([]);
   });
 
-  it("INTENTIONAL_SHORT_FORM allowlist matches reality — NEGATIVE control", async () => {
-    // Sanity: each flag in the allowlist must actually appear in BOTH
-    // commands AND have asymmetric help text (else it doesn't need to be
-    // allowlisted — clean it up to keep the allowlist minimal).
+  it("NEGATIVE control — one transport replacing shared privacy help is detected", async () => {
     const cliSrc = await readCli();
-    const serveBlock = extractCommandBlock(cliSrc, /\.command\(\s*"serve"\s*,/);
-    const serveHttpBlock = extractCommandBlock(cliSrc, /\.command\(\s*"serve-http"\s*\)/);
+    const mutant = cliSrc.replace(
+      '.option("--exclude-glob <pattern...>", EXCLUDE_GLOB_HELP)',
+      '.option("--exclude-glob <pattern...>", "transport-local privacy help")'
+    );
+    const serveBlock = extractCommandBlock(mutant, /\.command\(\s*"serve"\s*,/);
+    const serveHttpBlock = extractCommandBlock(mutant, /\.command\(\s*"serve-http"\s*\)/);
     const serveHelp = extractInlineHelp(serveBlock);
     const httpHelp = extractInlineHelp(serveHttpBlock);
+    expect(serveHelp.get("--exclude-glob")).not.toBe(httpHelp.get("--exclude-glob"));
+  });
+});
 
-    for (const flag of INTENTIONAL_SHORT_FORM) {
-      expect(serveHelp.has(flag), `${flag} in allowlist but not in serve`).toBe(true);
-      expect(httpHelp.has(flag), `${flag} in allowlist but not in serve-http`).toBe(true);
-      const s = serveHelp.get(flag) ?? "";
-      const h = httpHelp.get(flag) ?? "";
-      expect(
-        s === h ? "IDENTICAL" : "DIFFERENT",
-        `${flag} is in allowlist but help texts are actually identical — remove from allowlist`
-      ).toBe("DIFFERENT");
+describe("CLI privacy admission — every direct content Vault command forwards the same policy", () => {
+  const REQUIRED_PRIVACY_COMMANDS = new Set(["query", "index", "build-embeddings", "setup", "eval"]);
+  const NON_CONTENT_VAULT_COMMANDS = new Set(["clear-cache", "clear-index", "prune", "clear-embeddings"]);
+
+  function commandBlocks(cliSrc: string): Map<string, string> {
+    const matches = [...cliSrc.matchAll(/\.command\("([a-z][a-z0-9-]*)"/g)];
+    return new Map(
+      matches.map((match, index) => {
+        const start = match.index;
+        const end = matches[index + 1]?.index ?? cliSrc.length;
+        return [match[1] ?? "", cliSrc.slice(start, end)];
+      })
+    );
+  }
+
+  function directVaultPrivacyProblems(cliSrc: string): string[] {
+    const blocks = commandBlocks(cliSrc);
+    const directVaultCommands = new Set(
+      [...blocks].filter(([, block]) => block.includes("new Vault(opts.vault")).map(([name]) => name)
+    );
+    const expected = new Set([...REQUIRED_PRIVACY_COMMANDS, ...NON_CONTENT_VAULT_COMMANDS]);
+    const problems: string[] = [];
+    for (const name of new Set([...directVaultCommands, ...expected])) {
+      if (directVaultCommands.has(name) !== expected.has(name)) {
+        problems.push(`${name}: direct Vault command census drift`);
+      }
     }
+    for (const name of REQUIRED_PRIVACY_COMMANDS) {
+      const block = blocks.get(name) ?? "";
+      if (!block.includes('.option("--exclude-glob <pattern...>", EXCLUDE_GLOB_HELP)')) {
+        problems.push(`${name}: missing shared exclude-glob option`);
+      }
+      if (!block.includes('.option("--read-paths <pattern...>", READ_PATHS_HELP)')) {
+        problems.push(`${name}: missing shared read-paths option`);
+      }
+      if (!block.includes("new Vault(opts.vault, { excludeGlobs: opts.excludeGlob, readPaths: opts.readPaths })")) {
+        problems.push(`${name}: privacy options do not control its Vault`);
+      }
+    }
+    return problems;
+  }
+
+  it("keeps the direct Vault command census and privacy forwarding complete", async () => {
+    expect(directVaultPrivacyProblems(await readCli())).toEqual([]);
+  });
+
+  it("NEGATIVE control — a query that drops privacy forwarding is rejected", async () => {
+    const cliSrc = await readCli();
+    const mutant = cliSrc.replace(
+      "new Vault(opts.vault, { excludeGlobs: opts.excludeGlob, readPaths: opts.readPaths })",
+      "new Vault(opts.vault)"
+    );
+    expect(directVaultPrivacyProblems(mutant)).toContain("query: privacy options do not control its Vault");
+  });
+
+  it("NEGATIVE control — a future direct Vault command must be classified", async () => {
+    const cliSrc = await readCli();
+    const mutant = `${cliSrc}\nprogram.command("future-scan").action((opts) => new Vault(opts.vault));\n`;
+    expect(directVaultPrivacyProblems(mutant)).toContain("future-scan: direct Vault command census drift");
   });
 });
 
@@ -396,7 +437,7 @@ describe("CLI persistence-path help is exact and shared", () => {
     {
       flag: "--index-file",
       constant: "INDEX_FILE_HELP",
-      registrations: 6,
+      registrations: 7,
       claim: "must end exactly in the case-sensitive .fts5.db suffix"
     },
     {

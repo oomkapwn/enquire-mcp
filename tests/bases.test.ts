@@ -5,8 +5,17 @@
 import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { boundedSetAdd, listBases, MAX_WARNED_PREDICATES, parseBase, queryBase, readBase } from "../src/bases.js";
+import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
+import {
+  assertBoundedBaseJson,
+  type BaseQueryHit,
+  boundedSetAdd,
+  listBases,
+  MAX_WARNED_PREDICATES,
+  parseBase,
+  queryBase,
+  readBase
+} from "../src/bases.js";
 import { Vault } from "../src/vault.js";
 
 let dir: string;
@@ -16,6 +25,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await fs.rm(dir, { recursive: true, force: true });
 });
 
@@ -83,6 +93,53 @@ filters:
     const parsed = await parseBase(src);
     expect(parsed.filters).toBeDefined();
   });
+
+  it("rejects a YAML alias DAG and a recursive alias before Zod or output recursion", async () => {
+    await expect(
+      parseBase(`summaries:
+  first: &shared
+    count: 1
+  second: *shared
+`)
+    ).rejects.toThrow(/alias or cycle/u);
+    await expect(
+      parseBase(`filters: &loop
+  not: *loop
+`)
+    ).rejects.toThrow(/alias or cycle/u);
+  });
+
+  it("rejects exotic and accessor-backed direct graphs without invoking the accessor", () => {
+    expect(() => assertBoundedBaseJson(new Date(), "test graph")).toThrow(/non-plain object/u);
+    expect(() => assertBoundedBaseJson({ score: Number.NaN }, "test graph")).toThrow(/non-finite/u);
+    expect(() => assertBoundedBaseJson(new Array(1), "test graph")).toThrow(/sparse/u);
+    const accessorBacked: Record<string, unknown> = {};
+    let invoked = false;
+    Object.defineProperty(accessorBacked, "secret", {
+      enumerable: true,
+      get() {
+        invoked = true;
+        return "leaked";
+      }
+    });
+    expect(() => assertBoundedBaseJson(accessorBacked, "test graph")).toThrow(/accessor-backed/u);
+    expect(invoked).toBe(false);
+  });
+
+  it("admits depth 64 but rejects depth 65 without recursive traversal", () => {
+    const graphAt = (depth: number): Record<string, unknown> => {
+      const root: Record<string, unknown> = {};
+      let cursor = root;
+      for (let index = 0; index < depth; index++) {
+        const next: Record<string, unknown> = {};
+        cursor.next = next;
+        cursor = next;
+      }
+      return root;
+    };
+    expect(() => assertBoundedBaseJson(graphAt(64), "test graph")).not.toThrow();
+    expect(() => assertBoundedBaseJson(graphAt(65), "test graph")).toThrow(/maximum depth of 64/u);
+  });
 });
 
 async function makeBaseVault(): Promise<{ root: string; vault: Vault }> {
@@ -125,6 +182,20 @@ describe("listBases", () => {
     expect(out[0]?.size_bytes).toBeGreaterThan(0);
   });
 
+  it("keeps an exact view_count while bounding names and oversized scalar copies", async () => {
+    const { root, vault } = await makeBaseVault();
+    const views = Array.from({ length: 102 }, (_, index) => {
+      const name = index === 0 ? "x".repeat(300) : `view-${index}`;
+      return `  - type: table\n    name: "${name}"`;
+    }).join("\n");
+    await fs.writeFile(path.join(root, "many.base"), `views:\n${views}\n`);
+    const [summary] = await listBases(vault, {});
+    expect(summary?.view_count).toBe(102);
+    expect(summary?.view_names).toHaveLength(101);
+    expect(summary?.view_names[0]).toBe("<oversized view 0 name omitted>");
+    expect(summary?.view_names.at(-1)).toBe("<2 additional views omitted>");
+  });
+
   it("survives malformed .base files (size=0 counts, no crash)", async () => {
     const { root, vault } = await makeBaseVault();
     await fs.writeFile(path.join(root, "broken.base"), "this is\n  not: valid\n yaml: [");
@@ -149,6 +220,25 @@ describe("listBases", () => {
     }
     const out = await listBases(vault, { limit: 2 });
     expect(out.map((b) => b.name)).toEqual(["b4", "b3"]);
+  });
+
+  it("rejects non-finite, fractional, zero, and over-contract direct limits", async () => {
+    const { vault } = await makeBaseVault();
+    for (const limit of [Number.NaN, Number.POSITIVE_INFINITY, 1.5, 0, 501]) {
+      await expect(listBases(vault, { limit })).rejects.toThrow(/positive safe integer/u);
+    }
+    await expect(listBases(vault, { limit: 500 })).resolves.toEqual([]);
+  });
+
+  it("fails closed when the bounded inventory cannot prove the newest exact subset", async () => {
+    const { vault } = await makeBaseVault();
+    const bounded = vi.spyOn(vault, "listFilesByExtensionsBounded").mockResolvedValue({
+      entries: [],
+      visitedEntries: 17,
+      complete: false
+    });
+    await expect(listBases(vault, {})).rejects.toThrow(/requires a complete inventory.*17/u);
+    expect(bounded).toHaveBeenCalledWith([".base"], 10_000, 100_000, undefined);
   });
 });
 
@@ -240,6 +330,10 @@ views:
 });
 
 describe("queryBase — DSL execution", () => {
+  it("keeps the public matched_on value type open for legacy containers", () => {
+    expectTypeOf<BaseQueryHit["matched_on"]>().toEqualTypeOf<Record<string, unknown>>();
+  });
+
   it('filters by tag equality (`tag == "book"`)', async () => {
     const { root, vault } = await makeBaseVault();
     await fs.writeFile(
@@ -528,6 +622,189 @@ views:
     );
     const out = await queryBase(vault, { path: "q.base", limit: 2 });
     expect(out.matches.length).toBeLessThanOrEqual(2);
+  });
+
+  it("keeps the sorted top-limit set while counting a reversed complete inventory", async () => {
+    const { root, vault } = await makeBaseVault();
+    await fs.writeFile(path.join(root, "q.base"), "filters: 'true'\n");
+    const listed = await vault.listFilesByExtensionsBounded([".md"], 50_000, 200_000);
+    expect(listed.complete).toBe(true);
+    vi.spyOn(vault, "listFilesByExtensionsBounded").mockResolvedValue({
+      ...listed,
+      entries: [...listed.entries].reverse()
+    });
+    const expected = listed.entries
+      .map((entry) => entry.relPath)
+      .sort((left, right) => left.localeCompare(right) || (left < right ? -1 : left > right ? 1 : 0))
+      .slice(0, 2);
+    const out = await queryBase(vault, { path: "q.base", limit: 2 });
+    expect(out.total_matched).toBe(listed.entries.length);
+    expect(out.matches.map((match) => match.path)).toEqual(expected);
+    expect(out.truncated).toBe(true);
+  });
+
+  it("rejects non-finite, fractional, zero, and over-contract direct query limits", async () => {
+    const { root, vault } = await makeBaseVault();
+    for (const limit of [Number.NaN, Number.NEGATIVE_INFINITY, 2.5, 0, 501]) {
+      await expect(queryBase(vault, { path: "missing.base", limit })).rejects.toThrow(/positive safe integer/u);
+    }
+    await fs.writeFile(path.join(root, "q.base"), "filters: 'false'\n");
+    await expect(queryBase(vault, { path: "q.base", limit: 500 })).resolves.toMatchObject({
+      matches: [],
+      total_matched: 0,
+      truncated: false
+    });
+  });
+
+  it("fails closed instead of reporting a partial bounded walk as total_matched", async () => {
+    const { root, vault } = await makeBaseVault();
+    await fs.writeFile(path.join(root, "q.base"), "filters: 'true'\n");
+    const readFile = vi.spyOn(vault, "readFile");
+    const bounded = vi.spyOn(vault, "listFilesByExtensionsBounded").mockResolvedValue({
+      entries: [],
+      visitedEntries: 23,
+      complete: false
+    });
+    await expect(queryBase(vault, { path: "q.base" })).rejects.toThrow(/cannot report an exact total.*23/u);
+    expect(bounded).toHaveBeenCalledWith([".md"], 50_000, 200_000, undefined);
+    expect(readFile).not.toHaveBeenCalled();
+  });
+
+  it("skips cyclic and aliased note frontmatter before recursive filter evaluation", async () => {
+    const { root, vault } = await makeBaseVault();
+    await fs.writeFile(path.join(root, "q.base"), "filters: 'true'\n");
+    await fs.writeFile(
+      path.join(root, "cycle.md"),
+      `---
+loop: &loop
+  self: *loop
+---
+cycle
+`
+    );
+    await fs.writeFile(
+      path.join(root, "alias.md"),
+      `---
+first: &shared
+  value: one
+second: *shared
+---
+alias
+`
+    );
+    const out = await queryBase(vault, { path: "q.base" });
+    expect(out.matches.map((match) => match.path)).not.toContain("cycle.md");
+    expect(out.matches.map((match) => match.path)).not.toContain("alias.md");
+    expect(out.total_matched).toBe(4);
+  });
+
+  it("preserves small legacy matched_on diagnostics when no filter is active", async () => {
+    const { root, vault } = await makeBaseVault();
+    await fs.writeFile(
+      path.join(root, "legacy.md"),
+      `---
+tags: [book, reference]
+status: open
+type:
+  kind: source
+  flags: [reviewed, local]
+unrelated: not-public
+---
+legacy
+`
+    );
+    await fs.writeFile(path.join(root, "q.base"), "views:\n  - type: table\n");
+
+    const out = await queryBase(vault, { path: "q.base" });
+    expect(out.matches.find((match) => match.path === "legacy.md")?.matched_on).toEqual({
+      tags: ["book", "reference"],
+      status: "open",
+      type: {
+        kind: "source",
+        flags: ["reviewed", "local"]
+      }
+    });
+    expect(out.matches.find((match) => match.path === "legacy.md")?.matched_on).not.toHaveProperty("unrelated");
+  });
+
+  it("combines legacy keys with folded filter-referenced scalar diagnostics", async () => {
+    const { root, vault } = await makeBaseVault();
+    const longValue = "s".repeat(1_024);
+    await fs.writeFile(
+      path.join(root, "diagnostic.md"),
+      `---
+CuStOm_Field: yes
+payload:
+  nested_secret: do-not-copy
+details: ${longValue}
+status: hidden-unreferenced
+tags: [hidden, values]
+---
+body
+`
+    );
+    await fs.writeFile(
+      path.join(root, "q.base"),
+      `filters:
+  and:
+    - 'CUSTOM_field == "yes"'
+    - 'payload != null'
+    - 'details != null'
+`
+    );
+    const out = await queryBase(vault, { path: "q.base" });
+    expect(out.matches).toHaveLength(1);
+    const matchedOn = out.matches[0]?.matched_on;
+    expect(matchedOn).toEqual({
+      tags: ["hidden", "values"],
+      status: "hidden-unreferenced",
+      CUSTOM_field: "yes",
+      payload: "<object omitted>",
+      details: "<string omitted>"
+    });
+    expect(JSON.stringify(matchedOn)).not.toContain("do-not-copy");
+  });
+
+  it("replaces oversized legacy containers with markers instead of amplifying them per hit", async () => {
+    const { root, vault } = await makeBaseVault();
+    const tags = Array.from({ length: 33 }, (_, index) => `tag-${index}`).join(", ");
+    const objectEntries = Array.from({ length: 33 }, (_, index) => `  field_${index}: value_${index}`).join("\n");
+    await fs.writeFile(
+      path.join(root, "oversized.md"),
+      `---
+tags: [${tags}]
+status: ${"s".repeat(1_024)}
+type:
+${objectEntries}
+  secret: do-not-copy
+---
+oversized
+`
+    );
+    await fs.writeFile(path.join(root, "q.base"), "views:\n  - type: table\n");
+
+    const out = await queryBase(vault, { path: "q.base" });
+    const matchedOn = out.matches.find((match) => match.path === "oversized.md")?.matched_on;
+    expect(matchedOn).toEqual({
+      tags: "<array omitted: 33 items>",
+      status: "<string omitted>",
+      type: "<object omitted>"
+    });
+    expect(JSON.stringify(matchedOn)).not.toContain("do-not-copy");
+  });
+
+  it("rejects a filter whose matched_on key inventory would exceed its bound", async () => {
+    const { root, vault } = await makeBaseVault();
+    const predicates = Array.from({ length: 65 }, (_, index) => `    - 'key_${index} != null'`).join("\n");
+    await fs.writeFile(path.join(root, "q.base"), `filters:\n  and:\n${predicates}\n`);
+    await expect(queryBase(vault, { path: "q.base" })).rejects.toThrow(/more than 64 frontmatter keys/u);
+
+    const tooMany = Array.from({ length: 256 }, () => "    - 'true'").join("\n");
+    await fs.writeFile(path.join(root, "q.base"), `filters:\n  and:\n${tooMany}\n`);
+    await expect(queryBase(vault, { path: "q.base" })).rejects.toThrow(/256-node evaluation budget/u);
+
+    await fs.writeFile(path.join(root, "q.base"), `filters: '${"x".repeat(4_097)}'\n`);
+    await expect(queryBase(vault, { path: "q.base" })).rejects.toThrow(/4096 UTF-8 bytes/u);
   });
 
   // v3.5.0 — newly-supported predicates. Lock in closed deferrals.

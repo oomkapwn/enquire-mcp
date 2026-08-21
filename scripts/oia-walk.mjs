@@ -95,7 +95,9 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { load } from "js-yaml";
+import { expectedCoverageSourceFiles, normalizeCoverageReportedPath } from "./lib/coverage-policy.mjs";
 import { inspectEmbeddingsOfflineGuards } from "./lib/oia-offline-guard.mjs";
+import { inspectReleaseProvenanceWorkflow } from "./lib/oia-release-claims.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -346,8 +348,11 @@ walk("scripts", ".sh", (file) => {
 // This is the "claimed-guarantee vs code-guard" class (CLAUDE.md anti-pattern
 // since rc.7): the SLSA *level* claimed in docs MUST match what release.yml
 // actually does.
-//   • `npm publish --provenance` (+ GitHub OIDC) = SLSA Build **L2**
-//     (hosted builder + Sigstore-signed, non-forgeable-by-author provenance).
+//   • npm Trusted Publishing (+ GitHub OIDC) with an explicit `--provenance`
+//     flag, closed `NPM_CONFIG_PROVENANCE=true`, scrubbed provenance-file
+//     aliases, and closed NPM_ID_TOKEN/SIGSTORE_ID_TOKEN/GITLAB_CI identity
+//     carriers emits provenance and earns SLSA Build **L2** without a
+//     long-lived token.
 //   • SLSA Build **L3** requires an isolated, non-falsifiable builder, i.e.
 //     the `slsa-framework/slsa-github-generator` reusable workflow.
 //
@@ -356,11 +361,30 @@ walk("scripts", ".sh", (file) => {
 // This catches the #15 regression with zero network dependency.
 {
   const releaseYml = readLines(".github/workflows/release.yml").join("\n");
-  const earnsL3 = /slsa-framework\/slsa-github-generator/.test(releaseYml);
-  const doesProvenance = /npm publish[^\n]*--provenance/.test(releaseYml);
-  // Earned level: 3 if the isolated-builder generator is wired; 2 if only
-  // `npm publish --provenance`; 0 if neither (no provenance at all).
-  const earnedLevel = earnsL3 ? 3 : doesProvenance ? 2 : 0;
+  let releaseInspection = {
+    earnedLevel: 0,
+    publishCommandCount: 0,
+    provenancePublishCommandCount: 0,
+    problems: ["release workflow is not valid YAML"]
+  };
+  try {
+    releaseInspection = inspectReleaseProvenanceWorkflow(load(releaseYml));
+  } catch (error) {
+    releaseInspection.problems = [
+      `release workflow parse failed: ${error instanceof Error ? error.message : String(error)}`
+    ];
+  }
+  const earnedLevel = releaseInspection.earnedLevel;
+  const doesProvenance = releaseInspection.provenancePublishCommandCount === 1;
+  for (const problem of releaseInspection.problems) {
+    record(
+      "SLSA-WORKFLOW-MECHANISM",
+      ".github/workflows/release.yml",
+      1,
+      problem,
+      "Keep one semantic jobs.npm_publish Trusted Publishing command behind the exact verified handoff, protected environment, OIDC permission, canonical tarball, explicit --provenance, closed provenance config and identity carriers, and --ignore-scripts boundary."
+    );
+  }
   // Surfaces that carry the public SLSA/provenance claim. v3.9.0-rc.18 added
   // assets/social-preview.svg — the GitHub social card is the most-shared
   // visual of the repo and it carried a stale "SLSA-3" badge that rc.7's
@@ -377,10 +401,21 @@ walk("scripts", ".sh", (file) => {
   // Patterns that assert SLSA Build Level 3 (or the legacy "SLSA-3" shorthand,
   // or a badge linking to the L3 spec anchor).
   const l3ClaimRe = /\bSLSA[-\s]?3\b|\bSLSA\s+(?:Build\s+)?L(?:evel\s*)?3\b|levels#build-l3/i;
+  const l2ClaimRe =
+    /\bSLSA[-\s]?2\b|\bSLSA\s+(?:Build\s+)?L(?:evel\s*)?2\b|levels#build-l2|\bsigned\s+(?:npm\s+)?(?:build\s+)?provenance\b/i;
   for (const file of claimFiles) {
     const lines = readLines(file);
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i] ?? "";
+      if (l2ClaimRe.test(line) && earnedLevel < 2) {
+        record(
+          "SLSA-LEVEL-OVERCLAIM",
+          file,
+          i + 1,
+          line.trim().slice(0, 140),
+          `Doc claims signed npm/SLSA Build L2 provenance but release.yml earns Build L${earnedLevel}. Require one exact lifecycle-disabled npm Trusted Publishing command with verified handoff, protected environment, and effective id-token: write; comments and echo text do not count.`
+        );
+      }
       if (!l3ClaimRe.test(line)) continue;
       // A doc may legitimately mention L3 as a ROADMAP/future target — skip
       // lines that frame it as not-yet-earned.
@@ -391,7 +426,7 @@ walk("scripts", ".sh", (file) => {
           file,
           i + 1,
           line.trim().slice(0, 140),
-          `Doc claims SLSA Build L3 but release.yml only earns Build L${earnedLevel} (it does ${doesProvenance ? "`npm publish --provenance` = L2" : "no provenance"}; L3 needs slsa-framework/slsa-github-generator). Either adopt the isolated-builder generator, OR phrase the L3 mention as a roadmap target (add "roadmap"/"planned"/"on the roadmap").`
+          `Doc claims SLSA Build L3 but release.yml only earns Build L${earnedLevel} (it does ${doesProvenance ? "one exact OIDC Trusted Publishing command with explicit fail-closed provenance" : "no proven publication provenance"}; L3 needs a pinned generator job linked into publication). Either adopt the isolated-builder generator, OR phrase the L3 mention as a roadmap target (add "roadmap"/"planned"/"on the roadmap").`
         );
       }
     }
@@ -419,7 +454,7 @@ if (!SKIP_NETWORK) {
           "package.json",
           5,
           `npm @oomkapwn/enquire-mcp@${currentVersion} has no signed build-provenance attestation`,
-          `Docs claim signed build provenance (SLSA L2) but the current published version lacks dist.attestations. This typically means a manual \`npm publish\` (without --provenance) shipped this version. Releases must go through CI (release.yml uses --provenance). Pass --skip-network to skip (offline environments).`
+          `Docs claim signed build provenance (SLSA L2) but the current published version lacks dist.attestations. This typically means publication bypassed the protected npm Trusted Publishing job. Releases must go through release.yml's exact verified handoff and OIDC boundary. Pass --skip-network to skip (offline environments).`
         );
       }
     }
@@ -615,12 +650,10 @@ walk("src", ".ts", (file) => {
 //
 // Pattern: per-file coverage entries in check-per-file-coverage.mjs have
 // "// current X%" annotations. This check scans them and compares against
-// coverage/coverage-summary.json (when present from a recent `npm run
-// test:coverage` run). Drift > 1pp triggers a finding.
-//
-// Skipped when coverage-summary.json doesn't exist (cold CI without
-// coverage run) — this is not an authoritative check, just a state-driven
-// confirmation that documentation matches measurement.
+// coverage/coverage-summary.json produced by the immediately preceding
+// `npm run test:coverage` run. Drift > 1pp triggers a finding. A missing,
+// malformed, incomplete, or non-finite summary is itself a finding: absence
+// of evidence cannot be treated as evidence that the comments are current.
 //
 // IMPORTANT (v3.8.0-rc.18 S-AUDIT-3, self-audit on rc.17):
 // On dirty dev trees with STALE coverage-summary.json (e.g. from a
@@ -628,60 +661,200 @@ walk("src", ".ts", (file) => {
 // false-positive STALE-COVERAGE-COMMENT finding even when the floor is
 // still met. Workflow: ALWAYS run `npm run test:coverage` IMMEDIATELY
 // BEFORE `npm run check:oia` so the summary.json reflects current code.
-// CI's `coverage` job runs before the `oia` job — fine in CI. For local
-// dev, the recommended sequence is:
+// CI's `oia` job needs `coverage` and downloads that job's same-run artifact.
+// For local dev, the recommended sequence is:
 //   npm run test:coverage && npm run check:oia
 // This script does NOT auto-run test:coverage to keep the check fast in
 // CI (where coverage already ran) and to avoid masking the staleness
 // signal — surfaced explicitly in the error message for clarity.
 {
-  const summaryPath = join(repoRoot, "coverage", "coverage-summary.json");
-  if (existsSync(summaryPath)) {
-    let summary;
-    try {
-      summary = JSON.parse(readFileSync(summaryPath, "utf8"));
-    } catch {
-      summary = null;
+  const summaryRel = "coverage/coverage-summary.json";
+  const summaryPath = join(repoRoot, summaryRel);
+  const checkerPath = "scripts/check-per-file-coverage.mjs";
+  const checkerSrc = readFileSync(join(repoRoot, checkerPath), "utf8");
+  const checkerLines = checkerSrc.split("\n");
+  // Pattern: "src/foo.ts": { branches: N [, lines: M ...] }, // current [branches ]X% [...rest]
+  // v3.9.0-rc.24 — broadened from single-key `{ branches: N }` + `// current X%`:
+  // rc.23 added two-key floors (`{ branches, lines }`) + a `// current branches X% / lines Y%`
+  // comment, which the old regex silently dropped from drift-checking (the very gap this
+  // check exists to prevent). Now tolerates extra floor keys + an optional `branches ` word
+  // before the percent; still extracts the BRANCHES percent for the drift comparison.
+  const lineRe =
+    /"(src\/[\w./-]+)":\s*\{\s*branches:\s*\d+[^}]*\}\s*,?\s*\/\/\s*current\s*(?:branches\s*)?~?(\d+(?:\.\d+)?)%/;
+  const annotatedComments = [];
+  for (let i = 0; i < checkerLines.length; i++) {
+    const line = checkerLines[i] ?? "";
+    const match = lineRe.exec(line);
+    if (match) {
+      annotatedComments.push({
+        filePath: match[1],
+        claimedPercent: Number(match[2]),
+        line,
+        lineNumber: i + 1
+      });
     }
-    if (summary) {
-      const checkerPath = "scripts/check-per-file-coverage.mjs";
-      const checkerSrc = readFileSync(join(repoRoot, checkerPath), "utf8");
-      const checkerLines = checkerSrc.split("\n");
-      // Pattern: "src/foo.ts": { branches: N [, lines: M ...] }, // current [branches ]X% [...rest]
-      // v3.9.0-rc.24 — broadened from single-key `{ branches: N }` + `// current X%`:
-      // rc.23 added two-key floors (`{ branches, lines }`) + a `// current branches X% / lines Y%`
-      // comment, which the old regex silently dropped from drift-checking (the very gap this
-      // check exists to prevent). Now tolerates extra floor keys + an optional `branches ` word
-      // before the percent; still extracts the BRANCHES percent for the drift comparison.
-      const lineRe =
-        /"(src\/[\w./-]+)":\s*\{\s*branches:\s*\d+[^}]*\}\s*,?\s*\/\/\s*current\s*(?:branches\s*)?~?(\d+(?:\.\d+)?)%/;
-      for (let i = 0; i < checkerLines.length; i++) {
-        const line = checkerLines[i] ?? "";
-        const m = lineRe.exec(line);
-        if (!m) continue;
-        const filePath = m[1];
-        const claimedPercent = parseFloat(m[2] ?? "0");
-        // Find the matching entry in coverage-summary.json. Keys are
-        // absolute paths; normalize to relative.
-        let actualPercent = null;
-        for (const [absPath, metrics] of Object.entries(summary)) {
-          if (absPath === "total") continue;
-          if (absPath.endsWith(`/${filePath}`) && metrics?.branches?.pct !== undefined) {
-            actualPercent = metrics.branches.pct;
-            break;
+  }
+
+  const isRecord = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
+  const metricNames = ["lines", "statements", "functions", "branches"];
+  const coverageEntryProblem = (label, value) => {
+    if (!isRecord(value)) return `${label} must be an object`;
+    for (const metricName of metricNames) {
+      const metric = value[metricName];
+      if (!isRecord(metric)) return `${label}.${metricName} must be an object`;
+      for (const field of ["total", "covered", "skipped"]) {
+        if (!Object.hasOwn(metric, field)) return `${label}.${metricName}.${field} is missing`;
+        const count = metric[field];
+        if (!Number.isSafeInteger(count) || count < 0) {
+          return `${label}.${metricName}.${field} must be a non-negative safe integer`;
+        }
+      }
+      if (metric.covered > metric.total || metric.skipped > metric.total) {
+        return `${label}.${metricName} counts exceed total`;
+      }
+      if (!Object.hasOwn(metric, "pct")) return `${label}.${metricName}.pct is missing`;
+      if (typeof metric.pct !== "number" || !Number.isFinite(metric.pct) || metric.pct < 0 || metric.pct > 100) {
+        return `${label}.${metricName}.pct must be a finite number from 0 through 100`;
+      }
+    }
+    return null;
+  };
+
+  let summary = null;
+  let normalizedSummaryEntries = null;
+  if (!existsSync(summaryPath)) {
+    record(
+      "COVERAGE-SUMMARY-MISSING",
+      summaryRel,
+      1,
+      "coverage-summary.json is absent",
+      "Run `npm run test:coverage` immediately before OIA. In CI, keep the OIA job dependent on coverage and download the same-run `coverage-report` artifact into coverage/."
+    );
+  } else {
+    let parsed;
+    let parsedSuccessfully = false;
+    try {
+      parsed = JSON.parse(readFileSync(summaryPath, "utf8"));
+      parsedSuccessfully = true;
+    } catch (error) {
+      record(
+        "COVERAGE-SUMMARY-MALFORMED",
+        summaryRel,
+        1,
+        `coverage-summary.json is not valid JSON: ${error instanceof Error ? error.message : String(error)}`,
+        "Regenerate the summary with `npm run test:coverage`; do not hand-edit or reuse a partial artifact."
+      );
+    }
+    if (parsedSuccessfully) {
+      if (!isRecord(parsed)) {
+        record(
+          "COVERAGE-SUMMARY-MALFORMED",
+          summaryRel,
+          1,
+          "coverage-summary.json root must be an object",
+          "Regenerate the summary with `npm run test:coverage`; the OIA input must be a complete Istanbul summary."
+        );
+      } else {
+        const entries = Object.entries(parsed);
+        const sourceEntries = entries.filter(([label]) => label !== "total");
+        let problem = Object.hasOwn(parsed, "total")
+          ? coverageEntryProblem("total", parsed.total)
+          : "required total entry is missing";
+        if (problem === null && sourceEntries.length === 0) problem = "no source-file coverage entries are present";
+        if (problem === null) {
+          for (const [label, value] of sourceEntries) {
+            problem = coverageEntryProblem(label, value);
+            if (problem !== null) break;
           }
         }
-        if (actualPercent === null) continue; // file not in coverage report
-        const drift = Math.abs(actualPercent - claimedPercent);
-        if (drift > 1.0) {
+        if (problem !== null) {
           record(
-            "STALE-COVERAGE-COMMENT",
-            checkerPath,
-            i + 1,
-            line.trim(),
-            `Inline comment claims ~${claimedPercent}% for ${filePath} but coverage-summary.json says ${actualPercent.toFixed(2)}% (drift ${drift.toFixed(2)}pp). Update the comment to match reality, or remove the percentage annotation if maintenance burden outweighs value.`
+            "COVERAGE-SUMMARY-MALFORMED",
+            summaryRel,
+            1,
+            problem,
+            "Regenerate the summary with `npm run test:coverage`; missing, non-finite, or structurally incomplete metrics fail closed."
           );
+        } else {
+          let expectedFiles = [];
+          let inventoryProblem = null;
+          try {
+            expectedFiles = expectedCoverageSourceFiles(repoRoot);
+          } catch (error) {
+            inventoryProblem = error instanceof Error ? error.message : String(error);
+          }
+          const normalizedEntries = new Map();
+          const duplicateFiles = [];
+          const outsideFiles = [];
+          if (inventoryProblem === null) {
+            for (const [reportedPath, value] of sourceEntries) {
+              const normalized = normalizeCoverageReportedPath(repoRoot, reportedPath);
+              if (normalized === null) {
+                outsideFiles.push(reportedPath);
+                continue;
+              }
+              if (normalizedEntries.has(normalized)) duplicateFiles.push(normalized);
+              else normalizedEntries.set(normalized, value);
+            }
+            const expectedSet = new Set(expectedFiles);
+            const missingFiles = expectedFiles.filter((file) => !normalizedEntries.has(file));
+            const extraFiles = [...normalizedEntries.keys()].filter((file) => !expectedSet.has(file)).sort();
+            if (
+              outsideFiles.length > 0 ||
+              duplicateFiles.length > 0 ||
+              missingFiles.length > 0 ||
+              extraFiles.length > 0
+            ) {
+              const summarize = (label, values) =>
+                values.length === 0 ? `${label}=0` : `${label}=${values.length} [${values.slice(0, 8).join(", ")}]`;
+              inventoryProblem = [
+                summarize("outside", outsideFiles),
+                summarize("duplicate", duplicateFiles),
+                summarize("missing", missingFiles),
+                summarize("extra", extraFiles)
+              ].join("; ");
+            }
+          }
+          if (inventoryProblem !== null) {
+            record(
+              "COVERAGE-UNIVERSE-DRIFT",
+              summaryRel,
+              1,
+              inventoryProblem,
+              "Regenerate coverage with the reviewed exact include/exclude policy. Every non-excluded src/**/*.ts file must appear exactly once, with no outside or extra entries."
+            );
+          } else {
+            summary = parsed;
+            normalizedSummaryEntries = normalizedEntries;
+          }
         }
+      }
+    }
+  }
+
+  if (summary !== null && normalizedSummaryEntries !== null) {
+    for (const { filePath, claimedPercent, line, lineNumber } of annotatedComments) {
+      const matchingEntry = normalizedSummaryEntries.get(filePath);
+      if (matchingEntry === undefined) {
+        record(
+          "COVERAGE-ENTRY-MISSING",
+          summaryRel,
+          1,
+          `${filePath} has no exact normalized coverage entry`,
+          "Regenerate coverage from this checkout and ensure every annotated per-file floor remains included exactly once."
+        );
+        continue;
+      }
+      const actualPercent = matchingEntry.branches.pct;
+      const drift = Math.abs(actualPercent - claimedPercent);
+      if (drift > 1.0) {
+        record(
+          "STALE-COVERAGE-COMMENT",
+          checkerPath,
+          lineNumber,
+          line.trim(),
+          `Inline comment claims ~${claimedPercent}% for ${filePath} but coverage-summary.json says ${actualPercent.toFixed(2)}% (drift ${drift.toFixed(2)}pp). Update the comment to match reality, or remove the percentage annotation if maintenance burden outweighs value.`
+        );
       }
     }
   }
@@ -1031,7 +1204,7 @@ for (const docFile of DOCS_FILES_TO_SCAN) {
 // five-minute breaker before the actual audit started. Parse the workflow with
 // the pinned project YAML parser and inventory the whole class instead of
 // grepping one bare spelling:
-// exactly 15 reviewed jobs invoke one fixed helper after setup-node; every
+// exactly 16 reviewed jobs invoke one fixed helper after setup-node; every
 // literal npm-bearing run command belongs to one exact semantic inventory;
 // every job keeps its composed timeout; and both Linux audit steps have their
 // own TERM-to-KILL deadline.
@@ -1049,6 +1222,7 @@ for (const docFile of DOCS_FILES_TO_SCAN) {
   const matrixOs = `\${{ matrix.os }}`;
   const matrixNodeVersion = `\${{ matrix.node-version }}`;
   const alwaysCondition = `\${{ always() }}`;
+  const mainRefCondition = `\${{ github.ref == 'refs/heads/main' }}`;
   const expectedJobs = new Map([
     [
       "ci.yml",
@@ -1062,6 +1236,7 @@ for (const docFile of DOCS_FILES_TO_SCAN) {
         ["oia", 10],
         ["smoke", 10],
         ["protocol-conformance-matrix", 20],
+        ["npm-package", 20],
         ["package-consumer-matrix", 30],
         ["mcpb-basic-package", 40],
         ["mcpb-basic-matrix", 30],
@@ -1069,7 +1244,7 @@ for (const docFile of DOCS_FILES_TO_SCAN) {
       ])
     ],
     ["publish-docs.yml", new Map([["build", 10]])],
-    ["release.yml", new Map([["publish", 240]])]
+    ["release.yml", new Map([["verify", 240]])]
   ]);
   const expectedJobEnvironments = new Map([
     ["ci.yml#test", { NPM_CONFIG_ENGINE_STRICT: "true" }],
@@ -1091,7 +1266,8 @@ for (const docFile of DOCS_FILES_TO_SCAN) {
     ],
     ["ci.yml#mcpb-basic-package", { NPM_CONFIG_ENGINE_STRICT: "true", NPM_CONFIG_SCRIPT_SHELL: "/bin/bash" }],
     ["ci.yml#mcpb-basic-matrix", { NPM_CONFIG_ENGINE_STRICT: "true", NPM_CONFIG_SCRIPT_SHELL: matrixScriptShell }],
-    ["release.yml#publish", { BASH_ENV: "" }]
+    ["ci.yml#npm-package", { NPM_CONFIG_ENGINE_STRICT: "true", NPM_CONFIG_SCRIPT_SHELL: "/bin/bash" }],
+    ["release.yml#verify", { BASH_ENV: "" }]
   ]);
   const expectedJobRunners = new Map([
     ["ci.yml#lint", "ubuntu-latest"],
@@ -1103,12 +1279,13 @@ for (const docFile of DOCS_FILES_TO_SCAN) {
     ["ci.yml#oia", "ubuntu-latest"],
     ["ci.yml#smoke", "ubuntu-latest"],
     ["ci.yml#protocol-conformance-matrix", matrixOs],
+    ["ci.yml#npm-package", "ubuntu-latest"],
     ["ci.yml#package-consumer-matrix", matrixOs],
     ["ci.yml#mcpb-basic-package", "ubuntu-latest"],
     ["ci.yml#mcpb-basic-matrix", matrixOs],
     ["ci.yml#audit", "ubuntu-latest"],
     ["publish-docs.yml#build", "ubuntu-latest"],
-    ["release.yml#publish", "ubuntu-latest"]
+    ["release.yml#verify", "ubuntu-latest"]
   ]);
   const expectedSetupInputs = new Map([
     ["ci.yml#lint", { "node-version": 22, cache: "npm" }],
@@ -1123,6 +1300,7 @@ for (const docFile of DOCS_FILES_TO_SCAN) {
       "ci.yml#protocol-conformance-matrix",
       { "node-version": "22.13.0", cache: "npm", "cache-dependency-path": "package-lock.json" }
     ],
+    ["ci.yml#npm-package", { "node-version": "22.13.0", cache: "npm", "cache-dependency-path": "package-lock.json" }],
     [
       "ci.yml#package-consumer-matrix",
       { "node-version": "22.13.0", cache: "npm", "cache-dependency-path": "package-lock.json" }
@@ -1138,7 +1316,7 @@ for (const docFile of DOCS_FILES_TO_SCAN) {
     ["ci.yml#audit", { "node-version": 22, cache: "npm" }],
     ["publish-docs.yml#build", { "node-version": 22, cache: "npm" }],
     [
-      "release.yml#publish",
+      "release.yml#verify",
       {
         "node-version": "22.13.0",
         "registry-url": "https://registry.npmjs.org",
@@ -1157,12 +1335,13 @@ for (const docFile of DOCS_FILES_TO_SCAN) {
     ["ci.yml#oia", "559a7e13a198905e6ac358a1914d6e9fa087ad055f55b27c380ae171424f3d6b"],
     ["ci.yml#smoke", "44d845e567d5c3e9e38e265a970b7d2cbce33377b7ba78137effe85ca99e9110"],
     ["ci.yml#protocol-conformance-matrix", "7ec0b012fca4c5f77005997e6e4c43ce04b44e55dbf1d1f7ffcc313d1d3c552f"],
+    ["ci.yml#npm-package", "7ec0b012fca4c5f77005997e6e4c43ce04b44e55dbf1d1f7ffcc313d1d3c552f"],
     ["ci.yml#package-consumer-matrix", "7ec0b012fca4c5f77005997e6e4c43ce04b44e55dbf1d1f7ffcc313d1d3c552f"],
     ["ci.yml#mcpb-basic-package", "7ec0b012fca4c5f77005997e6e4c43ce04b44e55dbf1d1f7ffcc313d1d3c552f"],
     ["ci.yml#mcpb-basic-matrix", "7ec0b012fca4c5f77005997e6e4c43ce04b44e55dbf1d1f7ffcc313d1d3c552f"],
     ["ci.yml#audit", "559a7e13a198905e6ac358a1914d6e9fa087ad055f55b27c380ae171424f3d6b"],
-    ["publish-docs.yml#build", "559a7e13a198905e6ac358a1914d6e9fa087ad055f55b27c380ae171424f3d6b"],
-    ["release.yml#publish", "45d78043dcd5f1d0d38219d315b55674296d868fa1faef009ba630af06ced2f6"]
+    ["publish-docs.yml#build", "d6d9a6ab99423dc354d027dbb535c854e9e95836acb250c1f4bfa21d28a7d302"],
+    ["release.yml#verify", "add39e96ceac3beefa408d899638c13ef462ee9a85ca184bfb7a9a48c0a95144"]
   ]);
   const expectedNpmCommandDigests = new Map([
     ["ci.yml#lint", "85cb42a92181265d2458eb8b7a7aa737143eda0c7d4a6dd3349b4955e49adfcf"],
@@ -1174,17 +1353,21 @@ for (const docFile of DOCS_FILES_TO_SCAN) {
     ["ci.yml#oia", "03789343a6bc223162c6f26dba4e44d7704d14ecfadb083f32065825f48a8d6b"],
     ["ci.yml#smoke", "4158b622c017e1e9463d27732c2ef0d4277807309f5e18a3867fb6500837585a"],
     ["ci.yml#protocol-conformance-matrix", "4158b622c017e1e9463d27732c2ef0d4277807309f5e18a3867fb6500837585a"],
-    ["ci.yml#package-consumer-matrix", "4158b622c017e1e9463d27732c2ef0d4277807309f5e18a3867fb6500837585a"],
+    ["ci.yml#npm-package", "d221317662f47cffbf2eadf71360f8802984099a2f8a791bab4e2460f210603d"],
+    ["ci.yml#package-consumer-matrix", "f46f0ccb90328555e5e9f898433db6bbb6b23930aa52170916f60e2b2c6e1d73"],
     ["ci.yml#mcpb-basic-package", "72f8f9db912e223c63e5245d948adc6c23299a60262bd7ba22d2c106654181f6"],
     ["ci.yml#mcpb-basic-matrix", "428a7037595e3943656994b9fd69aec7639287929316ef9ffbe017c37490ae82"],
     ["ci.yml#audit", "257a09114a4e895df831ace40f70115b66d7ae38a41eb166ff5dca10df1b245c"],
-    ["dist-tag-cleanup.yml#cleanup", "80391e9a5a0ba770920e7798c6b4d8066035884c9b95b9cb5b4d9ff10768e5d5"],
+    ["dist-tag-cleanup.yml#cleanup", "b1dcb901eb22fd286c299b8e3ee1ac9f21cb529665be150c9a476b5a305e4ce0"],
     ["publish-docs.yml#build", "476bc2a8aea0d3def4c805b616058ba0c4aea7f9d940e73a5d9da4b5b977cfba"],
-    ["release.yml#publish", "1336676a0ee7b70b0c1ba51a7d28b8d32dc553cd93eec2b28f83781280bd1905"]
+    ["release.yml#verify", "c64ebc8bf2b792a5e7d55538cfead70f084caaee61b550ec05cafcae67d4ede5"],
+    ["release.yml#npm_publish", "f3d3b74973f767d496b6bc00c58e33f9cacd0449fd5fa89eb0b925e3eb553afb"],
+    ["release.yml#github_release", "108ecb3285e85905af15541a079ba1877e7713da88bb51e3c0f8f00f30aa5dec"],
+    ["release.yml#mcp_registry", "d70a7be8dfcff2a2e062a88235709adc0186487cda56100c9e33f3ec423f385a"]
   ]);
   const expectedPreauditDigests = new Map([
     ["ci.yml#audit", "877eb535025aaf14a917f52fd1a871e38a2c26836a6df19f5cc42a31f32eb6f6"],
-    ["release.yml#publish", "308eefba014372d2abb1f79273996ce4c8840cb956d3436c7ab2fddcc178d00a"]
+    ["release.yml#verify", "cc04209af39705adeddc6e5eaa10f53a6a259bd0b84efefb2dd5d5c0471f31c7"]
   ]);
   const bashDefaultJobs = new Set([
     "ci.yml#test-windows",
@@ -1448,7 +1631,12 @@ for (const docFile of DOCS_FILES_TO_SCAN) {
           defaultRun.shell === "bash"
         : parsedJob?.defaults === undefined;
       const expectedContinueOnError = identity === "ci.yml#test-macos" ? true : undefined;
-      const expectedIf = identity === "ci.yml#smoke" ? alwaysCondition : undefined;
+      const expectedIf =
+        identity === "ci.yml#smoke"
+          ? alwaysCondition
+          : identity === "publish-docs.yml#build"
+            ? mainRefCondition
+            : undefined;
       if (
         parsedJob === undefined ||
         parsedJob["runs-on"] !== expectedJobRunners.get(identity) ||
@@ -1605,29 +1793,29 @@ for (const docFile of DOCS_FILES_TO_SCAN) {
       );
     }
   }
-  if (helperCount !== 15) {
+  if (helperCount !== 16) {
     record(
       "NPM-CI-INVENTORY-CARDINALITY",
       wfDir,
       1,
       `bounded helper invocations=${helperCount}`,
-      "Exactly 15 reviewed workflow jobs must invoke the bounded npm-ci helper."
+      "Exactly 16 reviewed workflow jobs must invoke the bounded npm-ci helper."
     );
   }
-  if (helperTokenCount !== 15) {
+  if (helperTokenCount !== 16) {
     record(
       "NPM-CI-INVENTORY-CARDINALITY",
       wfDir,
       1,
       `all bounded-helper command tokens=${helperTokenCount}`,
-      "Exactly 15 workflow run commands may mention the bounded helper, and each must be one canonical reviewed step."
+      "Exactly 16 workflow run commands may mention the bounded helper, and each must be one canonical reviewed step."
     );
   }
 
   let boundedAuditCount = 0;
   for (const [workflowName, jobId] of [
     ["ci.yml", "audit"],
-    ["release.yml", "publish"]
+    ["release.yml", "verify"]
   ]) {
     const rel = join(wfDir, workflowName);
     const lines = existsSync(join(repoRoot, rel)) ? readLines(rel) : [];
@@ -1655,7 +1843,7 @@ for (const docFile of DOCS_FILES_TO_SCAN) {
         rel,
         jobBlock?.line ?? 1,
         `${jobId}: bounded audit commands=${auditSteps.length}`,
-        `Both CI audit and release publish must run exactly ${auditCommand} after their bounded install; a raw check:audit can consume the remaining job budget.`
+        `Both CI audit and unprivileged release verification must run exactly ${auditCommand} after their bounded install; a raw check:audit can consume the remaining job budget.`
       );
     }
   }

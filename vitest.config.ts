@@ -1,4 +1,5 @@
 import { defineConfig } from "vitest/config";
+import { COVERAGE_EXCLUDE_PATTERNS } from "./scripts/lib/coverage-policy.mjs";
 
 export default defineConfig({
   test: {
@@ -32,12 +33,10 @@ export default defineConfig({
       // (inflated stats copy-pasted from sub-agent output into release notes).
       reporter: ["text", "html", "lcov", "json-summary"],
       include: ["src/**/*.ts"],
-      // v3.6.0-rc.4 — registration-boilerplate exclude pivoted from exact
-      // paths to a brace-glob pattern. Rationale (Class A invariant fix):
-      // the rc.2 monolith split hardcoded 6 individual paths after running
-      // into the OLD `["src/index.ts"]` becoming stale post-split. A glob
-      // pattern is refactor-resistant — adding/renaming registration files
-      // in this category won't break coverage thresholds again.
+      // Registration/bootstrap exclusions are an exact, reviewed inventory.
+      // OIA independently enumerates src/**/*.ts and requires the coverage
+      // summary to contain every other source exactly once. A broad glob can
+      // silently make newly extracted logic disappear from the denominator.
       //
       // What "registration boilerplate" means here: code whose purpose is
       // to wire up the MCP server (CLI parsing, server construction,
@@ -45,10 +44,7 @@ export default defineConfig({
       // actual tool LOGIC is in `src/tools/*` which STAYS included + tested.
       // Without these exclusions coverage drops from ~89% lines to ~78%
       // (-11pp), which is an include-set artifact, not test quality.
-      exclude: [
-        "src/{index,cli,server,tool-registry,prompts,tool-manifest}.ts",
-        "**/*.test.ts"
-      ],
+      exclude: [...COVERAGE_EXCLUDE_PATTERNS],
       // v3.6 — branches threshold raised 72→74 after the coverage uplift
       // pass. v3.5.9 had dropped it from 73→72 because local was at 72.94%
       // (knife-edge against CI). This release adds targeted tests for

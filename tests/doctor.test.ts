@@ -88,7 +88,7 @@ async function createFts(file: string, vaultRoot?: string, withRow = false): Pro
   const index = new FtsIndex({ file, vaultRoot: resolvedRoot });
   await index.open();
   if (withRow) index.reindexFile("sentinel.md", 1, "sentinel content");
-  index.close();
+  await index.closeAndRelease();
 }
 
 async function createEmbed(
@@ -798,7 +798,7 @@ describe("runDoctor — strict source-state preservation", () => {
     const after = await snapshotDir(dir);
     expect(result.checks.find((check) => check.id === "index:fts5")?.status).toBe("ok");
     expect(after).toEqual(before);
-    expect(after.names).toEqual(["current.fts5.db"]);
+    expect(after.names).toEqual([".enquire-mcp-leases", "current.fts5.db"]);
   });
 
   it("validates non-empty f32 and int8 embed indexes without changing their source state", async (ctx) => {
@@ -894,7 +894,7 @@ describe("runDoctor — strict source-state preservation", () => {
     const trigramIndex = new FtsIndex({ file: indexFile, vaultRoot, tokenize: "trigram" });
     await trigramIndex.open();
     trigramIndex.reindexFile("sentinel.md", 1, "sentinel content");
-    trigramIndex.close();
+    await trigramIndex.closeAndRelease();
     const before = await snapshotDir(dir);
 
     // A low-level no-argument open deliberately retains same-root rebuild
@@ -903,7 +903,7 @@ describe("runDoctor — strict source-state preservation", () => {
     const mutatingPrimitive = new FtsIndex({ file: indexFile, vaultRoot });
     await mutatingPrimitive.open();
     expect(mutatingPrimitive.totalChunks()).toBe(0);
-    mutatingPrimitive.close();
+    await mutatingPrimitive.closeAndRelease();
 
     const after = await snapshotDir(dir);
     expect(after).not.toEqual(before);
@@ -1350,7 +1350,7 @@ describe("runDoctor — strict source-state preservation", () => {
       expect(result.ready).toBe(false);
       expect(after).toEqual(before);
     } finally {
-      index.close();
+      await index.closeAndRelease();
     }
   });
 

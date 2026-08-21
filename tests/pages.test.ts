@@ -118,7 +118,6 @@ describe("GitHub Pages artifact", () => {
     expect(landing).toContain("Complete leadership standard");
     expect(landing).toContain("Reviewed 2026-07-30");
     expect(landing).toContain("<strong>19</strong><span>MCP prompts</span>");
-    expect(landing).toContain("<strong>1,807</strong><span>public tests</span>");
     expect(landing).toContain("<strong>50+</strong><span>embedder languages</span>");
     expect(landing).toContain("BM25 + TF-IDF + ML + RRF + BGE + HNSW/int8");
     expect(landing).toContain("Dataview-style LIST/TABLE queries");

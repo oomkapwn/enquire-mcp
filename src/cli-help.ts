@@ -85,6 +85,14 @@ export const DISABLED_TOOLS_HELP =
 export const ENABLED_TOOLS_HELP =
   "Strict allowlist — when set, ONLY listed tools register. Complement to --disabled-tools (denylist). If both are set: a tool must be in the allowlist AND not in the denylist. Repeatable. Example: `--enabled-tools obsidian_search_text obsidian_read_note obsidian_get_recent_edits`.";
 
+/** Shared vault-path privacy denylist contract for every command that reads or indexes vault content. */
+export const EXCLUDE_GLOB_HELP =
+  "Privacy denylist — paths matching any glob are invisible and refuse direct reads; index/build/query/eval commands also omit them from persisted or returned results. Supports `*`, `**`, `?`; repeatable. Example: `--exclude-glob '02_Personal/**' '*.private.md'`.";
+
+/** Shared vault-path privacy allowlist contract for every command that reads or indexes vault content. */
+export const READ_PATHS_HELP =
+  "Strict privacy allowlist — ONLY paths matching at least one glob are visible; an explicit empty allowlist is rejected. With --exclude-glob, a path must match the allowlist and no denylist pattern. Supports `*`, `**`, `?`; repeatable. Example: `--read-paths '01_Projects/**' '99_Daily/**'`.";
+
 /**
  * `--tokenize` flag help (v3.8.0-rc.11 M-1 root-class fix). Pre-rc.11 serve
  * mentioned "Latin/Cyrillic" and "CJK/mixed-script", serve-http omitted these

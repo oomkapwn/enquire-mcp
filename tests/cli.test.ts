@@ -6,8 +6,10 @@ import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { EmbedDb, peekEmbedDbMeta } from "../src/embed-db.js";
+import { FeedbackStore } from "../src/feedback.js";
 import { defaultIndexFile, peekFtsMetaSafe } from "../src/fts5.js";
 import { parsePositiveInt, parseQuantizationMode, prepareServerDeps } from "../src/index.js";
+import { acquirePersistenceNamespaceEraser } from "../src/persistence-coordination.js";
 import {
   armWatcherActivationGuard,
   releaseWatcherActivationGuard,
@@ -32,6 +34,10 @@ describe("parsePositiveInt — CLI numeric flag validation (audit P2-2)", () => 
 
   it("accepts a large integer", () => {
     expect(parsePositiveInt("5242880", "--max-file-bytes")).toBe(5242880);
+  });
+
+  it("accepts the caller-supplied inclusive maximum", () => {
+    expect(parsePositiveInt("4294967295", "--hnsw-ef", 0xffff_ffff)).toBe(0xffff_ffff);
   });
 
   it("rejects NaN literal", () => {
@@ -66,9 +72,77 @@ describe("parsePositiveInt — CLI numeric flag validation (audit P2-2)", () => 
     expect(() => parsePositiveInt("1.5", "--max-file-bytes")).toThrow(/positive integer/);
   });
 
+  it.each(["9007199254740992", "9007199254740993"])("rejects unsafe integer spelling %s", (raw) => {
+    expect(() => parsePositiveInt(raw, "--max-file-bytes")).toThrow(/positive integer/);
+  });
+
+  it.each([" 1", "1 ", "+1", "01", "1.0", "1e3", "0x10", "0b10"])(
+    "rejects non-canonical decimal spelling %j",
+    (raw) => {
+      expect(() => parsePositiveInt(raw, "--max-file-bytes")).toThrow(/positive integer/);
+    }
+  );
+
+  it("rejects a value above the caller-supplied native maximum", () => {
+    expect(() => parsePositiveInt("4294967296", "--hnsw-ef", 0xffff_ffff)).toThrow(/4294967295/);
+  });
+
+  it.each([0, Number.NaN, Number.POSITIVE_INFINITY, 1.5, Number.MAX_SAFE_INTEGER + 1])(
+    "rejects an invalid parser maximum %s",
+    (maximum) => {
+      expect(() => parsePositiveInt("1", "--limit", maximum)).toThrow(
+        new TypeError("parsePositiveInt maximum must be a positive safe integer")
+      );
+    }
+  );
+
   it("includes the flag name in the error", () => {
     expect(() => parsePositiveInt("oops", "--cache-size")).toThrow(/--cache-size/);
   });
+});
+
+describe("prepareServerDeps — runtime authority admission", () => {
+  it.each([
+    ["enableWrite", "false", "a boolean"],
+    ["persistentCache", "false", "a boolean"],
+    ["watch", 1, "a boolean"],
+    ["disabledTools", "obsidian_read_note", "an array of strings"],
+    ["enabledTools", "obsidian_read_note", "an array of strings"]
+  ] as const)("rejects malformed programmatic option %s before vault I/O", async (name, value, expected) => {
+    await expect(
+      prepareServerDeps({
+        vault: "/not-opened-because-runtime-admission-fails",
+        [name]: value
+      } as never)
+    ).rejects.toThrow(new TypeError(`Serve option ${name} must be ${expected}`));
+  });
+
+  it("rejects an explicit empty read-path allowlist before vault I/O", async () => {
+    await expect(
+      prepareServerDeps({ vault: "/not-opened-because-runtime-admission-fails", readPaths: [] })
+    ).rejects.toThrow(new TypeError("Serve option readPaths must not be an empty allowlist"));
+  });
+
+  it.each(["disabledTools", "enabledTools"] as const)("rejects empty names in %s before vault I/O", async (name) => {
+    await expect(
+      prepareServerDeps({
+        vault: "/not-opened-because-runtime-admission-fails",
+        [name]: [" "]
+      })
+    ).rejects.toThrow(new TypeError(`Serve option ${name} must contain canonical tool names without outer whitespace`));
+  });
+
+  it.each(["readPath", "excludeGlobs", "disabledTool"])(
+    "rejects unknown programmatic option %s before vault I/O",
+    async (name) => {
+      await expect(
+        prepareServerDeps({
+          vault: "/not-opened-because-runtime-admission-fails",
+          [name]: ["Public/**"]
+        } as never)
+      ).rejects.toThrow(new TypeError(`Unknown serve option ${name}`));
+    }
+  );
 });
 
 describe("parseQuantizationMode — v2.17.0 --quantize-embeddings validation", () => {
@@ -596,8 +670,31 @@ describe("CLI subcommands E2E (against built dist/)", () => {
       timeout: 20000
     });
     expect(res.status).toBe(0);
-    expect(res.stdout).toMatch(/DRY RUN|already clean/);
+    expect(res.stdout).toMatch(/DRY RUN|already clean|no cache directory/);
     expect(res.stdout).not.toMatch(/enquire prune: removed/);
+  });
+
+  it("`prune` dry-run does not create a lease namespace or mutate the planned artifact", async (ctx) => {
+    if (!distExists()) return ctx.skip();
+    const cacheRoot = path.join(tmpdir, "prune-dry-run-root");
+    const enquireDir = path.join(cacheRoot, "enquire");
+    await fs.mkdir(enquireDir, { recursive: true });
+    const keepHash = path.basename(defaultIndexFile(await fs.realpath(vault))).slice(0, 12);
+    const otherHash = keepHash === "bbbbbbbbbbbb" ? "cccccccccccc" : "bbbbbbbbbbbb";
+    const artifact = path.join(enquireDir, `${otherHash}.json`);
+    await fs.writeFile(artifact, "DRY_RUN_SENTINEL", { mode: 0o600 });
+    const before = mutationFingerprint(await fs.lstat(artifact));
+
+    const res = spawnSync(process.execPath, [distEntry, "prune", "--vault", vault], {
+      encoding: "utf8",
+      timeout: 20_000,
+      env: { ...process.env, XDG_CACHE_HOME: cacheRoot }
+    });
+    expect(res.status, `${res.stdout ?? ""}${res.stderr ?? ""}`).toBe(0);
+    expect(res.stdout).toMatch(/DRY RUN/);
+    expect(mutationFingerprint(await fs.lstat(artifact))).toEqual(before);
+    expect(await fs.readFile(artifact, "utf8")).toBe("DRY_RUN_SENTINEL");
+    await expect(fs.lstat(path.join(enquireDir, ".enquire-mcp-leases"))).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it.for(["nonempty generated stage"])("`prune --yes` safely removes a %s", async (_fixture, { skip }) => {
@@ -624,6 +721,40 @@ describe("CLI subcommands E2E (against built dist/)", () => {
     expect(res.status, `${res.stdout ?? ""}${res.stderr ?? ""}`).toBe(0);
     await expect(fs.lstat(stage)).rejects.toMatchObject({ code: "ENOENT" });
     expect(await fs.readFile(sentinel, "utf8")).toBe("OUTSIDE_SENTINEL");
+  });
+
+  it("`prune --yes` cannot erase a live feedback family, then proceeds after awaited close", async (ctx) => {
+    if (!distExists()) return ctx.skip();
+    const cacheRoot = path.join(tmpdir, "prune-live-feedback-root");
+    const enquireDir = path.join(cacheRoot, "enquire");
+    await fs.mkdir(enquireDir, { recursive: true });
+    const keepHash = path.basename(defaultIndexFile(await fs.realpath(vault))).slice(0, 12);
+    const otherHash = keepHash === "bbbbbbbbbbbb" ? "cccccccccccc" : "bbbbbbbbbbbb";
+    const feedbackFile = path.join(enquireDir, `${otherHash}.feedback.json`);
+    const store = await FeedbackStore.open(feedbackFile, "/causal/other-vault");
+    try {
+      await store.record(["Durable.md"], true, "2026-08-21T00:00:00.000Z");
+      const before = await fs.readFile(feedbackFile);
+      const blocked = spawnSync(process.execPath, [distEntry, "prune", "--vault", vault, "--yes"], {
+        encoding: "utf8",
+        timeout: 20_000,
+        env: { ...process.env, XDG_CACHE_HOME: cacheRoot }
+      });
+      expect(blocked.status).not.toBe(0);
+      expect(`${blocked.stdout ?? ""}${blocked.stderr ?? ""}`).toMatch(/conflicts with active role\(s\): shared/i);
+      expect(await fs.readFile(feedbackFile)).toEqual(before);
+
+      await store.close();
+      const allowed = spawnSync(process.execPath, [distEntry, "prune", "--vault", vault, "--yes"], {
+        encoding: "utf8",
+        timeout: 20_000,
+        env: { ...process.env, XDG_CACHE_HOME: cacheRoot }
+      });
+      expect(allowed.status, `${allowed.stdout ?? ""}${allowed.stderr ?? ""}`).toBe(0);
+      await expect(fs.lstat(feedbackFile)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      await store.close();
+    }
   });
 
   it.for(["reserved directory"])(
@@ -671,6 +802,8 @@ describe("CLI subcommands E2E (against built dist/)", () => {
     const otherHash = keepHash === "bbbbbbbbbbbb" ? "cccccccccccc" : "bbbbbbbbbbbb";
     const artifact = path.join(enquireDir, `${otherHash}.json`);
     await fs.writeFile(artifact, "UNLINK_FAILURE_SENTINEL");
+    const initializer = await acquirePersistenceNamespaceEraser({ parentPath: enquireDir });
+    await initializer.release();
     await fs.chmod(enquireDir, 0o500);
     const capabilityProbe = path.join(enquireDir, "write-capability-probe");
     try {
@@ -775,6 +908,37 @@ describe("CLI subcommands E2E (against built dist/)", () => {
     expect(res.stderr).not.toMatch(/≥16 chars/);
   });
 
+  it("projects raw HTTP-only CLI fields away before strict ServeOptions admission", (ctx) => {
+    if (!distExists()) return ctx.skip();
+    const missingVault = path.join(tmpdir, "missing-http-cli-projection-vault");
+    const res = spawnSync(
+      process.execPath,
+      [
+        distEntry,
+        "serve-http",
+        "--vault",
+        missingVault,
+        "--bearer-token-env",
+        "ENQUIRE_HTTP_PROJECTION_TOKEN",
+        "--port",
+        "0",
+        "--rate-limit",
+        "0",
+        "--cors-origin",
+        "https://example.com"
+      ],
+      {
+        encoding: "utf8",
+        timeout: 20_000,
+        env: { ...process.env, ENQUIRE_HTTP_PROJECTION_TOKEN: "0123456789abcdef" }
+      }
+    );
+    const output = `${res.stdout ?? ""}${res.stderr ?? ""}`;
+    expect(res.status).not.toBe(0);
+    expect(output).toMatch(/Vault not found/);
+    expect(output).not.toMatch(/Unknown serve option (?:rateLimit|bearerTokenEnv|corsOrigin)/);
+  });
+
   it("`enquire-mcp clear-cache` reports 'no cache file' when none exists", (ctx) => {
     if (!distExists()) return ctx.skip();
     const cacheFile = path.join(tmpdir, "no-such.json");
@@ -786,6 +950,21 @@ describe("CLI subcommands E2E (against built dist/)", () => {
     expect(out).toContain("no cache file");
   });
 
+  it("`enquire-mcp clear-cache --cache-file` erases after the vault root disappeared", async (ctx) => {
+    if (!distExists()) return ctx.skip();
+    const cacheFile = path.join(tmpdir, "orphaned-vault-cache.json");
+    await fs.writeFile(cacheFile, '{"sentinel":"raw note body"}');
+    await fs.rm(vault, { recursive: true, force: true });
+
+    const out = execFileSync(
+      process.execPath,
+      [distEntry, "clear-cache", "--vault", vault, "--cache-file", cacheFile],
+      { encoding: "utf8" }
+    );
+    expect(out).toContain("removed cache file");
+    await expect(fs.lstat(cacheFile)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("`enquire-mcp clear-index` reports 'no fts5 index' when none exists", (ctx) => {
     if (!distExists()) return ctx.skip();
     const indexFile = path.join(tmpdir, "no-such.fts5.db");
@@ -795,6 +974,76 @@ describe("CLI subcommands E2E (against built dist/)", () => {
       { encoding: "utf8" }
     );
     expect(out).toContain("no fts5 index");
+  });
+
+  it("query and persistent eval apply the same privacy policy to responses and FTS bytes", async (ctx) => {
+    if (!distExists()) return ctx.skip();
+    if (!canRunFts5) return ctx.skip();
+    await fs.mkdir(path.join(vault, "Public"), { recursive: true });
+    await fs.mkdir(path.join(vault, "Private"), { recursive: true });
+    await fs.writeFile(path.join(vault, "Public", "Visible.md"), "zephyrprivacy visible evidence\n");
+    await fs.writeFile(path.join(vault, "Private", "Secret.md"), "zephyrprivacy forbidden evidence\n");
+    const queryIndex = path.join(tmpdir, "query-privacy.fts5.db");
+    const queryRun = spawnSync(
+      process.execPath,
+      [
+        distEntry,
+        "query",
+        "zephyrprivacy",
+        "--vault",
+        vault,
+        "--index-file",
+        queryIndex,
+        "--read-paths",
+        "Public/**",
+        "--json"
+      ],
+      { encoding: "utf8", timeout: 20_000 }
+    );
+    expect(queryRun.status, queryRun.stderr).toBe(0);
+    const queryResult = JSON.parse(queryRun.stdout) as { matches?: Array<{ path?: string }> };
+    expect(queryResult.matches?.some((match) => match.path === "Public/Visible.md")).toBe(true);
+    expect(queryResult.matches?.some((match) => match.path === "Private/Secret.md")).toBe(false);
+
+    const queriesFile = path.join(tmpdir, "privacy-eval.jsonl");
+    const evalIndex = path.join(tmpdir, "eval-privacy.fts5.db");
+    await fs.writeFile(
+      queriesFile,
+      `${JSON.stringify({ id: "privacy", query: "zephyrprivacy", relevant: ["Public/Visible.md"] })}\n`
+    );
+    const evalRun = spawnSync(
+      process.execPath,
+      [
+        distEntry,
+        "eval",
+        "--vault",
+        vault,
+        "--queries",
+        queriesFile,
+        "--persistent-index",
+        "--index-file",
+        evalIndex,
+        "--read-paths",
+        "Public/**",
+        "--json"
+      ],
+      { encoding: "utf8", timeout: 20_000 }
+    );
+    expect(evalRun.status, evalRun.stderr).toBe(0);
+
+    const Database = (await import("better-sqlite3")).default;
+    for (const file of [queryIndex, evalIndex]) {
+      const db = new Database(file, { readonly: true, fileMustExist: true });
+      try {
+        const rows = db.prepare("SELECT DISTINCT rel_path FROM chunks ORDER BY rel_path").all() as Array<{
+          rel_path: string;
+        }>;
+        expect(rows.map((row) => row.rel_path)).toContain("Public/Visible.md");
+        expect(rows.map((row) => row.rel_path)).not.toContain("Private/Secret.md");
+      } finally {
+        db.close();
+      }
+    }
   });
 
   it("`enquire-mcp index` builds the FTS5 index and reports per-status counts", async (ctx) => {

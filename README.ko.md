@@ -17,7 +17,7 @@
 [![CI](https://github.com/oomkapwn/enquire-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/oomkapwn/enquire-mcp/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/@oomkapwn/enquire-mcp.svg?label=npm&color=cb3837)](https://www.npmjs.com/package/@oomkapwn/enquire-mcp)
 [![downloads](https://img.shields.io/npm/dm/@oomkapwn/enquire-mcp.svg?color=cb3837)](https://www.npmjs.com/package/@oomkapwn/enquire-mcp)
-[![tests](https://img.shields.io/badge/tests-1807%20contracts-brightgreen.svg)](#️-신뢰)
+[![tests](https://img.shields.io/badge/tests-2207%20contracts-brightgreen.svg)](#️-신뢰)
 [![stable](https://img.shields.io/badge/v3.11.x-stable-brightgreen.svg)](./STABILITY.md)
 [![build provenance](https://img.shields.io/badge/build_provenance-SLSA_L2-blue.svg)](https://slsa.dev/spec/v1.0/levels#build-l2)
 [![MCP](https://img.shields.io/badge/MCP-2026--07--28-8A2BE2.svg)](https://modelcontextprotocol.io/)
@@ -55,7 +55,7 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 > 3. **`serve` 중 enquire가 시작하는 외부 네트워크 호출 0건.** q8 임베딩 모델은 **당신의 머신에서** 실행되어 **당신이** 작성한 마크다운을 인덱싱합니다 — 그래서 클라우드 API 키가 아니라 명시적인 일회성 로컬 다운로드(~118 MB)입니다. 콘텐츠는 연결한 MCP 클라이언트에만 반환되며, 해당 클라이언트나 터널의 데이터 처리는 그 자체의 신뢰 경계입니다([강제됨](./SECURITY.md), 희망 사항이 아님).
 > 4. **신선도를 인식하는 회상.** 모든 결과는 노트가 얼마나 오래되었는지 보고합니다. 선택형 최신성 재순위는 에이전트가 신선한 지식을 선호하고 재검증이 필요한 오래된 사실을 표시하도록 합니다 — 망각을 인식하는 최전선이, 당신의 파일이 이미 가진 `mtime` 위에 구축됩니다.
 
-**도구 46개 · MCP 프롬프트 19개 · 단위 테스트 1807+개 · 50+ 개 언어 · v3.11.x stable · semver 결속 · MIT · npm 빌드 출처 증명(SLSA L2).**
+**도구 46개 · MCP 프롬프트 19개 · 단위 테스트 2207+개 · 50+ 개 언어 · v3.11.x stable · semver 결속 · MIT · npm 빌드 출처 증명(SLSA L2).**
 
 ---
 
@@ -74,7 +74,7 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 | **Obsidian 지식 표면 전체** | ✅ Markdown, wikilink, frontmatter, Canvas, Bases, PDF, OCR |
 | **어려운 질문을 위한 agentic retrieval** | ✅ HyDE, sub-question decomposition, context packs, GraphRAG-light, MCP 프롬프트 19개 |
 | **통제권을 잃지 않는 확장성** | ✅ HNSW live update, persistence, adaptive refill, int8 quantization |
-| **프로덕션 신뢰** | ✅ 기본 read-only, privacy filter, 인증 HTTP, semver contracts, 1807 tests, 12 release gates, SLSA L2 provenance |
+| **프로덕션 신뢰** | ✅ 기본 read-only, privacy filter, 인증 HTTP, semver contracts, 2207 tests, 13 release gates, SLSA L2 provenance |
 
 **하나의 Vault. 모든 에이전트. 완전한 검색 스택. 클라우드 종속 없음.**
 
@@ -104,7 +104,7 @@ enquire-mcp serve --vault ~/Documents/Obsidian\ Vault
 
 ### 검토 가능한 데스크톱 번들이 필요하신가요? MCPB Basic
 
-[GitHub Release `v4.0.0-rc.3`](https://github.com/oomkapwn/enquire-mcp/releases/tag/v4.0.0-rc.3)는 `enquire-mcp-basic-4.0.0-rc.3.mcpb`와 checksum, inventory, SBOM, notices, provenance를 제공합니다. 번들에는 서버 JavaScript와 일반 의존성이 포함되며, 호환 MCPB 호스트가 Node.js 22.13 이상을 제공해야 합니다.
+[GitHub Release `v4.0.0-rc.4`](https://github.com/oomkapwn/enquire-mcp/releases/tag/v4.0.0-rc.4)는 `enquire-mcp-basic-4.0.0-rc.4.mcpb`와 checksum, inventory, SBOM, notices, provenance를 제공합니다. 번들에는 서버 JavaScript와 일반 의존성이 포함되며, 호환 MCPB 호스트가 Node.js 22.13 이상을 제공해야 합니다.
 
 Basic은 정확히 **13개의 읽기 전용 도구**와 **0개의 프롬프트**로 제한됩니다. 쓰기, 영구 인덱스, 모델, PDF/OCR, watcher는 없습니다. 실제 데스크톱 GUI, 서명, 디렉터리 승인 및 카탈로그는 유지관리자의 검증이 남아 있습니다. enquire는 serve 중 외부 호출을 시작하지 않지만 요청된 노트 텍스트는 연결된 MCP 클라이언트로 전달되며 해당 클라이언트의 개인정보 보호 조건을 따릅니다.
 
@@ -113,7 +113,7 @@ Basic은 정확히 **13개의 읽기 전용 도구**와 **0개의 프롬프트**
 **완전한 하이브리드 성능을 원하시나요?** 하이브리드 사전 점검을 마친 뒤 서버를 시작하세요:
 
 ```bash
-npm install -g @oomkapwn/enquire-mcp@4.0.0-rc.3      # exact prerelease package
+npm install -g @oomkapwn/enquire-mcp@4.0.0-rc.4      # exact prerelease package
 enquire-mcp --version
 # recommended: preview first, then explicitly apply the same package-coherent plan
 enquire-mcp first-run --tier hybrid --client claude-desktop --vault <path>
@@ -285,8 +285,8 @@ graph LR
 | **HTTP 전송** | Bearer 인증 (상수 시간 SHA-256 + `timingSafeEqual`), 토큰별 속도 제한, 엄격한 CORS |
 | **Frontmatter** | `js-yaml@5` `load` (YAML 1.2 코어 스키마, 기본 안전) — 코드 실행 없음 |
 | **캐시 + 인덱스 파일** | POSIX 모드가 동작하는 환경에서 Enquire는 민감한 파일에 `0600`을 최선 노력으로 다시 적용하며, Enquire가 만든 부모 디렉터리는 `0700`으로 시작하고 기존/사용자 지정 부모는 운영자가 관리 |
-| **단위 테스트 1807개 · 릴리스 필수 CI 검사 12개 · 현재 브랜치 보호 7개** | 현재 검증된 릴리스 상태이며 운영 세부사항은 아래에 고정되어 있습니다. |
-| **CI** | `release.yml`은 **릴리스 gate 12개**를 직접 나열하며 모든 PR에서 전부 실행합니다(`lint`, `test (22)`, `test (24)`, `smoke`, `audit`, `coverage`, `version-consistency`, `docs`, `oia`, `protocol-conformance`, `package-consumer`, `mcpb-basic`). 고정된 Windows hostile-filesystem job `test-windows`는 추가로 이름이 있는 check-run이며 `smoke`의 차단 전제조건으로 전이적으로 강제됩니다. 현재 브랜치 보호가 강제하는 것은 **7개**뿐이며, `docs`, `oia`, `protocol-conformance`, `package-consumer`, `mcpb-basic`는 릴리스 필수지만 보호되지 않습니다(브랜치 보호 스냅샷은 2026-07-23 실시간 확인). `test-macos`는 `continue-on-error`가 있는 유일한 권고 job입니다. `docker`는 CI workflow를 실패시킬 수 있지만 보호되지 않으며, CodeQL은 [GitHub default setup](https://docs.github.com/code-security/code-scanning/automatically-scanning-your-code-with-code-scanning/configuring-default-setup)을 통해 별도의 미보호 분석 2개를 실행합니다. npm publish 전에 `release.yml`이 태깅된 SHA에서 직접 나열한 12개 gate를 다시 확인합니다. |
+| **단위 테스트 2207개 · 릴리스 필수 CI 검사 13개 · 현재 브랜치 보호 전체 13개** | 현재 검증된 릴리스 상태이며 운영 세부사항은 아래에 고정되어 있습니다. |
+| **CI** | `release.yml`은 **릴리스 gate 13개**를 직접 나열하며 모든 PR에서 전부 실행합니다(`lint`, `test (22)`, `test (24)`, `smoke`, `audit`, `coverage`, `version-consistency`, `docs`, `oia`, `protocol-conformance`, `package-consumer`, `mcpb-basic`, `docker`). 고정된 Windows hostile-filesystem job `test-windows`는 추가로 이름이 있는 check-run이며 `smoke`의 차단 전제조건으로 전이적으로 강제됩니다. 현재 브랜치 보호는 **13개 모두**를 강제합니다(브랜치 보호 스냅샷은 2026-08-21 실시간 확인). `test-macos`는 `continue-on-error`가 있는 유일한 권고 job입니다. `docker` gate는 image를 build하고 bounded CLI 및 MCP introspection probe를 실행합니다. CodeQL은 [GitHub default setup](https://docs.github.com/code-security/code-scanning/automatically-scanning-your-code-with-code-scanning/configuring-default-setup)을 통해 별도의 미보호 분석 2개를 실행합니다. npm publish 전에 `release.yml`이 태깅된 SHA에서 직접 나열한 13개 gate를 다시 확인합니다. |
 | **커버리지** | 라인 ≥86% · 구문 ≥82% · 함수 ≥75% · 브랜치 ≥74% (게이트됨) |
 | **릴리스** | 태그별 npm + GitHub 릴리스 · semver · **서명된 빌드 출처 증명** (npm + Sigstore, SLSA Build L2; L3 생성기는 로드맵에) |
 | **안정성** | v3.0+ semver 결속 — 모든 CLI 플래그, 도구 이름, MCP 리소스, 프롬프트, 내보낸 심볼이 계약입니다 |
@@ -326,7 +326,7 @@ graph LR
 ```bash
 git clone https://github.com/oomkapwn/enquire-mcp.git
 cd enquire-mcp && npm install
-npm test       # 전체 스위트 (1807개 테스트)
+npm test       # 전체 스위트 (2207개 테스트)
 npm run lint   # 경고 0건
 npm run build  # tsc → dist/
 ```

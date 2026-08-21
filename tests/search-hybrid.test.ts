@@ -8,8 +8,9 @@ import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { EmbedDb } from "../src/embed-db.js";
+import { EmbedDb, hnswPersistBase } from "../src/embed-db.js";
 import { defaultIndexFile, FtsIndex } from "../src/fts5.js";
+import { textResult } from "../src/mcp-result.js";
 import { searchHybrid } from "../src/tools/index.js";
 import {
   buildTfidfIndex,
@@ -28,6 +29,82 @@ import {
 } from "../src/watcher-activation-guard.js";
 
 let root: string;
+
+interface SemanticAdmissionFixture {
+  readonly scratch: string;
+  readonly vaultRoot: string;
+  readonly embedFile: string;
+  readonly previousCacheHome: string | undefined;
+}
+
+async function createSemanticAdmissionFixture(): Promise<SemanticAdmissionFixture> {
+  const scratch = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-semantic-admission-"));
+  const vaultRoot = path.join(scratch, "vault");
+  const cacheRoot = path.join(scratch, "cache");
+  await fs.mkdir(vaultRoot);
+  const previousCacheHome = process.env.XDG_CACHE_HOME;
+  process.env.XDG_CACHE_HOME = cacheRoot;
+  const canonicalVaultRoot = await fs.realpath(vaultRoot);
+  const embedFile = defaultIndexFile(canonicalVaultRoot).replace(/\.fts5\.db$/u, ".embed.db");
+  await fs.mkdir(path.dirname(embedFile), { recursive: true });
+
+  const noteFile = path.join(canonicalVaultRoot, "Semantic.md");
+  await fs.writeFile(noteFile, "semantic admission marker\n");
+  const noteStat = await fs.stat(noteFile);
+  const seed = new EmbedDb({
+    file: embedFile,
+    vaultRoot: canonicalVaultRoot,
+    modelAlias: "multilingual",
+    dim: 384,
+    quantization: "f32"
+  });
+  await seed.open();
+  try {
+    const vector = new Float32Array(384);
+    vector[0] = 1;
+    seed.upsertNote("Semantic.md", noteStat.mtimeMs, [
+      {
+        chunkIndex: 0,
+        lineStart: 1,
+        lineEnd: 1,
+        textPreview: "semantic admission marker",
+        vector
+      }
+    ]);
+  } finally {
+    await seed.closeAndRelease();
+  }
+  return { scratch, vaultRoot: canonicalVaultRoot, embedFile, previousCacheHome };
+}
+
+async function removeSemanticAdmissionFixture(fixture: SemanticAdmissionFixture): Promise<void> {
+  if (fixture.previousCacheHome === undefined) delete process.env.XDG_CACHE_HOME;
+  else process.env.XDG_CACHE_HOME = fixture.previousCacheHome;
+  await fs.rm(fixture.scratch, { recursive: true, force: true });
+}
+
+function installSemanticAdmissionRuntimeMocks(buildHnsw: (...args: unknown[]) => Promise<unknown>): void {
+  vi.resetModules();
+  vi.doMock("@huggingface/transformers", () => ({
+    env: { allowRemoteModels: true, allowLocalModels: true },
+    pipeline: async () => async (input: string | string[]) => {
+      const texts = typeof input === "string" ? [input] : input;
+      const data = new Float32Array(texts.length * 384);
+      for (let index = 0; index < texts.length; index += 1) data[index * 384] = 1;
+      return { data, dims: [texts.length, 384] as const };
+    }
+  }));
+  vi.doMock("../src/hnsw.js", async () => {
+    const actual = await vi.importActual<typeof import("../src/hnsw.js")>("../src/hnsw.js");
+    return { ...actual, buildHnsw };
+  });
+}
+
+function resetSemanticAdmissionRuntimeMocks(): void {
+  vi.doUnmock("../src/hnsw.js");
+  vi.doUnmock("@huggingface/transformers");
+  vi.resetModules();
+}
 
 beforeAll(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-search-hybrid-"));
@@ -369,23 +446,42 @@ describe("searchHybrid (v2.0 beta — RRF over available signals)", () => {
       expect(causalSnapshot()).toEqual(quantizationBeforeRefusal);
 
       // Historical v1/v2 metadata intentionally has no quantization key.
-      // The caller projection normalizes only those admitted versions to f32;
-      // an empty legacy index therefore reaches the supported open path rather
-      // than being falsely classified as an unknown configuration.
+      // Build a physically genuine v2 fixture: relabelling a current database
+      // in metadata is not equivalent because later schemas add authority
+      // objects which full-class discovery must never accept as historical.
       const legacyEmbedFile = path.join(owningVault.root, "legacy-v2.embed.db");
-      const legacySeed = new EmbedDb({
-        file: legacyEmbedFile,
-        vaultRoot: owningVault.root,
-        modelAlias: "multilingual",
-        dim: 384,
-        quantization: "f32"
-      });
-      await legacySeed.open();
-      legacySeed.close();
       const legacyRaw = new Database(legacyEmbedFile);
       try {
-        legacyRaw.prepare("UPDATE meta SET value = '2' WHERE key = 'schema_version'").run();
-        legacyRaw.prepare("DELETE FROM meta WHERE key = 'quantization'").run();
+        legacyRaw.exec(`
+          CREATE TABLE meta (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+          );
+          CREATE TABLE embeddings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            rel_path TEXT NOT NULL,
+            chunk_index INTEGER NOT NULL,
+            line_start INTEGER NOT NULL,
+            line_end INTEGER NOT NULL,
+            text_preview TEXT NOT NULL,
+            vector BLOB NOT NULL,
+            kind TEXT NOT NULL DEFAULT 'md',
+            UNIQUE(rel_path, chunk_index)
+          );
+          CREATE INDEX embeddings_rel_path ON embeddings(rel_path);
+          CREATE TABLE source_state (
+            rel_path TEXT PRIMARY KEY,
+            mtime_ms INTEGER NOT NULL,
+            n_chunks INTEGER NOT NULL,
+            kind TEXT NOT NULL DEFAULT 'md',
+            indexed_at TEXT NOT NULL
+          );
+        `);
+        const insertMeta = legacyRaw.prepare("INSERT INTO meta (key, value) VALUES (?, ?)");
+        insertMeta.run("schema_version", "2");
+        insertMeta.run("vault_root", owningVault.root);
+        insertMeta.run("model_alias", "multilingual");
+        insertMeta.run("dim", "384");
       } finally {
         legacyRaw.close();
       }
@@ -396,6 +492,35 @@ describe("searchHybrid (v2.0 beta — RRF over available signals)", () => {
       const legacyResult = await embeddingsSearch(owningVault, { query: "legacy", limit: 1 }, legacyEmbedFile);
       expect(legacyResult.total_chunks).toBe(0);
       expect(legacyResult.matches).toEqual([]);
+
+      // NEGATIVE control: the former fixture shape was a current physical
+      // database with only schema_version/quantization edited. The raw
+      // diagnostic sees those bounded rows, while root-scoped full-class
+      // admission and search reject the cross-generation metadata spoof.
+      const spoofedLegacyFile = path.join(owningVault.root, "spoofed-legacy-v2.embed.db");
+      const spoofedLegacySeed = new EmbedDb({
+        file: spoofedLegacyFile,
+        vaultRoot: owningVault.root,
+        modelAlias: "multilingual",
+        dim: 384,
+        quantization: "f32"
+      });
+      await spoofedLegacySeed.open();
+      spoofedLegacySeed.close();
+      const spoofedLegacyRaw = new Database(spoofedLegacyFile);
+      try {
+        spoofedLegacyRaw.prepare("UPDATE meta SET value = '2' WHERE key = 'schema_version'").run();
+        spoofedLegacyRaw.prepare("DELETE FROM meta WHERE key = 'quantization'").run();
+      } finally {
+        spoofedLegacyRaw.close();
+      }
+      const spoofedRawMeta = await peekEmbedDbMeta(spoofedLegacyFile);
+      expect(spoofedRawMeta?.schema_version).toBe("2");
+      expect(Object.hasOwn(spoofedRawMeta ?? {}, "instance_uuid")).toBe(true);
+      expect(await peekEmbedDbMeta(spoofedLegacyFile, owningVault.root)).toBeNull();
+      await expect(
+        embeddingsSearch(owningVault, { query: "spoofed-legacy", limit: 1 }, spoofedLegacyFile)
+      ).rejects.toThrow("Embedding index configuration could not be verified");
 
       // Missing and present-but-empty are distinct discovery states. Search
       // must accept both zero-byte and schema-empty SQLite artifacts as safe
@@ -520,7 +645,7 @@ describe("searchHybrid — BM25 + TF-IDF fusion path", () => {
   });
 
   afterAll(async () => {
-    idx.close();
+    await idx.closeAndRelease();
     await fs.rm(ftsRoot, { recursive: true, force: true });
   });
 
@@ -711,7 +836,7 @@ describe("searchHybrid — kind flag (v2.8.0)", () => {
   });
 
   afterAll(async () => {
-    blendIdx?.close();
+    await blendIdx?.closeAndRelease();
     await fs.rm(blendRoot, { recursive: true, force: true });
   });
 
@@ -757,6 +882,26 @@ describe("searchHybrid — kind flag (v2.8.0)", () => {
     );
     expect(result.matches.length).toBeGreaterThan(0);
     expect(result.matches.every((m) => m.kind === "md")).toBe(true);
+
+    // MCP result admission accepts only the plain JSON domain. Note-level
+    // TF-IDF has no chunk/line evidence, so the producer must OMIT those
+    // optional keys instead of materializing `undefined` (the pre-fix shape
+    // made the public tool call return an MCP error string instead of JSON).
+    const firstHit = result.matches[0];
+    expect(firstHit).toBeDefined();
+    expect(Object.hasOwn(firstHit ?? {}, "chunk_index")).toBe(false);
+    expect(Object.hasOwn(firstHit ?? {}, "line_start")).toBe(false);
+    expect(Object.hasOwn(firstHit ?? {}, "line_end")).toBe(false);
+    expect(JSON.parse(textResult(result).content[0]?.text ?? "null")).toEqual(result);
+
+    // NEGATIVE control: the exact old producer shape remains rejected at the
+    // common boundary; this prevents a regression from being hidden by
+    // weakening admission to silently accept non-JSON `undefined` values.
+    const legacyUndefinedShape = {
+      ...result,
+      matches: [{ ...firstHit, chunk_index: undefined, line_start: undefined, line_end: undefined }]
+    };
+    expect(() => textResult(legacyUndefinedShape)).toThrow(/unsupported undefined/i);
   });
 
   // v3.7.12 M6 — graph boost must NOT call `vault.readNote` on `.pdf`
@@ -1136,6 +1281,47 @@ describe("searchHybrid — opt-in frontmatter filter (v3.10 rc.10)", () => {
 describe("searchHybridMulti — multi-query fan-out (v3.11.6-rc.7 C-4)", () => {
   const noEmbed = () => ({ ftsIndex: null, embedFile: path.join(root, "nonexistent.embed.db") });
 
+  it.each([
+    ["short", (length: number) => Array.from({ length: Math.max(0, length - 1) }, () => 0.5), /scores for/u],
+    ["NaN", (length: number) => Array.from({ length }, () => Number.NaN), /non-finite/u],
+    ["Infinity", (length: number) => Array.from({ length }, () => Number.POSITIVE_INFINITY), /non-finite/u]
+  ])("atomically rejects a %s reranker vector and preserves the fused order", async (_kind, makeScores, reason) => {
+    const v = new Vault(root);
+    const args = { query: "OAuth authentication token", limit: 5 } as const;
+    const baseline = await searchHybrid(v, args, noEmbed());
+    expect(baseline.matches.length).toBeGreaterThan(1);
+    const malformed = await searchHybrid(v, args, {
+      ...noEmbed(),
+      rerankerOverride: {
+        score: async (_query: string, passages: readonly string[]) => makeScores(passages.length)
+      }
+    });
+    expect(malformed.matches.map((match) => match.path)).toEqual(baseline.matches.map((match) => match.path));
+    expect(malformed.reranked).toMatchObject({ applied: false });
+    expect(malformed.reranked && "pairs" in malformed.reranked).toBe(false);
+    expect(malformed.reranked?.reason).toMatch(reason);
+    expect(malformed.signal_errors?.reranker).toMatch(reason);
+    expect(malformed.matches.every((match) => match.reranker_score === undefined)).toBe(true);
+  });
+
+  it("applies one exact finite reranker vector after complete admission", async () => {
+    const v = new Vault(root);
+    const result = await searchHybrid(
+      v,
+      { query: "OAuth authentication token", limit: 5 },
+      {
+        ...noEmbed(),
+        rerankerOverride: {
+          score: async (_query: string, passages: readonly string[]) => passages.map((_passage, index) => index)
+        }
+      }
+    );
+    expect(result.matches.length).toBeGreaterThan(1);
+    expect(result.reranked).toEqual({ applied: true, pairs: result.matches.length });
+    expect(result.signal_errors?.reranker).toBeUndefined();
+    expect(result.matches.some((match) => Number.isFinite(match.reranker_score))).toBe(true);
+  });
+
   it.each(["empty fan-out"])("rejects an invalid embedding namespace before the %s import path", async () => {
     let ensureCalls = 0;
     const v = {
@@ -1281,13 +1467,13 @@ describe("searchHybridMulti — multi-query fan-out (v3.11.6-rc.7 C-4)", () => {
     }
   });
 
-  // v3.11.7-rc.1 (whole-repo audit A12) — two DIFFERENT snapshots may
-  // legitimately build at once. The older/slower promise must still resolve
-  // for its original caller, but it must not publish over the newer completed
-  // cache when it finishes last.
-  it("an older slow TF-IDF build cannot overwrite the newer completed snapshot cache", async () => {
+  // Same-scope callers share discovery + build. If the source changes while
+  // that shared generation is in flight, every waiter fails closed and the
+  // next call builds the new generation exactly once.
+  it("a changed slow TF-IDF generation refuses every waiter then rebuilds once", async () => {
     let snapshot = 1;
     let reads = 0;
+    let listings = 0;
     let oldReadStarted = false;
     let releaseOld: (() => void) | undefined;
     const oldGate = new Promise<void>((resolve) => {
@@ -1300,7 +1486,10 @@ describe("searchHybridMulti — multi-query fan-out (v3.11.6-rc.7 C-4)", () => {
       mtimeMs
     });
     const fakeVault = {
-      listMarkdown: async () => [entry(snapshot)],
+      listMarkdown: async () => {
+        listings += 1;
+        return [entry(snapshot)];
+      },
       readNote: async (_absPath: string, mtimeMs?: number) => {
         reads += 1;
         if (mtimeMs === 1) {
@@ -1315,13 +1504,17 @@ describe("searchHybridMulti — multi-query fan-out (v3.11.6-rc.7 C-4)", () => {
     await vi.waitFor(() => expect(oldReadStarted).toBe(true));
 
     snapshot = 2;
+    const joinedBuild = buildTfidfIndex(fakeVault);
+    const oldRefusal = expect(oldBuild).rejects.toMatchObject({ code: "TFIDF_GENERATION_CHANGED" });
+    const joinedRefusal = expect(joinedBuild).rejects.toMatchObject({ code: "TFIDF_GENERATION_CHANGED" });
+    expect(reads).toBe(1);
+    expect(listings, "same-scope waiter must not repeat discovery").toBe(1);
+    releaseOld?.();
+    await Promise.all([oldRefusal, joinedRefusal]);
+
     const newest = await buildTfidfIndex(fakeVault);
     expect(newest.entriesRef[0]?.mtimeMs).toBe(2);
     expect(reads).toBe(2);
-
-    releaseOld?.();
-    const oldResult = await oldBuild;
-    expect(oldResult.entriesRef[0]?.mtimeMs).toBe(1); // its original caller still gets its snapshot
 
     const readsBeforeReuse = reads;
     const reused = await buildTfidfIndex(fakeVault);
@@ -1418,7 +1611,7 @@ describe("searchHybridMulti — multi-query fan-out (v3.11.6-rc.7 C-4)", () => {
         expect(receiptResult.matches.some((match) => match.path === siblingRelPath)).toBe(true);
       } finally {
         releaseBlocked?.();
-        fts.close();
+        await fts.closeAndRelease();
         await fs.unlink(absPath).catch(() => {});
         await fs.unlink(siblingAbsPath).catch(() => {});
         for (const dbArtifact of [ftsFile, `${ftsFile}-wal`, `${ftsFile}-shm`]) {
@@ -1552,6 +1745,296 @@ describe("searchHybrid — opt-in explain mode (v3.11.6 S-5)", () => {
       expect(a?.explain?.graph_boost).toBeUndefined();
     } finally {
       await fs.rm(gRoot, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("embeddingsSearch — HNSW database-generation authority", () => {
+  it("queries HNSW while its physical UUID and mutation epoch match EmbedDb", async () => {
+    const fixture = await createSemanticAdmissionFixture();
+    const authorityDb = new EmbedDb({
+      file: fixture.embedFile,
+      vaultRoot: fixture.vaultRoot,
+      modelAlias: "multilingual",
+      dim: 384,
+      quantization: "f32"
+    });
+    await authorityDb.open();
+    const authority = authorityDb.captureGenerationIdentity();
+    await authorityDb.closeAndRelease();
+
+    const searchKnn = vi.fn(() => ({ labels: [1], distances: [0] }));
+    installSemanticAdmissionRuntimeMocks(vi.fn(async () => undefined));
+    try {
+      const { embeddingsSearch: isolatedEmbeddingsSearch } = await import("../src/tools/search.js");
+      const result = await isolatedEmbeddingsSearch(
+        new Vault(fixture.vaultRoot),
+        { query: "semantic admission marker", limit: 1 },
+        fixture.embedFile,
+        {
+          index: { size: 1, searchKnn },
+          rowByLabel: new Map(),
+          modelAlias: "multilingual",
+          dbInstanceUuid: authority.dbInstanceUuid,
+          dbMutationEpoch: authority.dbMutationEpoch
+        }
+      );
+
+      expect(searchKnn).toHaveBeenCalled();
+      expect(result.matches.map((match) => match.path)).toEqual(["Semantic.md"]);
+    } finally {
+      resetSemanticAdmissionRuntimeMocks();
+      await removeSemanticAdmissionFixture(fixture);
+    }
+  });
+
+  it("never queries a stale graph after a second EmbedDb writer advances the epoch", async () => {
+    const fixture = await createSemanticAdmissionFixture();
+    const staleDb = new EmbedDb({
+      file: fixture.embedFile,
+      vaultRoot: fixture.vaultRoot,
+      modelAlias: "multilingual",
+      dim: 384,
+      quantization: "f32"
+    });
+    await staleDb.open();
+    const staleAuthority = staleDb.captureGenerationIdentity();
+    await staleDb.closeAndRelease();
+
+    const writer = new EmbedDb({
+      file: fixture.embedFile,
+      vaultRoot: fixture.vaultRoot,
+      modelAlias: "multilingual",
+      dim: 384,
+      quantization: "f32"
+    });
+    await writer.open();
+    try {
+      const noteStat = await fs.stat(path.join(fixture.vaultRoot, "Semantic.md"));
+      const vector = new Float32Array(384);
+      vector[0] = 1;
+      writer.upsertNote("Semantic.md", noteStat.mtimeMs, [
+        {
+          chunkIndex: 0,
+          lineStart: 1,
+          lineEnd: 1,
+          textPreview: "current semantic generation",
+          vector
+        }
+      ]);
+      expect(writer.captureGenerationIdentity().dbMutationEpoch).toBeGreaterThan(staleAuthority.dbMutationEpoch);
+    } finally {
+      await writer.closeAndRelease();
+    }
+
+    const searchKnn = vi.fn(() => ({ labels: [1], distances: [0] }));
+    installSemanticAdmissionRuntimeMocks(vi.fn(async () => undefined));
+    try {
+      const { embeddingsSearch: isolatedEmbeddingsSearch } = await import("../src/tools/search.js");
+      const result = await isolatedEmbeddingsSearch(
+        new Vault(fixture.vaultRoot),
+        { query: "semantic admission marker", limit: 1 },
+        fixture.embedFile,
+        {
+          index: { size: 1, searchKnn },
+          rowByLabel: new Map(),
+          modelAlias: "multilingual",
+          dbInstanceUuid: staleAuthority.dbInstanceUuid,
+          dbMutationEpoch: staleAuthority.dbMutationEpoch
+        }
+      );
+
+      expect(searchKnn).not.toHaveBeenCalled();
+      expect(result.matches.map((match) => match.path)).toEqual(["Semantic.md"]);
+      expect(result.matches[0]?.snippet).toContain("current semantic generation");
+    } finally {
+      resetSemanticAdmissionRuntimeMocks();
+      await removeSemanticAdmissionFixture(fixture);
+    }
+  });
+
+  it("refuses all results when EmbedDb advances during awaited live-vault validation", async () => {
+    const fixture = await createSemanticAdmissionFixture();
+    installSemanticAdmissionRuntimeMocks(vi.fn(async () => undefined));
+    let mutated = false;
+    try {
+      const { embeddingsSearch: isolatedEmbeddingsSearch } = await import("../src/tools/search.js");
+      const vault = new Vault(fixture.vaultRoot);
+      await vault.ensureExists();
+      const originalStat = vault.stat.bind(vault);
+      vi.spyOn(vault, "stat").mockImplementation(async (relPath) => {
+        if (!mutated) {
+          mutated = true;
+          const writer = new EmbedDb({
+            file: fixture.embedFile,
+            vaultRoot: fixture.vaultRoot,
+            modelAlias: "multilingual",
+            dim: 384,
+            quantization: "f32"
+          });
+          await writer.open();
+          try {
+            const noteStat = await fs.stat(path.join(fixture.vaultRoot, "Semantic.md"));
+            const vector = new Float32Array(384);
+            vector[0] = 1;
+            writer.upsertNote("Semantic.md", noteStat.mtimeMs, [
+              {
+                chunkIndex: 0,
+                lineStart: 1,
+                lineEnd: 1,
+                textPreview: "mutated during terminal validation",
+                vector
+              }
+            ]);
+          } finally {
+            await writer.closeAndRelease();
+          }
+        }
+        return originalStat(relPath);
+      });
+
+      await expect(
+        isolatedEmbeddingsSearch(vault, { query: "semantic admission marker", limit: 1 }, fixture.embedFile)
+      ).rejects.toThrow("Embedding index changed during search; retry the request");
+      expect(mutated).toBe(true);
+    } finally {
+      resetSemanticAdmissionRuntimeMocks();
+      await removeSemanticAdmissionFixture(fixture);
+    }
+  });
+});
+
+describe("prepareServerDeps — complete semantic-generation admission", () => {
+  it.each([false, true] as const)(
+    "quarantines an incomplete source generation before a semantic query (useHnsw=%s)",
+    async (useHnsw) => {
+      const fixture = await createSemanticAdmissionFixture();
+      const Database = (await import("better-sqlite3")).default;
+      const mutate = new Database(fixture.embedFile);
+      try {
+        expect(
+          mutate.prepare("UPDATE source_state SET n_chunks = 2 WHERE rel_path = ?").run("Semantic.md").changes
+        ).toBe(1);
+      } finally {
+        mutate.close();
+      }
+
+      const buildHnsw = vi.fn(async (..._args: unknown[]) => {
+        throw new Error("incomplete generations must never reach HNSW build");
+      });
+      installSemanticAdmissionRuntimeMocks(buildHnsw);
+      const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+      try {
+        const [{ prepareServerDeps }, { embeddingsSearch: isolatedEmbeddingsSearch }] = await Promise.all([
+          import("../src/server.js"),
+          import("../src/tools/search.js")
+        ]);
+        const deps = await prepareServerDeps({
+          vault: fixture.vaultRoot,
+          useHnsw,
+          hnswPersist: false
+        });
+
+        expect(deps.watcherHealth).toMatchObject({ semanticUsable: false, hnswUsable: false });
+        expect(deps.hnswContext).toBeNull();
+        expect(buildHnsw).not.toHaveBeenCalled();
+        await expect(
+          isolatedEmbeddingsSearch(
+            deps.vault,
+            { query: "semantic admission marker", limit: 1 },
+            fixture.embedFile,
+            deps.hnswContext,
+            deps.watcherHealth
+          )
+        ).rejects.toThrow(/embedding search is quarantined/i);
+
+        const log = stderr.mock.calls.map(([chunk]) => String(chunk)).join("");
+        expect(log).toMatch(/failed complete semantic admission/i);
+        expect(log).not.toMatch(/falling back to brute-force semantic search/i);
+      } finally {
+        stderr.mockRestore();
+        resetSemanticAdmissionRuntimeMocks();
+        await removeSemanticAdmissionFixture(fixture);
+      }
+    }
+  );
+
+  it.each(["missing", "corrupt"] as const)(
+    "keeps a healthy EmbedDb on the brute-force route when the HNSW sidecar is %s",
+    async (sidecarState) => {
+      const fixture = await createSemanticAdmissionFixture();
+      const persistFile = hnswPersistBase(fixture.embedFile);
+      if (sidecarState === "corrupt") {
+        await fs.writeFile(`${persistFile}.meta.json`, '{"formatVersion":3');
+      }
+      const buildHnsw = vi.fn(async (..._args: unknown[]) => {
+        throw new Error("bounded synthetic HNSW unavailability");
+      });
+      installSemanticAdmissionRuntimeMocks(buildHnsw);
+      const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+      try {
+        const [{ prepareServerDeps }, { embeddingsSearch: isolatedEmbeddingsSearch }] = await Promise.all([
+          import("../src/server.js"),
+          import("../src/tools/search.js")
+        ]);
+        const deps = await prepareServerDeps({ vault: fixture.vaultRoot, useHnsw: true });
+
+        expect(buildHnsw).toHaveBeenCalledTimes(1);
+        expect(deps.hnswContext).toBeNull();
+        expect(deps.watcherHealth).toMatchObject({ semanticUsable: true, hnswUsable: true });
+        const result = await isolatedEmbeddingsSearch(
+          deps.vault,
+          { query: "semantic admission marker", limit: 1 },
+          fixture.embedFile,
+          deps.hnswContext,
+          deps.watcherHealth
+        );
+        expect(result.method).toBe("embeddings-cosine");
+        expect(result.matches.map((match) => match.path)).toEqual(["Semantic.md"]);
+
+        const log = stderr.mock.calls.map(([chunk]) => String(chunk)).join("");
+        expect(log).toMatch(/HNSW build failed; falling back to brute-force semantic search/i);
+        expect(log).not.toMatch(/failed complete semantic admission/i);
+      } finally {
+        stderr.mockRestore();
+        resetSemanticAdmissionRuntimeMocks();
+        await removeSemanticAdmissionFixture(fixture);
+      }
+    }
+  );
+
+  it("treats saveTo(false) as an uncommitted optimization without a persisted-success receipt", async () => {
+    const fixture = await createSemanticAdmissionFixture();
+    const persistFile = hnswPersistBase(fixture.embedFile);
+    const saveTo = vi.fn(async (..._args: unknown[]) => false);
+    const buildHnsw = vi.fn(async (..._args: unknown[]) => ({
+      dim: 384,
+      size: 1,
+      searchKnn: () => ({ labels: [1], distances: [0] }),
+      setEf: () => {},
+      applyDiff: async () => {},
+      saveTo
+    }));
+    installSemanticAdmissionRuntimeMocks(buildHnsw);
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      const { prepareServerDeps } = await import("../src/server.js");
+      const deps = await prepareServerDeps({ vault: fixture.vaultRoot, useHnsw: true });
+
+      expect(buildHnsw).toHaveBeenCalledTimes(1);
+      expect(saveTo).toHaveBeenCalledTimes(1);
+      expect(saveTo.mock.calls[0]?.[0]).toBe(persistFile);
+      expect(deps.hnswContext?.index.size).toBe(1);
+      expect(deps.watcherHealth).toMatchObject({ semanticUsable: true, hnswUsable: true });
+      await expect(fs.lstat(`${persistFile}.meta.json`)).rejects.toMatchObject({ code: "ENOENT" });
+
+      const log = stderr.mock.calls.map(([chunk]) => String(chunk)).join("");
+      expect(log).toMatch(/HNSW persist failed.*did not commit its metadata pointer/is);
+      expect(log).not.toMatch(/immutable generation \+ meta pointer persisted/i);
+    } finally {
+      stderr.mockRestore();
+      resetSemanticAdmissionRuntimeMocks();
+      await removeSemanticAdmissionFixture(fixture);
     }
   });
 });

@@ -495,13 +495,15 @@ function ftsNamespaceAdmissionViolations(sources: { fts: string; doctor: string 
   });
 }
 
-/** Keep six sensitive writers from inferring directory ownership then path-chmodding a race winner. */
+/** Keep sensitive writers on the shared mode-0700 missing-parent acquisition path
+ * without inferring directory ownership then path-chmodding a race winner. */
 function writerParentModeProblems(sources: {
   vault: string;
   feedback: string;
   hnsw: string;
   fts: string;
   embed: string;
+  persistenceCoordination: string;
   watcherGuard: string;
 }): string[] {
   const between = (source: string, startMarker: string, endMarker: string): string => {
@@ -524,10 +526,10 @@ function writerParentModeProblems(sources: {
       label: "Feedback",
       body: between(
         sources.feedback,
-        "  private async writeOnce(data: FeedbackData = this.data): Promise<void> {",
-        "\n  }\n}"
+        "  static async open(file: string, vaultRoot?: string): Promise<FeedbackStore> {",
+        "  /**\n   * Record a usefulness mark"
       ),
-      mkdir: "await fs.mkdir(dir, { recursive: true, mode: 0o700 });",
+      mkdir: "const lifetime = await acquirePersistenceFamilyLease({",
       forbidden: ["dirExisted", "fs.stat(dir", "fs.chmod(dir"]
     },
     {
@@ -550,11 +552,25 @@ function writerParentModeProblems(sources: {
       label: "EmbedDb",
       body: between(
         sources.embed,
-        "  async open(expectedDiscovery?: EmbedDbConfigDiscovery)",
-        "  /**\n   * Remove the embed db"
+        "  private async acquireSharedPersistenceRole(): Promise<PersistenceFamilyLeaseHandle> {",
+        "  private releasePersistenceLifetime(): Promise<void> {"
       ),
-      mkdir: "await fs.mkdir(parentDir, { recursive: true, mode: 0o700 });",
+      mkdir: ": await acquirePersistenceFamilyLease({",
       forbidden: ["parentExisted", "fs.stat(parentDir", "fs.chmod(parentDir"]
+    },
+    {
+      label: "Persistence coordinator",
+      body: between(
+        sources.persistenceCoordination,
+        "export async function acquirePersistenceFamilyLease(",
+        "/**\n * Acquire a coordinated family role through"
+      ),
+      mkdir: "await fs.mkdir(path.dirname(path.resolve(options.targetPath)), { recursive: true, mode: 0o700 });",
+      forbidden: [
+        "parentExisted",
+        "fs.stat(path.dirname(path.resolve(options.targetPath))",
+        "fs.chmod(path.dirname(path.resolve(options.targetPath))"
+      ]
     },
     {
       label: "watcher guard",
@@ -593,6 +609,7 @@ describe("enforcement-guarantee → code-guard invariant (rc.3, overclaim #15/#1
     const feedback = readFileSync(path.join(repoRoot, "src/feedback.ts"), "utf8");
     const fts = readFileSync(path.join(repoRoot, "src/fts5.ts"), "utf8");
     const embed = readFileSync(path.join(repoRoot, "src/embed-db.ts"), "utf8");
+    const persistenceCoordination = readFileSync(path.join(repoRoot, "src/persistence-coordination.ts"), "utf8");
     const watcherGuard = readFileSync(path.join(repoRoot, "src/watcher-activation-guard.ts"), "utf8");
     expect(registry).toContain("const admittedMatches = await searchLiveFts(vault, idx, {");
     expect(registry).toContain("const matches = admittedMatches.map((match) => ({");
@@ -613,7 +630,9 @@ describe("enforcement-guarantee → code-guard invariant (rc.3, overclaim #15/#1
     expect(publicReceiptLeakViolations(search, registry)).toEqual([]);
     expect(embedNamespaceAdmissionViolations({ search, meta, doctor, evalSource })).toEqual([]);
     expect(ftsNamespaceAdmissionViolations({ fts, doctor })).toEqual([]);
-    expect(writerParentModeProblems({ vault, feedback, hnsw, fts, embed, watcherGuard })).toEqual([]);
+    expect(
+      writerParentModeProblems({ vault, feedback, hnsw, fts, embed, persistenceCoordination, watcherGuard })
+    ).toEqual([]);
     expect(hnsw).toContain('rowByLabel: ReadonlyMap<number, Omit<EmbedReceiptSearchHit, "score">>');
     expect(hnsw).toContain("indexed_mtime_ms: row.indexed_mtime_ms,");
     expect(hnsw).toContain("indexed_revision: row.indexed_revision");
@@ -714,6 +733,7 @@ describe("enforcement-guarantee → code-guard invariant (rc.3, overclaim #15/#1
     const hnsw = readFileSync(path.join(repoRoot, "src/hnsw.ts"), "utf8");
     const fts = readFileSync(path.join(repoRoot, "src/fts5.ts"), "utf8");
     const embed = readFileSync(path.join(repoRoot, "src/embed-db.ts"), "utf8");
+    const persistenceCoordination = readFileSync(path.join(repoRoot, "src/persistence-coordination.ts"), "utf8");
     const watcherGuard = readFileSync(path.join(repoRoot, "src/watcher-activation-guard.ts"), "utf8");
     const ftsReceipt = "(match) => match,";
     const ftsMask = "(receipts) => idx.currentSourceReceiptMask(receipts)";
@@ -847,7 +867,7 @@ describe("enforcement-guarantee → code-guard invariant (rc.3, overclaim #15/#1
       expect(ftsNamespaceAdmissionViolations(mutant)).not.toEqual([]);
     }
 
-    const writerSources = { vault, feedback, hnsw, fts, embed, watcherGuard };
+    const writerSources = { vault, feedback, hnsw, fts, embed, persistenceCoordination, watcherGuard };
     const parentModeMutants = [
       {
         ...writerSources,
@@ -858,7 +878,10 @@ describe("enforcement-guarantee → code-guard invariant (rc.3, overclaim #15/#1
       },
       {
         ...writerSources,
-        feedback: feedback.replace("await fs.mkdir(dir", "await fs.stat(dir);\n      await fs.mkdir(dir")
+        feedback: feedback.replace(
+          "const lifetime = await acquirePersistenceFamilyLease({",
+          "const lifetime = await acquirePersistenceFamilyLeaseInScopes({"
+        )
       },
       {
         ...writerSources,
@@ -873,7 +896,18 @@ describe("enforcement-guarantee → code-guard invariant (rc.3, overclaim #15/#1
       },
       {
         ...writerSources,
-        embed: embed.replace("await fs.mkdir(parentDir", "await fs.stat(parentDir);\n      await fs.mkdir(parentDir")
+        embed: embed.replace(
+          ": await acquirePersistenceFamilyLease({",
+          ": await acquirePersistenceFamilyLeaseInScopes({"
+        )
+      },
+      {
+        ...writerSources,
+        persistenceCoordination: persistenceCoordination.replace(
+          "await fs.mkdir(path.dirname(path.resolve(options.targetPath)), { recursive: true, mode: 0o700 });",
+          "await fs.stat(path.dirname(path.resolve(options.targetPath)));\n    " +
+            "await fs.mkdir(path.dirname(path.resolve(options.targetPath)), { recursive: true, mode: 0o700 });"
+        )
       },
       {
         ...writerSources,

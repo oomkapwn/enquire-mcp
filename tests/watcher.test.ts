@@ -13,6 +13,7 @@ import type {
 import { defaultIndexFile, FtsIndex } from "../src/fts5.js";
 import type { HnswIndex } from "../src/hnsw.js";
 import * as hnswModule from "../src/hnsw.js";
+import type { PersistenceFamilyScopes } from "../src/persistence-coordination.js";
 import { Vault } from "../src/vault.js";
 import { type HnswRowMeta, VaultWatcher } from "../src/watcher.js";
 import { makePdf } from "./helpers/make-pdf.js";
@@ -879,8 +880,8 @@ describe("VaultWatcher with FTS5 index (v3.6 — reindex branches)", () => {
       await fs.writeFile(absPath, "new generation with the same mtime\n");
       await fs.utimes(absPath, new Date(indexedMtimeMs), new Date(indexedMtimeMs));
       expect((await fs.stat(absPath)).mtimeMs).toBe(indexedMtimeMs);
-      const originalReadNote = v.readNote;
-      v.readNote = async () => {
+      const originalReadNoteUncached = v.readNoteUncached;
+      v.readNoteUncached = async () => {
         throw new Error("synthetic equal-mtime source-read failure");
       };
       try {
@@ -890,7 +891,7 @@ describe("VaultWatcher with FTS5 index (v3.6 — reindex branches)", () => {
           }
         ).handle(absPath, "change");
       } finally {
-        v.readNote = originalReadNote;
+        v.readNoteUncached = originalReadNoteUncached;
       }
 
       // Mutation control: physical old rows remain, but durable source-scoped
@@ -1028,10 +1029,10 @@ describe("VaultWatcher with FTS5 index (v3.6 — reindex branches)", () => {
       await fs.utimes(aPath, pinnedTime, pinnedTime);
       expect((await fs.stat(aPath)).mtimeMs).toBe(pinnedMtimeMs);
       expect((await fs.stat(bPath)).mtimeMs).toBe(pinnedMtimeMs);
-      const originalReadNote = v.readNote.bind(v);
-      v.readNote = async (...args: Parameters<Vault["readNote"]>) => {
+      const originalReadNoteUncached = v.readNoteUncached.bind(v);
+      v.readNoteUncached = async (...args: Parameters<Vault["readNoteUncached"]>) => {
         if (args[0] === aPath) throw new Error("synthetic alias preparation failure");
-        return originalReadNote(...args);
+        return originalReadNoteUncached(...args);
       };
       try {
         await (w as unknown as { handle(absPath: string, kind: "add" | "change" | "unlink"): Promise<void> }).handle(
@@ -1039,7 +1040,7 @@ describe("VaultWatcher with FTS5 index (v3.6 — reindex branches)", () => {
           "change"
         );
       } finally {
-        v.readNote = originalReadNote;
+        v.readNoteUncached = originalReadNoteUncached;
       }
 
       expect(fts.search("alias_old_secret", { limit: 10 })).toEqual([]);
@@ -1080,11 +1081,11 @@ describe("VaultWatcher with FTS5 index (v3.6 — reindex branches)", () => {
     fts.reindexFile(aRel, pinnedMtimeMs, "alias_commit_old", [], []);
     fts.reindexFile(bRel, pinnedMtimeMs, "alias_commit_old", [], []);
     const w = new VaultWatcher({ vault: v, ftsIndex: fts, silent: true });
-    const originalReadNote = v.readNote.bind(v);
+    const originalReadNoteUncached = v.readNoteUncached.bind(v);
     const stagedReads = new Set<string>();
-    v.readNote = async (...args: Parameters<Vault["readNote"]>) => {
+    v.readNoteUncached = async (...args: Parameters<Vault["readNoteUncached"]>) => {
       if (args[0] === aPath || args[0] === bPath) stagedReads.add(args[0]);
-      return originalReadNote(...args);
+      return originalReadNoteUncached(...args);
     };
     const originalReindexFile = fts.reindexFile.bind(fts);
     let commitFailureInjected = false;
@@ -1123,7 +1124,7 @@ describe("VaultWatcher with FTS5 index (v3.6 — reindex branches)", () => {
       );
     } finally {
       fts.reindexFile = originalReindexFile;
-      v.readNote = originalReadNote;
+      v.readNoteUncached = originalReadNoteUncached;
       await w.close();
       await fts.closeAndRelease();
     }
@@ -1722,6 +1723,7 @@ describe("VaultWatcher direct HNSW flush generation binding", () => {
     embedDb: {
       captureHnswBuildSnapshot(): HnswBuildSnapshot;
       captureHnswReceiptSnapshot(): HnswReceiptSnapshot;
+      getPersistenceFamilyScopes(): PersistenceFamilyScopes;
     } | null;
   }
 
@@ -1739,8 +1741,10 @@ describe("VaultWatcher direct HNSW flush generation binding", () => {
   });
 
   const receipt = (payloadByte: "a" | "b"): HnswPersistenceReceipt => ({
-    version: 2,
+    version: 3,
     signature: `direct-flush-${payloadByte}`,
+    dbInstanceUuid: "d".repeat(32),
+    dbMutationEpoch: payloadByte === "a" ? 11 : 12,
     dim: 4,
     activeRows: 1,
     maxLabel: 7,
@@ -1782,8 +1786,16 @@ describe("VaultWatcher direct HNSW flush generation binding", () => {
     before: HnswBuildSnapshot,
     receipts: ReadonlyArray<HnswReceiptSnapshot>,
     persistFile: string | null = path.join(root, ".cache", "direct.hnsw")
-  ): { internals: DirectFlushInternals; receiptCaptures: () => number } => {
+  ): {
+    internals: DirectFlushInternals;
+    persistenceScopes: PersistenceFamilyScopes;
+    receiptCaptures: () => number;
+  } => {
     const internals = watcher as unknown as DirectFlushInternals;
+    // The direct unit tests mock both native persistence and erasure. This
+    // opaque sentinel proves that the watcher's exact pinned family authority
+    // is threaded through both boundaries without creating real lease state.
+    const persistenceScopes = Object.freeze({}) as PersistenceFamilyScopes;
     let receiptIndex = 0;
     internals.hnswDirty = true;
     internals.hnswPersistUnsafe = false;
@@ -1797,9 +1809,10 @@ describe("VaultWatcher direct HNSW flush generation binding", () => {
         if (!next) throw new Error(`unexpected receipt capture ${receiptIndex + 1}`);
         receiptIndex += 1;
         return next;
-      }
+      },
+      getPersistenceFamilyScopes: () => persistenceScopes
     };
-    return { internals, receiptCaptures: () => receiptIndex };
+    return { internals, persistenceScopes, receiptCaptures: () => receiptIndex };
   };
 
   it("rejects a rowsByLabel mismatch before building a compact graph", async () => {
@@ -1853,7 +1866,16 @@ describe("VaultWatcher direct HNSW flush generation binding", () => {
     const clear = vi.spyOn(hnswModule, "clearHnswPersistedArtifacts");
 
     await expect(watcher.flushHnswToDisk()).resolves.toBe(false);
-    expect(saveTo).toHaveBeenCalledWith(internals.hnswPersistFile, before.rowsByLabel, before.receipt.signature);
+    expect(saveTo).toHaveBeenCalledWith(
+      internals.hnswPersistFile,
+      before.rowsByLabel,
+      before.receipt.signature,
+      {
+        dbInstanceUuid: before.receipt.dbInstanceUuid,
+        dbMutationEpoch: before.receipt.dbMutationEpoch
+      },
+      fixture.persistenceScopes
+    );
     expect(clear).not.toHaveBeenCalled();
     expect(fixture.receiptCaptures()).toBe(1);
     expect(internals.hnswPersistUnsafe).toBe(false);
@@ -1882,7 +1904,7 @@ describe("VaultWatcher direct HNSW flush generation binding", () => {
 
     await expect(watcher.flushHnswToDisk()).resolves.toBe(false);
     expect(events).toEqual(["build", "save", "clear"]);
-    expect(clear).toHaveBeenCalledWith(internals.hnswPersistFile);
+    expect(clear).toHaveBeenCalledWith(internals.hnswPersistFile, fixture.persistenceScopes);
     expect(fixture.receiptCaptures()).toBe(2);
     expect(internals.hnswPersistUnsafe).toBe(true);
     expect(internals.hnswDirty).toBe(true);
@@ -1904,7 +1926,16 @@ describe("VaultWatcher direct HNSW flush generation binding", () => {
       dim: 4,
       maxElements: 1
     });
-    expect(saveTo).toHaveBeenCalledWith(internals.hnswPersistFile, before.rowsByLabel, before.receipt.signature);
+    expect(saveTo).toHaveBeenCalledWith(
+      internals.hnswPersistFile,
+      before.rowsByLabel,
+      before.receipt.signature,
+      {
+        dbInstanceUuid: before.receipt.dbInstanceUuid,
+        dbMutationEpoch: before.receipt.dbMutationEpoch
+      },
+      fixture.persistenceScopes
+    );
     expect(clear).not.toHaveBeenCalled();
     expect(fixture.receiptCaptures()).toBe(2);
     expect(internals.hnswPersistUnsafe).toBe(false);

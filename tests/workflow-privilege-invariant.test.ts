@@ -607,7 +607,7 @@ describe("privileged maintenance workflow invariants", () => {
     expect(cleanupWorkflowProblems(cleanup)).toEqual([]);
   });
 
-  it("detects cleanup privilege, failure-masking, mutation-scope and postcondition regressions", () => {
+  it("NEGATIVE: detects cleanup privilege, failure-masking, mutation-scope and postcondition regressions", () => {
     expect(
       cleanupWorkflowProblems(replaceOnce(cleanup, "      name: npm-maintenance", "      name: unprotected"))
     ).toContain("cleanup-protected-environment");

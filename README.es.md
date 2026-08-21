@@ -48,7 +48,7 @@ Tu bóveda de Obsidian se convierte en **memoria a largo plazo persistente y con
 > 3. **Cero llamadas de red salientes iniciadas por enquire durante `serve`.** El modelo de embeddings q8 se ejecuta **en tu máquina** e indexa el markdown que **tú** escribiste: por eso es una descarga local explícita y única (~118 MB), no una clave de API en la nube. El contenido solo se devuelve al cliente MCP que conectas; el tratamiento que haga ese cliente o túnel de los datos es su propio límite de confianza ([garantizado](./SECURITY.md), no aspiracional).
 > 4. **Recuperación consciente de la frescura.** Cada resultado informa de la antigüedad de la nota; el reordenamiento por recencia opcional permite que un agente prefiera el conocimiento reciente y marque los hechos obsoletos para reverificación: la frontera consciente del olvido, construida sobre el `mtime` que tus archivos ya tienen.
 
-**46 herramientas · 19 prompts MCP · 2207+ pruebas unitarias · 50+ idiomas · v3.11.x estable · ligado a semver · MIT · procedencia de compilación en npm (SLSA L2).**
+**46 herramientas · 19 prompts MCP · 2212+ pruebas unitarias · 50+ idiomas · v3.11.x estable · ligado a semver · MIT · procedencia de compilación en npm (SLSA L2).**
 
 ---
 
@@ -67,7 +67,7 @@ Tu bóveda de Obsidian se convierte en **memoria a largo plazo persistente y con
 | **Toda la superficie de conocimiento de Obsidian** | ✅ Markdown, wikilinks, frontmatter, Canvas, Bases, PDF y OCR |
 | **Recuperación agéntica para preguntas difíciles** | ✅ HyDE, descomposición en subpreguntas, paquetes de contexto, GraphRAG-light y 19 prompts MCP |
 | **Escala sin ceder el control** | ✅ Actualizaciones HNSW en vivo, persistencia, relleno adaptativo y cuantización int8 |
-| **Confianza para producción** | ✅ Solo lectura por defecto, filtros de privacidad, HTTP autenticado, contratos semver, 2207 pruebas, 13 gates de publicación y procedencia SLSA L2 |
+| **Confianza para producción** | ✅ Solo lectura por defecto, filtros de privacidad, HTTP autenticado, contratos semver, 2212 pruebas, 13 gates de publicación y procedencia SLSA L2 |
 
 **Una bóveda. Todos los agentes. La pila completa. Sin dependencia de la nube.**
 
@@ -278,7 +278,7 @@ Además 3 recursos MCP (`obsidian://vault/info`, `obsidian://note/{path}`, `obsi
 | **Transporte HTTP** | Autenticación bearer (SHA-256 de tiempo constante + `timingSafeEqual`), límite de tasa por token, CORS estricto |
 | **Frontmatter** | `js-yaml@5` `load` (esquema núcleo YAML 1.2, seguro por defecto) — sin ejecución de código |
 | **Archivos de caché + índice** | Cuando funcionan los modos POSIX, Enquire vuelve a aplicar `0600` a los archivos sensibles con el mejor esfuerzo; un directorio padre creado por Enquire empieza con `0700`, mientras que uno existente/personalizado sigue administrado por el operador |
-| **2207 pruebas unitarias · 13 comprobaciones de CI requeridas para release · las 13 protegidas actualmente** | Estado de publicación verificado; el detalle operativo está fijado debajo. |
+| **2212 pruebas unitarias · 13 comprobaciones de CI requeridas para release · las 13 protegidas actualmente** | Estado de publicación verificado; el detalle operativo está fijado debajo. |
 | **CI** | `release.yml` enumera directamente **13 gates de release**, todos ejecutados en cada PR: `lint`, `test (22)`, `test (24)`, `smoke`, `audit`, `coverage`, `version-consistency`, `docs`, `oia`, `protocol-conformance`, `package-consumer`, `mcpb-basic` y `docker`. El job Windows hostile-filesystem fijado `test-windows` es un check-run adicional con nombre, exigido de forma transitiva como prerrequisito bloqueante de `smoke`. La protección de rama exige ahora los **13** (snapshot verificado en vivo el 2026-08-21). `test-macos` es el único job indicativo con `continue-on-error`. El gate `docker` construye la imagen y ejecuta probes acotados de CLI e introspección MCP; CodeQL ejecuta dos análisis separados no protegidos mediante el [default setup de GitHub](https://docs.github.com/code-security/code-scanning/automatically-scanning-your-code-for-vulnerabilities-and-errors/configuring-default-setup-for-code-scanning). Antes de npm publish, `release.yml` reverifica los 13 gates que enumera directamente en el SHA etiquetado. |
 | **Cobertura** | Líneas ≥86 % · sentencias ≥82 % · funciones ≥75 % · ramas ≥74 % (con guarda) |
 | **Publicación de versiones** | npm + GitHub release por cada tag · semver · **procedencia de compilación firmada** (npm + Sigstore, SLSA Build L2; generador L3 en la hoja de ruta) |

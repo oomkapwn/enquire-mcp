@@ -384,12 +384,12 @@ describe("watcher activation guard", () => {
     await expect(db.clearOnDisk()).resolves.toBe(true);
     await expect(assertWatcherActivationGuardClear(embedDbFile)).resolves.toBeUndefined();
 
-    // NEGATIVE control: derived artifacts are removed before the guard. A
-    // deterministic type error at the first artifact must reject and retain
-    // the interlock, so the next startup remains quarantined.
+    // NEGATIVE control: family admission now rejects an unsafe main artifact
+    // before acquiring erasure authority or deleting anything. The interlock
+    // must remain, so the next startup stays quarantined.
     await armWatcherActivationGuard(embedDbFile);
     await fs.mkdir(embedDbFile);
-    await expect(db.clearOnDisk()).rejects.toThrow(/Refusing to clear an unsafe embedding-index artifact/i);
+    await expect(db.clearOnDisk()).rejects.toThrow(/Persistence lease target must be absent or a regular file/i);
     await expect(assertWatcherActivationGuardClear(embedDbFile)).rejects.toThrow(/guard exists/i);
     expect((await fs.lstat(embedDbFile)).isDirectory()).toBe(true);
     expect((await fs.lstat(guardPath)).isDirectory()).toBe(true);

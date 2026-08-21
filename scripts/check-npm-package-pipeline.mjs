@@ -258,12 +258,19 @@ export function npmPackagePipelineProblems(inputs) {
       '{ packageName: "pdfjs-dist", specifier: "pdfjs-dist/legacy/build/pdf.mjs", exportPaths: [["getDocument"]] }'
     ) ||
     !inputs.consumer.includes("function writeOptionalLoadabilityProbe(consumerDir, optionalProbes)") ||
+    countMatches(inputs.consumer, /allowedMissingPlatforms/gu) !== 2 ||
+    !inputs.consumer.includes('allowedMissingPlatforms: Object.freeze(["win32"])') ||
+    !inputs.consumer.includes("export function optionalDependencyMayBeMissing(probe, platform = process.platform)") ||
+    !inputs.consumer.includes("return probe.allowedMissingPlatforms?.includes(platform) === true;") ||
+    !inputs.consumer.includes("optionalDependencyMayBeMissing(optionalProbe, process.platform)") ||
+    !inputs.consumer.includes("const loadableOptionalProbes = []") ||
     !inputs.consumer.includes("optional dependency probe inventory differs from package.json") ||
     !inputs.consumer.includes("const resolved = import.meta.resolve(importSpecifier)") ||
     !inputs.consumer.includes('const expectedPackageRoot = path.join(nodeModulesRoot, ...packageName.split("/"))') ||
     !inputs.consumer.includes("const loaded = await import(importSpecifier)") ||
     !inputs.consumer.includes('assert.equal(typeof capability, "function"') ||
     !inputs.consumer.includes('database.prepare("SELECT 1 AS ok").get().ok') ||
+    !inputs.consumer.includes("writeOptionalLoadabilityProbe(consumerDir, loadableOptionalProbes)") ||
     !inputs.consumer.includes(
       'run(process.execPath, [path.join(consumerDir, "optional-loadability.mjs")], { cwd: consumerDir })'
     )

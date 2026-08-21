@@ -92,7 +92,7 @@ the same outcome?
 | **Available-signal fallback + quarantine on uncertain semantic state** | ✅ | ✕ | ✕ | ✕ |
 | **Read-only default + explicit write gate + privacy filters** | ✅ | ✕ | ✕ | ✕ |
 | **46 tools + 19 MCP prompts + semver-bound MCP contract** | ✅ | ✕ | ✕ | ✕ |
-| **2207 tests + 13 release gates + signed npm provenance** | ✅ | ✕ | ✕ | ✕ |
+| **2212 tests + 13 release gates + signed npm provenance** | ✅ | ✕ | ✕ | ✕ |
 
 **Legend:** `✅` means the complete row is built in. `✕` means the complete
 combination was not documented on the reviewed public product surface; it does
@@ -156,7 +156,7 @@ These numbers are derived from the current repository and guarded by CI:
 |---|---|
 | Tool count | **46** |
 | MCP prompt count | **19** |
-| Test count (public) | **2207** |
+| Test count (public) | **2212** |
 | Release-required CI gates | **13** |
 | Supported embedder languages | **50+** |
 | Default write posture | **Off / read-only** |

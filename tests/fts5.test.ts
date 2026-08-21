@@ -493,9 +493,9 @@ describe("FtsIndex — exact namespace admission and bounded erasure", () => {
 
     if (phase === "inspection") {
       const realLstat = fs.lstat.bind(fs);
-      const spy = vi.spyOn(fs, "lstat").mockImplementation(async (candidate) => {
+      const spy = vi.spyOn(fs, "lstat").mockImplementation(async (candidate, ...args) => {
         if (String(candidate) === canonicalWal) throw denied;
-        return realLstat(candidate);
+        return realLstat(candidate, ...args);
       });
       try {
         await expect(idx.clearOnDisk()).rejects.toThrow("Unable to inspect FTS index artifacts before clearing");

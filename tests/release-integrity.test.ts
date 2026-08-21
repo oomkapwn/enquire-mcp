@@ -2519,6 +2519,20 @@ function releaseMutationInventoryProblems(source: string): string[] {
             `release mutation matrix expect may only be one direct call or an allowlisted static matcher at ${position.line + 1}:${position.character + 1}`
           );
         }
+        if (directExpect && start >= matrixStart && start < callbackEnd) {
+          const nonStraightLine = nonStraightLineAncestor(parent);
+          const reviewedNestedOwner =
+            nonStraightLine !== null &&
+            (ts.isForOfStatement(nonStraightLine) ||
+              ts.isForStatement(nonStraightLine) ||
+              ts.isTryStatement(nonStraightLine));
+          if (nonStraightLine !== null && !reviewedNestedOwner) {
+            const position = sourceFile.getLineAndCharacterOfPosition(start);
+            problems.push(
+              `release mutation matrix expect must be one straight-line matcher or belong to an exact shared loop, not nested under ${ts.SyntaxKind[nonStraightLine.kind]} at ${position.line + 1}:${position.character + 1}`
+            );
+          }
+        }
       }
     }
     if (ts.isIdentifier(node) && (node.text === "replaceExactly" || node.text === "replaceAllExactly")) {
@@ -5996,12 +6010,19 @@ function remoteGateScriptProblems(packageConsumer: string, protocolConformance: 
       '{ packageName: "pdfjs-dist", specifier: "pdfjs-dist/legacy/build/pdf.mjs", exportPaths: [["getDocument"]] }'
     ) ||
     !packageConsumer.includes("function writeOptionalLoadabilityProbe(consumerDir, optionalProbes)") ||
+    mutationMatchCount(packageConsumer, "allowedMissingPlatforms") !== 2 ||
+    !packageConsumer.includes('allowedMissingPlatforms: Object.freeze(["win32"])') ||
+    !packageConsumer.includes("export function optionalDependencyMayBeMissing(probe, platform = process.platform)") ||
+    !packageConsumer.includes("return probe.allowedMissingPlatforms?.includes(platform) === true;") ||
+    !packageConsumer.includes("optionalDependencyMayBeMissing(optionalProbe, process.platform)") ||
+    !packageConsumer.includes("const loadableOptionalProbes = []") ||
     !packageConsumer.includes("optional dependency probe inventory differs from package.json") ||
     !packageConsumer.includes("const resolved = import.meta.resolve(importSpecifier)") ||
     !packageConsumer.includes('const expectedPackageRoot = path.join(nodeModulesRoot, ...packageName.split("/"))') ||
     !packageConsumer.includes("const loaded = await import(importSpecifier)") ||
     !packageConsumer.includes('assert.equal(typeof capability, "function"') ||
     !packageConsumer.includes('database.prepare("SELECT 1 AS ok").get().ok') ||
+    !packageConsumer.includes("writeOptionalLoadabilityProbe(consumerDir, loadableOptionalProbes)") ||
     !packageConsumer.includes(
       'run(process.execPath, [path.join(consumerDir, "optional-loadability.mjs")], { cwd: consumerDir })'
     )

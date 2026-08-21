@@ -40,11 +40,28 @@ export const OPTIONAL_DEPENDENCY_PROBES = Object.freeze([
   {
     packageName: "hnswlib-node",
     specifier: "hnswlib-node",
-    exportPaths: [["HierarchicalNSW"], ["default", "HierarchicalNSW"]]
+    exportPaths: [["HierarchicalNSW"], ["default", "HierarchicalNSW"]],
+    allowedMissingPlatforms: Object.freeze(["win32"])
   },
   { packageName: "pdfjs-dist", specifier: "pdfjs-dist/legacy/build/pdf.mjs", exportPaths: [["getDocument"]] },
   { packageName: "tesseract.js", specifier: "tesseract.js", exportPaths: [["createWorker"]] }
 ]);
+
+/**
+ * Decide whether npm may legitimately remove one failed optional native build.
+ *
+ * `hnswlib-node` is source-built during install and npm removes it after a
+ * Windows toolchain/ABI failure because it is optional. Every other declared
+ * optional dependency remains required by the full consumer lane, and an HNSW
+ * package that is present is still resolved and exercised below.
+ *
+ * @param probe - One closed-world optional dependency probe.
+ * @param platform - Node platform being verified.
+ * @returns Whether absence is explicitly admitted for this exact pair.
+ */
+export function optionalDependencyMayBeMissing(probe, platform = process.platform) {
+  return probe.allowedMissingPlatforms?.includes(platform) === true;
+}
 
 /**
  * Resolve npm without handing a `.cmd` shim to `spawnSync` on Windows.
@@ -456,13 +473,20 @@ function verifyConsumer(tarballPath, mode, rootPackage, tempRoot) {
       );
     }
   } else {
-    for (const { packageName: optionalName } of optionalProbes) {
-      assert.ok(
-        existsSync(path.join(consumerDir, "node_modules", ...optionalName.split("/"))),
-        `${mode}: ${optionalName} is absent despite --include=optional`
-      );
+    const loadableOptionalProbes = [];
+    for (const optionalProbe of optionalProbes) {
+      const optionalName = optionalProbe.packageName;
+      const installed = existsSync(path.join(consumerDir, "node_modules", ...optionalName.split("/")));
+      if (!installed) {
+        assert.ok(
+          optionalDependencyMayBeMissing(optionalProbe, process.platform),
+          `${mode}: ${optionalName} is absent despite --include=optional`
+        );
+        continue;
+      }
+      loadableOptionalProbes.push(optionalProbe);
     }
-    writeOptionalLoadabilityProbe(consumerDir, optionalProbes);
+    writeOptionalLoadabilityProbe(consumerDir, loadableOptionalProbes);
     run(process.execPath, [path.join(consumerDir, "optional-loadability.mjs")], { cwd: consumerDir });
   }
   assert.ok(

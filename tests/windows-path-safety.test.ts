@@ -821,12 +821,26 @@ describe("VaultWatcher physical-alias convergence (S-8e)", () => {
       expect(`${aStat.dev}:${aStat.ino}`).not.toBe(`${bStat.dev}:${bStat.ino}`);
 
       const reconciled = await snapshotWindowsWatcherState(fixture, markers);
-      expectMarkerPaths(reconciled, "replacementraceoldmarker", []);
-      expectMarkerPaths(reconciled, "replacementracegroupmarker", ["A.md"]);
-      expectMarkerPaths(reconciled, "replacementracenewinodemarker", ["B.md"]);
+      expect(markerPaths(reconciled.ftsByMarker, "replacementraceoldmarker")).toEqual([]);
+      expect(markerPaths(reconciled.embedByMarker, "replacementraceoldmarker")).toEqual([]);
+      expect(markerPaths(reconciled.ftsByMarker, "replacementracegroupmarker")).toEqual(["A.md"]);
+      expect(markerPaths(reconciled.embedByMarker, "replacementracegroupmarker")).toEqual(["A.md"]);
+      expect(markerPaths(reconciled.ftsByMarker, "replacementracenewinodemarker")).toEqual(["B.md"]);
+      expect(markerPaths(reconciled.embedByMarker, "replacementracenewinodemarker")).toEqual(["B.md"]);
+      // The first plan observed a physical-membership drift after staging A.
+      // SQLite is fully replanned and authoritative, while the process-local
+      // graph is deliberately quarantined until restart rather than adopting
+      // a piecemeal generation. Its retained metadata cannot be an egress while
+      // hnswUsable is false.
+      expect(markerPathsInHnsw(reconciled, "replacementraceoldmarker")).toEqual(["A.md", "B.md"]);
+      expect(markerPathsInHnsw(reconciled, "replacementracegroupmarker")).toEqual([]);
+      expect(markerPathsInHnsw(reconciled, "replacementracenewinodemarker")).toEqual([]);
+      expect(fixture.watcher.searchHealth.hnswUsable).toBe(false);
       expect(reconciled.embedPaths).toEqual(["A.md", "B.md"]);
       expect([...new Set(fixture.reindexedPaths)].sort()).toEqual(["A.md", "B.md"]);
-      expect(watcherAuditsMatch(reconciled, 2)).toBe(true);
+      expect(reconciled.ftsAudit).toMatchObject({ declared_files: 2, indexed_files: 2, mismatched_files: 0 });
+      expect(reconciled.embedAudit).toMatchObject({ indexed_files: 2, mismatched_files: 0 });
+      expect(watcherAuditsMatch(reconciled, 2)).toBe(false);
     } finally {
       stageSpy.mockRestore();
       await closeWindowsWatcherFixture(fixture);

@@ -24,7 +24,11 @@ import {
   verifyNpmPackageArtifactManifest
 } from "../scripts/npm-package-artifact.mjs";
 // @ts-expect-error — .mjs package consumer has no declaration file; tests exercise its pure platform selector.
-import { OPTIONAL_DEPENDENCY_PROBES, packageCliProcessSpec } from "../scripts/package-consumer.mjs";
+import {
+  OPTIONAL_DEPENDENCY_PROBES,
+  optionalDependencyMayBeMissing,
+  packageCliProcessSpec
+} from "../scripts/package-consumer.mjs";
 // @ts-expect-error — .mjs release script has no declaration file; tests exercise its injected transaction core.
 import { syncVersion } from "../scripts/sync-version.mjs";
 
@@ -399,6 +403,26 @@ describe("release metadata schema gates", () => {
     expect(
       npmPackagePipelineProblems({
         ...pipelineInputs,
+        consumer: mutateOnce(
+          consumer,
+          'allowedMissingPlatforms: Object.freeze(["win32"])',
+          'allowedMissingPlatforms: Object.freeze(["win32", "linux"])'
+        )
+      })
+    ).toContain("package-consumer full lane must resolve and load every exact optional dependency");
+    expect(
+      npmPackagePipelineProblems({
+        ...pipelineInputs,
+        consumer: mutateOnce(
+          consumer,
+          "return probe.allowedMissingPlatforms?.includes(platform) === true;",
+          "return probe.allowedMissingPlatforms !== undefined;"
+        )
+      })
+    ).toContain("package-consumer full lane must resolve and load every exact optional dependency");
+    expect(
+      npmPackagePipelineProblems({
+        ...pipelineInputs,
         artifact: mutateOnce(
           artifact,
           "const tarEntries = inspectNpmTarEntries(tarballBytes);",
@@ -426,6 +450,15 @@ describe("release metadata schema gates", () => {
       probeKind: "sqlite-memory",
       specifier: "better-sqlite3"
     });
+    const hnswProbe = OPTIONAL_DEPENDENCY_PROBES.find(({ packageName }) => packageName === "hnswlib-node");
+    expect(hnswProbe).toMatchObject({ allowedMissingPlatforms: ["win32"], packageName: "hnswlib-node" });
+    expect(optionalDependencyMayBeMissing(hnswProbe, "win32")).toBe(true);
+    expect(optionalDependencyMayBeMissing(hnswProbe, "linux")).toBe(false);
+    expect(
+      OPTIONAL_DEPENDENCY_PROBES.filter((probe) => optionalDependencyMayBeMissing(probe, "win32")).map(
+        ({ packageName }) => packageName
+      )
+    ).toEqual(["hnswlib-node"]);
 
     const tarballEntries = [
       { body: "{", path: "package.json" },

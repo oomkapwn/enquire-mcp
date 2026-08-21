@@ -149,6 +149,71 @@ afterEach(async () => {
 });
 
 describe("portable cross-process persistence lease", () => {
+  it("keeps stable path and descriptor identity surfaces separate while publishing", async () => {
+    const { targetPath } = await fixture();
+    const realLstat = fs.lstat.bind(fs);
+    const identityOffset = 2n ** 60n;
+    let markerPathReads = 0;
+    vi.spyOn(fs, "lstat").mockImplementation(async (filePath, options) => {
+      const stats = await realLstat(filePath, options);
+      const basename = path.basename(filePath.toString());
+      if (basename === ".gate" || basename.startsWith(".candidate.") || basename.startsWith("lease.")) {
+        markerPathReads++;
+        return new Proxy(stats, {
+          get(target, property, receiver) {
+            const value = Reflect.get(target, property, receiver);
+            return (property === "dev" || property === "ino") && typeof value === "bigint"
+              ? value + identityOffset
+              : value;
+          }
+        });
+      }
+      return stats;
+    });
+
+    const lease = await acquirePersistenceLease({ targetPath, familyKey: "embed-db", role: "shared" });
+    await lease.release();
+
+    expect(markerPathReads).toBeGreaterThan(0);
+    expect(await inspectPersistenceLeases({ targetPath, familyKey: "embed-db" })).toMatchObject({
+      gate: null,
+      leases: [],
+      candidates: []
+    });
+  });
+
+  it("rejects a marker whose path identity surface changes during publication", async () => {
+    const { targetPath } = await fixture();
+    const realLstat = fs.lstat.bind(fs);
+    let finalPathReads = 0;
+    vi.spyOn(fs, "lstat").mockImplementation(async (filePath, options) => {
+      const stats = await realLstat(filePath, options);
+      if (path.basename(filePath.toString()).startsWith("lease.shared.") && finalPathReads < 2) {
+        finalPathReads++;
+        const identityDelta = BigInt(finalPathReads);
+        return new Proxy(stats, {
+          get(target, property, receiver) {
+            const value = Reflect.get(target, property, receiver);
+            return property === "ino" && typeof value === "bigint" ? value + identityDelta : value;
+          }
+        });
+      }
+      return stats;
+    });
+
+    await expect(acquirePersistenceLease({ targetPath, familyKey: "embed-db", role: "shared" })).rejects.toSatisfy(
+      (error: unknown) =>
+        error instanceof PersistenceLeaseIntegrityError && !(error instanceof PersistenceLeaseOwnershipError)
+    );
+    expect(finalPathReads).toBe(2);
+    vi.restoreAllMocks();
+    expect(await inspectPersistenceLeases({ targetPath, familyKey: "embed-db" })).toMatchObject({
+      gate: null,
+      leases: [],
+      candidates: []
+    });
+  });
+
   it("exactly removes a just-linked marker when final verification fails transiently", async () => {
     const { targetPath } = await fixture();
     const realLink = fs.link.bind(fs);
@@ -299,10 +364,55 @@ describe("portable cross-process persistence lease", () => {
     await shared.release();
   });
 
+  it("releases monotonically while a caller concurrently removes the persistence parent", async () => {
+    const { root, targetPath } = await fixture();
+    const lease = await acquirePersistenceLease({ targetPath, familyKey: "embed-db", role: "shared" });
+    const realLink = fs.link.bind(fs);
+    const linkedDuringRelease: string[] = [];
+    vi.spyOn(fs, "link").mockImplementation(async (existingPath, newPath) => {
+      linkedDuringRelease.push(path.basename(newPath.toString()));
+      return realLink(existingPath, newPath);
+    });
+    const realUnlink = fs.unlink.bind(fs);
+    let markerUnlinkReached: (() => void) | undefined;
+    const markerUnlinkStarted = new Promise<void>((resolve) => {
+      markerUnlinkReached = resolve;
+    });
+    let allowMarkerUnlink: (() => void) | undefined;
+    const markerUnlinkAllowed = new Promise<void>((resolve) => {
+      allowMarkerUnlink = resolve;
+    });
+    vi.spyOn(fs, "unlink").mockImplementation(async (filePath) => {
+      if (path.basename(filePath.toString()) === lease.marker.id) {
+        markerUnlinkReached?.();
+        await markerUnlinkAllowed;
+      }
+      return realUnlink(filePath);
+    });
+
+    const releasing = lease.release();
+    await markerUnlinkStarted;
+    try {
+      await fs.rm(root, { recursive: true, force: true });
+    } finally {
+      allowMarkerUnlink?.();
+    }
+    await releasing;
+
+    expect(linkedDuringRelease).toEqual([]);
+    await expect(fs.lstat(root)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("drains a transient same-scope release debt after the ephemeral caller discards its error", async () => {
     const { targetPath } = await fixture();
     const lease = await acquirePersistenceLease({ targetPath, familyKey: "embed-db", role: "shared" });
     expect(getProcessPersistenceLeaseDebtStatus()).toMatchObject({ ownerCount: 0, artifactCount: 0 });
+    const realLink = fs.link.bind(fs);
+    let releaseLinks = 0;
+    vi.spyOn(fs, "link").mockImplementation(async (existingPath, newPath) => {
+      releaseLinks++;
+      return realLink(existingPath, newPath);
+    });
     const realUnlink = fs.unlink.bind(fs);
     let markerReleaseFaults = 0;
     vi.spyOn(fs, "unlink").mockImplementation(async (filePath) => {
@@ -317,7 +427,13 @@ describe("portable cross-process persistence lease", () => {
       expect(error).toBeInstanceOf(PersistenceLeaseOwnershipError);
     });
     expect(markerReleaseFaults).toBe(1);
+    expect(releaseLinks).toBe(0);
     expect(getProcessPersistenceLeaseDebtStatus()).toMatchObject({ ownerCount: 1, artifactCount: 1 });
+    expect(await inspectPersistenceLeases({ targetPath, familyKey: "embed-db" })).toMatchObject({
+      gate: null,
+      leases: [{ id: lease.marker.id }],
+      candidates: []
+    });
 
     vi.restoreAllMocks();
     const eraser = await acquirePersistenceLease({ targetPath, familyKey: "embed-db", role: "eraser" });
@@ -707,6 +823,63 @@ describe("portable cross-process persistence lease", () => {
     ).rejects.toBeInstanceOf(PersistenceLeaseIntegrityError);
     await expect(fs.lstat(path.join(firstParent, ".enquire-mcp-leases"))).rejects.toMatchObject({ code: "ENOENT" });
     await expect(fs.lstat(path.join(secondParent, ".enquire-mcp-leases"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("preserves exact parent identities above Number.MAX_SAFE_INTEGER", async () => {
+    const { root, targetPath } = await fixture();
+    const canonicalRoot = await fs.realpath(root);
+    const realLstat = fs.lstat.bind(fs);
+    const exactDev = 2n ** 60n + 3n;
+    const exactIno = 2n ** 61n + 5n;
+    const namespacePaths = new Set<string>();
+    let parentReads = 0;
+    vi.spyOn(fs, "lstat").mockImplementation(async (filePath, options) => {
+      const stats = await realLstat(filePath, options);
+      const resolvedPath = path.resolve(filePath.toString());
+      if (resolvedPath !== canonicalRoot && !namespacePaths.has(resolvedPath)) return stats;
+      if (resolvedPath === canonicalRoot) parentReads++;
+      return new Proxy(stats, {
+        get(target, property, receiver) {
+          if (property === "dev") return exactDev;
+          if (property === "ino") {
+            const value = Reflect.get(target, property, receiver);
+            return resolvedPath === canonicalRoot || typeof value !== "bigint" ? exactIno : value + 2n ** 62n;
+          }
+          return Reflect.get(target, property, receiver);
+        }
+      });
+    });
+
+    const scope = await resolvePersistenceLeaseScope({ targetPath, familyKey: "embed-db" });
+    expect(scope.parentIdentity).toEqual({ dev: exactDev, ino: exactIno });
+    await revalidatePersistenceLeaseScope(scope);
+    namespacePaths.add(scope.rootDirectory);
+    namespacePaths.add(scope.directory);
+    const lease = await acquirePersistenceLeaseInScope(scope, { role: "shared" });
+    expect(lease.scope.namespaceIdentity?.root.ino).toBeGreaterThan(BigInt(Number.MAX_SAFE_INTEGER));
+    expect(lease.scope.namespaceIdentity?.family.ino).toBeGreaterThan(BigInt(Number.MAX_SAFE_INTEGER));
+    await lease.release();
+    expect(parentReads).toBeGreaterThanOrEqual(2);
+  });
+
+  it("rejects a zero inode instead of accepting an ambiguous parent identity", async () => {
+    const { root, targetPath } = await fixture();
+    const canonicalRoot = await fs.realpath(root);
+    const realLstat = fs.lstat.bind(fs);
+    vi.spyOn(fs, "lstat").mockImplementation(async (filePath, options) => {
+      const stats = await realLstat(filePath, options);
+      if (path.resolve(filePath.toString()) !== canonicalRoot) return stats;
+      return new Proxy(stats, {
+        get(target, property, receiver) {
+          return property === "ino" ? 0n : Reflect.get(target, property, receiver);
+        }
+      });
+    });
+
+    await expect(resolvePersistenceLeaseScope({ targetPath, familyKey: "embed-db" })).rejects.toThrow(
+      /no exact filesystem identity/i
+    );
+    await expect(fs.lstat(path.join(root, ".enquire-mcp-leases"))).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("pins parent dev/ino and rejects later operations after rename plus same-path replacement", async () => {

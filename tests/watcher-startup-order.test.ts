@@ -190,7 +190,12 @@ function catchClosesWatcherEmbedBeforeEscape(catchClause: ts.CatchClause, closeC
   };
   visit(catchClause.block);
   const close = matchingCloses[0];
-  return matchingCloses.length === 1 && close !== undefined && escapes.every((exit) => close.position < exit.pos);
+  return (
+    matchingCloses.length === 1 &&
+    close !== undefined &&
+    isDirectlyAwaited(close.call) &&
+    escapes.every((exit) => close.position < exit.pos)
+  );
 }
 
 /**
@@ -207,6 +212,7 @@ function watcherStartupOrderViolations(source: string): string[] {
   const constructors: ts.NewExpression[] = [];
   const resourceAcquisitionPositions: number[] = [];
   const feedbackDeclarations: ts.VariableDeclaration[] = [];
+  const feedbackAssignments: ts.BinaryExpression[] = [];
   const returns: ts.ReturnStatement[] = [];
 
   const visit = (node: ts.Node): void => {
@@ -223,6 +229,14 @@ function watcherStartupOrderViolations(source: string): string[] {
     }
     if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.name.text === "feedbackStore") {
       feedbackDeclarations.push(node);
+    }
+    if (
+      ts.isBinaryExpression(node) &&
+      node.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+      ts.isIdentifier(node.left) &&
+      node.left.text === "feedbackStore"
+    ) {
+      feedbackAssignments.push(node);
     }
     if (ts.isReturnStatement(node)) returns.push(node);
     ts.forEachChild(node, visit);
@@ -525,9 +539,15 @@ function watcherStartupOrderViolations(source: string): string[] {
       }
     }
 
+    const feedbackOpenPositions = [
+      ...feedbackDeclarations
+        .filter((declaration) => declaration.initializer?.kind !== ts.SyntaxKind.NullKeyword)
+        .map((declaration) => declaration.getStart(sourceFile)),
+      ...feedbackAssignments.map((assignment) => assignment.getStart(sourceFile))
+    ];
     if (feedbackDeclarations.length !== 1) {
       violations.push(`expected exactly one feedbackStore declaration, found ${feedbackDeclarations.length}`);
-    } else if ((feedbackDeclarations[0]?.getStart(sourceFile) ?? -1) <= activation.position) {
+    } else if (feedbackOpenPositions.length !== 1 || (feedbackOpenPositions[0] ?? -1) <= activation.position) {
       violations.push("feedbackStore must open only after watcher.activate()");
     }
     if (returns.length === 0) {
@@ -536,10 +556,7 @@ function watcherStartupOrderViolations(source: string): string[] {
       violations.push("watcher.activate() must run before every prepareServerDeps return");
     }
     if (guardRelease) {
-      if (
-        feedbackDeclarations.length === 1 &&
-        (feedbackDeclarations[0]?.getStart(sourceFile) ?? -1) <= guardRelease.position
-      ) {
+      if (feedbackOpenPositions.length !== 1 || (feedbackOpenPositions[0] ?? -1) <= guardRelease.position) {
         violations.push("feedbackStore must open only after activation guard release");
       }
       if (returns.some((statement) => statement.getStart(sourceFile) <= guardRelease.position)) {
@@ -796,7 +813,7 @@ ${REQUIRED_PURE_VALIDATION_BLOCK}
       }
       await watcher.captureAttachedSinkDrift();
     } catch (error) {
-      closeWatcherEmbedDbAfterFailure(watcherEmbedDb, "watcher startup");
+      await closeWatcherEmbedDbAfterFailure(watcherEmbedDb, "watcher startup");
       watcherEmbedDb = null;
       await watcher.close();
       if (guardArmAttempted) throw watcherActivationRecoveryError(error);
@@ -818,7 +835,7 @@ ${REQUIRED_PURE_VALIDATION_BLOCK}
         watcherActivationGuard = null;
       }
     } catch (error) {
-      closeWatcherEmbedDbAfterFailure(watcherEmbedDb, "watcher activation");
+      await closeWatcherEmbedDbAfterFailure(watcherEmbedDb, "watcher activation");
       watcherEmbedDb = null;
       await watcher.close();
       throw error;
@@ -904,27 +921,43 @@ describe("watcher startup activation ordering (v3.12.0-rc.25 S-8c)", () => {
     );
 
     const missingStartupEmbedCleanup = GOOD_STARTUP.replace(
-      '      closeWatcherEmbedDbAfterFailure(watcherEmbedDb, "watcher startup");\n',
+      '      await closeWatcherEmbedDbAfterFailure(watcherEmbedDb, "watcher startup");\n',
       ""
     );
     expect(watcherStartupOrderViolations(missingStartupEmbedCleanup)).toContain(
       "watcher startup catch must close watcher EmbedDb before rethrow/return"
     );
 
+    const unawaitedStartupEmbedCleanup = GOOD_STARTUP.replace(
+      '      await closeWatcherEmbedDbAfterFailure(watcherEmbedDb, "watcher startup");\n',
+      '      closeWatcherEmbedDbAfterFailure(watcherEmbedDb, "watcher startup");\n'
+    );
+    expect(watcherStartupOrderViolations(unawaitedStartupEmbedCleanup)).toContain(
+      "watcher startup catch must close watcher EmbedDb before rethrow/return"
+    );
+
     const missingActivationEmbedCleanup = GOOD_STARTUP.replace(
-      '      closeWatcherEmbedDbAfterFailure(watcherEmbedDb, "watcher activation");\n',
+      '      await closeWatcherEmbedDbAfterFailure(watcherEmbedDb, "watcher activation");\n',
       ""
     );
     expect(watcherStartupOrderViolations(missingActivationEmbedCleanup)).toContain(
       "watcher activation catch must close watcher EmbedDb before rethrow/return"
     );
 
+    const unawaitedActivationEmbedCleanup = GOOD_STARTUP.replace(
+      '      await closeWatcherEmbedDbAfterFailure(watcherEmbedDb, "watcher activation");\n',
+      '      closeWatcherEmbedDbAfterFailure(watcherEmbedDb, "watcher activation");\n'
+    );
+    expect(watcherStartupOrderViolations(unawaitedActivationEmbedCleanup)).toContain(
+      "watcher activation catch must close watcher EmbedDb before rethrow/return"
+    );
+
     const lateStartupEmbedCleanup = GOOD_STARTUP.replace(
-      '      closeWatcherEmbedDbAfterFailure(watcherEmbedDb, "watcher startup");\n',
+      '      await closeWatcherEmbedDbAfterFailure(watcherEmbedDb, "watcher startup");\n',
       ""
     ).replace(
       "      throw error;\n    }\n  }\n  if (opts.useHnsw)",
-      '      throw error;\n      closeWatcherEmbedDbAfterFailure(watcherEmbedDb, "watcher startup");\n    }\n  }\n  if (opts.useHnsw)'
+      '      throw error;\n      await closeWatcherEmbedDbAfterFailure(watcherEmbedDb, "watcher startup");\n    }\n  }\n  if (opts.useHnsw)'
     );
     expect(watcherStartupOrderViolations(lateStartupEmbedCleanup)).toContain(
       "watcher startup catch must close watcher EmbedDb before rethrow/return"
@@ -1069,8 +1102,8 @@ describe("watcher startup activation ordering (v3.12.0-rc.25 S-8c)", () => {
       "      if (watcherActivationGuard) {\n        await releaseWatcherActivationGuard(watcherActivationGuard);\n        watcherActivationGuard = null;\n      }\n",
       ""
     ).replace(
-      '    } catch (error) {\n      closeWatcherEmbedDbAfterFailure(watcherEmbedDb, "watcher activation");\n      watcherEmbedDb = null;\n      await watcher.close();',
-      '    } catch (error) {\n      closeWatcherEmbedDbAfterFailure(watcherEmbedDb, "watcher activation");\n      watcherEmbedDb = null;\n      if (watcherActivationGuard) {\n        await releaseWatcherActivationGuard(watcherActivationGuard);\n        watcherActivationGuard = null;\n      }\n      await watcher.close();'
+      '    } catch (error) {\n      await closeWatcherEmbedDbAfterFailure(watcherEmbedDb, "watcher activation");\n      watcherEmbedDb = null;\n      await watcher.close();',
+      '    } catch (error) {\n      await closeWatcherEmbedDbAfterFailure(watcherEmbedDb, "watcher activation");\n      watcherEmbedDb = null;\n      if (watcherActivationGuard) {\n        await releaseWatcherActivationGuard(watcherActivationGuard);\n        watcherActivationGuard = null;\n      }\n      await watcher.close();'
     );
     expect(watcherStartupOrderViolations(releaseInFailureCatch)).toContain(
       "activation guard release must stay on watcher.activate() successful try path"

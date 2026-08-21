@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
-import { constants, type Dirent, promises as fs, type Stats } from "node:fs";
+import { type BigIntStats, constants, type Dirent, promises as fs } from "node:fs";
 import type { FileHandle } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -30,10 +30,10 @@ export type PersistenceLeaseRole = "shared" | "publisher" | "eraser";
 
 /** Exact filesystem identity of the canonical persistence parent directory. */
 export interface PersistenceLeaseParentIdentity {
-  /** Device identifier returned by `lstat`. */
-  readonly dev: number;
-  /** Inode/file identifier returned by `lstat`. */
-  readonly ino: number;
+  /** Exact device identifier returned by BigInt `lstat`. */
+  readonly dev: bigint;
+  /** Exact inode/file identifier returned by BigInt `lstat`. */
+  readonly ino: bigint;
 }
 
 /** Exact filesystem identities of an acquisition-bound lease namespace. */
@@ -174,7 +174,8 @@ export interface PersistenceLeaseHandle {
   /** Exact marker metadata owned by this handle. */
   readonly marker: PersistenceLeaseMarker;
   /**
-   * Remove only this handle's still-identical marker.
+   * Remove only this handle's still-identical marker. Release is monotonic:
+   * it never publishes a new gate or staging artifact.
    *
    * @returns A promise that settles after exact cleanup; repeated calls reuse it.
    */
@@ -367,8 +368,8 @@ interface OwnedMarker {
 }
 
 interface FileIdentity {
-  readonly dev: number;
-  readonly ino: number;
+  readonly dev: bigint;
+  readonly ino: bigint;
 }
 
 interface GateOptions {
@@ -412,16 +413,21 @@ function exactMarkerOwnershipIsTerminal(error: unknown): boolean {
   );
 }
 
+function hasExactFileIdentity(value: unknown): value is FileIdentity {
+  if (typeof value !== "object" || value === null) return false;
+  const candidate = value as { readonly dev?: unknown; readonly ino?: unknown };
+  return (
+    typeof candidate.dev === "bigint" && candidate.dev >= 0n && typeof candidate.ino === "bigint" && candidate.ino > 0n
+  );
+}
+
 function exactPinnedScopeKey(scope: PersistenceLeaseScope): string {
   const namespace = scope.namespaceIdentity;
   if (
     namespace === undefined ||
-    !Number.isSafeInteger(scope.parentIdentity.dev) ||
-    !Number.isSafeInteger(scope.parentIdentity.ino) ||
-    !Number.isSafeInteger(namespace.root.dev) ||
-    !Number.isSafeInteger(namespace.root.ino) ||
-    !Number.isSafeInteger(namespace.family.dev) ||
-    !Number.isSafeInteger(namespace.family.ino)
+    !hasExactFileIdentity(scope.parentIdentity) ||
+    !hasExactFileIdentity(namespace.root) ||
+    !hasExactFileIdentity(namespace.family)
   ) {
     throw new PersistenceLeaseIntegrityError("Persistence lease debt requires an exact pinned scope");
   }
@@ -429,13 +435,13 @@ function exactPinnedScopeKey(scope: PersistenceLeaseScope): string {
     .update(
       JSON.stringify([
         scope.canonicalParent,
-        scope.parentIdentity.dev,
-        scope.parentIdentity.ino,
+        scope.parentIdentity.dev.toString(10),
+        scope.parentIdentity.ino.toString(10),
         scope.digest,
-        namespace.root.dev,
-        namespace.root.ino,
-        namespace.family.dev,
-        namespace.family.ino
+        namespace.root.dev.toString(10),
+        namespace.root.ino.toString(10),
+        namespace.family.dev.toString(10),
+        namespace.family.ino.toString(10)
       ]),
       "utf8"
     )
@@ -737,20 +743,23 @@ export function composePersistenceLeaseDebtOwners(
   );
 }
 
-function assertPrivateMode(stats: Stats, expected: number, label: string): void {
+function assertPrivateMode(stats: BigIntStats, expected: number, label: string): void {
   if (process.platform === "win32") return;
-  if ((stats.mode & 0o777) !== expected) {
+  if ((stats.mode & 0o777n) !== BigInt(expected)) {
     throw new PersistenceLeaseIntegrityError(`${label} permissions must be ${expected.toString(8)}`);
   }
-  if (typeof process.getuid === "function" && stats.uid !== process.getuid()) {
+  if (typeof process.getuid === "function" && stats.uid !== BigInt(process.getuid())) {
     throw new PersistenceLeaseIntegrityError(`${label} must be owned by the current user`);
   }
 }
 
-async function assertPrivateDirectory(directory: string, label: string): Promise<Stats> {
-  const stats = await fs.lstat(directory);
+async function assertPrivateDirectory(directory: string, label: string): Promise<BigIntStats> {
+  const stats = await fs.lstat(directory, { bigint: true });
   if (stats.isSymbolicLink() || !stats.isDirectory()) {
     throw new PersistenceLeaseIntegrityError(`${label} must be a real directory`);
+  }
+  if (!hasExactFileIdentity(identity(stats))) {
+    throw new PersistenceLeaseIntegrityError(`${label} has no exact filesystem identity`);
   }
   assertPrivateMode(stats, 0o700, label);
   const real = await fs.realpath(directory);
@@ -876,38 +885,99 @@ function storedMarker(
   };
 }
 
-function identity(stats: Stats): FileIdentity {
+function identity(stats: BigIntStats): FileIdentity {
   return { dev: stats.dev, ino: stats.ino };
 }
 
 function sameIdentity(left: FileIdentity, right: FileIdentity): boolean {
-  return left.dev === right.dev && left.ino === right.ino;
+  return hasExactFileIdentity(left) && hasExactFileIdentity(right) && left.dev === right.dev && left.ino === right.ino;
 }
 
-async function lstatTrustedFile(filePath: string, label: string): Promise<Stats> {
-  const stats = await fs.lstat(filePath);
+async function lstatTrustedFile(filePath: string, label: string): Promise<BigIntStats> {
+  const stats = await fs.lstat(filePath, { bigint: true });
   if (stats.isSymbolicLink() || !stats.isFile()) {
     throw new PersistenceLeaseIntegrityError(`${label} must be a regular file`);
   }
+  if (!hasExactFileIdentity(identity(stats))) {
+    throw new PersistenceLeaseIntegrityError(`${label} has no exact filesystem identity`);
+  }
   assertPrivateMode(stats, 0o600, label);
-  if (stats.size < 1 || stats.size > MAX_MARKER_BYTES) {
+  if (stats.size < 1n || stats.size > BigInt(MAX_MARKER_BYTES)) {
     throw new PersistenceLeaseIntegrityError(`${label} has an invalid bounded size`);
   }
   return stats;
 }
 
-async function lstatRecoverableCandidate(filePath: string): Promise<Stats> {
-  const stats = await fs.lstat(filePath);
+async function lstatRecoverableCandidate(filePath: string): Promise<BigIntStats> {
+  const stats = await fs.lstat(filePath, { bigint: true });
   if (stats.isSymbolicLink() || !stats.isFile()) {
     throw new PersistenceLeaseIntegrityError("Persistence lease staging marker must be a regular file");
   }
-  if (process.platform !== "win32" && (stats.mode & 0o077) !== 0) {
+  if (!hasExactFileIdentity(identity(stats))) {
+    throw new PersistenceLeaseIntegrityError("Persistence lease staging marker has no exact filesystem identity");
+  }
+  if (process.platform !== "win32" && (stats.mode & 0o077n) !== 0n) {
     throw new PersistenceLeaseIntegrityError("Persistence lease staging marker permissions must remain private");
   }
-  if (typeof process.getuid === "function" && stats.uid !== process.getuid()) {
+  if (typeof process.getuid === "function" && stats.uid !== BigInt(process.getuid())) {
     throw new PersistenceLeaseIntegrityError("Persistence lease staging marker must be owned by the current user");
   }
   return stats;
+}
+
+interface OpenedIdentityFile {
+  readonly file: FileHandle;
+  readonly stats: BigIntStats;
+}
+
+async function openIdentityPinnedRegular(
+  filePath: string,
+  label: string,
+  markerShape: "authoritative" | "candidate"
+): Promise<OpenedIdentityFile> {
+  const inspect =
+    markerShape === "authoritative"
+      ? () => lstatTrustedFile(filePath, label)
+      : () => lstatRecoverableCandidate(filePath);
+  const before = await inspect();
+  const flags = constants.O_RDONLY | (process.platform === "win32" ? 0 : constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  const file = await fs.open(filePath, flags);
+  try {
+    const opened = await file.stat({ bigint: true });
+    if (
+      !opened.isFile() ||
+      !hasExactFileIdentity(identity(opened)) ||
+      (markerShape === "authoritative" && (opened.size < 1n || opened.size > BigInt(MAX_MARKER_BYTES)))
+    ) {
+      throw new PersistenceLeaseIntegrityError(`${label} changed while it was opened`);
+    }
+    const middle = await inspect();
+    if (!sameIdentity(identity(before), identity(middle))) {
+      throw new PersistenceLeaseIntegrityError(`${label} path identity changed while it was opened`);
+    }
+
+    // Windows 24H2+ exposes path lstat through GetFileInformationByName while
+    // descriptor stat still uses the handle API. Those are distinct identity
+    // surfaces in libuv, so compare path-to-path and fstat-to-fstat instead of
+    // truncating either 64-bit value or assuming the two APIs are interchangeable.
+    const confirmation = await fs.open(filePath, flags);
+    try {
+      const confirmed = await confirmation.stat({ bigint: true });
+      if (!confirmed.isFile() || !sameIdentity(identity(opened), identity(confirmed))) {
+        throw new PersistenceLeaseIntegrityError(`${label} descriptor identity changed while it was opened`);
+      }
+    } finally {
+      await confirmation.close();
+    }
+    const after = await inspect();
+    if (!sameIdentity(identity(before), identity(after))) {
+      throw new PersistenceLeaseIntegrityError(`${label} path identity changed while it was confirmed`);
+    }
+    return { file, stats: opened };
+  } catch (error) {
+    await file.close();
+    throw error;
+  }
 }
 
 function parseStoredMarker(raw: string, id: string, scope: PersistenceLeaseScope): StoredMarker {
@@ -979,20 +1049,30 @@ async function readTrustedMarker(
 }> {
   await revalidatePersistenceLeaseScope(scope);
   const filePath = path.join(scope.directory, id);
-  const before = await lstatTrustedFile(filePath, "Persistence lease marker");
-  const file = await fs.open(filePath, constants.O_RDONLY);
+  const openedFile = await openIdentityPinnedRegular(filePath, "Persistence lease marker", "authoritative");
+  const { file } = openedFile;
   try {
-    const opened = await file.stat();
-    if (!opened.isFile() || !sameIdentity(identity(before), identity(opened))) {
-      throw new PersistenceLeaseIntegrityError("Persistence lease marker changed while it was opened");
-    }
+    const opened = openedFile.stats;
     const bytes = await file.readFile({ encoding: "utf8" });
-    if (Buffer.byteLength(bytes, "utf8") !== opened.size) {
+    if (BigInt(Buffer.byteLength(bytes, "utf8")) !== opened.size) {
       throw new PersistenceLeaseIntegrityError("Persistence lease marker changed while it was read");
     }
-    const after = await lstatTrustedFile(filePath, "Persistence lease marker");
-    if (!sameIdentity(identity(opened), identity(after))) {
-      throw new PersistenceLeaseIntegrityError("Persistence lease marker identity changed while it was read");
+    const after = await file.stat({ bigint: true });
+    if (
+      !sameIdentity(identity(opened), identity(after)) ||
+      opened.size !== after.size ||
+      opened.mtimeNs !== after.mtimeNs ||
+      opened.ctimeNs !== after.ctimeNs
+    ) {
+      throw new PersistenceLeaseIntegrityError("Persistence lease marker changed while it was read");
+    }
+    const current = await openIdentityPinnedRegular(filePath, "Persistence lease marker", "authoritative");
+    try {
+      if (!sameIdentity(identity(opened), identity(current.stats))) {
+        throw new PersistenceLeaseIntegrityError("Persistence lease marker path changed while it was read");
+      }
+    } finally {
+      await current.file.close();
     }
     const marker = parseStoredMarker(bytes, id, scope);
     await revalidatePersistenceLeaseScope(scope);
@@ -1005,26 +1085,47 @@ async function readTrustedMarker(
 
 async function exactUnlink(scope: PersistenceLeaseScope, owned: OwnedMarker, label: string): Promise<void> {
   await revalidatePersistenceLeaseScope(scope);
-  const current = await lstatTrustedFile(owned.path, label);
-  if (!sameIdentity(owned.identity, identity(current))) {
-    throw new PersistenceLeaseIntegrityError(`${label} no longer belongs to this handle`);
-  }
-  const currentBytes = await fs.readFile(owned.path, "utf8");
-  if (currentBytes !== owned.bytes) {
-    throw new PersistenceLeaseIntegrityError(`${label} ownership token changed`);
+  const current = await openIdentityPinnedRegular(owned.path, label, "authoritative");
+  try {
+    if (!sameIdentity(owned.identity, identity(current.stats))) {
+      throw new PersistenceLeaseIntegrityError(`${label} no longer belongs to this handle`);
+    }
+    const currentBytes = await current.file.readFile({ encoding: "utf8" });
+    const afterRead = await current.file.stat({ bigint: true });
+    if (
+      currentBytes !== owned.bytes ||
+      BigInt(Buffer.byteLength(currentBytes, "utf8")) !== afterRead.size ||
+      !sameIdentity(identity(current.stats), identity(afterRead)) ||
+      current.stats.mtimeNs !== afterRead.mtimeNs ||
+      current.stats.ctimeNs !== afterRead.ctimeNs
+    ) {
+      throw new PersistenceLeaseIntegrityError(`${label} ownership token changed`);
+    }
+  } finally {
+    await current.file.close();
   }
   await revalidatePersistenceLeaseScope(scope);
   await fs.unlink(owned.path);
   await revalidatePersistenceLeaseScope(scope);
 }
 
-async function cleanupCandidate(scope: PersistenceLeaseScope, filePath: string, file: FileHandle): Promise<void> {
+async function cleanupCandidate(
+  scope: PersistenceLeaseScope,
+  filePath: string,
+  expectedIdentity: FileIdentity
+): Promise<void> {
   await revalidatePersistenceLeaseScope(scope);
   try {
-    const [opened, current] = await Promise.all([file.stat(), fs.lstat(filePath)]);
-    if (current.isFile() && !current.isSymbolicLink() && sameIdentity(identity(opened), identity(current))) {
-      await fs.unlink(filePath);
+    const current = await openIdentityPinnedRegular(filePath, "Persistence lease staging marker", "candidate");
+    try {
+      if (!sameIdentity(expectedIdentity, identity(current.stats))) {
+        throw new PersistenceLeaseIntegrityError("Persistence lease staging marker no longer belongs to this handle");
+      }
+    } finally {
+      await current.file.close();
     }
+    await revalidatePersistenceLeaseScope(scope);
+    await fs.unlink(filePath);
   } catch (error) {
     if (errorCode(error) !== "ENOENT") throw error;
   }
@@ -1061,7 +1162,7 @@ function ownedMarkerDebt(
     }
     if (candidatePending && candidatePath !== undefined) {
       try {
-        await cleanupCandidate(scope, candidatePath, owned.file);
+        await cleanupCandidate(scope, candidatePath, owned.identity);
         candidatePending = false;
       } catch (error) {
         failures.push(error);
@@ -1094,7 +1195,11 @@ async function publishMarker(
     throw new PersistenceLeaseIntegrityError("Persistence lease marker exceeds its byte budget");
   }
   const file = await fs.open(candidatePath, constants.O_CREAT | constants.O_EXCL | constants.O_RDWR, 0o600);
-  const opened = await file.stat();
+  const opened = await file.stat({ bigint: true });
+  if (!opened.isFile() || !hasExactFileIdentity(identity(opened))) {
+    await file.close();
+    throw new PersistenceLeaseIntegrityError("Persistence lease staging marker has no exact filesystem identity");
+  }
   const candidateOwned: OwnedMarker = {
     path: path.join(scope.directory, finalName),
     file,
@@ -1103,33 +1208,78 @@ async function publishMarker(
     marker: publicMarker(finalName, stored)
   };
   let publishedOwned: OwnedMarker | undefined;
+  let finalLinked = false;
   try {
     await file.writeFile(bytes, "utf8");
     await file.sync();
     await fs.chmod(candidatePath, 0o600);
-    await fs.link(candidatePath, path.join(scope.directory, finalName));
-    publishedOwned = candidateOwned;
-    const finalStats = await lstatTrustedFile(path.join(scope.directory, finalName), "Persistence lease marker");
-    if (!sameIdentity(identity(opened), identity(finalStats))) {
-      throw new PersistenceLeaseIntegrityError("Published persistence lease marker changed identity");
+    const written = await file.stat({ bigint: true });
+    if (
+      !sameIdentity(candidateOwned.identity, identity(written)) ||
+      written.size !== BigInt(Buffer.byteLength(bytes, "utf8"))
+    ) {
+      throw new PersistenceLeaseIntegrityError("Persistence lease staging marker changed while it was written");
     }
+    await fs.link(candidatePath, path.join(scope.directory, finalName));
+    finalLinked = true;
+    const finalOpened = await openIdentityPinnedRegular(
+      path.join(scope.directory, finalName),
+      "Persistence lease marker",
+      "authoritative"
+    );
+    let finalOwned: OwnedMarker;
+    try {
+      if (!sameIdentity(candidateOwned.identity, identity(finalOpened.stats))) {
+        throw new PersistenceLeaseIntegrityError("Published persistence lease marker changed identity");
+      }
+      const finalBytes = await finalOpened.file.readFile({ encoding: "utf8" });
+      const afterRead = await finalOpened.file.stat({ bigint: true });
+      if (
+        finalBytes !== bytes ||
+        BigInt(Buffer.byteLength(finalBytes, "utf8")) !== afterRead.size ||
+        !sameIdentity(identity(finalOpened.stats), identity(afterRead)) ||
+        finalOpened.stats.mtimeNs !== afterRead.mtimeNs ||
+        finalOpened.stats.ctimeNs !== afterRead.ctimeNs
+      ) {
+        throw new PersistenceLeaseIntegrityError("Published persistence lease marker changed while verified");
+      }
+      finalOwned = {
+        ...candidateOwned,
+        file: finalOpened.file,
+        identity: identity(finalOpened.stats)
+      };
+    } catch (error) {
+      await finalOpened.file.close();
+      throw error;
+    }
+    try {
+      // On Windows, retaining the descriptor opened through the candidate
+      // pathname can prevent that hard-link name from being removed while the
+      // authoritative name remains. Transfer ownership to a separately opened
+      // final descriptor before deleting the staging link.
+      await file.close();
+    } catch (error) {
+      await finalOwned.file.close();
+      throw error;
+    }
+    publishedOwned = finalOwned;
     await revalidatePersistenceLeaseScope(scope);
-    await cleanupCandidate(scope, candidatePath, file);
-    return candidateOwned;
+    await cleanupCandidate(scope, candidatePath, finalOwned.identity);
+    return finalOwned;
   } catch (error) {
-    const debtOwner = ownedMarkerDebt(scope, candidateOwned, candidatePath, publishedOwned !== undefined);
+    const debtOwner = ownedMarkerDebt(scope, publishedOwned ?? candidateOwned, candidatePath, finalLinked);
     try {
       await debtOwner.release();
     } catch (cleanupError) {
       throw new PersistenceLeaseOwnershipError(
-        publishedOwned === undefined
+        !finalLinked
           ? "Persistence lease staging cleanup was incomplete"
           : "Persistence lease marker publication retained exact ownership debt",
         [error, cleanupError],
         debtOwner
       );
     }
-    if (publishedOwned !== undefined) {
+    if (finalLinked) {
       throw new PersistenceLeaseIntegrityError("Persistence lease marker publication did not reach a fixed point");
     }
     throw error;
@@ -1273,11 +1423,11 @@ function conflictingRoles(
 
 async function targetCanonicalName(absoluteTarget: string, canonicalParent: string): Promise<string> {
   try {
-    const targetStats = await fs.lstat(absoluteTarget);
+    const targetStats = await fs.lstat(absoluteTarget, { bigint: true });
     if (targetStats.isSymbolicLink() || !targetStats.isFile()) {
       throw new PersistenceLeaseIntegrityError("Persistence lease target must be absent or a regular file");
     }
-    if (targetStats.nlink !== 1) {
+    if (targetStats.nlink !== 1n) {
       throw new PersistenceLeaseIntegrityError("Persistence lease target must not have hard-link aliases");
     }
     const targetReal = await fs.realpath(absoluteTarget);
@@ -1314,21 +1464,12 @@ export async function revalidatePersistenceLeaseScope(scope: PersistenceLeaseSco
     scope.targetName.length === 0 ||
     path.basename(scope.targetName) !== scope.targetName ||
     scope.targetName !== scope.targetName.normalize("NFC") ||
-    typeof scope.parentIdentity !== "object" ||
-    scope.parentIdentity === null ||
-    !Number.isSafeInteger(scope.parentIdentity.dev) ||
-    !Number.isSafeInteger(scope.parentIdentity.ino) ||
+    !hasExactFileIdentity(scope.parentIdentity) ||
     (namespaceIdentity !== undefined &&
       (typeof namespaceIdentity !== "object" ||
         namespaceIdentity === null ||
-        typeof namespaceIdentity.root !== "object" ||
-        namespaceIdentity.root === null ||
-        !Number.isSafeInteger(namespaceIdentity.root.dev) ||
-        !Number.isSafeInteger(namespaceIdentity.root.ino) ||
-        typeof namespaceIdentity.family !== "object" ||
-        namespaceIdentity.family === null ||
-        !Number.isSafeInteger(namespaceIdentity.family.dev) ||
-        !Number.isSafeInteger(namespaceIdentity.family.ino)))
+        !hasExactFileIdentity(namespaceIdentity.root) ||
+        !hasExactFileIdentity(namespaceIdentity.family)))
   ) {
     throw new PersistenceLeaseIntegrityError("Persistence lease scope shape is invalid");
   }
@@ -1341,7 +1482,7 @@ export async function revalidatePersistenceLeaseScope(scope: PersistenceLeaseSco
   ) {
     throw new PersistenceLeaseIntegrityError("Persistence lease scope derivation is invalid");
   }
-  const parentStats = await fs.lstat(scope.canonicalParent);
+  const parentStats = await fs.lstat(scope.canonicalParent, { bigint: true });
   if (parentStats.isSymbolicLink() || !parentStats.isDirectory()) {
     throw new PersistenceLeaseIntegrityError("Persistence lease parent must remain a real directory");
   }
@@ -1393,9 +1534,12 @@ export async function resolvePersistenceLeaseScope(target: PersistenceLeaseTarge
     throw new TypeError("Persistence lease target path must name a file");
   }
   const canonicalParent = await fs.realpath(path.dirname(absoluteTarget));
-  const parentStats = await fs.lstat(canonicalParent);
+  const parentStats = await fs.lstat(canonicalParent, { bigint: true });
   if (!parentStats.isDirectory() || parentStats.isSymbolicLink()) {
     throw new PersistenceLeaseIntegrityError("Persistence lease parent must be a real directory");
+  }
+  if (!hasExactFileIdentity(identity(parentStats))) {
+    throw new PersistenceLeaseIntegrityError("Persistence lease parent has no exact filesystem identity");
   }
   const targetName = await targetCanonicalName(absoluteTarget, canonicalParent);
   const digest = persistenceScopeDigest(targetName, familyKey);
@@ -1441,47 +1585,24 @@ function leaseHandleDebt(handle: PersistenceLeaseHandle): PersistenceLeaseDebtOw
 function persistenceLeaseHandle(
   scope: PersistenceLeaseScope,
   role: PersistenceLeaseRole,
-  owned: OwnedMarker,
-  timing: GateOptions
+  owned: OwnedMarker
 ): PersistenceLeaseHandle {
   let markerPending = true;
   let fileClosed = false;
-  let pendingGateDebt: PersistenceLeaseDebtOwner | undefined;
   let releasePromise: Promise<void> | undefined;
   let handle: PersistenceLeaseHandle;
-  const fullyReleased = (): boolean => !markerPending && fileClosed && pendingGateDebt === undefined;
+  const fullyReleased = (): boolean => !markerPending && fileClosed;
   const currentDebtOwner = (): PersistenceLeaseDebtOwner => ({
-    artifacts: [...(markerPending ? [{ scope, marker: owned.marker }] : []), ...(pendingGateDebt?.artifacts ?? [])],
+    artifacts: markerPending ? [{ scope, marker: owned.marker }] : [],
     release: async () => handle.release()
   });
   const release = async (): Promise<void> => {
-    if (pendingGateDebt !== undefined) {
-      const debt = pendingGateDebt;
-      try {
-        await debt.release();
-      } catch (error) {
-        throw new PersistenceLeaseOwnershipError(
-          error instanceof Error ? error.message : "Persistence lease release retained an earlier gate debt",
-          [error],
-          currentDebtOwner()
-        );
-      }
-      if (pendingGateDebt === debt) pendingGateDebt = undefined;
-    }
     if (markerPending) {
-      let gate: OwnedMarker;
-      try {
-        gate = await acquireGate(scope, timing);
-      } catch (error) {
-        if (error instanceof PersistenceLeaseOwnershipError) pendingGateDebt = error.debtOwner;
-        throw new PersistenceLeaseOwnershipError(
-          error instanceof Error
-            ? error.message
-            : "Persistence lease release could not acquire its gate and retained exact ownership debt",
-          [error],
-          currentDebtOwner()
-        );
-      }
+      // Exact unlink is the release linearization point. A concurrent gated
+      // acquisition either observes this marker, observes its absence after
+      // unlink, or fails closed if the entry disappears mid-inspection.
+      // Release itself must remain deletion-only so a fire-and-forget close
+      // cannot recreate lease entries after parent teardown has begun.
       let markerFailure: unknown;
       try {
         await exactUnlink(scope, owned, "Persistence lease marker");
@@ -1494,13 +1615,6 @@ function persistenceLeaseHandle(
           if (errorCode(error) !== "ENOENT") markerFailure = error;
         } else markerFailure = error;
       }
-      let gateFailure: unknown;
-      try {
-        await releaseGate(scope, gate);
-      } catch (error) {
-        if (error instanceof PersistenceLeaseOwnershipError) pendingGateDebt = error.debtOwner;
-        gateFailure = error;
-      }
       let closeFailure: unknown;
       if (!markerPending && !fileClosed) {
         try {
@@ -1510,7 +1624,7 @@ function persistenceLeaseHandle(
           closeFailure = error;
         }
       }
-      const failures = [markerFailure, gateFailure, closeFailure].filter((error) => error !== undefined);
+      const failures = [markerFailure, closeFailure].filter((error) => error !== undefined);
       if (failures.length > 0) {
         const debtOwner = currentDebtOwner();
         if (debtOwner.artifacts.length > 0) {
@@ -1629,7 +1743,7 @@ async function acquirePersistenceLeaseInScopeOnce(
     throw error;
   }
   if (!owned) throw new PersistenceLeaseIntegrityError("Persistence lease acquisition did not publish a marker");
-  const handle = persistenceLeaseHandle(pinnedScope, options.role, owned, timing);
+  const handle = persistenceLeaseHandle(pinnedScope, options.role, owned);
   try {
     await releaseGate(pinnedScope, gate);
   } catch (gateError) {
@@ -1712,21 +1826,22 @@ async function recoverExactCandidate(
   await revalidatePersistenceLeaseScope(scope);
   const marker = candidateMarker(markerId);
   const markerPath = path.join(scope.directory, markerId);
-  const before = await lstatRecoverableCandidate(markerPath);
-  const file = await fs.open(markerPath, constants.O_RDONLY);
+  const openedFile = await openIdentityPinnedRegular(markerPath, "Persistence lease staging marker", "candidate");
+  const { file } = openedFile;
   try {
-    const opened = await file.stat();
-    if (!opened.isFile() || !sameIdentity(identity(before), identity(opened))) {
-      throw new PersistenceLeaseIntegrityError("Persistence lease staging marker changed while it was opened");
-    }
+    const opened = openedFile.stats;
     assertSameHostEsrch(marker);
     if (!(await assertQuiescent({ scope, marker }))) {
       throw new PersistenceLeaseRecoveryError("Persistence lease recovery requires proven quiescence");
     }
     await revalidatePersistenceLeaseScope(scope);
-    const current = await lstatRecoverableCandidate(markerPath);
-    if (!sameIdentity(identity(opened), identity(current))) {
-      throw new PersistenceLeaseIntegrityError("Persistence lease staging marker changed before recovery");
+    const current = await openIdentityPinnedRegular(markerPath, "Persistence lease staging marker", "candidate");
+    try {
+      if (!sameIdentity(identity(opened), identity(current.stats))) {
+        throw new PersistenceLeaseIntegrityError("Persistence lease staging marker changed before recovery");
+      }
+    } finally {
+      await current.file.close();
     }
     await revalidatePersistenceLeaseScope(scope);
     await fs.unlink(markerPath);

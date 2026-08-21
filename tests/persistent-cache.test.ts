@@ -881,13 +881,13 @@ describe("persistent cache", () => {
         observePreflight = resolve;
       });
       let blocked = false;
-      const lstatSpy = vi.spyOn(fs, "lstat").mockImplementation(async (candidate) => {
+      const lstatSpy = vi.spyOn(fs, "lstat").mockImplementation(async (candidate, ...args) => {
         if (!blocked && String(candidate) === cacheFile) {
           blocked = true;
           observePreflight();
           await preflightGate;
         }
-        return realLstat(candidate);
+        return realLstat(candidate, ...args);
       });
       let removed = false;
       try {

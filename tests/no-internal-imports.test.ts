@@ -91,6 +91,9 @@ const EXPECTED_COVERAGE_CLOSURE_FILES = [
   "tests/release-integrity.test.ts",
   "tests/release-mutation-identity-audit.ts",
   "tests/release-mutation-plan.ts",
+  "tests/release-mutation-transition-audit.ts",
+  "tests/release-mutation-transition-plan.ts",
+  "tests/release-mutation-transition.ts",
   "tests/release-split-contract-fixtures.ts"
 ] as const;
 const EXPECTED_COVERAGE_EXTERNAL_MODULES = new Set([

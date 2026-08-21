@@ -86,7 +86,11 @@ function boundedSection(source: string, start: string, end: string): string {
 }
 
 function pdfOcrPublicContractProblems(readPdf: string, ocrPdf: string): string[] {
-  const normalize = (text: string): string => text.replace(/["'`]/g, "").replace(/\s+/g, " ").toLowerCase();
+  const normalize = (text: string): string => {
+    const normalizedQuotes = text.replace(/["'`]/g, "");
+    const normalizedWhitespace = normalizedQuotes.replace(/\s+/g, " ");
+    return normalizedWhitespace.toLowerCase();
+  };
   const read = normalize(readPdf);
   const ocr = normalize(ocrPdf);
   const problems: string[] = [];
@@ -127,6 +131,186 @@ const PUBLIC_READMES = [
 
 function containsExactInteger(text: string, value: number): boolean {
   return new RegExp(`(?:^|\\D)${value}(?:\\D|$)`).test(text);
+}
+
+type PreviewFontEntry = Readonly<{
+  file: string;
+  sha256: string;
+  family: string;
+  subfamily: string;
+  fullName: string;
+  version: string;
+  postScriptName: string;
+  copyright: string;
+  embeddedLicenseDescription: string;
+  embeddedLicenseUrl: string;
+}>;
+
+type PreviewFontProvenance = Readonly<{
+  schemaVersion: number;
+  source: Readonly<{
+    repository: string;
+    tag: string;
+    commit: string;
+    releaseUrl: string;
+    archiveUrl: string;
+    archiveSha256: string;
+    archiveDirectory: string;
+  }>;
+  license: Readonly<{
+    file: string;
+    spdx: string;
+    sha256: string;
+    reservedFontNames: readonly string[];
+  }>;
+  fonts: readonly PreviewFontEntry[];
+}>;
+
+type PreviewFontEvidence = Readonly<{
+  manifestRaw: string;
+  bundled: ReadonlyMap<string, Buffer>;
+}>;
+
+const PREVIEW_FONT_SOURCE = Object.freeze({
+  repository: "https://github.com/liberationfonts/liberation-fonts",
+  tag: "2.1.5",
+  commit: "4b0192046158094654e865245832c66d2104219e",
+  releaseUrl: "https://github.com/liberationfonts/liberation-fonts/releases/tag/2.1.5",
+  archiveUrl: "https://github.com/liberationfonts/liberation-fonts/files/7261482/liberation-fonts-ttf-2.1.5.tar.gz",
+  archiveSha256: "7191c669bf38899f73a2094ed00f7b800553364f90e2637010a69c0e268f25d0",
+  archiveDirectory: "liberation-fonts-ttf-2.1.5"
+});
+
+const PREVIEW_FONT_SHA256 = Object.freeze({
+  "LiberationSans-Regular.ttf": "76d04c18ea243f426b7de1f3ad208e927008f961dc5945e5aad352d0dfde8ee8",
+  "LiberationSans-Bold.ttf": "788abee4c806d660e8aee46689dd8540cd4bb98da03dcc9d171ce3efd99a9173"
+});
+const PREVIEW_FONT_LICENSE_SHA256 = "93fed46019c38bbe566b479d22148e2e8a1e85ada614accb0211c37b2c61c19b";
+
+const PREVIEW_FONT_NAME_IDS = {
+  copyright: 0,
+  family: 1,
+  subfamily: 2,
+  fullName: 4,
+  version: 5,
+  postScriptName: 6,
+  embeddedLicenseDescription: 13,
+  embeddedLicenseUrl: 14
+} as const;
+
+function sha256(bytes: Buffer | string): string {
+  return createHash("sha256").update(bytes).digest("hex");
+}
+
+/** Read platform-independent Unicode/Windows records from a TrueType `name` table. */
+function openTypeNames(font: Buffer): ReadonlyMap<number, ReadonlySet<string>> {
+  if (font.length < 12) throw new Error("truncated sfnt header");
+  const tableCount = font.readUInt16BE(4);
+  let nameTableOffset = -1;
+  let nameTableLength = -1;
+  for (let index = 0; index < tableCount; index++) {
+    const recordOffset = 12 + index * 16;
+    if (recordOffset + 16 > font.length) throw new Error("truncated sfnt directory");
+    if (font.toString("ascii", recordOffset, recordOffset + 4) !== "name") continue;
+    nameTableOffset = font.readUInt32BE(recordOffset + 8);
+    nameTableLength = font.readUInt32BE(recordOffset + 12);
+  }
+  if (nameTableOffset < 0 || nameTableOffset + nameTableLength > font.length) {
+    throw new Error("missing or truncated sfnt name table");
+  }
+  const recordCount = font.readUInt16BE(nameTableOffset + 2);
+  const storageOffset = nameTableOffset + font.readUInt16BE(nameTableOffset + 4);
+  const names = new Map<number, Set<string>>();
+  for (let index = 0; index < recordCount; index++) {
+    const recordOffset = nameTableOffset + 6 + index * 12;
+    if (recordOffset + 12 > nameTableOffset + nameTableLength) throw new Error("truncated name record");
+    const platform = font.readUInt16BE(recordOffset);
+    if (platform !== 0 && platform !== 3) continue;
+    const nameId = font.readUInt16BE(recordOffset + 6);
+    const length = font.readUInt16BE(recordOffset + 8);
+    const valueOffset = storageOffset + font.readUInt16BE(recordOffset + 10);
+    if (valueOffset + length > nameTableOffset + nameTableLength || length % 2 !== 0) {
+      throw new Error("invalid UTF-16BE name record");
+    }
+    let value = "";
+    for (let offset = valueOffset; offset < valueOffset + length; offset += 2) {
+      value += String.fromCharCode(font.readUInt16BE(offset));
+    }
+    const values = names.get(nameId) ?? new Set<string>();
+    values.add(value);
+    names.set(nameId, values);
+  }
+  return names;
+}
+
+/** Bind committed font bytes and embedded rights metadata to one reviewed rights-holder release. */
+function previewFontProvenanceProblems(evidence: PreviewFontEvidence): string[] {
+  const problems: string[] = [];
+  let manifest: PreviewFontProvenance;
+  try {
+    manifest = JSON.parse(evidence.manifestRaw) as PreviewFontProvenance;
+  } catch {
+    return ["invalid font provenance JSON"];
+  }
+  if (manifest.schemaVersion !== 1) problems.push("unsupported font provenance schema");
+  if (JSON.stringify(manifest.source) !== JSON.stringify(PREVIEW_FONT_SOURCE)) {
+    problems.push("font rights-holder release is not locked");
+  }
+
+  const expectedFiles = ["LiberationSans-Regular.ttf", "LiberationSans-Bold.ttf"];
+  if (manifest.fonts?.map((font) => font.file).join("\n") !== expectedFiles.join("\n")) {
+    problems.push("font manifest file set or order drift");
+  }
+  for (const font of manifest.fonts ?? []) {
+    const bundled = evidence.bundled.get(font.file);
+    if (!bundled) {
+      problems.push(`missing font evidence ${font.file}`);
+      continue;
+    }
+    const reviewedSha256 = PREVIEW_FONT_SHA256[font.file as keyof typeof PREVIEW_FONT_SHA256];
+    if (reviewedSha256 === undefined || font.sha256 !== reviewedSha256) {
+      problems.push(`reviewed release digest drift ${font.file}`);
+    }
+    if (sha256(bundled) !== font.sha256) problems.push(`bundled digest drift ${font.file}`);
+    if (
+      font.version !== "Version 2.1.5" ||
+      font.embeddedLicenseDescription !== "Licensed under the SIL Open Font License, Version 1.1" ||
+      font.embeddedLicenseUrl !== "http://scripts.sil.org/OFL" ||
+      !font.copyright.includes("2010 Google Corporation") ||
+      !font.copyright.includes("2012 Red Hat, Inc.")
+    ) {
+      problems.push(`embedded font rights drift ${font.file}`);
+    }
+    try {
+      const names = openTypeNames(bundled);
+      for (const [field, nameId] of Object.entries(PREVIEW_FONT_NAME_IDS) as [keyof PreviewFontEntry, number][]) {
+        if (!names.get(nameId)?.has(font[field])) problems.push(`font metadata drift ${font.file}:${field}`);
+      }
+    } catch {
+      problems.push(`invalid OpenType font ${font.file}`);
+    }
+  }
+
+  const license = evidence.bundled.get(manifest.license?.file);
+  if (!license) {
+    problems.push("missing font license evidence");
+  } else {
+    const licenseText = license.toString("utf8");
+    if (manifest.license.sha256 !== PREVIEW_FONT_LICENSE_SHA256) problems.push("reviewed license digest drift");
+    if (sha256(license) !== manifest.license.sha256) problems.push("font license digest drift");
+    if (manifest.license.spdx !== "OFL-1.1" || !licenseText.includes("SIL OPEN FONT LICENSE Version 1.1")) {
+      problems.push("font license identifier drift");
+    }
+    for (const reservedName of ["Arimo", "Tinos", "Cousine", "Liberation"]) {
+      if (!manifest.license.reservedFontNames?.includes(reservedName) || !licenseText.includes(reservedName)) {
+        problems.push(`missing reserved font name ${reservedName}`);
+      }
+    }
+    for (const copyright of ["2010 Google Corporation", "2012 Red Hat, Inc."]) {
+      if (!licenseText.includes(copyright)) problems.push(`missing font license copyright ${copyright}`);
+    }
+  }
+  return problems;
 }
 
 type McpbDocumentationContract = Readonly<{
@@ -765,7 +949,8 @@ async function assertCoverageOiaEvidenceContract(): Promise<void> {
     replaceExactly(
       ciWorkflow,
       downloadBlock,
-      downloadBlock.replace(
+      replaceExactly(
+        downloadBlock,
         "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
         "actions/download-artifact@v8"
       )
@@ -1961,6 +2146,10 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
 
   it("social-preview composition keeps the TOP-1 message and exact proof count", async () => {
     const svg = await read("assets/social-preview.svg");
+    const renderer = await read("scripts/render-social-preview.mjs");
+    const pkgRaw = await read("package.json");
+    const lockRaw = await read("package-lock.json");
+    const fontProvenanceRaw = await read("assets/fonts/font-provenance.json");
     const actual = await countActualTests();
     const actualTools = manifestToolNames().size;
     const actualPrompts = registeredNames(await read("src/prompts.ts"), "registerPrompt").size;
@@ -1991,6 +2180,62 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
       }
       return problems;
     };
+    const deterministicRendererProblems = (
+      candidateRenderer: string,
+      candidateSvg: string,
+      candidatePkgRaw: string,
+      candidateLockRaw: string
+    ): string[] => {
+      const problems: string[] = [];
+      const imports = [...candidateRenderer.matchAll(/from\s+"([^"]+)"/g)].map((match) => match[1] ?? "");
+      const pkg = JSON.parse(candidatePkgRaw) as {
+        devDependencies?: Record<string, string>;
+        files?: string[];
+      };
+      const lock = JSON.parse(candidateLockRaw) as {
+        packages?: Record<string, { dev?: boolean; integrity?: string; version?: string }>;
+      };
+      if (!imports.includes("@resvg/resvg-wasm")) problems.push("renderer must import the pinned WASM rasterizer");
+      for (const nativeRenderer of ["sharp", "@napi-rs/canvas", "canvas"]) {
+        if (imports.includes(nativeRenderer)) problems.push(`renderer must not import native ${nativeRenderer}`);
+      }
+      for (const marker of [
+        'import.meta.resolve("@resvg/resvg-wasm/index_bg.wasm")',
+        '"LiberationSans-Regular.ttf"',
+        '"LiberationSans-Bold.ttf"',
+        '"LICENSE_LIBERATION"',
+        '"font-provenance.json"',
+        "assertFontProvenance(JSON.parse(provenanceRaw), fontBuffers, license);",
+        "fontBuffers",
+        'href="data:image/png;base64,'
+      ]) {
+        if (!candidateRenderer.includes(marker)) problems.push(`renderer missing deterministic input ${marker}`);
+      }
+      if (/\b(?:fontFiles|fontDirs|loadSystemFonts)\b/.test(candidateRenderer)) {
+        problems.push("renderer must not consult system font configuration");
+      }
+      if (!candidateSvg.startsWith('<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640"')) {
+        problems.push("SVG must declare the canonical 1280x640 viewport");
+      }
+      if (!candidateSvg.includes('font-family="Liberation Sans"')) {
+        problems.push("SVG must use only the committed Liberation Sans family");
+      }
+      if (/(?:-apple-system|BlinkMacSystemFont|Segoe UI|Roboto|Helvetica|Arial|sans-serif)/.test(candidateSvg)) {
+        problems.push("SVG must not name a platform font fallback");
+      }
+      if (pkg.devDependencies?.["@resvg/resvg-wasm"] !== "2.6.2") {
+        problems.push("WASM renderer must be an exact devDependency");
+      }
+      const lockEntry = lock.packages?.["node_modules/@resvg/resvg-wasm"];
+      if (lockEntry?.version !== "2.6.2" || lockEntry.dev !== true || !lockEntry.integrity?.startsWith("sha512-")) {
+        problems.push("WASM renderer lock entry must pin version, integrity, and dev scope");
+      }
+      const publishedAssets = pkg.files?.filter((entry) => entry === "assets" || entry.startsWith("assets/")) ?? [];
+      if (publishedAssets.length !== 1 || publishedAssets[0] !== "assets/social-preview.png") {
+        problems.push("only the rendered social preview may enter the published npm package");
+      }
+      return problems;
+    };
     expect(previewProblems(svg)).toEqual([]);
     expect(previewProblems(replaceExactly(svg, "EVERY AGENT.", "ONE AGENT.", 1))).toContain("missing EVERY AGENT.");
     expect(previewProblems(replaceExactly(svg, `>${actual}</text>`, `>${actual + 1}</text>`, 1))).toContain(
@@ -2004,10 +2249,165 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
     ).toContain(`stale MCP PROMPTS count ${actualPrompts + 1}`);
     expect(previewProblems(replaceExactly(svg, "MCP PROMPTS", "WORKFLOWS", 1))).toContain("stale WORKFLOWS label");
 
-    const renderer = await read("scripts/render-social-preview.mjs");
+    expect(deterministicRendererProblems(renderer, svg, pkgRaw, lockRaw)).toEqual([]);
+    expect(
+      deterministicRendererProblems(
+        replaceExactly(renderer, 'from "@resvg/resvg-wasm"', 'from "sharp"', 1),
+        svg,
+        pkgRaw,
+        lockRaw
+      )
+    ).toEqual(
+      expect.arrayContaining([
+        "renderer must import the pinned WASM rasterizer",
+        "renderer must not import native sharp"
+      ])
+    );
+    expect(
+      deterministicRendererProblems(
+        renderer,
+        replaceExactly(svg, 'font-family="Liberation Sans"', 'font-family="-apple-system, Arial"', 1),
+        pkgRaw,
+        lockRaw
+      )
+    ).toEqual(
+      expect.arrayContaining([
+        "SVG must use only the committed Liberation Sans family",
+        "SVG must not name a platform font fallback"
+      ])
+    );
+    expect(
+      deterministicRendererProblems(
+        renderer,
+        svg,
+        replaceExactly(pkgRaw, '"@resvg/resvg-wasm": "2.6.2"', '"@resvg/resvg-wasm": "^2.6.2"', 1),
+        lockRaw
+      )
+    ).toContain("WASM renderer must be an exact devDependency");
+    expect(
+      deterministicRendererProblems(
+        renderer,
+        svg,
+        replaceExactly(pkgRaw, '"assets/social-preview.png"', '"assets"', 1),
+        lockRaw
+      )
+    ).toContain("only the rendered social preview may enter the published npm package");
+    expect(
+      deterministicRendererProblems(
+        replaceExactly(
+          renderer,
+          "assertFontProvenance(JSON.parse(provenanceRaw), fontBuffers, license);",
+          "void provenanceRaw;",
+          1
+        ),
+        svg,
+        pkgRaw,
+        lockRaw
+      )
+    ).toContain(
+      "renderer missing deterministic input assertFontProvenance(JSON.parse(provenanceRaw), fontBuffers, license);"
+    );
+
     expect(renderer).toContain('"social-preview-art.png"');
-    expect(renderer).toContain(".composite([{ input: overlay }])");
     expect((await fs.stat(path.join(repoRoot, "assets/social-preview-art.png"))).size).toBeGreaterThan(100_000);
+    const fontFiles = ["LiberationSans-Regular.ttf", "LiberationSans-Bold.ttf"] as const;
+    const provenance = JSON.parse(fontProvenanceRaw) as PreviewFontProvenance;
+    const bundled = new Map<string, Buffer>();
+    for (const file of [...fontFiles, "LICENSE_LIBERATION"]) {
+      bundled.set(file, await fs.readFile(path.join(repoRoot, "assets", "fonts", file)));
+    }
+    const fontEvidence = { manifestRaw: fontProvenanceRaw, bundled };
+    expect(previewFontProvenanceProblems(fontEvidence)).toEqual([]);
+
+    const regular = bundled.get("LiberationSans-Regular.ttf");
+    expect(regular).toBeDefined();
+    const damagedRegular = Buffer.from(regular ?? []);
+    damagedRegular[damagedRegular.length - 1] = (damagedRegular[damagedRegular.length - 1] ?? 0) ^ 1;
+    expect(
+      previewFontProvenanceProblems({
+        ...fontEvidence,
+        bundled: new Map(bundled).set("LiberationSans-Regular.ttf", damagedRegular)
+      })
+    ).toContain("bundled digest drift LiberationSans-Regular.ttf");
+
+    const staleDigestManifest: PreviewFontProvenance = {
+      ...provenance,
+      fonts: provenance.fonts.map((font, index) => (index === 0 ? { ...font, sha256: "0".repeat(64) } : font))
+    };
+    expect(
+      previewFontProvenanceProblems({ ...fontEvidence, manifestRaw: JSON.stringify(staleDigestManifest) })
+    ).toEqual(
+      expect.arrayContaining([
+        "reviewed release digest drift LiberationSans-Regular.ttf",
+        "bundled digest drift LiberationSans-Regular.ttf"
+      ])
+    );
+
+    const staleMetadataManifest: PreviewFontProvenance = {
+      ...provenance,
+      fonts: provenance.fonts.map((font, index) => (index === 0 ? { ...font, subfamily: "Book" } : font))
+    };
+    expect(
+      previewFontProvenanceProblems({ ...fontEvidence, manifestRaw: JSON.stringify(staleMetadataManifest) })
+    ).toContain("font metadata drift LiberationSans-Regular.ttf:subfamily");
+
+    const staleSourceManifest: PreviewFontProvenance = {
+      ...provenance,
+      source: { ...provenance.source, tag: "2.1.4" }
+    };
+    expect(
+      previewFontProvenanceProblems({ ...fontEvidence, manifestRaw: JSON.stringify(staleSourceManifest) })
+    ).toContain("font rights-holder release is not locked");
+
+    const staleRightsManifest: PreviewFontProvenance = {
+      ...provenance,
+      fonts: provenance.fonts.map((font, index) =>
+        index === 0 ? { ...font, embeddedLicenseDescription: "Licensed under an unreviewed license" } : font
+      )
+    };
+    expect(
+      previewFontProvenanceProblems({ ...fontEvidence, manifestRaw: JSON.stringify(staleRightsManifest) })
+    ).toEqual(
+      expect.arrayContaining([
+        "embedded font rights drift LiberationSans-Regular.ttf",
+        "font metadata drift LiberationSans-Regular.ttf:embeddedLicenseDescription"
+      ])
+    );
+
+    const license = bundled.get("LICENSE_LIBERATION");
+    expect(license).toBeDefined();
+    const damagedLicense = Buffer.concat([license ?? Buffer.alloc(0), Buffer.from("\nmutation")]);
+    expect(
+      previewFontProvenanceProblems({
+        ...fontEvidence,
+        bundled: new Map(bundled).set("LICENSE_LIBERATION", damagedLicense)
+      })
+    ).toContain("font license digest drift");
+
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-social-preview-"));
+    try {
+      const outputs = [path.join(tempRoot, "first.png"), path.join(tempRoot, "second.png")];
+      for (const output of outputs) {
+        const rendered = spawnSync(
+          process.execPath,
+          [path.join(repoRoot, "scripts/render-social-preview.mjs"), "--output", output],
+          { cwd: repoRoot, encoding: "utf8", timeout: 30_000 }
+        );
+        expect(rendered.status, `${rendered.stdout}\n${rendered.stderr}`).toBe(0);
+      }
+      const [first, second, committed] = await Promise.all([
+        fs.readFile(outputs[0] ?? ""),
+        fs.readFile(outputs[1] ?? ""),
+        fs.readFile(path.join(repoRoot, "assets/social-preview.png"))
+      ]);
+      expect(sha256(first)).toBe(sha256(second));
+      expect(sha256(first)).toBe(sha256(committed));
+      expect(first.subarray(0, 8).toString("hex")).toBe("89504e470d0a1a0a");
+      expect(first.readUInt32BE(16)).toBe(1280);
+      expect(first.readUInt32BE(20)).toBe(640);
+    } finally {
+      await fs.rm(tempRoot, { recursive: true, force: true });
+    }
   });
 
   // v3.9.0-rc.37 (audit F1) — ROADMAP.md carried a stale "Process maturity —
@@ -4059,7 +4459,10 @@ describe("docs/code consistency — AI-agent text surfaces + AGENTS.md numeric c
     const releaseYml = await read(".github/workflows/release.yml");
     const m = /REQUIRED="([^"]+)"/.exec(releaseYml);
     if (!m) throw new Error('release.yml must declare REQUIRED="...|..." regex');
-    return (m[1] ?? "").split("|").map((gate) => gate.replace(/\\([()])/g, "$1"));
+    return (m[1] ?? "").split("|").map((gate) => {
+      const unescapedGate = gate.replace(/\\([()])/g, "$1");
+      return unescapedGate;
+    });
   }
 
   async function countRequiredCiGates(): Promise<number> {
@@ -4443,12 +4846,12 @@ describe("docs/code consistency — AI-agent text surfaces + AGENTS.md numeric c
       "- `test-macos` is advisory.\n\n" +
       "Live branch-protection snapshot";
     expect(checkAgentsCiInventory(exactInventory, ["lint", "docker"])).toBeNull();
-    expect(checkAgentsCiInventory(exactInventory.replace("2. `docker`", "2. `smoke`"), ["lint", "docker"])).toMatch(
-      /expected "docker"/
-    );
+    expect(
+      checkAgentsCiInventory(replaceExactly(exactInventory, "2. `docker`", "2. `smoke`"), ["lint", "docker"])
+    ).toMatch(/expected "docker"/);
     expect(
       checkAgentsCiInventory(
-        exactInventory.replace("- `test-macos` is advisory.", "- `docker` is not branch-protected."),
+        replaceExactly(exactInventory, "- `test-macos` is advisory.", "- `docker` is not branch-protected."),
         ["lint", "docker"]
       )
     ).toMatch(/additional unprotected/);

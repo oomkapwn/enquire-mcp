@@ -31,6 +31,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { hnswPersistBase } from "../src/embed-db.js";
 import { planCachePrune, planCachePruneOnDisk } from "../src/fts5.js";
 import { clearHnswPersistedArtifacts, isHnswGenerationBasename } from "../src/hnsw.js";
+import { acquirePersistenceFamilyLease } from "../src/persistence-coordination.js";
 import {
   assertCacheFilePath,
   assertEmbedDbFilePath,
@@ -38,6 +39,7 @@ import {
   assertFtsIndexFilePath,
   assertHnswFilePath
 } from "../src/persistence-path.js";
+import { SEMANTIC_PERSISTENCE_FAMILY_KEY } from "../src/semantic-persistence.js";
 import {
   preflightSqliteArtifactFamily,
   publishSensitiveArtifact,
@@ -208,11 +210,19 @@ const ERASURE_MANIFEST = [
     family: "embed-db + HNSW sidecars (vectors + raw text_preview)",
     file: "src/embed-db.ts",
     eraser: "clearOnDisk",
-    requiredTokens: ["-wal", "-shm", "-journal", "hnswPersistBase(", "clearHnswPersistedArtifacts("],
+    requiredTokens: ["-wal", "-shm", "-journal", "hnswPersistBase(", "clearHnswPersistedArtifactsWithEraser("],
     routeMembers: [
       {
         file: "src/hnsw.ts",
-        member: "clearHnswPersistedArtifacts",
+        member: "clearHnswPersistedArtifactsWithEraser",
+        requiredTokens: [
+          "scopesFromActiveSemanticEraser(capability)",
+          "clearHnswPersistedArtifactsUnchecked(canonicalFile)"
+        ]
+      },
+      {
+        file: "src/hnsw.ts",
+        member: "clearHnswPersistedArtifactsUnchecked",
         requiredTokens: [
           "const plan = await planHnswErasure(file);",
           "removeSensitiveArtifactTempEntry(entry.entryPath)"
@@ -465,7 +475,12 @@ const SENSITIVE_PUBLISHER_INVENTORY: readonly SensitivePublisherInventoryEntry[]
     eraserRoutes: [
       {
         file: "src/hnsw.ts",
-        member: "clearHnswPersistedArtifacts",
+        member: "clearHnswPersistedArtifactsWithEraser",
+        needles: ["scopesFromActiveSemanticEraser(capability)", "clearHnswPersistedArtifactsUnchecked(canonicalFile)"]
+      },
+      {
+        file: "src/hnsw.ts",
+        member: "clearHnswPersistedArtifactsUnchecked",
         needles: ["const plan = await planHnswErasure(file);", "removeSensitiveArtifactTempEntry(entry.entryPath)"]
       },
       {
@@ -476,7 +491,7 @@ const SENSITIVE_PUBLISHER_INVENTORY: readonly SensitivePublisherInventoryEntry[]
       {
         file: "src/embed-db.ts",
         member: "clearOnDisk",
-        needles: ["clearHnswPersistedArtifacts(hnswBase)"]
+        needles: ["clearHnswPersistedArtifactsWithEraser(hnswBase, eraserCapability)"]
       },
       {
         file: "src/fts5.ts",
@@ -501,7 +516,7 @@ const SENSITIVE_READER_INVENTORY: readonly SensitiveReaderInventoryEntry[] = [
   {
     id: "parse-cache load",
     file: "src/vault.ts",
-    member: "loadDiskCache",
+    member: "loadDiskCacheOnce",
     calls: 1,
     exactCall: "readSensitiveArtifactText(file, this.maxDiskCacheBytes)",
     directArgument: "file"
@@ -585,6 +600,21 @@ function runtimeMemberBodies(source: string, file: string, member: string): stri
   };
   visit(sourceFile);
   return bodies;
+}
+
+/** Mutate one exact runtime member without letting a same-text needle in an
+ * unrelated method silently redirect a causal negative control. */
+function replaceRuntimeMemberExactly(
+  source: string,
+  file: string,
+  member: string,
+  needle: string,
+  replacement: string
+): string {
+  const bodies = runtimeMemberBodies(source, file, member);
+  if (bodies.length !== 1) throw new Error(`${file}#${member}: expected one runtime member, found ${bodies.length}`);
+  const body = bodies[0] ?? "";
+  return replaceExactly(source, body, replaceExactly(body, needle, replacement));
 }
 
 interface ProductionTypeScriptSource {
@@ -3583,8 +3613,12 @@ describe("erasure-completeness invariant (rc.36, P-2 class)", () => {
         skip("native macOS newline/normalization-equivalence control");
         return;
       }
-      const actualBaseName = "Caf\u00e9\nCustom.hnsw";
-      const configuredBaseName = actualBaseName.normalize("NFD").toLowerCase();
+      // Persistence scopes canonicalize their target basename to NFC. Keep the
+      // authorized spelling NFC while the physical generation uses the native
+      // equivalent NFD/case alias, so this still exercises all three axes.
+      const canonicalBaseName = "Caf\u00e9\nCustom.hnsw";
+      const actualBaseName = canonicalBaseName.normalize("NFD");
+      const configuredBaseName = canonicalBaseName.toLowerCase();
       const actualGeneration = path.join(cacheDir, `${actualBaseName}.${"B".repeat(48)}.BIN`);
       const configuredGeneration = path.join(cacheDir, `${configuredBaseName}.${"b".repeat(48)}.bin`);
       try {
@@ -3606,8 +3640,19 @@ describe("erasure-completeness invariant (rc.36, P-2 class)", () => {
         throw err;
       }
 
-      await expect(clearHnswPersistedArtifacts(path.join(cacheDir, configuredBaseName))).resolves.toBe(true);
-      await expect(fs.lstat(actualGeneration)).rejects.toMatchObject({ code: "ENOENT" });
+      const configuredBase = path.join(cacheDir, configuredBaseName);
+      const embedTarget = `${configuredBase.slice(0, -".hnsw".length)}.embed.db`;
+      const lifetime = await acquirePersistenceFamilyLease({
+        targetPath: embedTarget,
+        familyKey: SEMANTIC_PERSISTENCE_FAMILY_KEY,
+        role: "shared"
+      });
+      try {
+        await expect(clearHnswPersistedArtifacts(configuredBase, lifetime.scopes)).resolves.toBe(true);
+        await expect(fs.lstat(actualGeneration)).rejects.toMatchObject({ code: "ENOENT" });
+      } finally {
+        await lifetime.release();
+      }
     }
   );
 
@@ -4089,7 +4134,14 @@ describe("erasure-completeness invariant (rc.36, P-2 class)", () => {
     it.each([
       {
         mutant: "capture callback is no longer a SQLite transaction",
-        apply: (source: string) => replaceExactly(source, "const capture = db.transaction(", "const capture = (")
+        apply: (source: string) =>
+          replaceRuntimeMemberExactly(
+            source,
+            "src/embed-db.ts",
+            "captureHnswSnapshot",
+            "const capture = db.transaction(",
+            "const capture = ("
+          )
       },
       {
         mutant: "live-label manifest hashes a path instead of the native label",
@@ -4197,11 +4249,25 @@ describe("erasure-completeness invariant (rc.36, P-2 class)", () => {
       },
       {
         mutant: "receipt comparator ignores the physical DB generation",
-        apply: (source: string) => replaceExactly(source, "left.dbInstanceUuid === right.dbInstanceUuid", "true")
+        apply: (source: string) =>
+          replaceRuntimeMemberExactly(
+            source,
+            "src/embed-db.ts",
+            "sameHnswPersistenceReceipt",
+            "left.dbInstanceUuid === right.dbInstanceUuid",
+            "true"
+          )
       },
       {
         mutant: "receipt comparator ignores the durable DB epoch",
-        apply: (source: string) => replaceExactly(source, "left.dbMutationEpoch === right.dbMutationEpoch", "true")
+        apply: (source: string) =>
+          replaceRuntimeMemberExactly(
+            source,
+            "src/embed-db.ts",
+            "sameHnswPersistenceReceipt",
+            "left.dbMutationEpoch === right.dbMutationEpoch",
+            "true"
+          )
       }
     ])("EmbedDb HNSW snapshot invariant rejects $mutant", ({ apply }) => {
       const source = readFileSync(path.join(repoRoot, "src/embed-db.ts"), "utf8");
@@ -4742,10 +4808,10 @@ describe("erasure-completeness invariant (rc.36, P-2 class)", () => {
       expect(
         emptyHnswRowsBranch(serverSrc),
         "empty-embed-db branch must route through the complete HNSW eraser"
-      ).toContain("clearHnswPersistedArtifacts(persistFile)");
+      ).toContain("clearHnswPersistedArtifacts(persistFile, db.getPersistenceFamilyScopes())");
     });
 
-    it.each(["clearHnswPersistedArtifacts(persistFile)"])(
+    it.each(["clearHnswPersistedArtifacts(persistFile, db.getPersistenceFamilyScopes())"])(
       "empty-HNSW branch detector rejects removal of %s",
       (route) => {
         const mutated = replaceExactly(serverSrc, route, "disabledClearHnswPersistedArtifacts(persistFile)");

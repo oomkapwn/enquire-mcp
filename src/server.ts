@@ -413,6 +413,26 @@ function watcherActivationRecoveryError(cause: unknown): Error {
 }
 
 /**
+ * Release the watcher-owned EmbedDb at one failed startup boundary.
+ *
+ * The caller clears its local handle only after this awaited close succeeds.
+ * A rejection therefore leaves the exact handle reachable by the outer
+ * retryable prepared-dependency cleanup owner.
+ *
+ * @param db - Watcher-owned database handle, when startup opened one.
+ * @param context - Stable lifecycle stage used only in the diagnostic.
+ * @returns After the database and its shared persistence lifetime are closed.
+ */
+async function closeWatcherEmbedDbAfterFailure(db: EmbedDb | null, context: string): Promise<void> {
+  if (!db) return;
+  try {
+    await db.closeAndRelease();
+  } catch (error) {
+    throw new Error(`enquire: watcher EmbedDb cleanup after ${context} failed`, { cause: error });
+  }
+}
+
+/**
  * One-time bootstrap of the heavy deps (vault open + FTS5 sync + watcher).
  * Idempotent on a per-call basis but NOT designed to be called multiple
  * times in one process — it would acquire duplicate live watcher/SQLite
@@ -733,6 +753,18 @@ export async function prepareServerDeps(opts: ServeOptions): Promise<ServerDeps>
             }\n`
           );
         });
+        try {
+          await closeWatcherEmbedDbAfterFailure(watcherEmbedDb, "watcher startup");
+          watcherEmbedDb = null;
+        } catch (closeErr) {
+          // Keep the exact handle for prepareServerDeps' outer retryable
+          // cleanup owner; this diagnostic must not bypass guard recovery.
+          process.stderr.write(
+            `enquire: watcher EmbedDb cleanup after startup failure also failed — ${
+              closeErr instanceof Error ? closeErr.message : String(closeErr)
+            }\n`
+          );
+        }
         if (guardArmAttempted) throw watcherActivationRecoveryError(err);
         throw err;
       }
@@ -1075,6 +1107,17 @@ export async function prepareServerDeps(opts: ServeOptions): Promise<ServerDeps>
             }\n`
           );
         });
+        try {
+          await closeWatcherEmbedDbAfterFailure(watcherEmbedDb, "watcher activation");
+          watcherEmbedDb = null;
+        } catch (closeErr) {
+          // Preserve the handle for the outer retryable cleanup owner.
+          process.stderr.write(
+            `enquire: watcher EmbedDb cleanup after activation failure also failed — ${
+              closeErr instanceof Error ? closeErr.message : String(closeErr)
+            }\n`
+          );
+        }
         if (hnswPersistenceLifetime) {
           try {
             await hnswPersistenceLifetime.release();

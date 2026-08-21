@@ -336,8 +336,8 @@ const MATRIX_TITLE = "keeps release.yml wired to the shared evaluator and an exa
 const SOURCE_COMMIT = "8420e2fca3ed0dac994859a9e9a30b933d5ddf9e";
 const MATRIX_SOURCE_SHA256 = "3fa0b67411e2fc0f4d7c6bce6075ba91eb25edc19a210b5c2f8dd408def6e18b";
 const MATRIX_SLICE_SHA256 = "caca0093c744df9f6c6cdd0e8200fd8df45052e784297079887ea48686c5e07f";
-const CURRENT_HYBRID_SOURCE_SHA256 = "2a15da915814bdfd4baacda33c87d93ce8679d89a93fb459ac97c37d3ba8763e";
-const CURRENT_HYBRID_MATRIX_SLICE_SHA256 = "398f36f2842f8770f4a8db0836e653886bd2b435169162eedb01cd1dcaa43116";
+const CURRENT_HYBRID_SOURCE_SHA256 = "f991e52257e70b7419d32b45dccb1d0613ea78ba0b9d56a4ee1d583f3a9747c2";
+const CURRENT_HYBRID_MATRIX_SLICE_SHA256 = "91c6a9441c76195643e1b8d1990f6a088c0a417517bf1d2c820aba161b5b8756";
 const IDENTITY_FIXTURE_SHA256 = "8205d24e6d42dd4cb8986368611514131abe701434beb30150e33ea08f4b1288";
 const MUTATION_MATCH_COUNT_NODE_SHA256 = "5e57cd7a2f1dd60cc4bda3b10c4a7e906f7e5b9604902eff5e54f20bd0c8f49d";
 const NPM_PROVENANCE_PROBLEM_NODE_SHA256 = "f6f47a5f8eb309db455cf684ca187c5c1ce6dadd0443e4c11475a779a5944334";
@@ -350,6 +350,44 @@ const REGISTRY_EVALUATOR_DETECTOR_NODE_SHA256 = "b45c5aed44cf1bff818d5ddac4f80e8
 const REGISTRY_STEP_DETECTOR_NODE_SHA256 = "5dec02c19d724cf373acc0c9b65fba7309b4b3e5c4ca6cff5422ec5c64e12db6";
 const REGISTRY_RUN_DETECTOR_NODE_SHA256 = "5b09ecbae41cfc47a6f66ff353e923ef511dd0007fba0a075d61de6e256935e6";
 const REGISTRY_WORKFLOW_PROBLEM_NODE_SHA256 = "65bf82b0a4429d04ea16bfd0baa7b8397c0c43a945f978e0f4395e59cbcf1221";
+interface ReleaseOraclePinSet {
+  readonly mcpRegistryEvaluatorProblems: string;
+  readonly mcpRegistryRunProblems: string;
+  readonly mcpRegistryStepProblems: string;
+  readonly mutationMatchCount: string;
+  readonly npmProvenanceContractProblems: string;
+  readonly npmProvenanceEvaluatorProblems: string;
+  readonly npmProvenanceProblem: string;
+  readonly npmProvenanceWorkflowProblems: string;
+  readonly registryEvaluatorProblem: string;
+  readonly registryWorkflowProblem: string;
+}
+
+const HISTORICAL_RELEASE_ORACLE_PINS: ReleaseOraclePinSet = Object.freeze({
+  mcpRegistryEvaluatorProblems: REGISTRY_EVALUATOR_DETECTOR_NODE_SHA256,
+  mcpRegistryRunProblems: REGISTRY_RUN_DETECTOR_NODE_SHA256,
+  mcpRegistryStepProblems: REGISTRY_STEP_DETECTOR_NODE_SHA256,
+  mutationMatchCount: MUTATION_MATCH_COUNT_NODE_SHA256,
+  npmProvenanceContractProblems: NPM_PROVENANCE_DETECTOR_NODE_SHA256,
+  npmProvenanceEvaluatorProblems: NPM_PROVENANCE_EVALUATOR_DETECTOR_NODE_SHA256,
+  npmProvenanceProblem: NPM_PROVENANCE_PROBLEM_NODE_SHA256,
+  npmProvenanceWorkflowProblems: NPM_PROVENANCE_WORKFLOW_DETECTOR_NODE_SHA256,
+  registryEvaluatorProblem: REGISTRY_EVALUATOR_PROBLEM_NODE_SHA256,
+  registryWorkflowProblem: REGISTRY_WORKFLOW_PROBLEM_NODE_SHA256
+});
+
+const CURRENT_RELEASE_ORACLE_PINS: ReleaseOraclePinSet = Object.freeze({
+  mcpRegistryEvaluatorProblems: "b45c5aed44cf1bff818d5ddac4f80e8fb805e61300f93f77afc299d3e8f0047c",
+  mcpRegistryRunProblems: "5b09ecbae41cfc47a6f66ff353e923ef511dd0007fba0a075d61de6e256935e6",
+  mcpRegistryStepProblems: "8f292bf5c72d205cb6d5ebae554420682cd08f7f997d46465f83a34b34e77984",
+  mutationMatchCount: "5e57cd7a2f1dd60cc4bda3b10c4a7e906f7e5b9604902eff5e54f20bd0c8f49d",
+  npmProvenanceContractProblems: "c453e6c43d71d042e8609997e13a461891e299b494d84242b02227a0b96a825f",
+  npmProvenanceEvaluatorProblems: "99506547faeba03621f4a30f9c2262c3873ec974df5621741e4db01fabb5ef14",
+  npmProvenanceProblem: "f6f47a5f8eb309db455cf684ca187c5c1ce6dadd0443e4c11475a779a5944334",
+  npmProvenanceWorkflowProblems: "f95cc1e45e40eded6452abe1134108457d377b1a8294b8f537df57d4933371ee",
+  registryEvaluatorProblem: "4c374cc179d7a95cdf25085358c62e482134824abca913b126167d3bb8397b26",
+  registryWorkflowProblem: "65bf82b0a4429d04ea16bfd0baa7b8397c0c43a945f978e0f4395e59cbcf1221"
+});
 const REGISTRY_EVALUATOR_PROBLEM =
   "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics";
 const REGISTRY_WORKFLOW_PROBLEM =
@@ -7756,6 +7794,60 @@ function enclosingSharedExecutionLoop(
   return null;
 }
 
+function literalBooleanValue(expression: ts.Expression): boolean | null {
+  let current = expression;
+  while (
+    ts.isParenthesizedExpression(current) ||
+    ts.isAsExpression(current) ||
+    ts.isTypeAssertionExpression(current) ||
+    ts.isNonNullExpression(current) ||
+    ts.isSatisfiesExpression(current)
+  ) {
+    current = current.expression;
+  }
+  if (current.kind === ts.SyntaxKind.TrueKeyword) return true;
+  if (current.kind === ts.SyntaxKind.FalseKeyword) return false;
+  return null;
+}
+
+/** Recognize only syntax that certainly prevents a later sibling from executing. */
+function statementDefinitelyTerminates(statement: ts.Statement): boolean {
+  if (ts.isReturnStatement(statement) || ts.isThrowStatement(statement)) return true;
+  if (ts.isBlock(statement)) return statement.statements.some(statementDefinitelyTerminates);
+  if (ts.isIfStatement(statement)) {
+    const literal = literalBooleanValue(statement.expression);
+    if (literal === true) return statementDefinitelyTerminates(statement.thenStatement);
+    if (literal === false) {
+      return statement.elseStatement !== undefined && statementDefinitelyTerminates(statement.elseStatement);
+    }
+    return (
+      statement.elseStatement !== undefined &&
+      statementDefinitelyTerminates(statement.thenStatement) &&
+      statementDefinitelyTerminates(statement.elseStatement)
+    );
+  }
+  return false;
+}
+
+/** Require an exact direct statement whose earlier siblings cannot certainly terminate. */
+function isDirectReachableMatrixStatement(statement: ts.Statement, matrix: MatrixScan): boolean {
+  const body = matrix.callback.body;
+  if (!ts.isBlock(body) || statement.parent !== body) return false;
+  const index = body.statements.indexOf(statement);
+  if (index < 0) return false;
+  return !body.statements.slice(0, index).some(statementDefinitelyTerminates);
+}
+
+/** A singleton primary matcher executes only as one live direct callback statement. */
+function isDirectSingletonPrimaryMatcher(matcher: ts.CallExpression, matrix: MatrixScan): boolean {
+  const statement = matcher.parent;
+  return (
+    ts.isExpressionStatement(statement) &&
+    statement.expression === matcher &&
+    isDirectReachableMatrixStatement(statement, matrix)
+  );
+}
+
 function validateMatrixCallbackNoReturns(matrix: MatrixScan, problems: string[]): void {
   const returns: ts.ReturnStatement[] = [];
   const visit = (node: ts.Node): void => {
@@ -7796,12 +7888,22 @@ function validateSharedLegacyPrimaryTopologies(
   }
 
   for (const [matcher, owners] of ownersByMatcher) {
-    if (owners.length < 2) continue;
     const matcherHash = sha256(matcher.getText(matrix.sourceFile));
+    if (owners.length === 1) {
+      const owner = owners[0];
+      if (owner !== undefined && !isDirectSingletonPrimaryMatcher(matcher, matrix)) {
+        problems.push(
+          `release mutation hybrid singleton primary matcher ${matcherHash} for ${owner.caseId} ` +
+            "must be one unconditional direct execution in the exact matrix callback"
+        );
+        anchors.delete(owner.caseId);
+      }
+      continue;
+    }
     const loop = enclosingSharedExecutionLoop(matcher, matrix.callback);
     const valid =
       loop !== null &&
-      loop.parent === matrix.callback.body &&
+      isDirectReachableMatrixStatement(loop, matrix) &&
       (ts.isForOfStatement(loop)
         ? exactForOfSharedTopology(loop, matcher, owners, matcherHash, matrix, graph)
         : exactNumericSharedTopology(loop, matcher, owners, matcherHash, matrix, graph));
@@ -8094,6 +8196,191 @@ function validateGlobalCaseExecutionOrder(
   );
 }
 
+function validateTransitionCaseExecutionOrder(
+  manifest: IdentityManifest,
+  matrix: MatrixScan,
+  bindingGraph: VariableBindingGraph,
+  declarative: HybridDeclarativeScan,
+  legacyExecutionAnchors: ReadonlyMap<string, LegacyCaseExecutionAnchor>,
+  plannedLegacyExecutionAnchors: ReadonlyMap<string, LegacyCaseExecutionAnchor>,
+  plan: ReleaseMutationTransitionObservationPlan,
+  problems: string[]
+): void {
+  const hadPriorProblems = problems.length !== 0;
+  const expansion = expandDeclarativeExecutionEvents(declarative.cases, declarative.executionEvents);
+  problems.push(...expansion.problems);
+  if (expansion.problems.length !== 0) return;
+  if (hadPriorProblems) return;
+
+  const successorByOld = new Map(plan.successors.map((entry) => [entry.oldId, entry.newId]));
+  const targetRootId = (oldId: string): string => successorByOld.get(oldId) ?? oldId;
+  const caseIdForRoot = (rootId: string): string =>
+    `release.case.${rootId.startsWith("release.") ? rootId.slice("release.".length) : rootId}`;
+  const rootByHandle = new Map(declarative.mutations.map((mutation) => [mutation.handle, mutation.id]));
+  const manifestCaseById = new Map(manifest.cases.map((identityCase) => [identityCase.id, identityCase]));
+  const observedByCaseId = new Map<string, AnchoredCaseExecution>();
+  const currentLegacyAnchors = new Map<string, LegacyCaseExecutionAnchor>();
+  const recordObserved = (execution: AnchoredCaseExecution): void => {
+    const previous = observedByCaseId.get(execution.caseId);
+    if (
+      previous !== undefined &&
+      (previous.anchor !== execution.anchor ||
+        previous.rootId !== execution.rootId ||
+        previous.tieBreaker !== execution.tieBreaker)
+    ) {
+      problems.push(`release mutation transition case ${execution.caseId} has conflicting execution observations`);
+      return;
+    }
+    observedByCaseId.set(execution.caseId, execution);
+  };
+  for (const execution of expansion.executions) {
+    const oldRootId = rootByHandle.get(execution.identityCase.handle);
+    if (oldRootId === undefined) return;
+    const rootId = targetRootId(oldRootId);
+    recordObserved({
+      anchor: execution.anchor,
+      caseId: caseIdForRoot(rootId),
+      rootId,
+      tieBreaker: execution.tieBreaker
+    });
+  }
+  for (const [caseId, executionAnchor] of legacyExecutionAnchors) {
+    const identityCase = manifestCaseById.get(caseId);
+    if (identityCase === undefined) return;
+    const rootId = targetRootId(identityCase.root);
+    const currentCaseId = caseIdForRoot(rootId);
+    currentLegacyAnchors.set(currentCaseId, executionAnchor);
+    recordObserved({
+      anchor: executionAnchor.anchor,
+      caseId: currentCaseId,
+      rootId,
+      tieBreaker: executionAnchor.rootAnchor
+    });
+  }
+  for (const [caseId, executionAnchor] of plannedLegacyExecutionAnchors) {
+    currentLegacyAnchors.set(caseId, executionAnchor);
+    recordObserved({
+      anchor: executionAnchor.anchor,
+      caseId,
+      rootId: caseId.replace("release.case.", "release."),
+      tieBreaker: executionAnchor.rootAnchor
+    });
+  }
+
+  const expectedOrder: Array<{ readonly caseId: string; readonly rootId: string }> = [];
+  const newRootsByAfter = new Map<string, ReleaseMutationTransitionObservationPlan["newIdentities"]>();
+  for (const entry of plan.newIdentities) {
+    if (entry.role !== "root") continue;
+    newRootsByAfter.set(entry.afterOldId, [...(newRootsByAfter.get(entry.afterOldId) ?? []), entry]);
+  }
+  const mutationById = new Map(manifest.mutations.map((mutation) => [mutation.id, mutation]));
+  const frozenCases: AnchoredCaseExecution[] = [];
+  for (const identityCase of manifest.cases) {
+    const frozenPrimaryMatcher = identityCase.checks[0]?.matcherEvaluations[0];
+    const frozenRoot = mutationById.get(identityCase.root);
+    if (frozenPrimaryMatcher === undefined || frozenRoot === undefined) return;
+    frozenCases.push({
+      anchor: frozenPrimaryMatcher.assertionSpan.start,
+      caseId: identityCase.id,
+      rootId: identityCase.root,
+      tieBreaker: frozenRoot.legacySpan.start
+    });
+  }
+  frozenCases.sort(
+    (left, right) =>
+      left.anchor - right.anchor || left.tieBreaker - right.tieBreaker || left.caseId.localeCompare(right.caseId)
+  );
+  let insertedNewRoots = 0;
+  for (const frozenCase of frozenCases) {
+    const rootId = targetRootId(frozenCase.rootId);
+    expectedOrder.push({ caseId: caseIdForRoot(rootId), rootId });
+    for (const entry of newRootsByAfter.get(frozenCase.rootId) ?? []) {
+      expectedOrder.push({ caseId: caseIdForRoot(entry.ownerId), rootId: entry.ownerId });
+      insertedNewRoots++;
+    }
+  }
+  const expectedNewRootCount = plan.newIdentities.filter((entry) => entry.role === "root").length;
+  if (insertedNewRoots !== expectedNewRootCount) {
+    problems.push(
+      `release mutation transition execution authority must insert ${expectedNewRootCount} current-only root cases; ` +
+        `found ${insertedNewRoots}`
+    );
+  }
+
+  const expectedOrderByCaseId = new Map(expectedOrder.map((execution, index) => [execution.caseId, index]));
+  const ownersByMatcher = new Map<ts.CallExpression, SharedLegacyPrimaryOwner[]>();
+  for (const [caseId, executionAnchor] of currentLegacyAnchors) {
+    const expectedIndex = expectedOrderByCaseId.get(caseId);
+    if (expectedIndex === undefined) {
+      problems.push(`release mutation transition observed unexpected current legacy case ${caseId}`);
+      continue;
+    }
+    const owners = ownersByMatcher.get(executionAnchor.matcher) ?? [];
+    owners.push({
+      caseId,
+      frozenRootAnchor: expectedIndex,
+      rootCall: executionAnchor.rootCall
+    });
+    ownersByMatcher.set(executionAnchor.matcher, owners);
+  }
+  for (const [matcher, owners] of ownersByMatcher) {
+    const matcherHash = sha256(matcher.getText(matrix.sourceFile));
+    if (owners.length === 1) {
+      const owner = owners[0];
+      if (owner !== undefined && !isDirectSingletonPrimaryMatcher(matcher, matrix)) {
+        problems.push(
+          `release mutation transition singleton primary matcher ${matcherHash} for ${owner.caseId} ` +
+            "must be one unconditional direct execution in the exact matrix callback"
+        );
+      }
+      continue;
+    }
+    const loop = enclosingSharedExecutionLoop(matcher, matrix.callback);
+    const valid =
+      loop !== null &&
+      isDirectReachableMatrixStatement(loop, matrix) &&
+      (ts.isForOfStatement(loop)
+        ? exactForOfSharedTopology(loop, matcher, owners, matcherHash, matrix, bindingGraph)
+        : exactNumericSharedTopology(loop, matcher, owners, matcherHash, matrix, bindingGraph));
+    if (!valid) {
+      problems.push(
+        `release mutation transition shared primary matcher ${matcherHash} must retain one exact closed ` +
+          `iterable/runtime topology for ${owners.length} current root(s)`
+      );
+    }
+  }
+
+  const observed = [...observedByCaseId.values()].sort(
+    (left, right) =>
+      left.anchor - right.anchor || left.tieBreaker - right.tieBreaker || left.caseId.localeCompare(right.caseId)
+  );
+  const observedIdentity = observed.map(({ caseId, rootId }) => ({ caseId, rootId }));
+  if (observedIdentity.length !== expectedOrder.length) {
+    problems.push(
+      `release mutation transition case execution census must equal ${expectedOrder.length}; ` +
+        `found ${observedIdentity.length}`
+    );
+  }
+  if (JSON.stringify(observedIdentity) === JSON.stringify(expectedOrder)) return;
+
+  const comparableLength = Math.max(expectedOrder.length, observedIdentity.length);
+  let mismatchIndex = 0;
+  while (
+    mismatchIndex < comparableLength &&
+    JSON.stringify(expectedOrder[mismatchIndex]) === JSON.stringify(observedIdentity[mismatchIndex])
+  ) {
+    mismatchIndex++;
+  }
+  const render = (identity: { readonly caseId: string; readonly rootId: string } | undefined): string =>
+    identity === undefined ? "<missing>" : `${identity.caseId}(${identity.rootId})`;
+  problems.push(
+    "release mutation hybrid global case execution order must equal exact frozen primary-oracle order; " +
+      `first mismatch ${mismatchIndex + 1}: expected ${render(expectedOrder[mismatchIndex])}, ` +
+      `found ${render(observedIdentity[mismatchIndex])}; transition census ` +
+      `${observedIdentity.length}/${expectedOrder.length}`
+  );
+}
+
 function assignmentTargetContainsIdentifier(value: ts.Expression, identifier: string): boolean {
   if (ts.isIdentifier(value)) return value.text === identifier;
   if (
@@ -8149,7 +8436,12 @@ const ORACLE_BINDING_ASSIGNMENT_OPERATORS: ReadonlySet<ts.SyntaxKind> = new Set(
   ts.SyntaxKind.QuestionQuestionEqualsToken
 ]);
 
-function validateReleaseOraclePins(matrix: MatrixScan, declarative: HybridDeclarativeScan, problems: string[]): void {
+function validateReleaseOraclePins(
+  matrix: MatrixScan,
+  declarative: HybridDeclarativeScan,
+  problems: string[],
+  pins: ReleaseOraclePinSet = HISTORICAL_RELEASE_ORACLE_PINS
+): void {
   const functionHashes = new Map<string, string[]>();
   const npmProblemConstantHashes: string[] = [];
   const evaluatorProblemConstantHashes: string[] = [];
@@ -8180,35 +8472,32 @@ function validateReleaseOraclePins(matrix: MatrixScan, declarative: HybridDeclar
       problems.push(`release mutation hybrid pinned ${name} AST node must retain exact SHA-256 ${expected}`);
     }
   };
-  exactNodeHash("mutationMatchCount", MUTATION_MATCH_COUNT_NODE_SHA256);
-  exactNodeHash("npmProvenanceContractProblems", NPM_PROVENANCE_DETECTOR_NODE_SHA256);
-  exactNodeHash("npmProvenanceEvaluatorProblems", NPM_PROVENANCE_EVALUATOR_DETECTOR_NODE_SHA256);
-  exactNodeHash("npmProvenanceWorkflowProblems", NPM_PROVENANCE_WORKFLOW_DETECTOR_NODE_SHA256);
-  exactNodeHash("mcpRegistryEvaluatorProblems", REGISTRY_EVALUATOR_DETECTOR_NODE_SHA256);
-  exactNodeHash("mcpRegistryStepProblems", REGISTRY_STEP_DETECTOR_NODE_SHA256);
-  exactNodeHash("mcpRegistryRunProblems", REGISTRY_RUN_DETECTOR_NODE_SHA256);
-  if (npmProblemConstantHashes.length !== 1 || npmProblemConstantHashes[0] !== NPM_PROVENANCE_PROBLEM_NODE_SHA256) {
+  exactNodeHash("mutationMatchCount", pins.mutationMatchCount);
+  exactNodeHash("npmProvenanceContractProblems", pins.npmProvenanceContractProblems);
+  exactNodeHash("npmProvenanceEvaluatorProblems", pins.npmProvenanceEvaluatorProblems);
+  exactNodeHash("npmProvenanceWorkflowProblems", pins.npmProvenanceWorkflowProblems);
+  exactNodeHash("mcpRegistryEvaluatorProblems", pins.mcpRegistryEvaluatorProblems);
+  exactNodeHash("mcpRegistryStepProblems", pins.mcpRegistryStepProblems);
+  exactNodeHash("mcpRegistryRunProblems", pins.mcpRegistryRunProblems);
+  if (npmProblemConstantHashes.length !== 1 || npmProblemConstantHashes[0] !== pins.npmProvenanceProblem) {
     problems.push(
       "release mutation hybrid pinned npm provenance problem AST node must retain exact SHA-256 " +
-        NPM_PROVENANCE_PROBLEM_NODE_SHA256
+        pins.npmProvenanceProblem
     );
   }
   if (
     evaluatorProblemConstantHashes.length !== 1 ||
-    evaluatorProblemConstantHashes[0] !== REGISTRY_EVALUATOR_PROBLEM_NODE_SHA256
+    evaluatorProblemConstantHashes[0] !== pins.registryEvaluatorProblem
   ) {
     problems.push(
       "release mutation hybrid pinned registry problem AST node must retain exact SHA-256 " +
-        REGISTRY_EVALUATOR_PROBLEM_NODE_SHA256
+        pins.registryEvaluatorProblem
     );
   }
-  if (
-    workflowProblemConstantHashes.length !== 1 ||
-    workflowProblemConstantHashes[0] !== REGISTRY_WORKFLOW_PROBLEM_NODE_SHA256
-  ) {
+  if (workflowProblemConstantHashes.length !== 1 || workflowProblemConstantHashes[0] !== pins.registryWorkflowProblem) {
     problems.push(
       "release mutation hybrid pinned registry workflow problem AST node must retain exact SHA-256 " +
-        REGISTRY_WORKFLOW_PROBLEM_NODE_SHA256
+        pins.registryWorkflowProblem
     );
   }
 
@@ -9649,10 +9938,14 @@ export function observeReleaseMutationTransitionPopulation(
   const projectionMatrixProblems: string[] = [];
   const projectionMatrix = scanMatrix(matrixSource, projectionMatrixProblems);
   problems.push(...projectionMatrixProblems);
+  if (projectionMatrix !== null) validateMatrixCallbackNoReturns(projectionMatrix, problems);
   const declarativeProjection =
     projectionMatrix === null
       ? { cases: Object.freeze([]), executionEvents: Object.freeze([]), mutations: Object.freeze([]) }
       : scanHybridDeclarativeMatrix(projectionMatrix, problems);
+  if (projectionMatrix !== null) {
+    validateReleaseOraclePins(projectionMatrix, declarativeProjection, problems, CURRENT_RELEASE_ORACLE_PINS);
+  }
   const sourceObservation = observeReleaseMutationTransitionSources(
     matrixSource,
     manifestSource,
@@ -9806,10 +10099,34 @@ export function observeReleaseMutationTransitionPopulation(
       return call === undefined ? [] : [[assignment.id, call] as const];
     })
   );
-  const exactPlannedLegacyCase = (targetId: string, ownerId: string, caseNodeSha256: string): boolean => {
-    if (projectionMatrix === null || transitionBindingGraph === null) return false;
+  const plannedLegacyCaseAnchors = new Map<string, LegacyCaseExecutionAnchor>();
+  const currentCaseIdForRoot = (rootId: string): string =>
+    `release.case.${rootId.startsWith("release.") ? rootId.slice("release.".length) : rootId}`;
+  const recordPlannedLegacyCase = (rootId: string, anchor: LegacyCaseExecutionAnchor): void => {
+    const caseId = currentCaseIdForRoot(rootId);
+    const previous = plannedLegacyCaseAnchors.get(caseId);
+    if (
+      previous !== undefined &&
+      (previous.anchor !== anchor.anchor ||
+        previous.rootAnchor !== anchor.rootAnchor ||
+        previous.matcher !== anchor.matcher)
+    ) {
+      problems.push(`current planned legacy case ${caseId} has conflicting exact execution anchors`);
+      return;
+    }
+    plannedLegacyCaseAnchors.set(caseId, anchor);
+  };
+  const exactPlannedLegacyCase = (
+    targetId: string,
+    ownerId: string,
+    caseNodeSha256: string
+  ): LegacyCaseExecutionAnchor | null => {
+    if (projectionMatrix === null || transitionBindingGraph === null) return null;
     const rootCall = currentLegacyCallById.get(ownerId)?.node;
-    if (rootCall === undefined) return false;
+    if (rootCall === undefined) {
+      problems.push(`current target ${targetId} case witness ${caseNodeSha256} has no exact owner root ${ownerId}`);
+      return null;
+    }
     const candidates = (transitionCaseNodes.get(caseNodeSha256) ?? []).filter((node) =>
       transitionMatcherCalls(node).some((matcher) =>
         rootBoundToCurrentMatcher(rootCall, matcher, projectionMatrix.sourceFile, transitionBindingGraph)
@@ -9820,9 +10137,26 @@ export function observeReleaseMutationTransitionPopulation(
         `current target ${targetId} case witness ${caseNodeSha256} must identify one exact root-bound case node; ` +
           `found ${candidates.length}`
       );
-      return false;
+      return null;
     }
-    return true;
+    const candidate = candidates[0];
+    if (candidate === undefined) return null;
+    const matchers = transitionMatcherCalls(candidate).filter((matcher) =>
+      rootBoundToCurrentMatcher(rootCall, matcher, projectionMatrix.sourceFile, transitionBindingGraph)
+    );
+    if (matchers.length !== 1 || matchers[0] === undefined) {
+      problems.push(
+        `current target ${targetId} case witness ${caseNodeSha256} must contain one exact root-bound matcher; ` +
+          `found ${matchers.length}`
+      );
+      return null;
+    }
+    return {
+      anchor: matchers[0].getStart(projectionMatrix.sourceFile),
+      matcher: matchers[0],
+      rootAnchor: rootCall.getStart(projectionMatrix.sourceFile),
+      rootCall
+    };
   };
   const targetIdentities: ReleaseMutationTransitionProjection[] = [];
   const targetSemanticsById = new Map<string, TransitionObservedMutationSemantics>();
@@ -9893,7 +10227,10 @@ export function observeReleaseMutationTransitionPopulation(
       ) {
         problems.push(`current new identity ${assignment.id} disagrees with its reviewed logical projection`);
       }
-      exactPlannedLegacyCase(assignment.id, rootId, planEntry.caseNodeSha256);
+      const plannedCaseAnchor = exactPlannedLegacyCase(assignment.id, rootId, planEntry.caseNodeSha256);
+      if (planEntry.role === "root" && plannedCaseAnchor !== null) {
+        recordPlannedLegacyCase(rootId, plannedCaseAnchor);
+      }
     } else {
       const oldMutation = manifest.mutations.find((mutation) => mutation.id === assignment.oldId);
       const oldOwnerCase = oldMutation === undefined ? undefined : historicalCaseByRoot.get(oldMutation.ownerRoot);
@@ -9927,6 +10264,8 @@ export function observeReleaseMutationTransitionPopulation(
     });
     if (assignment.kind === "successor") {
       const successor = plan.successors.find((entry) => entry.newId === assignment.id);
+      const plannedCaseAnchor =
+        successor === undefined ? null : exactPlannedLegacyCase(assignment.id, rootId, successor.caseNodeSha256);
       const logicalProjectionSha256 = transitionLogicalProjectionSha256(
         call.mode,
         sourceId,
@@ -9940,12 +10279,15 @@ export function observeReleaseMutationTransitionPopulation(
         successor === undefined ||
         logicalProjectionSha256 !== successor.logicalProjectionSha256 ||
         call.nodeSha256 !== successor.nodeSha256 ||
-        !exactPlannedLegacyCase(assignment.id, rootId, successor.caseNodeSha256)
+        plannedCaseAnchor === null
       ) {
         problems.push(`current successor ${assignment.id} disagrees with its reviewed target witnesses`);
         problems.push(
           `current successor ${assignment.id} observed logical ${logicalProjectionSha256}, node ${call.nodeSha256}`
         );
+      }
+      if (observedRole === "root" && plannedCaseAnchor !== null) {
+        recordPlannedLegacyCase(rootId, plannedCaseAnchor);
       }
     }
     if (assignment.kind === "new") {
@@ -10009,6 +10351,18 @@ export function observeReleaseMutationTransitionPopulation(
         },
         assignment.id
       )
+    );
+  }
+  if (projectionMatrix !== null && transitionBindingGraph !== null) {
+    validateTransitionCaseExecutionOrder(
+      manifest,
+      projectionMatrix,
+      transitionBindingGraph,
+      declarativeProjection,
+      legacyCaseAnchors,
+      plannedLegacyCaseAnchors,
+      plan,
+      problems
     );
   }
   const targetIdByOldId = new Map(

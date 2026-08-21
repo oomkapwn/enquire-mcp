@@ -580,23 +580,454 @@ describe("portable cross-process persistence lease", () => {
     await eraser.release();
   });
 
-  it("retries the short gate when an EEXIST owner releases before inspection", async () => {
-    const { targetPath } = await fixture();
-    const realLink = fs.link.bind(fs);
-    let injectedAba = false;
-    const linkSpy = vi.spyOn(fs, "link").mockImplementation(async (existingPath, newPath) => {
-      if (!injectedAba && path.basename(newPath.toString()) === ".gate") {
-        injectedAba = true;
-        throw Object.assign(new Error("gate owner released before inspection"), { code: "EEXIST" });
+  it("admits only exact marker finalization and confirmed release during contention", async () => {
+    {
+      const { targetPath } = await fixture();
+      const realLink = fs.link.bind(fs);
+      let injectedAba = false;
+      const linkSpy = vi.spyOn(fs, "link").mockImplementation(async (existingPath, newPath) => {
+        if (!injectedAba && path.basename(newPath.toString()) === ".gate") {
+          injectedAba = true;
+          throw Object.assign(new Error("gate owner released before inspection"), { code: "EEXIST" });
+        }
+        return realLink(existingPath, newPath);
+      });
+      try {
+        const lease = await acquirePersistenceLease({ targetPath, familyKey: "embed-db", role: "shared" });
+        expect(injectedAba).toBe(true);
+        await lease.release();
+      } finally {
+        linkSpy.mockRestore();
       }
-      return realLink(existingPath, newPath);
-    });
-    try {
-      const lease = await acquirePersistenceLease({ targetPath, familyKey: "embed-db", role: "shared" });
-      expect(injectedAba).toBe(true);
-      await lease.release();
-    } finally {
-      linkSpy.mockRestore();
+    }
+
+    {
+      const { targetPath } = await fixture();
+      const realLink = fs.link.bind(fs);
+      let gateLinkAttempts = 0;
+      const linkSpy = vi.spyOn(fs, "link").mockImplementation(async (existingPath, newPath) => {
+        if (path.basename(newPath.toString()) !== ".gate") return realLink(existingPath, newPath);
+        gateLinkAttempts++;
+        if (gateLinkAttempts === 1) {
+          await new Promise<void>((resolve) => setTimeout(resolve, 10));
+          throw Object.assign(new Error("delayed absent gate contention"), { code: "EEXIST" });
+        }
+        throw Object.assign(new Error("gate retry crossed its deadline"), { code: "EIO" });
+      });
+      try {
+        await expect(
+          acquirePersistenceLease({
+            targetPath,
+            familyKey: "embed-db",
+            role: "shared",
+            gateTimeoutMs: 1,
+            gatePollMs: 1
+          })
+        ).rejects.toBeInstanceOf(PersistenceLeaseTimeoutError);
+        expect(gateLinkAttempts).toBe(1);
+      } finally {
+        linkSpy.mockRestore();
+      }
+    }
+
+    const createFixedGate = async (): Promise<{
+      readonly gateBytes: string;
+      readonly gatePath: string;
+      readonly targetPath: string;
+    }> => {
+      const { targetPath } = await fixture();
+      const initializer = await acquirePersistenceLease({ targetPath, familyKey: "embed-db", role: "shared" });
+      const { scope } = initializer;
+      await initializer.release();
+      const gatePath = path.join(scope.directory, ".gate");
+      const gateBytes = `${JSON.stringify({
+        version: 1,
+        scopeDigest: scope.digest,
+        kind: "gate",
+        hostname: os.hostname(),
+        pid: process.pid,
+        nonce: "a".repeat(32),
+        createdAt: "2026-08-22T00:00:00.000Z"
+      })}\n`;
+      await fs.writeFile(gatePath, gateBytes, { flag: "wx", mode: 0o600 });
+      return { gateBytes, gatePath, targetPath };
+    };
+    const injectFirstGateDescriptorTransition = (
+      firstNlink: bigint
+    ): { readonly calls: () => number; readonly restore: () => void } => {
+      const realOpen = fs.open.bind(fs);
+      let firstGateHandleWrapped = false;
+      let statCalls = 0;
+      const openSpy = vi.spyOn(fs, "open").mockImplementation(async (candidate, ...args) => {
+        const handle = await realOpen(candidate, ...args);
+        if (firstGateHandleWrapped || path.basename(candidate.toString()) !== ".gate") return handle;
+        firstGateHandleWrapped = true;
+        const realStat = handle.stat.bind(handle);
+        const mutableHandle = handle as unknown as {
+          stat(options: { bigint: true }): Promise<import("node:fs").BigIntStats>;
+        };
+        mutableHandle.stat = async (options) => {
+          const stats = await realStat(options);
+          statCalls++;
+          if (statCalls !== 1) return stats;
+          return new Proxy(stats, {
+            get(target, property) {
+              if (property === "nlink") return firstNlink;
+              if (property === "ctimeNs") return target.ctimeNs - 1n;
+              const value = Reflect.get(target, property, target);
+              return typeof value === "function" ? value.bind(target) : value;
+            }
+          });
+        };
+        return handle;
+      });
+      return { calls: () => statCalls, restore: () => openSpy.mockRestore() };
+    };
+    const injectFirstDescriptorUnlink = (
+      markerPath: string,
+      replacementBytes?: string,
+      options: { readonly injectCloseEnoent?: boolean; readonly unlinkOnSecondStat?: boolean } = {}
+    ): {
+      readonly calls: () => number;
+      readonly closeFaults: () => number;
+      readonly closeLeaked: () => Promise<void>;
+      readonly restore: () => void;
+      readonly unlinked: () => boolean;
+    } => {
+      const realOpen = fs.open.bind(fs);
+      let firstMarkerHandleWrapped = false;
+      let statCalls = 0;
+      let closeFaults = 0;
+      let leakedClose: (() => Promise<void>) | undefined;
+      let unlinked = false;
+      const { injectCloseEnoent = false, unlinkOnSecondStat = true } = options;
+      const openSpy = vi.spyOn(fs, "open").mockImplementation(async (candidate, ...args) => {
+        const handle = await realOpen(candidate, ...args);
+        if (firstMarkerHandleWrapped || candidate.toString() !== markerPath) return handle;
+        firstMarkerHandleWrapped = true;
+        const realStat = handle.stat.bind(handle);
+        const realClose = handle.close.bind(handle);
+        const mutableHandle = handle as unknown as {
+          close(): Promise<void>;
+          stat(options: { bigint: true }): Promise<import("node:fs").BigIntStats>;
+        };
+        mutableHandle.close = async () => {
+          if (injectCloseEnoent && closeFaults === 0) {
+            closeFaults++;
+            leakedClose = realClose;
+            throw Object.assign(new Error("injected marker descriptor close failure"), { code: "ENOENT" });
+          }
+          leakedClose = undefined;
+          return realClose();
+        };
+        mutableHandle.stat = async (options) => {
+          statCalls++;
+          if (statCalls === 2 && unlinkOnSecondStat) {
+            await fs.unlink(markerPath);
+            unlinked = true;
+            if (replacementBytes !== undefined) {
+              await fs.writeFile(markerPath, replacementBytes, { flag: "wx", mode: 0o600 });
+            }
+          }
+          return realStat(options);
+        };
+        return handle;
+      });
+      return {
+        calls: () => statCalls,
+        closeFaults: () => closeFaults,
+        closeLeaked: async () => {
+          const close = leakedClose;
+          leakedClose = undefined;
+          await close?.();
+        },
+        restore: () => openSpy.mockRestore(),
+        unlinked: () => unlinked
+      };
+    };
+    const removeIfPresent = async (filePath: string): Promise<void> => {
+      try {
+        await fs.unlink(filePath);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+    };
+
+    {
+      const { gatePath, targetPath } = await createFixedGate();
+      const transition = injectFirstGateDescriptorTransition(2n);
+      try {
+        await expect(
+          acquirePersistenceLease({
+            targetPath,
+            familyKey: "embed-db",
+            role: "shared",
+            gateTimeoutMs: 30,
+            gatePollMs: 5
+          })
+        ).rejects.toBeInstanceOf(PersistenceLeaseTimeoutError);
+        expect(transition.calls()).toBe(2);
+      } finally {
+        transition.restore();
+        await fs.unlink(gatePath);
+      }
+    }
+
+    {
+      const { gatePath, targetPath } = await createFixedGate();
+      const transition = injectFirstGateDescriptorTransition(1n);
+      try {
+        await expect(
+          acquirePersistenceLease({
+            targetPath,
+            familyKey: "embed-db",
+            role: "shared",
+            gateTimeoutMs: 30,
+            gatePollMs: 5
+          })
+        ).rejects.toBeInstanceOf(PersistenceLeaseIntegrityError);
+        expect(transition.calls()).toBe(2);
+      } finally {
+        transition.restore();
+        await fs.unlink(gatePath);
+      }
+    }
+
+    {
+      const { gatePath, targetPath } = await createFixedGate();
+      const transition = injectFirstGateDescriptorTransition(3n);
+      try {
+        await expect(
+          acquirePersistenceLease({
+            targetPath,
+            familyKey: "embed-db",
+            role: "shared",
+            gateTimeoutMs: 30,
+            gatePollMs: 5
+          })
+        ).rejects.toBeInstanceOf(PersistenceLeaseIntegrityError);
+        expect(transition.calls()).toBe(2);
+      } finally {
+        transition.restore();
+        await fs.unlink(gatePath);
+      }
+    }
+
+    {
+      const { gatePath, targetPath } = await createFixedGate();
+      const transition = injectFirstDescriptorUnlink(gatePath);
+      try {
+        const lease = await acquirePersistenceLease({
+          targetPath,
+          familyKey: "embed-db",
+          role: "shared",
+          gateTimeoutMs: 100,
+          gatePollMs: 5
+        });
+        expect(transition.calls()).toBe(2);
+        expect(transition.unlinked()).toBe(true);
+        await lease.release();
+      } finally {
+        transition.restore();
+        await removeIfPresent(gatePath);
+      }
+    }
+
+    {
+      const { gatePath, targetPath } = await createFixedGate();
+      const transition = injectFirstDescriptorUnlink(gatePath, undefined, { injectCloseEnoent: true });
+      try {
+        await expect(
+          acquirePersistenceLease({
+            targetPath,
+            familyKey: "embed-db",
+            role: "shared",
+            gateTimeoutMs: 100,
+            gatePollMs: 5
+          })
+        ).rejects.toBeInstanceOf(AggregateError);
+        expect(transition.calls()).toBe(2);
+        expect(transition.closeFaults()).toBe(1);
+        expect(transition.unlinked()).toBe(true);
+      } finally {
+        await transition.closeLeaked();
+        transition.restore();
+        await removeIfPresent(gatePath);
+      }
+    }
+
+    {
+      const { gatePath, targetPath } = await createFixedGate();
+      const transition = injectFirstDescriptorUnlink(gatePath, undefined, {
+        injectCloseEnoent: true,
+        unlinkOnSecondStat: false
+      });
+      try {
+        await expect(
+          acquirePersistenceLease({
+            targetPath,
+            familyKey: "embed-db",
+            role: "shared",
+            gateTimeoutMs: 100,
+            gatePollMs: 5
+          })
+        ).rejects.toMatchObject({ code: "ENOENT" });
+        expect(transition.calls()).toBe(2);
+        expect(transition.closeFaults()).toBe(1);
+        expect(transition.unlinked()).toBe(false);
+      } finally {
+        await transition.closeLeaked();
+        transition.restore();
+        await removeIfPresent(gatePath);
+      }
+    }
+
+    {
+      const { gatePath, targetPath } = await createFixedGate();
+      const transition = injectFirstDescriptorUnlink(gatePath);
+      const realLstat = fs.lstat.bind(fs);
+      let injectedEio = false;
+      const lstatSpy = vi.spyOn(fs, "lstat").mockImplementation(async (candidate, options) => {
+        if (!injectedEio && transition.unlinked() && candidate.toString() === gatePath) {
+          injectedEio = true;
+          throw Object.assign(new Error("injected gate disappearance confirmation failure"), { code: "EIO" });
+        }
+        return realLstat(candidate, options);
+      });
+      try {
+        await expect(
+          acquirePersistenceLease({
+            targetPath,
+            familyKey: "embed-db",
+            role: "shared",
+            gateTimeoutMs: 100,
+            gatePollMs: 5
+          })
+        ).rejects.toMatchObject({ code: "EIO" });
+        expect(transition.calls()).toBe(2);
+        expect(injectedEio).toBe(true);
+      } finally {
+        lstatSpy.mockRestore();
+        transition.restore();
+        await removeIfPresent(gatePath);
+      }
+    }
+
+    {
+      const { gateBytes, gatePath, targetPath } = await createFixedGate();
+      const transition = injectFirstDescriptorUnlink(gatePath, gateBytes);
+      try {
+        await expect(
+          acquirePersistenceLease({
+            targetPath,
+            familyKey: "embed-db",
+            role: "shared",
+            gateTimeoutMs: 100,
+            gatePollMs: 5
+          })
+        ).rejects.toThrow(/reappeared after it disappeared/u);
+        expect(transition.calls()).toBe(2);
+        expect(transition.unlinked()).toBe(true);
+      } finally {
+        transition.restore();
+        await removeIfPresent(gatePath);
+      }
+    }
+
+    {
+      const { targetPath } = await fixture();
+      const retained = await acquirePersistenceLease({ targetPath, familyKey: "embed-db", role: "shared" });
+      const markerPath = path.join(retained.scope.directory, retained.marker.id);
+      const transition = injectFirstDescriptorUnlink(markerPath);
+      try {
+        await expect(inspectPersistenceLeases({ targetPath, familyKey: "embed-db" })).rejects.toBeInstanceOf(
+          PersistenceLeaseIntegrityError
+        );
+        expect(transition.calls()).toBe(2);
+        expect(transition.unlinked()).toBe(true);
+      } finally {
+        transition.restore();
+        await retained.release();
+      }
+    }
+
+    {
+      const { targetPath } = await fixture();
+      const departing = await acquirePersistenceLease({ targetPath, familyKey: "embed-db", role: "publisher" });
+      const markerPath = path.join(departing.scope.directory, departing.marker.id);
+      const realLstat = fs.lstat.bind(fs);
+      let releasedDuringScan = false;
+      const lstatSpy = vi.spyOn(fs, "lstat").mockImplementation(async (candidate, options) => {
+        if (!releasedDuringScan && candidate.toString() === markerPath) {
+          releasedDuringScan = true;
+          await departing.release();
+        }
+        return realLstat(candidate, options);
+      });
+      try {
+        const replacement = await acquirePersistenceLease({
+          targetPath,
+          familyKey: "embed-db",
+          role: "publisher"
+        });
+        expect(releasedDuringScan).toBe(true);
+        await replacement.release();
+      } finally {
+        lstatSpy.mockRestore();
+        await departing.release();
+      }
+    }
+
+    {
+      const { targetPath } = await fixture();
+      const retained = await acquirePersistenceLease({ targetPath, familyKey: "embed-db", role: "publisher" });
+      const markerPath = path.join(retained.scope.directory, retained.marker.id);
+      const realLstat = fs.lstat.bind(fs);
+      let injectedEio = false;
+      const lstatSpy = vi.spyOn(fs, "lstat").mockImplementation(async (candidate, options) => {
+        if (!injectedEio && candidate.toString() === markerPath) {
+          injectedEio = true;
+          throw Object.assign(new Error("injected lifetime marker inspection failure"), { code: "EIO" });
+        }
+        return realLstat(candidate, options);
+      });
+      try {
+        await expect(
+          acquirePersistenceLease({ targetPath, familyKey: "embed-db", role: "publisher" })
+        ).rejects.toMatchObject({ code: "EIO" });
+        expect(injectedEio).toBe(true);
+      } finally {
+        lstatSpy.mockRestore();
+        await retained.release();
+      }
+    }
+
+    {
+      const { targetPath } = await fixture();
+      const departing = await acquirePersistenceLease({ targetPath, familyKey: "embed-db", role: "publisher" });
+      const markerPath = path.join(departing.scope.directory, departing.marker.id);
+      const markerBytes = await fs.readFile(markerPath, "utf8");
+      const realLstat = fs.lstat.bind(fs);
+      let replacedDuringScan = false;
+      const lstatSpy = vi.spyOn(fs, "lstat").mockImplementation(async (candidate, options) => {
+        if (!replacedDuringScan && candidate.toString() === markerPath) {
+          replacedDuringScan = true;
+          await departing.release();
+          await fs.writeFile(markerPath, markerBytes, { flag: "wx", mode: 0o600 });
+          throw Object.assign(new Error("injected released-marker path miss"), { code: "ENOENT" });
+        }
+        return realLstat(candidate, options);
+      });
+      try {
+        await expect(acquirePersistenceLease({ targetPath, familyKey: "embed-db", role: "publisher" })).rejects.toThrow(
+          /reappeared after it disappeared/u
+        );
+        expect(replacedDuringScan).toBe(true);
+      } finally {
+        lstatSpy.mockRestore();
+        await departing.release();
+        await removeIfPresent(markerPath);
+      }
     }
   });
 

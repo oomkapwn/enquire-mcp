@@ -300,6 +300,24 @@ export class PersistenceLeaseIntegrityError extends PersistenceLeaseError {
   }
 }
 
+type PersistenceLeaseMarkerPathStage = "initial" | "after-open";
+
+class PersistenceLeaseMarkerPathAbsentError extends PersistenceLeaseIntegrityError {
+  readonly stage: PersistenceLeaseMarkerPathStage;
+  override readonly cause: unknown;
+
+  constructor(stage: PersistenceLeaseMarkerPathStage, cause?: unknown) {
+    super(
+      stage === "initial"
+        ? "Persistence lease marker was absent before it could be stably opened"
+        : "Persistence lease marker disappeared after it was opened"
+    );
+    this.name = "PersistenceLeaseMarkerPathAbsentError";
+    this.stage = stage;
+    this.cause = cause;
+  }
+}
+
 /** Raised when explicit recovery cannot prove same-host orphanhood and quiescence. */
 export class PersistenceLeaseRecoveryError extends PersistenceLeaseError {
   /**
@@ -893,6 +911,31 @@ function sameIdentity(left: FileIdentity, right: FileIdentity): boolean {
   return hasExactFileIdentity(left) && hasExactFileIdentity(right) && left.dev === right.dev && left.ino === right.ino;
 }
 
+function trustedMarkerSnapshotMetadataMatches(opened: BigIntStats, after: BigIntStats): boolean {
+  return (
+    sameIdentity(identity(opened), identity(after)) &&
+    opened.size === after.size &&
+    opened.mtimeNs === after.mtimeNs &&
+    opened.mode === after.mode &&
+    opened.uid === after.uid &&
+    opened.gid === after.gid
+  );
+}
+
+function trustedMarkerSnapshotIsStable(opened: BigIntStats, after: BigIntStats): boolean {
+  if (!trustedMarkerSnapshotMetadataMatches(opened, after)) return false;
+  if (opened.nlink === after.nlink) return opened.ctimeNs === after.ctimeNs;
+
+  // Publishing creates the authoritative name as a hard link and then removes
+  // its staging name. Darwin records that protocol-owned 2 -> 1 link-count
+  // finalization as a ctime change even though identity and contents are fixed.
+  return opened.nlink === 2n && after.nlink === 1n;
+}
+
+function trustedMarkerSnapshotWasUnlinked(opened: BigIntStats, after: BigIntStats): boolean {
+  return trustedMarkerSnapshotMetadataMatches(opened, after) && opened.nlink === 1n && after.nlink === 0n;
+}
+
 async function lstatTrustedFile(filePath: string, label: string): Promise<BigIntStats> {
   const stats = await fs.lstat(filePath, { bigint: true });
   if (stats.isSymbolicLink() || !stats.isFile()) {
@@ -930,18 +973,42 @@ interface OpenedIdentityFile {
   readonly stats: BigIntStats;
 }
 
+async function classifyMarkerPathAbsence<T>(
+  operation: () => Promise<T>,
+  stage: PersistenceLeaseMarkerPathStage | undefined
+): Promise<T> {
+  try {
+    return await operation();
+  } catch (error) {
+    if (stage !== undefined && errorCode(error) === "ENOENT") {
+      throw new PersistenceLeaseMarkerPathAbsentError(stage, error);
+    }
+    throw error;
+  }
+}
+
+async function closeFileAfterFailure(file: FileHandle, error: unknown, message: string): Promise<never> {
+  try {
+    await file.close();
+  } catch (closeError) {
+    throw new AggregateError([error, closeError], message);
+  }
+  throw error;
+}
+
 async function openIdentityPinnedRegular(
   filePath: string,
   label: string,
-  markerShape: "authoritative" | "candidate"
+  markerShape: "authoritative" | "candidate",
+  markerAbsenceBeforeOpen?: PersistenceLeaseMarkerPathStage
 ): Promise<OpenedIdentityFile> {
   const inspect =
     markerShape === "authoritative"
       ? () => lstatTrustedFile(filePath, label)
       : () => lstatRecoverableCandidate(filePath);
-  const before = await inspect();
+  const before = await classifyMarkerPathAbsence(inspect, markerAbsenceBeforeOpen);
   const flags = constants.O_RDONLY | (process.platform === "win32" ? 0 : constants.O_NOFOLLOW | constants.O_NONBLOCK);
-  const file = await fs.open(filePath, flags);
+  const file = await classifyMarkerPathAbsence(() => fs.open(filePath, flags), markerAbsenceBeforeOpen);
   try {
     const opened = await file.stat({ bigint: true });
     if (
@@ -951,7 +1018,8 @@ async function openIdentityPinnedRegular(
     ) {
       throw new PersistenceLeaseIntegrityError(`${label} changed while it was opened`);
     }
-    const middle = await inspect();
+    const afterOpenStage = markerAbsenceBeforeOpen === undefined ? undefined : "after-open";
+    const middle = await classifyMarkerPathAbsence(inspect, afterOpenStage);
     if (!sameIdentity(identity(before), identity(middle))) {
       throw new PersistenceLeaseIntegrityError(`${label} path identity changed while it was opened`);
     }
@@ -960,23 +1028,27 @@ async function openIdentityPinnedRegular(
     // descriptor stat still uses the handle API. Those are distinct identity
     // surfaces in libuv, so compare path-to-path and fstat-to-fstat instead of
     // truncating either 64-bit value or assuming the two APIs are interchangeable.
-    const confirmation = await fs.open(filePath, flags);
+    const confirmation = await classifyMarkerPathAbsence(() => fs.open(filePath, flags), afterOpenStage);
     try {
       const confirmed = await confirmation.stat({ bigint: true });
       if (!confirmed.isFile() || !sameIdentity(identity(opened), identity(confirmed))) {
         throw new PersistenceLeaseIntegrityError(`${label} descriptor identity changed while it was opened`);
       }
-    } finally {
-      await confirmation.close();
+    } catch (error) {
+      return closeFileAfterFailure(
+        confirmation,
+        error,
+        `${label} confirmation failure was followed by descriptor-close failure`
+      );
     }
-    const after = await inspect();
+    await confirmation.close();
+    const after = await classifyMarkerPathAbsence(inspect, afterOpenStage);
     if (!sameIdentity(identity(before), identity(after))) {
       throw new PersistenceLeaseIntegrityError(`${label} path identity changed while it was confirmed`);
     }
     return { file, stats: opened };
   } catch (error) {
-    await file.close();
-    throw error;
+    return closeFileAfterFailure(file, error, `${label} failure was followed by descriptor-close failure`);
   }
 }
 
@@ -1049,7 +1121,7 @@ async function readTrustedMarker(
 }> {
   await revalidatePersistenceLeaseScope(scope);
   const filePath = path.join(scope.directory, id);
-  const openedFile = await openIdentityPinnedRegular(filePath, "Persistence lease marker", "authoritative");
+  const openedFile = await openIdentityPinnedRegular(filePath, "Persistence lease marker", "authoritative", "initial");
   const { file } = openedFile;
   try {
     const opened = openedFile.stats;
@@ -1058,29 +1130,58 @@ async function readTrustedMarker(
       throw new PersistenceLeaseIntegrityError("Persistence lease marker changed while it was read");
     }
     const after = await file.stat({ bigint: true });
-    if (
-      !sameIdentity(identity(opened), identity(after)) ||
-      opened.size !== after.size ||
-      opened.mtimeNs !== after.mtimeNs ||
-      opened.ctimeNs !== after.ctimeNs
-    ) {
+    if (!trustedMarkerSnapshotIsStable(opened, after)) {
+      if (trustedMarkerSnapshotWasUnlinked(opened, after)) {
+        throw new PersistenceLeaseMarkerPathAbsentError("after-open");
+      }
       throw new PersistenceLeaseIntegrityError("Persistence lease marker changed while it was read");
     }
-    const current = await openIdentityPinnedRegular(filePath, "Persistence lease marker", "authoritative");
+    const current = await openIdentityPinnedRegular(
+      filePath,
+      "Persistence lease marker",
+      "authoritative",
+      "after-open"
+    );
     try {
       if (!sameIdentity(identity(opened), identity(current.stats))) {
         throw new PersistenceLeaseIntegrityError("Persistence lease marker path changed while it was read");
       }
-    } finally {
-      await current.file.close();
+    } catch (error) {
+      return closeFileAfterFailure(
+        current.file,
+        error,
+        "Persistence lease marker path validation failure was followed by descriptor-close failure"
+      );
     }
+    await current.file.close();
     const marker = parseStoredMarker(bytes, id, scope);
     await revalidatePersistenceLeaseScope(scope);
     return { file, identity: identity(opened), bytes, marker };
   } catch (error) {
-    await file.close();
-    throw error;
+    return closeFileAfterFailure(
+      file,
+      error,
+      "Persistence lease marker read failure was followed by descriptor-close failure"
+    );
   }
+}
+
+async function markerPathIsConfirmedAbsentAfterReadFailure(
+  scope: PersistenceLeaseScope,
+  id: string,
+  error: unknown
+): Promise<boolean> {
+  if (!(error instanceof PersistenceLeaseMarkerPathAbsentError)) return false;
+
+  await revalidatePersistenceLeaseScope(scope);
+  try {
+    await fs.lstat(path.join(scope.directory, id), { bigint: true });
+  } catch (confirmationError) {
+    if (errorCode(confirmationError) !== "ENOENT") throw confirmationError;
+    await revalidatePersistenceLeaseScope(scope);
+    return true;
+  }
+  throw new PersistenceLeaseIntegrityError("Persistence lease marker reappeared after it disappeared");
 }
 
 async function exactUnlink(scope: PersistenceLeaseScope, owned: OwnedMarker, label: string): Promise<void> {
@@ -1327,19 +1428,26 @@ async function releaseGate(scope: PersistenceLeaseScope, gate: OwnedMarker): Pro
 
 async function acquireGate(scope: PersistenceLeaseScope, options: GateOptions): Promise<OwnedMarker> {
   const started = performance.now();
+  let attempted = false;
   while (true) {
+    if (attempted && performance.now() - started >= options.timeoutMs) {
+      throw new PersistenceLeaseTimeoutError(options.timeoutMs);
+    }
+    attempted = true;
     await revalidatePersistenceLeaseScope(scope);
     const nonce = randomBytes(16).toString("hex");
     try {
       return await publishMarker(scope, GATE_NAME, storedMarker(scope, "gate", nonce));
     } catch (error) {
       if (errorCode(error) !== "EEXIST") throw error;
+      let trusted: Awaited<ReturnType<typeof readTrustedMarker>>;
       try {
-        await readTrustedMarker(scope, GATE_NAME).then(async ({ file }) => file.close());
+        trusted = await readTrustedMarker(scope, GATE_NAME);
       } catch (inspectionError) {
-        if (errorCode(inspectionError) === "ENOENT") continue;
+        if (await markerPathIsConfirmedAbsentAfterReadFailure(scope, GATE_NAME, inspectionError)) continue;
         throw inspectionError;
       }
+      await trusted.file.close();
       const elapsed = performance.now() - started;
       if (elapsed >= options.timeoutMs) throw new PersistenceLeaseTimeoutError(options.timeoutMs);
       await new Promise<void>((resolve) => setTimeout(resolve, Math.min(options.pollMs, options.timeoutMs - elapsed)));
@@ -1364,7 +1472,10 @@ async function readBoundedDirectory(directory: string): Promise<Dirent[]> {
   }
 }
 
-async function scanScopeDirectory(scope: PersistenceLeaseScope): Promise<ScopeDirectoryScan> {
+async function scanScopeDirectory(
+  scope: PersistenceLeaseScope,
+  allowConfirmedLeaseRelease = false
+): Promise<ScopeDirectoryScan> {
   await revalidatePersistenceLeaseScope(scope);
   const entries = await readBoundedDirectory(scope.directory);
   const markers: PersistenceLeaseMarker[] = [];
@@ -1393,7 +1504,15 @@ async function scanScopeDirectory(scope: PersistenceLeaseScope): Promise<ScopeDi
     if (!entry.isFile() || entry.isSymbolicLink()) {
       throw new PersistenceLeaseIntegrityError("Persistence lease marker must be a regular file");
     }
-    const trusted = await readTrustedMarker(scope, entry.name);
+    let trusted: Awaited<ReturnType<typeof readTrustedMarker>>;
+    try {
+      trusted = await readTrustedMarker(scope, entry.name);
+    } catch (error) {
+      if (allowConfirmedLeaseRelease && (await markerPathIsConfirmedAbsentAfterReadFailure(scope, entry.name, error))) {
+        continue;
+      }
+      throw error;
+    }
     try {
       markers.push(publicMarker(entry.name, trusted.marker));
     } finally {
@@ -1408,7 +1527,10 @@ async function scanScopeDirectory(scope: PersistenceLeaseScope): Promise<ScopeDi
 }
 
 async function listLeaseMarkers(scope: PersistenceLeaseScope): Promise<PersistenceLeaseMarker[]> {
-  return (await scanScopeDirectory(scope)).leases;
+  // The caller holds `.gate`, so no lifetime marker can be published while the
+  // scan runs. A confirmed disappearance is therefore a monotonic release;
+  // public inspection and recovery keep the stricter default above.
+  return (await scanScopeDirectory(scope, true)).leases;
 }
 
 function conflictingRoles(
@@ -1599,8 +1721,9 @@ function persistenceLeaseHandle(
   const release = async (): Promise<void> => {
     if (markerPending) {
       // Exact unlink is the release linearization point. A concurrent gated
-      // acquisition either observes this marker, observes its absence after
-      // unlink, or fails closed if the entry disappears mid-inspection.
+      // acquisition either observes this marker or confirms that this exact
+      // path stayed absent after a stable descriptor became unlinked; every
+      // other inspection error still fails closed.
       // Release itself must remain deletion-only so a fire-and-forget close
       // cannot recreate lease entries after parent teardown has begun.
       let markerFailure: unknown;
@@ -1788,7 +1911,7 @@ export async function inspectPersistenceLeases(target: PersistenceLeaseTarget): 
       await trusted.file.close();
     }
   } catch (error) {
-    if (errorCode(error) !== "ENOENT") throw error;
+    if (!(error instanceof PersistenceLeaseMarkerPathAbsentError) || error.stage !== "initial") throw error;
   }
   const scan = await scanScopeDirectory(scope);
   return { scope, gate, leases: scan.leases, candidates: scan.candidates };

@@ -162,13 +162,16 @@ function populations(): {
   return { historical, current, authority };
 }
 
-// These two checks execute the complete versioned audit rather than one unit
-// helper. Hosted Node 22.13 needs materially more time than Node 24 for the
-// same assertions (19s vs 13s, and 106s vs 82s respectively). Keep the bounds
-// local so ordinary tests retain the global 15s breaker while the exhaustive
-// controls retain every source scan, mutation, and generator comparison.
-const FROZEN_AUTHORITY_AUDIT_TIMEOUT_MS = 30_000;
-const TRANSITION_CAUSAL_CLOSURE_TIMEOUT_MS = 150_000;
+// These three checks execute the complete versioned audit rather than one unit
+// helper. Hosted plain Node 22.13/24 measured 19s/13s for the frozen authority
+// and 106s/82s for the causal closure. V8 coverage later measured 23.795s,
+// 17.754s, and 177.515s for the frozen authority, complete-source drift, and
+// causal closure respectively. Rounded local ceilings retain at least 40%
+// headroom over those maxima while ordinary tests keep the global 15s breaker
+// and every source scan, mutation, assertion, and generator comparison remains.
+const FROZEN_AUTHORITY_AUDIT_TIMEOUT_MS = 35_000;
+const COMPLETE_SOURCE_DRIFT_AUDIT_TIMEOUT_MS = 30_000;
+const TRANSITION_CAUSAL_CLOSURE_TIMEOUT_MS = 250_000;
 
 describe("release mutation schema-v3 transition authority", () => {
   // biome-ignore format: Keep this exhaustive callback inline without reindenting its audited body.
@@ -213,25 +216,29 @@ describe("release mutation schema-v3 transition authority", () => {
     expect(metaSource).not.toContain("expect(preparedAudit.auditMatrix(matrixSource)).toEqual([])");
   });
 
-  it("NEGATIVE rejects complete-source drift before an unchanged row can inherit historical semantics", () => {
-    const matrixSource = readFileSync(new URL("./release-integrity.test.ts", import.meta.url), "utf8");
-    const historicalFixtureSource = readFileSync(
-      new URL("./fixtures/release-mutation-identity.v2.json", import.meta.url),
-      "utf8"
-    );
-    const authoritySource = readFileSync(
-      new URL("./fixtures/release-mutation-transition.v3.json", import.meta.url),
-      "utf8"
-    );
-    const drifted = matrixSource.replace(
-      "interface WorkflowJob {",
-      "// unauthorized transition drift\ninterface WorkflowJob {"
-    );
+  it(
+    "NEGATIVE rejects complete-source drift before an unchanged row can inherit historical semantics",
+    () => {
+      const matrixSource = readFileSync(new URL("./release-integrity.test.ts", import.meta.url), "utf8");
+      const historicalFixtureSource = readFileSync(
+        new URL("./fixtures/release-mutation-identity.v2.json", import.meta.url),
+        "utf8"
+      );
+      const authoritySource = readFileSync(
+        new URL("./fixtures/release-mutation-transition.v3.json", import.meta.url),
+        "utf8"
+      );
+      const drifted = matrixSource.replace(
+        "interface WorkflowJob {",
+        "// unauthorized transition drift\ninterface WorkflowJob {"
+      );
 
-    expect(releaseMutationVersionedTransitionAuditProblems(drifted, historicalFixtureSource, authoritySource)).toEqual(
-      expect.arrayContaining([expect.stringMatching(/current matrix source witness mismatch/)])
-    );
-  });
+      expect(
+        releaseMutationVersionedTransitionAuditProblems(drifted, historicalFixtureSource, authoritySource)
+      ).toEqual(expect.arrayContaining([expect.stringMatching(/current matrix source witness mismatch/)]));
+    },
+    COMPLETE_SOURCE_DRIFT_AUDIT_TIMEOUT_MS
+  );
 
   it("keeps schema v2 byte-exact while reserving every successor and new identity", () => {
     const fixtureSource = readFileSync(

@@ -2707,10 +2707,17 @@ function isCacheSourceReceipt(value: unknown): value is CacheSourceReceipt {
   if (!isRecord(value)) return false;
   return (
     typeof value.dev === "number" &&
-    Number.isSafeInteger(value.dev) &&
+    // Node exposes ordinary Stats.dev/ino as numbers even when a native
+    // Windows file identifier is wider than JavaScript's exact-integer range.
+    // JSON still round-trips that already-materialized value as the same
+    // JavaScript number,
+    // and this receipt is a freshness hint rather than an authenticity proof.
+    // Reject fractions/non-finite values, but do not discard a legitimate
+    // Windows cache generation merely because its opaque identity is wide.
+    Number.isInteger(value.dev) &&
     value.dev >= 0 &&
     typeof value.ino === "number" &&
-    Number.isSafeInteger(value.ino) &&
+    Number.isInteger(value.ino) &&
     value.ino >= 0 &&
     typeof value.size === "number" &&
     Number.isSafeInteger(value.size) &&

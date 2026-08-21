@@ -1612,6 +1612,22 @@ async function unlinkHnswGeneration(file: string): Promise<void> {
 }
 
 /**
+ * Load a persisted HNSW graph through the legacy two-argument compatibility
+ * route. Without trusted runtime shape authority this route deliberately
+ * returns `null` so the caller rebuilds instead of trusting sidecar metadata.
+ *
+ * @param file - Exact lowercase `.hnsw` persistence base.
+ * @param expectedSignature - Current embed-database generation signature.
+ * @returns `null` before persistence I/O so the caller takes the fail-soft rebuild path.
+ * @throws {TypeError} If `file` is outside the exact HNSW namespace or
+ * `expectedSignature` is empty.
+ */
+export function loadHnswFromDisk(
+  file: string,
+  expectedSignature: string
+): Promise<{ index: HnswIndex; rowsByLabel: Map<number, HnswPersistedMeta["rowsByLabel"][string]> } | null>;
+
+/**
  * v2.16.0 — load a previously-persisted HNSW index from disk. Returns
  * `null` (with a stderr warning) if:
  *   • The meta pointer or its immutable generation is missing
@@ -1647,10 +1663,6 @@ async function unlinkHnswGeneration(file: string): Promise<void> {
  * @throws {TypeError} If `options.expectedDim` is outside the bounded native dimension contract.
  * @throws {TypeError} If either trusted manifest is not a bounded exact map.
  */
-export function loadHnswFromDisk(
-  file: string,
-  expectedSignature: string
-): Promise<{ index: HnswIndex; rowsByLabel: Map<number, HnswPersistedMeta["rowsByLabel"][string]> } | null>;
 export function loadHnswFromDisk(
   file: string,
   expectedSignature: string,

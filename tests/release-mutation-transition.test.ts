@@ -162,7 +162,16 @@ function populations(): {
   return { historical, current, authority };
 }
 
+// These two checks execute the complete versioned audit rather than one unit
+// helper. Hosted Node 22.13 needs materially more time than Node 24 for the
+// same assertions (19s vs 13s, and 106s vs 82s respectively). Keep the bounds
+// local so ordinary tests retain the global 15s breaker while the exhaustive
+// controls retain every source scan, mutation, and generator comparison.
+const FROZEN_AUTHORITY_AUDIT_TIMEOUT_MS = 30_000;
+const TRANSITION_CAUSAL_CLOSURE_TIMEOUT_MS = 150_000;
+
 describe("release mutation schema-v3 transition authority", () => {
+  // biome-ignore format: Keep this exhaustive callback inline without reindenting its audited body.
   it("audits the frozen current matrix through the exact versioned authority", () => {
     const matrixSource = readFileSync(new URL("./release-integrity.test.ts", import.meta.url), "utf8");
     const historicalFixtureSource = readFileSync(
@@ -187,7 +196,7 @@ describe("release mutation schema-v3 transition authority", () => {
         { cwd: fileURLToPath(new URL("..", import.meta.url)), encoding: "utf8" }
       )
     ).toBe(authoritySource);
-  });
+  }, FROZEN_AUTHORITY_AUDIT_TIMEOUT_MS);
 
   it("keeps the META positive baseline wired to v3 and legacy checks differential-only", () => {
     const metaSource = readFileSync(new URL("./meta-invariant-coverage.test.ts", import.meta.url), "utf8");
@@ -362,6 +371,7 @@ describe("release mutation schema-v3 transition authority", () => {
     ]).toEqual(["root", "dependency", "root", "dependency"]);
   });
 
+  // biome-ignore format: Keep this exhaustive callback inline without reindenting its audited body.
   it("NEGATIVE binds new split identities to resolved values, derivations, and the 16-source closure", () => {
     const matrixSource = readFileSync(new URL("./release-integrity.test.ts", import.meta.url), "utf8");
     const historicalFixtureSource = readFileSync(
@@ -520,7 +530,7 @@ describe("release mutation schema-v3 transition authority", () => {
         JSON.stringify(repinnedAuthority)
       )
     ).toContain("source historical ID fragment.release-visibility-poll was reused for a changed projection");
-  }, 90_000);
+  }, TRANSITION_CAUSAL_CLOSURE_TIMEOUT_MS);
 
   it("classifies every historical and current identity without repinning schema v2", () => {
     const { historical, current, authority } = populations();

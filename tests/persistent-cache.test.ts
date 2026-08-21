@@ -931,9 +931,10 @@ describe("persistent cache", () => {
   });
 
   it("reloads cache on next ensureExists when files unchanged", async () => {
+    const hello = await fs.realpath(path.join(root, "Hello.md"));
     const v1 = trackedVault(root, { persistentCache: true, cacheFile });
     await v1.ensureExists();
-    await v1.readNote(path.join(root, "Hello.md"));
+    await v1.readNote(hello);
     await v1.saveDiskCache();
 
     const v2 = trackedVault(root, { persistentCache: true, cacheFile });
@@ -941,6 +942,57 @@ describe("persistent cache", () => {
     const internal = v2 as unknown as { cache: Map<string, unknown> };
     expect(internal.cache.size).toBe(1);
     expect([...internal.cache.keys()].map((entry) => path.basename(entry))).toEqual(["Hello.md"]);
+
+    // Windows can expose a native file identifier wider than 2^53 through
+    // ordinary number-valued Stats. The value is already opaque/rounded at
+    // that API boundary, but JSON preserves the same number. Prove restart
+    // admission does not confuse "outside the safe-integer domain" with
+    // "not an integral filesystem identity".
+    const wideDev = 9_007_199_254_740_992;
+    const wideIno = 9_007_199_254_740_996;
+    const persisted = JSON.parse(await fs.readFile(cacheFile, "utf8")) as {
+      entries: Array<{
+        content: string;
+        sourceReceipt: Record<"dev" | "ino", number>;
+      }>;
+    };
+    const entry = persisted.entries[0];
+    if (!entry) throw new Error("persisted wide-identity fixture is missing");
+    entry.content = "wide-identity-cache-sentinel";
+    entry.sourceReceipt.dev = wideDev;
+    entry.sourceReceipt.ino = wideIno;
+    await fs.writeFile(cacheFile, JSON.stringify(persisted));
+
+    const realStat = fs.stat.bind(fs);
+    let mockedIno = wideIno;
+    const statSpy = vi.spyOn(fs, "stat").mockImplementation(async (candidate, ...args) => {
+      const stat = await realStat(candidate, ...args);
+      if (String(candidate) !== hello || typeof stat.dev !== "number") return stat;
+      return new Proxy(stat, {
+        get(target, property) {
+          if (property === "dev") return wideDev;
+          if (property === "ino") return mockedIno;
+          const value = Reflect.get(target, property, target);
+          return typeof value === "function" ? value.bind(target) : value;
+        }
+      });
+    });
+    try {
+      const v3 = trackedVault(root, { persistentCache: true, cacheFile });
+      await v3.ensureExists();
+      await expect(v3.readNote(hello)).resolves.toMatchObject({ content: "wide-identity-cache-sentinel" });
+
+      entry.content = "fractional-identity-cache-sentinel";
+      entry.sourceReceipt.ino = 1.5;
+      mockedIno = 1.5;
+      await fs.writeFile(cacheFile, JSON.stringify(persisted));
+      const v4 = trackedVault(root, { persistentCache: true, cacheFile });
+      await v4.ensureExists();
+      const fractionalInternal = v4 as unknown as { cache: Map<string, unknown> };
+      expect(fractionalInternal.cache.size).toBe(0);
+    } finally {
+      statSpy.mockRestore();
+    }
   });
 
   it("invalidates an entry whose mtime changed since cache write", async () => {

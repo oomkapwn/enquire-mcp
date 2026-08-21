@@ -2819,6 +2819,18 @@ async function createDistinctFoldedHardlinkedSymlinks(
   return true;
 }
 
+async function clearTestHnswArtifactsWithAuthority(file: string): Promise<boolean> {
+  const embedTarget = `${file.slice(0, -".hnsw".length)}.embed.db`;
+  const lifetime = await acquirePersistenceFamilyLease({
+    targetPath: embedTarget,
+    familyKey: SEMANTIC_PERSISTENCE_FAMILY_KEY,
+    role: "shared"
+  });
+  const scopes = lifetime.scopes;
+  await lifetime.release();
+  return clearHnswPersistedArtifacts(file, scopes);
+}
+
 describe("erasure-completeness invariant (rc.36, P-2 class)", () => {
   let root: string;
   let cacheDir: string;
@@ -3405,7 +3417,7 @@ describe("erasure-completeness invariant (rc.36, P-2 class)", () => {
     if (!(await createDistinctFoldedHardlinks(exactPath, foldedPath, skip))) return;
 
     const erase = hnsw
-      ? clearHnswPersistedArtifacts(path.join(cacheDir, exactBase))
+      ? clearTestHnswArtifactsWithAuthority(path.join(cacheDir, exactBase))
       : removeSensitiveArtifactTemps(path.join(cacheDir, exactBase));
     await expect(erase).rejects.toThrow(/ambiguous|casing/i);
     expect(await fs.readFile(exactPath, "utf8")).toBe("HARDLINK_SENTINEL");
@@ -3439,7 +3451,7 @@ describe("erasure-completeness invariant (rc.36, P-2 class)", () => {
       route === "sensitive-artifact eraser"
         ? removeSensitiveArtifactTemps(path.join(cacheDir, "CaseCache.json"))
         : route === "HNSW eraser"
-          ? clearHnswPersistedArtifacts(path.join(cacheDir, "CaseVault.hnsw"))
+          ? clearTestHnswArtifactsWithAuthority(path.join(cacheDir, "CaseVault.hnsw"))
           : planCachePruneOnDisk(cacheDir, [exactName, foldedName], INVENTORY_KEEP);
     await expect(operation).rejects.toThrow(/ambiguous|spelling/i);
     expect((await fs.lstat(exactPath)).isSymbolicLink()).toBe(true);
@@ -3541,7 +3553,7 @@ describe("erasure-completeness invariant (rc.36, P-2 class)", () => {
       await fs.mkdir(stage, { mode: 0o700 });
       await fs.writeFile(path.join(stage, "artifact"), "SENSITIVE_WINDOWS_ARTIFACT", { mode: 0o600 });
 
-      expect(await clearHnswPersistedArtifacts(configuredBase)).toBe(true);
+      expect(await clearTestHnswArtifactsWithAuthority(configuredBase)).toBe(true);
       for (const artifact of [...paths, stage]) {
         await expect(fs.lstat(artifact)).rejects.toMatchObject({ code: "ENOENT" });
       }
@@ -3565,7 +3577,7 @@ describe("erasure-completeness invariant (rc.36, P-2 class)", () => {
         throw err;
       }
 
-      await expect(clearHnswPersistedArtifacts(configuredBase)).rejects.toThrow(/ambiguous path spelling/i);
+      await expect(clearTestHnswArtifactsWithAuthority(configuredBase)).rejects.toThrow(/ambiguous path spelling/i);
       expect(await fs.readFile(canonical, "utf8")).toBe("CANONICAL_GENERATION");
       expect(await fs.readFile(alias, "utf8")).toBe("DISTINCT_ALIAS_GENERATION");
     }

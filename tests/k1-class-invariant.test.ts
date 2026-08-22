@@ -2536,6 +2536,10 @@ function hasGuard(text: string, site: ConstructorSite): "discovery" | "safe" | n
 }
 
 describe("K-1 class invariant (v3.6.3 methodological guard; recursive scan since v3.7.0 M-3)", () => {
+  // Squash-main coverage run 32542057599 measured this unchanged exhaustive
+  // scan at 17.376s after the PR run completed it in 13.979s. Keep the global
+  // 15s breaker for ordinary tests and give only this measured scan 30s.
+  // biome-ignore format: Keep the exhaustive callback inline without reformatting its mutation corpus.
   it("every `new EmbedDb` / `new FtsIndex` in src/ is preceded by discovery or // SAFE BY DESIGN", async () => {
     const files = await collectTsFiles(SRC_ROOT);
     const unguarded: string[] = [];
@@ -3591,7 +3595,7 @@ describe("K-1 class invariant (v3.6.3 methodological guard; recursive scan since
     expect(admissionOrderProblems(embedContinuityDropped, EMBED_ADMISSION_ORDER)).toContain(
       "Embed bootstrap: guard continuity comparison is missing"
     );
-  });
+  }, 30_000);
 
   it.for([
     { store: "FTS" as const, file: "fts5.ts", spec: FTS_ADMISSION_ORDER },

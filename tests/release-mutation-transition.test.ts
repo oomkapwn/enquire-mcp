@@ -164,12 +164,12 @@ function populations(): {
 
 // These three checks execute the complete versioned audit rather than one unit
 // helper. Hosted plain Node 22.13/24 measured 19s/13s for the frozen authority
-// and 106s/82s for the causal closure. V8 coverage later measured 23.795s,
+// and 106s/82s for the causal closure. Hosted V8 coverage measured 23.795s,
 // 17.754s, and 177.515s for the frozen authority, complete-source drift, and
-// causal closure respectively. Rounded local ceilings retain at least 40%
+// causal closure respectively; a later full local Node 25 V8 run measured the
+// frozen authority at 35.728s. Rounded local ceilings retain at least 40%
 // headroom over those maxima while ordinary tests keep the global 15s breaker
 // and every source scan, mutation, assertion, and generator comparison remains.
-const FROZEN_AUTHORITY_AUDIT_TIMEOUT_MS = 35_000;
 const COMPLETE_SOURCE_DRIFT_AUDIT_TIMEOUT_MS = 30_000;
 const TRANSITION_CAUSAL_CLOSURE_TIMEOUT_MS = 250_000;
 
@@ -199,7 +199,7 @@ describe("release mutation schema-v3 transition authority", () => {
         { cwd: fileURLToPath(new URL("..", import.meta.url)), encoding: "utf8" }
       )
     ).toBe(authoritySource);
-  }, FROZEN_AUTHORITY_AUDIT_TIMEOUT_MS);
+  }, 60_000);
 
   it("keeps the META positive baseline wired to v3 and legacy checks differential-only", () => {
     const metaSource = readFileSync(new URL("./meta-invariant-coverage.test.ts", import.meta.url), "utf8");

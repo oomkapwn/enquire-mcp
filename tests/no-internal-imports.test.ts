@@ -152,6 +152,9 @@ interface CoverageIsolationInputs {
   readonly ciWorkflow: string;
   readonly vitestConfig: string;
   readonly vitestConfigFiles: readonly string[];
+  readonly docsConsistencySource: string;
+  readonly k1ClassSource: string;
+  readonly releaseMutationTransitionSource: string;
   readonly closureSources: ReadonlyMap<string, string>;
 }
 
@@ -732,9 +735,17 @@ function registrationTimeoutProblems(
     "it",
     "test"
   ]);
+  const shadowsRegistrationCallee = suiteCallback.body.statements.some(
+    (statement) =>
+      ts.isFunctionDeclaration(statement) &&
+      statement.name !== undefined &&
+      safeRegistrationCallees.has(statement.name.text)
+  );
   const registrationIsReachable =
     registrationEntry !== undefined &&
+    !shadowsRegistrationCallee &&
     suiteCallback.body.statements.slice(0, registrationEntry.statementIndex + 1).every((statement) => {
+      if (ts.isFunctionDeclaration(statement)) return true;
       if (!ts.isExpressionStatement(statement) || !ts.isCallExpression(statement.expression)) return false;
       return ts.isIdentifier(statement.expression.expression)
         ? safeRegistrationCallees.has(statement.expression.expression.text)
@@ -981,6 +992,30 @@ function coverageIsolationProblems(input: CoverageIsolationInputs): string[] {
       "keeps release.yml wired to the shared evaluator and an exact mirrored inventory",
       "330_000"
     ),
+    ...registrationTimeoutProblems(
+      input.k1ClassSource,
+      "tests/k1-class-invariant.test.ts",
+      "K-1 class invariant (v3.6.3 methodological guard; recursive scan since v3.7.0 M-3)",
+      "it",
+      "every `new EmbedDb` / `new FtsIndex` in src/ is preceded by discovery or // SAFE BY DESIGN",
+      "30_000"
+    ),
+    ...registrationTimeoutProblems(
+      input.releaseMutationTransitionSource,
+      "tests/release-mutation-transition.test.ts",
+      "release mutation schema-v3 transition authority",
+      "it",
+      "audits the frozen current matrix through the exact versioned authority",
+      "60_000"
+    ),
+    ...registrationTimeoutProblems(
+      input.docsConsistencySource,
+      "tests/docs-consistency.test.ts",
+      "docs/code consistency — numeric claims (v3.5.1 audit-driven)",
+      "it",
+      "OIA check count is consistent across oia-walk.mjs, AGENTS.md, ROADMAP.md (rc.22)",
+      "25_000"
+    ),
     ...coverageImportClosureProblems(input.closureSources)
   ];
 }
@@ -1001,12 +1036,25 @@ async function readCoverageIsolationInputs(): Promise<CoverageIsolationInputs> {
   }
   const rootEntries = await fs.readdir(repoRoot);
   const vitestConfigFiles = rootEntries.filter((name) => /^vitest\.(?:config|workspace)\./u.test(name)).sort();
-  const [packageJson, ciWorkflow, vitestConfig] = await Promise.all([
-    fs.readFile(path.join(repoRoot, "package.json"), "utf8"),
-    fs.readFile(path.join(repoRoot, ".github", "workflows", "ci.yml"), "utf8"),
-    fs.readFile(path.join(repoRoot, "vitest.config.ts"), "utf8")
-  ]);
-  return { packageJson, ciWorkflow, vitestConfig, vitestConfigFiles, closureSources };
+  const [packageJson, ciWorkflow, vitestConfig, docsConsistencySource, k1ClassSource, releaseMutationTransitionSource] =
+    await Promise.all([
+      fs.readFile(path.join(repoRoot, "package.json"), "utf8"),
+      fs.readFile(path.join(repoRoot, ".github", "workflows", "ci.yml"), "utf8"),
+      fs.readFile(path.join(repoRoot, "vitest.config.ts"), "utf8"),
+      fs.readFile(path.join(repoRoot, "tests", "docs-consistency.test.ts"), "utf8"),
+      fs.readFile(path.join(repoRoot, "tests", "k1-class-invariant.test.ts"), "utf8"),
+      fs.readFile(path.join(repoRoot, "tests", "release-mutation-transition.test.ts"), "utf8")
+    ]);
+  return {
+    packageJson,
+    ciWorkflow,
+    vitestConfig,
+    vitestConfigFiles,
+    docsConsistencySource,
+    k1ClassSource,
+    releaseMutationTransitionSource,
+    closureSources
+  };
 }
 
 let coverageInputsPromise: Promise<CoverageIsolationInputs> | undefined;
@@ -1509,7 +1557,13 @@ describe("Class A invariant — no test imports value from registration boilerpl
       );
     const metaTimeoutDiagnostic =
       "tests/meta-invariant-coverage.test.ts must retain one direct beforeAll registration with timeout 720_000";
+    const shadowedMetaRegistration =
+      'describe("META-invariant: exact structural census + NEGATIVE control coverage", () => {\n' +
+      "  beforeAll(() => {}, 720_000);\n" +
+      "  function beforeAll(..._args: unknown[]): void {}\n" +
+      "});";
     expect(metaTimeoutProblems(syntheticRaisedMetaRegistration)).toContain(metaTimeoutDiagnostic);
+    expect(metaTimeoutProblems(shadowedMetaRegistration)).toContain(metaTimeoutDiagnostic);
     expect(metaTimeoutProblems(staleMetaTimeout)).toContain(metaTimeoutDiagnostic);
     expect(metaTimeoutProblems(supersededMetaTimeout)).toContain(metaTimeoutDiagnostic);
     const releaseSource = requiredClosureSource(current.closureSources, "tests/release-integrity.test.ts");
@@ -1540,6 +1594,115 @@ describe("Class A invariant — no test imports value from registration boilerpl
     expect(releaseTimeoutProblems(unreachableReleaseRegistration)).toContain(
       "tests/release-integrity.test.ts must retain one direct it registration with timeout 330_000"
     );
+    const k1TimeoutProblems = (source: string): string[] =>
+      registrationTimeoutProblems(
+        source,
+        "tests/k1-class-invariant.test.ts",
+        "K-1 class invariant (v3.6.3 methodological guard; recursive scan since v3.7.0 M-3)",
+        "it",
+        "every `new EmbedDb` / `new FtsIndex` in src/ is preceded by discovery or // SAFE BY DESIGN",
+        "30_000"
+      );
+    const k1TimeoutDiagnostic =
+      "tests/k1-class-invariant.test.ts must retain one direct it registration with timeout 30_000";
+    const staleK1Timeout = replaceExactly(
+      current.k1ClassSource,
+      "  }, 30_000);\n\n  it.for([",
+      "  }, 15_000);\n\n  it.for(["
+    );
+    const missingK1Timeout = replaceExactly(
+      current.k1ClassSource,
+      "  }, 30_000);\n\n  it.for([",
+      "  });\n\n  it.for(["
+    );
+    const raisedK1Timeout = replaceExactly(
+      current.k1ClassSource,
+      "  }, 30_000);\n\n  it.for([",
+      "  }, 30_001);\n\n  it.for(["
+    );
+    expect(k1TimeoutProblems(staleK1Timeout)).toContain(k1TimeoutDiagnostic);
+    expect(k1TimeoutProblems(missingK1Timeout)).toContain(k1TimeoutDiagnostic);
+    expect(k1TimeoutProblems(raisedK1Timeout)).toContain(k1TimeoutDiagnostic);
+    const transitionTimeoutProblems = (source: string): string[] =>
+      registrationTimeoutProblems(
+        source,
+        "tests/release-mutation-transition.test.ts",
+        "release mutation schema-v3 transition authority",
+        "it",
+        "audits the frozen current matrix through the exact versioned authority",
+        "60_000"
+      );
+    const transitionTimeoutDiagnostic =
+      "tests/release-mutation-transition.test.ts must retain one direct it registration with timeout 60_000";
+    const transitionTimeoutNeedle =
+      '  }, 60_000);\n\n  it("keeps the META positive baseline wired to v3 and legacy checks differential-only"';
+    const staleTransitionTimeout = replaceExactly(
+      current.releaseMutationTransitionSource,
+      transitionTimeoutNeedle,
+      transitionTimeoutNeedle.replace("60_000", "35_000")
+    );
+    const missingTransitionTimeout = replaceExactly(
+      current.releaseMutationTransitionSource,
+      transitionTimeoutNeedle,
+      transitionTimeoutNeedle.replace("}, 60_000);", "});")
+    );
+    const raisedTransitionTimeout = replaceExactly(
+      current.releaseMutationTransitionSource,
+      transitionTimeoutNeedle,
+      transitionTimeoutNeedle.replace("60_000", "60_001")
+    );
+    const unreachableTransitionRegistration =
+      'describe("release mutation schema-v3 transition authority", () => {\n' +
+      "  return;\n" +
+      '  it("audits the frozen current matrix through the exact versioned authority", () => {}, 60_000);\n' +
+      "});";
+    expect(transitionTimeoutProblems(staleTransitionTimeout)).toContain(transitionTimeoutDiagnostic);
+    expect(transitionTimeoutProblems(missingTransitionTimeout)).toContain(transitionTimeoutDiagnostic);
+    expect(transitionTimeoutProblems(raisedTransitionTimeout)).toContain(transitionTimeoutDiagnostic);
+    expect(transitionTimeoutProblems(unreachableTransitionRegistration)).toContain(transitionTimeoutDiagnostic);
+    const docsTimeoutProblems = (source: string): string[] =>
+      registrationTimeoutProblems(
+        source,
+        "tests/docs-consistency.test.ts",
+        "docs/code consistency — numeric claims (v3.5.1 audit-driven)",
+        "it",
+        "OIA check count is consistent across oia-walk.mjs, AGENTS.md, ROADMAP.md (rc.22)",
+        "25_000"
+      );
+    const docsTimeoutDiagnostic =
+      "tests/docs-consistency.test.ts must retain one direct it registration with timeout 25_000";
+    const docsTimeoutNeedle = '  }, 25_000);\n\n  it("package.json description tool-count matches actual count"';
+    const staleDocsTimeout = replaceExactly(
+      current.docsConsistencySource,
+      docsTimeoutNeedle,
+      docsTimeoutNeedle.replace("25_000", "15_000")
+    );
+    const missingDocsTimeout = replaceExactly(
+      current.docsConsistencySource,
+      docsTimeoutNeedle,
+      docsTimeoutNeedle.replace("}, 25_000);", "});")
+    );
+    const raisedDocsTimeout = replaceExactly(
+      current.docsConsistencySource,
+      docsTimeoutNeedle,
+      docsTimeoutNeedle.replace("25_000", "25_001")
+    );
+    const unreachableDocsRegistration =
+      'describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () => {\n' +
+      "  function declarationIsSafe(): void {}\n" +
+      "  return;\n" +
+      '  it("OIA check count is consistent across oia-walk.mjs, AGENTS.md, ROADMAP.md (rc.22)", () => {}, 25_000);\n' +
+      "});";
+    const shadowedDocsRegistration =
+      'describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () => {\n' +
+      '  it("OIA check count is consistent across oia-walk.mjs, AGENTS.md, ROADMAP.md (rc.22)", () => {}, 25_000);\n' +
+      "  function it(..._args: unknown[]): void {}\n" +
+      "});";
+    expect(docsTimeoutProblems(staleDocsTimeout)).toContain(docsTimeoutDiagnostic);
+    expect(docsTimeoutProblems(missingDocsTimeout)).toContain(docsTimeoutDiagnostic);
+    expect(docsTimeoutProblems(raisedDocsTimeout)).toContain(docsTimeoutDiagnostic);
+    expect(docsTimeoutProblems(unreachableDocsRegistration)).toContain(docsTimeoutDiagnostic);
+    expect(docsTimeoutProblems(shadowedDocsRegistration)).toContain(docsTimeoutDiagnostic);
 
     const directProductionImport = 'import { Vault } from "../src/vault.js";';
     expect(moduleProblems("tests/release-integrity.test.ts", directProductionImport)).toContain(
@@ -1566,6 +1729,9 @@ describe("Class A invariant — no test imports value from registration boilerpl
       ciWorkflow: ciWithFilteredTest,
       vitestConfig: vitestWithGlobalExclusion,
       vitestConfigFiles: [...current.vitestConfigFiles, "vitest.workspace.ts"],
+      docsConsistencySource: staleDocsTimeout,
+      k1ClassSource: staleK1Timeout,
+      releaseMutationTransitionSource: staleTransitionTimeout,
       closureSources: aggregateClosureSources
     });
     expect(aggregateProblems).toEqual([
@@ -1576,6 +1742,9 @@ describe("Class A invariant — no test imports value from registration boilerpl
       "vitest test config must retain its exact reviewed static key set",
       "tests/meta-invariant-coverage.test.ts must retain one direct beforeAll registration with timeout 720_000",
       "tests/release-integrity.test.ts must retain one direct it registration with timeout 330_000",
+      "tests/k1-class-invariant.test.ts must retain one direct it registration with timeout 30_000",
+      "tests/release-mutation-transition.test.ts must retain one direct it registration with timeout 60_000",
+      "tests/docs-consistency.test.ts must retain one direct it registration with timeout 25_000",
       "tests/release-integrity.test.ts value-imports production path src/vault.js",
       "tests/helpers/exact-source-mutation.ts value-imports production path dist/index.js"
     ]);

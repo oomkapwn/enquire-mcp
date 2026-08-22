@@ -1889,6 +1889,9 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
   // said "8 OIA checks" while the canonical count had reached 10 (Check 9 rc.14,
   // Check 10 rc.20). Pin every surface that states the count to oia-walk.mjs's
   // self-declared canonical number, so adding a check forces a docs sync.
+  // Hosted Node 22/24 and V8 measured the expanded repo-copy + eight-child-OIA
+  // contract at 11.149s/7.682s/9.644s; full local Node 25 measured 15.332s.
+  // Keep its finite 25s budget local while ordinary tests retain the global 15s.
   it("OIA check count is consistent across oia-walk.mjs, AGENTS.md, ROADMAP.md (rc.22)", async () => {
     await assertCoverageOiaEvidenceContract();
     const oia = await read("scripts/oia-walk.mjs");
@@ -1906,7 +1909,7 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
     const rm = /(\d+)\s+state-driven OIA drift checks/.exec(roadmap);
     expect(rm, "ROADMAP.md must state the OIA check count").not.toBeNull();
     expect(Number.parseInt(rm?.[1] ?? "0", 10), "ROADMAP.md OIA count must match oia-walk canonical").toBe(n);
-  });
+  }, 25_000);
 
   it("package.json description tool-count matches actual count", async () => {
     const pkgRaw = await read("package.json");

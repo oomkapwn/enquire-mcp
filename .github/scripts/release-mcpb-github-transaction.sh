@@ -108,13 +108,23 @@ github_latest_read() {
   echo "::warning::GitHub latest-release read was neither strict HTTP 200 nor authoritative HTTP 404" >&2
   return 2
 }
-VERSION=$(node -p "require('./package.json').version")
+if ! [[ "${MCPB_RELEASE_VERSION:-}" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$ ]] ||
+   ! [[ "${MCPB_RELEASE_SOURCE_SHA:-}" =~ ^[0-9a-f]{40}$ ]]; then
+  echo "::error::Verified handoff release identity is missing or malformed"
+  exit 1
+fi
+VERSION="$MCPB_RELEASE_VERSION"
 TAG="v$VERSION"
 ASSET="artifacts/enquire-mcp-basic-$VERSION.mcpb"
 CONTENT="artifacts/enquire-mcp-basic-$VERSION.content-manifest.json"
 SBOM="artifacts/enquire-mcp-basic-$VERSION.sbom.cdx.json"
 LICENSES="artifacts/enquire-mcp-basic-$VERSION.third-party-licenses.json"
-SOURCE_SHA=$(git rev-parse HEAD)
+SOURCE_SHA="$MCPB_RELEASE_SOURCE_SHA"
+RELEASE_EVALUATOR="scripts/check-release-integrity.mjs"
+if [ ! -f "$RELEASE_EVALUATOR" ] || [ -L "$RELEASE_EVALUATOR" ]; then
+  echo "::error::Reviewed release evaluator is missing, non-regular, or a symlink"
+  exit 1
+fi
 EXPECTED_PRERELEASE=false
 if [ "$MCPB_RELEASE_CHANNEL" != "latest" ]; then
   EXPECTED_PRERELEASE=true
@@ -126,7 +136,7 @@ release_state() {
     EXPECTED_RELEASE_BODY_SHA256="$MCPB_RELEASE_BODY_SHA256" \
     EXPECTED_RELEASE_BODY_BYTES="$MCPB_RELEASE_BODY_BYTES" \
     EXPECTED_RELEASE_BODY_CHARS="$MCPB_RELEASE_BODY_CHARS" \
-    node scripts/check-release-integrity.mjs release-state "$TAG" "$EXPECTED_PRERELEASE" \
+    node "$RELEASE_EVALUATOR" release-state "$TAG" "$EXPECTED_PRERELEASE" \
     "$(basename "$ASSET")" "$(basename "$ASSET.sha256")" "$(basename "$CONTENT")" \
     "$(basename "$SBOM")" "$(basename "$LICENSES")" "$(basename "$ASSET.provenance.json")"
 }
@@ -192,7 +202,7 @@ refresh_exact_release_assets() {
     return 1
   fi
   if ! CURRENT_ASSETS=$(printf '%s' "$CURRENT_ASSET_PAGES" | node \
-    scripts/check-release-integrity.mjs flatten-pages asset) || \
+    "$RELEASE_EVALUATOR" flatten-pages asset) || \
      ! CURRENT_ID=$(printf '%s' "$CURRENT_RELEASE" | jq -er \
        '.id | select(type == "number" and . > 0 and floor == . and . <= 9007199254740991) | tostring') || \
      ! CURRENT_TAG=$(printf '%s' "$CURRENT_RELEASE" | jq -er \
@@ -221,7 +231,7 @@ confirm_exact_draft_identity() {
     return 1
   fi
   if ! CONFIRM_ASSETS=$(printf '%s' "$CONFIRM_ASSET_PAGES" | node \
-    scripts/check-release-integrity.mjs flatten-pages asset) || \
+    "$RELEASE_EVALUATOR" flatten-pages asset) || \
      ! CONFIRM_ID=$(printf '%s' "$CONFIRM_RELEASE" | jq -er \
     '.id | select(type == "number" and . > 0 and floor == . and . <= 9007199254740991) | tostring') || \
      ! CONFIRM_TAG=$(printf '%s' "$CONFIRM_RELEASE" | jq -er \
@@ -297,7 +307,7 @@ for (( release_attempt=1; release_attempt<=12; release_attempt++ )); do
     sleep 5
     continue
   fi
-  if ! RELEASES=$(printf '%s' "$RELEASE_PAGES" | node scripts/check-release-integrity.mjs \
+  if ! RELEASES=$(printf '%s' "$RELEASE_PAGES" | node "$RELEASE_EVALUATOR" \
     flatten-pages release); then
     if [ "$release_attempt" -eq 12 ]; then
       echo "::error::Release $TAG pages remained unstable after 12 bounded checks"
@@ -350,7 +360,7 @@ if [ "$RELEASE_PRERELEASE" != "$EXPECTED_PRERELEASE" ] || \
 fi
 ASSET_PAGES=$(gh_read api --paginate --slurp \
   "repos/$MCPB_RELEASE_REPOSITORY/releases/$RELEASE_ID/assets?per_page=100")
-REMOTE_ASSETS=$(printf '%s' "$ASSET_PAGES" | node scripts/check-release-integrity.mjs \
+REMOTE_ASSETS=$(printf '%s' "$ASSET_PAGES" | node "$RELEASE_EVALUATOR" \
   flatten-pages asset)
 RELEASE_STATE=$(jq -n --argjson release "$RELEASE_JSON" --argjson assets "$REMOTE_ASSETS" \
   '{release: $release, assets: $assets}')
@@ -673,7 +683,7 @@ for (( asset_set_attempt=1; asset_set_attempt<=12; asset_set_attempt++ )); do
     '{release: $release, assets: $assets}')
   FINAL_ACTION=$(printf '%s' "$FINAL_STATE" | release_state | jq -r '.action')
   FINAL_COUNT=$(printf '%s' "$FINAL_ASSETS" | jq 'length')
-  ASSET_SET_ACTION=$(node scripts/check-release-integrity.mjs visibility \
+  ASSET_SET_ACTION=$(node "$RELEASE_EVALUATOR" visibility \
     "$FINAL_COUNT" 6 "$asset_set_attempt" 12 "release $TAG asset set" | jq -r '.action')
   if [ "$ASSET_SET_ACTION" = "ready" ]; then break; fi
   if [ "$FINAL_ACTION" != "resume_draft" ]; then
@@ -783,7 +793,7 @@ if [ "$FINAL_ACTION" = "publish_draft" ]; then
           exit 1
         fi
       fi
-      node scripts/check-release-integrity.mjs channel-advance \
+      node "$RELEASE_EVALUATOR" channel-advance \
         "$VERSION" "$CURRENT_LATEST_VERSION" "$MCPB_RELEASE_CHANNEL"
     fi
     PATCH_EXIT=0
@@ -876,7 +886,7 @@ for (( published_list_attempt=1; published_list_attempt<=12; published_list_atte
     sleep 5
     continue
   fi
-  if ! RELEASES=$(printf '%s' "$RELEASE_PAGES" | node scripts/check-release-integrity.mjs \
+  if ! RELEASES=$(printf '%s' "$RELEASE_PAGES" | node "$RELEASE_EVALUATOR" \
     flatten-pages release); then
     if [ "$published_list_attempt" -eq 12 ]; then
       echo "::error::Published release pages remained unstable after 12 bounded checks"
@@ -938,7 +948,7 @@ for (( post_publish_asset_attempt=1; post_publish_asset_attempt<=12; post_publis
     sleep 5
     continue
   fi
-  if ! POST_ASSETS=$(printf '%s' "$POST_ASSET_PAGES" | node scripts/check-release-integrity.mjs \
+  if ! POST_ASSETS=$(printf '%s' "$POST_ASSET_PAGES" | node "$RELEASE_EVALUATOR" \
     flatten-pages asset); then
     if [ "$post_publish_asset_attempt" -eq 12 ]; then
       echo "::error::Published asset pages remained unstable after 12 bounded checks"
@@ -967,7 +977,7 @@ for (( post_publish_asset_attempt=1; post_publish_asset_attempt<=12; post_publis
       '{release: $release, assets: $assets}')
     printf '%s' "$PENDING_STATE" | release_state >/dev/null
   fi
-  POST_ASSET_VISIBILITY=$(node scripts/check-release-integrity.mjs visibility \
+  POST_ASSET_VISIBILITY=$(node "$RELEASE_EVALUATOR" visibility \
     "$POST_ASSET_COUNT" 6 "$post_publish_asset_attempt" 12 "published release $TAG asset set" | \
     jq -r '.action')
   if [ "$POST_ASSET_VISIBILITY" = "retry" ]; then

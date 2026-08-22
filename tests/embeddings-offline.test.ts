@@ -40,6 +40,139 @@ describe("embeddings serve-offline enforcement (rc.42 F1)", () => {
     expect(isEmbeddingsOffline()).toBe(false);
   });
 
+  it("preserves legacy empty ServerDeps while prepared explicit empty allowlists deny all tools", async () => {
+    const { buildMcpServer, formatReadyBanner, prepareServerDeps } = await import("../src/server.js");
+    const { Vault } = await import("../src/vault.js");
+    const makeLegacyDeps = (enabledTools: Set<string> = new Set()) => ({
+      vault: new Vault("/not-opened-by-tool-filter-test"),
+      ftsIndex: null,
+      watcher: null,
+      watcherEmbedDb: null,
+      feedbackStore: null,
+      disabledTools: new Set<string>(),
+      enabledTools,
+      warningTracker: { printed: false },
+      hnswContext: null
+    });
+
+    const legacyEmpty = buildMcpServer(makeLegacyDeps(), { vault: "/not-opened-by-tool-filter-test" });
+    const scratch = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-empty-tool-allowlist-"));
+    const root = path.join(scratch, "vault");
+    await fs.mkdir(root);
+    const prepared = await prepareServerDeps({ vault: root, embeddingIndex: false, enabledTools: [] });
+    const explicitEmpty = buildMcpServer(prepared, { vault: root });
+    try {
+      expect(legacyEmpty.toolInputSchemaJson("obsidian_read_note")).toBeDefined();
+      expect(formatReadyBanner(makeLegacyDeps())).not.toContain("enabled-tools=");
+      expect(prepared.enabledTools).toEqual(new Set());
+      expect(prepared.enabledToolsConfigured).toBe(true);
+      expect(explicitEmpty.toolInputSchemaJson("obsidian_read_note")).toBeUndefined();
+      expect(formatReadyBanner(prepared)).toContain("enabled-tools=0");
+      expect(() =>
+        buildMcpServer(makeLegacyDeps(new Set([" "])), { vault: "/not-opened-by-tool-filter-test" })
+      ).toThrow(
+        new TypeError("ServerDeps.enabledTools must be a Set of canonical tool names without outer whitespace")
+      );
+      expect(() =>
+        buildMcpServer(
+          { ...makeLegacyDeps(), disabledTools: new Set([" "]) },
+          { vault: "/not-opened-by-tool-filter-test" }
+        )
+      ).toThrow(
+        new TypeError("ServerDeps.disabledTools must be a Set of canonical tool names without outer whitespace")
+      );
+    } finally {
+      await Promise.all([legacyEmpty.close(), explicitEmpty.close()]);
+      await fs.rm(scratch, { recursive: true, force: true });
+    }
+  });
+
+  it("composes caller-constructed ServerDeps and ServeOptions as monotonic authority", async () => {
+    const scratch = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-server-authority-"));
+    const root = path.join(scratch, "vault");
+    await fs.mkdir(root);
+    const { FeedbackStore } = await import("../src/feedback.js");
+    const { buildMcpServer } = await import("../src/server.js");
+    const { Vault } = await import("../src/vault.js");
+    const vault = new Vault(root, { enableWrite: true });
+    const feedbackStore = await FeedbackStore.open(path.join(scratch, "state.feedback.json"), root);
+    const makeDeps = (
+      enabledTools: Set<string> = new Set(),
+      disabledTools: Set<string> = new Set(),
+      preparedVault = vault
+    ) => ({
+      vault: preparedVault,
+      ftsIndex: null,
+      watcher: null,
+      watcherEmbedDb: null,
+      feedbackStore,
+      disabledTools,
+      enabledTools,
+      warningTracker: { printed: true },
+      hnswContext: null
+    });
+
+    const narrowedFeatures = buildMcpServer(makeDeps(), {
+      vault: root,
+      enableWrite: false,
+      feedbackWeight: "0"
+    });
+    const matchingFeatures = buildMcpServer(makeDeps(), {
+      vault: root,
+      enableWrite: true,
+      feedbackWeight: "0.5"
+    });
+    const intersectedAllowlist = buildMcpServer(makeDeps(new Set(["obsidian_read_note", "obsidian_create_note"])), {
+      vault: root,
+      enableWrite: true,
+      enabledTools: ["obsidian_read_note", "obsidian_stats"]
+    });
+    const unionedDenylist = buildMcpServer(makeDeps(new Set(), new Set(["obsidian_read_note"])), {
+      vault: root,
+      disabledTools: ["obsidian_list_notes"]
+    });
+
+    try {
+      expect(narrowedFeatures.toolInputSchemaJson("obsidian_read_note")).toBeDefined();
+      expect(narrowedFeatures.toolInputSchemaJson("obsidian_create_note")).toBeUndefined();
+      expect(narrowedFeatures.toolInputSchemaJson("obsidian_mark_useful")).toBeUndefined();
+
+      expect(matchingFeatures.toolInputSchemaJson("obsidian_create_note")).toBeDefined();
+      expect(matchingFeatures.toolInputSchemaJson("obsidian_mark_useful")).toBeDefined();
+
+      expect(intersectedAllowlist.toolInputSchemaJson("obsidian_read_note")).toBeDefined();
+      expect(intersectedAllowlist.toolInputSchemaJson("obsidian_create_note")).toBeUndefined();
+      expect(intersectedAllowlist.toolInputSchemaJson("obsidian_stats")).toBeUndefined();
+
+      expect(unionedDenylist.toolInputSchemaJson("obsidian_read_note")).toBeUndefined();
+      expect(unionedDenylist.toolInputSchemaJson("obsidian_list_notes")).toBeUndefined();
+      expect(unionedDenylist.toolInputSchemaJson("obsidian_stats")).toBeDefined();
+
+      const privateVault = new Vault(root, { readPaths: ["Public/**"] });
+      expect(() =>
+        buildMcpServer(makeDeps(new Set(), new Set(), privateVault), {
+          vault: root,
+          readPaths: ["Private/**"]
+        })
+      ).toThrow(new TypeError("Serve option readPaths does not match the prepared Vault privacy boundary"));
+      expect(() =>
+        buildMcpServer(makeDeps(), {
+          vault: root,
+          disabledTools: [" obsidian_read_note"]
+        })
+      ).toThrow(new TypeError("Serve option disabledTools must contain canonical tool names without outer whitespace"));
+    } finally {
+      await Promise.all([
+        narrowedFeatures.close(),
+        matchingFeatures.close(),
+        intersectedAllowlist.close(),
+        unionedDenylist.close()
+      ]);
+      await feedbackStore.close();
+      await fs.rm(scratch, { recursive: true, force: true });
+    }
+  });
+
   it("setEmbeddingsOffline toggles and both programmatic server boundaries enforce it (POSITIVE)", async () => {
     setEmbeddingsOffline();
     expect(isEmbeddingsOffline()).toBe(true);
@@ -403,11 +536,12 @@ describe("embeddings serve-offline enforcement (rc.42 F1)", () => {
       };
       expect(inspectEmbeddingsOfflineGuards(sources).missingRuntimeActions).toEqual([]);
 
-      const queryGuard = "      setEmbeddingsOffline();\n      const v = new Vault(opts.vault);";
+      const queryGuard =
+        "        setEmbeddingsOffline();\n        const v = new Vault(opts.vault, { excludeGlobs: opts.excludeGlob, readPaths: opts.readPaths });";
       expect(sources.cliSrc).toContain(queryGuard);
       const commentOnlyCli = sources.cliSrc.replace(
         queryGuard,
-        "      // setEmbeddingsOffline();\n      const v = new Vault(opts.vault);"
+        "        // setEmbeddingsOffline();\n        const v = new Vault(opts.vault);"
       );
       expect(inspectEmbeddingsOfflineGuards({ ...sources, cliSrc: commentOnlyCli }).missingRuntimeActions).toContain(
         "query"
@@ -415,7 +549,7 @@ describe("embeddings serve-offline enforcement (rc.42 F1)", () => {
 
       const conditionalCli = sources.cliSrc.replace(
         queryGuard,
-        "      if (false) {\n        setEmbeddingsOffline();\n      }\n      const v = new Vault(opts.vault);"
+        "        if (false) {\n          setEmbeddingsOffline();\n        }\n        const v = new Vault(opts.vault);"
       );
       expect(inspectEmbeddingsOfflineGuards({ ...sources, cliSrc: conditionalCli }).missingRuntimeActions).toContain(
         "query"
@@ -428,7 +562,7 @@ describe("embeddings serve-offline enforcement (rc.42 F1)", () => {
 
       const resetBeforeQueryCli = sources.cliSrc.replace(
         queryGuard,
-        `${queryGuard.split("\n")[0]}\n      setEmbeddingsOffline(false);\n      const v = new Vault(opts.vault);`
+        `${queryGuard.split("\n")[0]}\n        setEmbeddingsOffline(false);\n        const v = new Vault(opts.vault);`
       );
       expect(
         inspectEmbeddingsOfflineGuards({ ...sources, cliSrc: resetBeforeQueryCli }).missingRuntimeActions
@@ -436,7 +570,7 @@ describe("embeddings serve-offline enforcement (rc.42 F1)", () => {
 
       const shadowedCli = sources.cliSrc.replace(
         queryGuard,
-        `      const setEmbeddingsOffline = () => {};\n${queryGuard}`
+        `        const setEmbeddingsOffline = () => {};\n${queryGuard}`
       );
       expect(inspectEmbeddingsOfflineGuards({ ...sources, cliSrc: shadowedCli }).missingRuntimeActions).toContain(
         "query"
@@ -451,7 +585,7 @@ describe("embeddings serve-offline enforcement (rc.42 F1)", () => {
       ).toContain("query");
 
       const lateCli = sources.cliSrc
-        .replace(queryGuard, "      const v = new Vault(opts.vault);")
+        .replace(queryGuard, "        const v = new Vault(opts.vault);")
         .replace(/( {8}const result = await searchHybrid\([^\n]+\);\n)/, "$1        setEmbeddingsOffline();\n");
       expect(inspectEmbeddingsOfflineGuards({ ...sources, cliSrc: lateCli }).missingRuntimeActions).toContain("query");
 

@@ -274,8 +274,8 @@ async function createFixture(
     fixtures.push(fixture);
     return fixture;
   } catch (error) {
-    embedDb.close();
-    fts.close();
+    await embedDb.closeAndRelease().catch(() => {});
+    await fts.closeAndRelease().catch(() => {});
     throw error;
   }
 }
@@ -292,8 +292,8 @@ beforeEach(async () => {
 afterEach(async () => {
   for (const fixture of fixtures) {
     await fixture.watcher.close().catch(() => {});
-    fixture.embedDb.close();
-    fixture.fts.close();
+    await fixture.embedDb.closeAndRelease().catch(() => {});
+    await fixture.fts.closeAndRelease().catch(() => {});
   }
   await fs.rm(sandboxRoot, { recursive: true, force: true });
 });
@@ -641,7 +641,7 @@ describe("VaultWatcher startup activation barrier", () => {
       inspectVisibleAliasInventoryInLane(): Promise<unknown>;
     };
     const inventorySpy = vi.spyOn(watcherInternals, "inspectVisibleAliasInventoryInLane");
-    const readNoteSpy = vi.spyOn(fixture.vault, "readNote");
+    const readNoteSpy = vi.spyOn(fixture.vault, "readNoteUncached");
     let readNoteCalls = 0;
     let inventoryCalls = 0;
     const duringPath = path.join(fixture.vault.root, "During.md");
@@ -792,7 +792,7 @@ describe("VaultWatcher single-generation staging", () => {
     expectHnswMatchesEmbedDb(fixture);
   });
 
-  it("(NEGATIVE control) bounds one live event to one latest-state retry and lets a later event recover", async () => {
+  it("(NEGATIVE control) bounds one live event and lets a later event recover authoritative stores", async () => {
     let churnPath = "";
     let embedCalls = 0;
     const churningEmbedder: Embedder = {
@@ -840,17 +840,20 @@ describe("VaultWatcher single-generation staging", () => {
       expect(markerPathsInHnsw(fixture.hnswRowsByLabel, marker)).toEqual([]);
     }
 
-    // Retry exhaustion is per accepted event, not a permanent poison pill. A
-    // later event sees the now-quiet third generation and commits it coherently.
+    // Retry exhaustion is per accepted event, not a permanent poison pill for
+    // the authoritative SQLite stores. The process-local native graph remains
+    // quarantined until restart: its retained metadata is not output authority
+    // once hnswUsable is false, and advancing it piecemeal after a missed DB
+    // generation would risk blessing an incomplete graph.
     await enqueue(fixture.watcher, churnPath, "change");
     await fixture.watcher.close();
     expect(embedCalls).toBe(3);
     expect(markerPathsInFts(fixture.fts, "churnoldmarker")).toEqual([]);
     expect(markerPathsInEmbedDb(fixture.embedDb, "churnoldmarker")).toEqual([]);
-    expect(markerPathsInHnsw(fixture.hnswRowsByLabel, "churnoldmarker")).toEqual([]);
+    expect(markerPathsInHnsw(fixture.hnswRowsByLabel, "churnoldmarker")).toEqual(["Churn.md"]);
     expect(markerPathsInFts(fixture.fts, "churnthirdmarker")).toEqual(["Churn.md"]);
     expect(markerPathsInEmbedDb(fixture.embedDb, "churnthirdmarker")).toEqual(["Churn.md"]);
-    expect(markerPathsInHnsw(fixture.hnswRowsByLabel, "churnthirdmarker")).toEqual(["Churn.md"]);
-    expectHnswMatchesEmbedDb(fixture);
+    expect(markerPathsInHnsw(fixture.hnswRowsByLabel, "churnthirdmarker")).toEqual([]);
+    expect(fixture.watcher.searchHealth.hnswUsable).toBe(false);
   });
 });

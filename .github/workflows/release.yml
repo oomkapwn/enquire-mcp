@@ -9,25 +9,28 @@ concurrency:
   group: release-publication
   cancel-in-progress: false
 
-permissions:
-  # Read the exact-SHA CI artifact that already passed the cross-platform
-  # mcpb-basic gate and the exact workflow-run attempt's jobs; explicit maps
-  # otherwise default omitted scopes to none.
-  actions: read
-  # `contents: write` (was `read` pre-3.7.15) — required for the
-  # "Create GitHub Release" step (v3.7.14 F5) to call the GitHub Releases
-  # API. The first end-to-end test of F5 (v3.7.14 tag push) failed with
-  # `HTTP 403: Resource not accessible by integration` because GitHub's
-  # default GITHUB_TOKEN since 2023 grants only read on `contents`.
-  # Documented as overclaim #9 in v3.7.15 CHANGELOG. The npm publish
-  # step is unaffected (it uses NODE_AUTH_TOKEN from `secrets.NPM_TOKEN`).
-  contents: write
-  # `id-token: write` — npm provenance signing and stable-only MCP Registry OIDC login.
-  id-token: write
+permissions: {}
 
 jobs:
-  publish:
+  verify:
+    name: Verify exact tagged SHA and assemble canonical handoff
     runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      deadline_epoch: ${{ steps.deadline.outputs.epoch }}
+      version: ${{ steps.handoff.outputs.version }}
+      tag: ${{ steps.handoff.outputs.tag }}
+      source_sha: ${{ steps.handoff.outputs.source_sha }}
+      channel: ${{ steps.handoff.outputs.channel }}
+      build_run_id: ${{ steps.mcpb_candidate.outputs.build_run_id }}
+      npm_build_run_attempt: ${{ steps.mcpb_candidate.outputs.npm_build_run_attempt }}
+      release_body_sha256: ${{ steps.release_body.outputs.sha256 }}
+      release_body_bytes: ${{ steps.release_body.outputs.bytes }}
+      release_body_chars: ${{ steps.release_body.outputs.chars }}
+      handoff_artifact_id: ${{ steps.handoff_upload.outputs.artifact-id }}
+      handoff_digest: ${{ steps.handoff_upload.outputs.artifact-digest }}
     env:
       # Prevent any prior lifecycle/script step from installing a non-interactive
       # Bash startup hook before a later token-bearing shell starts.
@@ -49,7 +52,7 @@ jobs:
           echo "epoch=$((NOW + 13800))" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
+          ref: ${{ github.ref }}
           persist-credentials: false
           # We need full history so we can verify the tagged SHA is reachable
           # from `main` (P0 release-pipeline integrity check below).
@@ -186,10 +189,13 @@ jobs:
           # v4.0.0-rc.2 — bumped to 12: `mcpb-basic` aggregates three-OS
           # canonical Linux bundle assembly plus three-OS logical-content and
           # official-client read-only verification of those same exact bytes.
+          # 2026-08-21 audit follow-up — bumped to 13: `docker` must build and
+          # complete both bounded CLI and MCP introspection probes on the exact
+          # source SHA before any publication step can run.
           # Public gate-count mirror; tests pin this exact inventory to the
           # shared evaluator used below. Do not use a regex/count as readiness.
-          REQUIRED="lint|test \(22\)|test \(24\)|smoke|audit|coverage|version-consistency|docs|oia|protocol-conformance|package-consumer|mcpb-basic"
-          REQ_COUNT=12
+          REQUIRED="lint|test \(22\)|test \(24\)|smoke|audit|coverage|version-consistency|docs|oia|protocol-conformance|package-consumer|mcpb-basic|docker"
+          REQ_COUNT=13
           for (( attempt=1; attempt<=120; attempt++ )); do
             if ! CI_RUN_PAGES=$(gh_read api --paginate --slurp \
               "repos/${{ github.repository }}/actions/workflows/ci.yml/runs?branch=main&event=push&head_sha=$SHA&per_page=100"); then
@@ -276,6 +282,8 @@ jobs:
         run: node scripts/npm-ci-with-retry.mjs
       - run: npm run lint
       - run: npm run build
+      - name: Verify one-build npm artifact pipeline
+        run: node scripts/check-npm-package-pipeline.mjs
       - name: Test exact source without npm or contents-write tokens
         # The exact main SHA already passed the live GitHub-metadata invariant
         # in required CI. Re-running the suite here does not expose npm or
@@ -324,7 +332,7 @@ jobs:
           SSL_CERT_DIR: ""
           NODE_EXTRA_CA_CERTS: ""
           NODE_OPTIONS: ""
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
           RELEASE_JOB_DEADLINE_EPOCH: ${{ steps.deadline.outputs.epoch }}
         run: |
           set -euo pipefail
@@ -388,6 +396,9 @@ jobs:
           PINNED_RUN_ATTEMPT=""
           PINNED_ARTIFACT_ID=""
           PINNED_ARTIFACT_DIGEST=""
+          PINNED_NPM_RUN_ATTEMPT=""
+          PINNED_NPM_ARTIFACT_ID=""
+          PINNED_NPM_ARTIFACT_DIGEST=""
           RELEASE_PAGES=$(gh_read api --paginate --slurp \
             "repos/${{ github.repository }}/releases?per_page=100")
           RELEASES=$(printf '%s' "$RELEASE_PAGES" | node scripts/check-release-integrity.mjs \
@@ -426,12 +437,18 @@ jobs:
               PINNED_RUN_ATTEMPT=$(jq -r '.build_run_attempt // empty' "$RESUME_PROVENANCE")
               PINNED_ARTIFACT_ID=$(jq -r '.build_artifact_id // empty' "$RESUME_PROVENANCE")
               PINNED_ARTIFACT_DIGEST=$(jq -r '.build_artifact_digest // empty' "$RESUME_PROVENANCE")
+              PINNED_NPM_RUN_ATTEMPT=$(jq -r '.npm_build_run_attempt // empty' "$RESUME_PROVENANCE")
+              PINNED_NPM_ARTIFACT_ID=$(jq -r '.npm_build_artifact_id // empty' "$RESUME_PROVENANCE")
+              PINNED_NPM_ARTIFACT_DIGEST=$(jq -r '.npm_build_artifact_digest // empty' "$RESUME_PROVENANCE")
               if [ "$PROVENANCE_SOURCE" != "$SOURCE_SHA" ] || \
                  [ "$PROVENANCE_ARTIFACT" != "enquire-mcp-basic-$VERSION.mcpb" ] || \
                  ! [[ "$PROVENANCE_RUN_ID" =~ ^[1-9][0-9]*$ ]] || \
                  ! [[ "$PINNED_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]] || \
                  ! [[ "$PINNED_ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]] || \
-                 ! [[ "$PINNED_ARTIFACT_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+                 ! [[ "$PINNED_ARTIFACT_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || \
+                 ! [[ "$PINNED_NPM_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]] || \
+                 ! [[ "$PINNED_NPM_ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]] || \
+                 ! [[ "$PINNED_NPM_ARTIFACT_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
                 echo "::error::Existing release provenance does not identify this source/artifact"
                 exit 1
               fi
@@ -462,15 +479,22 @@ jobs:
               candidate "$SOURCE_SHA" "${PINNED_RUN_ATTEMPT:--}" \
               "${PINNED_ARTIFACT_ID:--}" "${PINNED_ARTIFACT_DIGEST:--}")
             if [ "$(printf '%s' "$CANDIDATE_RESULT" | jq -r '.state')" = "skip" ]; then continue; fi
+            NPM_CANDIDATE_RESULT=$(printf '%s' "$CANDIDATE_PAYLOAD" | node scripts/check-release-integrity.mjs \
+              npm-candidate "$SOURCE_SHA" "${PINNED_NPM_RUN_ATTEMPT:--}" \
+              "${PINNED_NPM_ARTIFACT_ID:--}" "${PINNED_NPM_ARTIFACT_DIGEST:--}")
+            if [ "$(printf '%s' "$NPM_CANDIDATE_RESULT" | jq -r '.state')" = "skip" ]; then continue; fi
             CI_RUN_ID="$CANDIDATE_RUN_ID"
             PINNED_RUN_ATTEMPT=$(printf '%s' "$CANDIDATE_RESULT" | jq -r '.runAttempt')
             PINNED_ARTIFACT_ID=$(printf '%s' "$CANDIDATE_RESULT" | jq -r '.artifactId')
             PINNED_ARTIFACT_DIGEST=$(printf '%s' "$CANDIDATE_RESULT" | jq -r '.digest')
+            PINNED_NPM_RUN_ATTEMPT=$(printf '%s' "$NPM_CANDIDATE_RESULT" | jq -r '.runAttempt')
+            PINNED_NPM_ARTIFACT_ID=$(printf '%s' "$NPM_CANDIDATE_RESULT" | jq -r '.artifactId')
+            PINNED_NPM_ARTIFACT_DIGEST=$(printf '%s' "$NPM_CANDIDATE_RESULT" | jq -r '.digest')
             break
           done < <(printf '%s' "$RUNS" | node scripts/check-release-integrity.mjs candidate-runs "$SOURCE_SHA" | \
             jq -r '.[]')
           if [ -z "$CI_RUN_ID" ]; then
-            echo "::error::No exact-SHA main push CI run has both a successful mcpb-basic job and live candidate artifact"
+            echo "::error::No exact-SHA main push CI run has successful MCPB/npm consumers and both live candidate artifacts"
             exit 1
           fi
           CANDIDATE_ZIP="$RESUME_DIR/mcpb-basic-candidate-$PINNED_RUN_ATTEMPT-$PINNED_ARTIFACT_ID.zip"
@@ -504,10 +528,45 @@ jobs:
             }
             if (expected.size !== 0) process.exit(4);
           '
+          NPM_CANDIDATE_ZIP="$RESUME_DIR/npm-package-candidate-$PINNED_NPM_RUN_ATTEMPT-$PINNED_NPM_ARTIFACT_ID.zip"
+          gh_read api -H "Accept: application/vnd.github+json" \
+            "repos/${{ github.repository }}/actions/artifacts/$PINNED_NPM_ARTIFACT_ID/zip" > "$NPM_CANDIDATE_ZIP"
+          ACTUAL_NPM_ARTIFACT_DIGEST="sha256:$(sha256sum "$NPM_CANDIDATE_ZIP" | awk '{print $1}')"
+          if [ "$ACTUAL_NPM_ARTIFACT_DIGEST" != "$PINNED_NPM_ARTIFACT_DIGEST" ]; then
+            echo "::error::Downloaded npm Actions artifact digest differs from the selected API identity"
+            exit 1
+          fi
+          NPM_CANDIDATE_ZIP_SIZE=$(/usr/bin/stat --format=%s "$NPM_CANDIDATE_ZIP")
+          if ! [[ "$NPM_CANDIDATE_ZIP_SIZE" =~ ^[1-9][0-9]*$ ]] || \
+             [ "$NPM_CANDIDATE_ZIP_SIZE" -gt 68157440 ]; then
+            echo "::error::Downloaded npm Actions artifact ZIP exceeds its bounded envelope"
+            exit 1
+          fi
+          mkdir npm-package
+          NPM_CANDIDATE_ZIP="$NPM_CANDIDATE_ZIP" node --input-type=module -e '
+            import { readFileSync, writeFileSync } from "node:fs";
+            import { unzipSync } from "fflate";
+            import { portableArchivePath } from "./scripts/lib/mcpb-safety.mjs";
+            const expected = new Set(["enquire-mcp-npm.tgz", "npm-package-manifest.json"]);
+            const entries = unzipSync(readFileSync(process.env.NPM_CANDIDATE_ZIP));
+            if (Object.keys(entries).length !== expected.size) process.exit(2);
+            for (const [rawName, data] of Object.entries(entries)) {
+              const name = portableArchivePath(rawName);
+              if (name !== rawName || !expected.delete(name)) process.exit(3);
+              writeFileSync(`npm-package/${name}`, data, { flag: "wx" });
+            }
+            if (expected.size !== 0) process.exit(4);
+          '
+          node scripts/npm-package-artifact.mjs verify \
+            npm-package/npm-package-manifest.json npm-package/enquire-mcp-npm.tgz \
+            "$SOURCE_SHA" "$CI_RUN_ID" "$PINNED_NPM_RUN_ATTEMPT"
           echo "build_run_id=$CI_RUN_ID" >> "$GITHUB_OUTPUT"
           echo "build_run_attempt=$PINNED_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
           echo "artifact_id=$PINNED_ARTIFACT_ID" >> "$GITHUB_OUTPUT"
           echo "artifact_digest=$PINNED_ARTIFACT_DIGEST" >> "$GITHUB_OUTPUT"
+          echo "npm_build_run_attempt=$PINNED_NPM_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
+          echo "npm_artifact_id=$PINNED_NPM_ARTIFACT_ID" >> "$GITHUB_OUTPUT"
+          echo "npm_artifact_digest=$PINNED_NPM_ARTIFACT_DIGEST" >> "$GITHUB_OUTPUT"
       - name: Re-verify exact CI-gated Basic MCPB release asset
         run: npm run mcpb:verify
       - name: Resolve npm dist-tag from version
@@ -537,6 +596,9 @@ jobs:
           BUILD_RUN_ATTEMPT: ${{ steps.mcpb_candidate.outputs.build_run_attempt }}
           BUILD_ARTIFACT_ID: ${{ steps.mcpb_candidate.outputs.artifact_id }}
           BUILD_ARTIFACT_DIGEST: ${{ steps.mcpb_candidate.outputs.artifact_digest }}
+          NPM_BUILD_RUN_ATTEMPT: ${{ steps.mcpb_candidate.outputs.npm_build_run_attempt }}
+          NPM_BUILD_ARTIFACT_ID: ${{ steps.mcpb_candidate.outputs.npm_artifact_id }}
+          NPM_BUILD_ARTIFACT_DIGEST: ${{ steps.mcpb_candidate.outputs.npm_artifact_digest }}
         run: |
           set -euo pipefail
           VERSION=$(node -p "require('./package.json').version")
@@ -572,6 +634,9 @@ jobs:
               build_run_attempt: Number(process.env.BUILD_RUN_ATTEMPT),
               build_artifact_id: process.env.BUILD_ARTIFACT_ID,
               build_artifact_digest: process.env.BUILD_ARTIFACT_DIGEST,
+              npm_build_run_attempt: Number(process.env.NPM_BUILD_RUN_ATTEMPT),
+              npm_build_artifact_id: process.env.NPM_BUILD_ARTIFACT_ID,
+              npm_build_artifact_digest: process.env.NPM_BUILD_ARTIFACT_DIGEST,
               release: `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/releases/tag/${process.env.TAG}`,
               mcpb_spec_commit: "70fe3b34cd6dff1b3bba046638edc72a6467a4fb",
               packer: "@anthropic-ai/mcpb@2.1.2",
@@ -644,7 +709,7 @@ jobs:
           SSL_CERT_DIR: ""
           NODE_EXTRA_CA_CERTS: ""
           NODE_OPTIONS: ""
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
           RELEASE_JOB_DEADLINE_EPOCH: ${{ steps.deadline.outputs.epoch }}
           MCPB_RELEASE_BODY_PATH: ${{ steps.release_body.outputs.path }}
           MCPB_RELEASE_BODY_SHA256: ${{ steps.release_body.outputs.sha256 }}
@@ -974,57 +1039,271 @@ jobs:
               exit 1
             fi
           done
-      - name: Publish with provenance or verify an exact prior publication
-        id: npm_publication
+      - name: Assemble exact verified release handoff
+        id: handoff
         shell: /bin/bash --noprofile --norc -p -e -o pipefail {0}
-        run: |
+        env:
+          CHANNEL: ${{ steps.dist_tag.outputs.tag }}
+          RELEASE_BODY: ${{ steps.release_body.outputs.path }}
+        run: |-
+          set -euo pipefail
+          HANDOFF_ROOT="$RUNNER_TEMP/release-handoff"
+          if [ -e "$HANDOFF_ROOT" ]; then echo "::error::Release handoff root already exists"; exit 1; fi
+          mkdir -m 0700 -p "$HANDOFF_ROOT/artifacts" "$HANDOFF_ROOT/npm-package" \
+            "$HANDOFF_ROOT/scripts/lib" "$HANDOFF_ROOT/.github/scripts"
+          VERSION=$(node -p "require('./package.json').version")
+          SOURCE_SHA=$(git rev-parse HEAD)
+          TAG="v$VERSION"
+          cp -- package.json server.json "$RELEASE_BODY" "$HANDOFF_ROOT/"
+          mv -- "$HANDOFF_ROOT/$(basename "$RELEASE_BODY")" "$HANDOFF_ROOT/release-notes.md"
+          cp -- npm-package/enquire-mcp-npm.tgz npm-package/npm-package-manifest.json "$HANDOFF_ROOT/npm-package/"
+          cp -- artifacts/enquire-mcp-basic-* "$HANDOFF_ROOT/artifacts/"
+          cp -- scripts/check-release-integrity.mjs scripts/npm-package-artifact.mjs "$HANDOFF_ROOT/scripts/"
+          cp -- scripts/lib/entrypoint.mjs "$HANDOFF_ROOT/scripts/lib/"
+          cp -- .github/scripts/release-mcpb-github-transaction.sh "$HANDOFF_ROOT/.github/scripts/"
+          jq -n --arg version "$VERSION" --arg tag "$TAG" --arg source_sha "$SOURCE_SHA" --arg channel "$CHANNEL" \
+            '{version:$version,tag:$tag,source_sha:$source_sha,channel:$channel}' > "$HANDOFF_ROOT/handoff.json"
+          if find "$HANDOFF_ROOT" -type l -o ! -type d ! -type f | grep -q .; then
+            echo "::error::Release handoff contains a symlink or non-regular entry"
+            exit 1
+          fi
+          cd "$HANDOFF_ROOT"
+          find . -type f ! -name release-files.sha256 -print0 | LC_ALL=C sort -z | \
+            xargs -0 sha256sum > release-files.sha256
+          sha256sum -c release-files.sha256
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "source_sha=$SOURCE_SHA" >> "$GITHUB_OUTPUT"
+          echo "channel=$CHANNEL" >> "$GITHUB_OUTPUT"
+      - name: Upload exact verified release handoff
+        id: handoff_upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: release-handoff-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/release-handoff
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 2
+          compression-level: 0
+  npm_publish:
+    name: Publish npm with protected Trusted Publishing OIDC
+    needs:
+      - verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+    environment:
+      name: npm-publish
+    outputs:
+      provenance_verified: ${{ steps.npm_provenance.outputs.verified }}
+    steps:
+      - name: Download and verify exact release handoff
+        shell: /bin/bash --noprofile --norc -p -e -o pipefail {0}
+        env:
+          BASH_ENV: ''
+          ENV: ''
+          SHELLOPTS: ''
+          PS4: ''
+          GH_HOST: github.com
+          GH_ENTERPRISE_TOKEN: ''
+          GITHUB_ENTERPRISE_TOKEN: ''
+          GH_TOKEN: ${{ github.token }}
+          HANDOFF_ARTIFACT_ID: ${{ needs.verify.outputs.handoff_artifact_id }}
+          EXPECTED_HANDOFF_DIGEST: ${{ needs.verify.outputs.handoff_digest }}
+          EXPECTED_VERSION: ${{ needs.verify.outputs.version }}
+          EXPECTED_TAG: ${{ needs.verify.outputs.tag }}
+          EXPECTED_SOURCE_SHA: ${{ needs.verify.outputs.source_sha }}
+          EXPECTED_CHANNEL: ${{ needs.verify.outputs.channel }}
+        run: |-
           set -euo pipefail
           builtin unset -v https_proxy http_proxy all_proxy
+          builtin umask 077
+          GH_BIN=$(type -P gh)
+          TIMEOUT_BIN=$(type -P timeout)
+          HANDOFF_ZIP="$RUNNER_TEMP/release-handoff.zip"
+          HANDOFF_ROOT="$RUNNER_TEMP/release-handoff"
+          if [ -e "$HANDOFF_ZIP" ] || [ -e "$HANDOFF_ROOT" ]; then
+            echo "::error::Release handoff target already exists"
+            exit 1
+          fi
+          "$TIMEOUT_BIN" --kill-after=10s 120s "$GH_BIN" api -H "Accept: application/vnd.github+json" \
+            "repos/$GITHUB_REPOSITORY/actions/artifacts/$HANDOFF_ARTIFACT_ID/zip" > "$HANDOFF_ZIP"
+          if [[ ! "$EXPECTED_HANDOFF_DIGEST" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "::error::Verify-job handoff digest is not the upload-artifact 64-hex wire format"
+            exit 1
+          fi
+          ACTUAL_HANDOFF_DIGEST="$(sha256sum "$HANDOFF_ZIP" | awk '{print $1}')"
+          if [ "$ACTUAL_HANDOFF_DIGEST" != "$EXPECTED_HANDOFF_DIGEST" ]; then
+            echo "::error::Downloaded handoff digest differs from verify-job identity"
+            exit 1
+          fi
+          python3 - "$HANDOFF_ZIP" "$HANDOFF_ROOT" "$EXPECTED_VERSION" <<'PY'
+          import os
+          import stat
+          import sys
+          import zipfile
+          from pathlib import PurePosixPath
+          archive, root, version = sys.argv[1:]
+          expected = {
+              "handoff.json",
+              "release-files.sha256",
+              "package.json",
+              "server.json",
+              "release-notes.md",
+              "npm-package/enquire-mcp-npm.tgz",
+              "npm-package/npm-package-manifest.json",
+              "scripts/check-release-integrity.mjs",
+              "scripts/npm-package-artifact.mjs",
+              "scripts/lib/entrypoint.mjs",
+              ".github/scripts/release-mcpb-github-transaction.sh",
+              f"artifacts/enquire-mcp-basic-{version}.mcpb",
+              f"artifacts/enquire-mcp-basic-{version}.mcpb.sha256",
+              f"artifacts/enquire-mcp-basic-{version}.mcpb.provenance.json",
+              f"artifacts/enquire-mcp-basic-{version}.content-manifest.json",
+              f"artifacts/enquire-mcp-basic-{version}.sbom.cdx.json",
+              f"artifacts/enquire-mcp-basic-{version}.third-party-licenses.json",
+          }
+          with zipfile.ZipFile(archive) as source:
+              infos = source.infolist()
+              names = [info.filename for info in infos]
+              if len(names) != len(set(names)) or set(names) != expected:
+                  raise SystemExit("unexpected release handoff inventory")
+              os.mkdir(root, 0o700)
+              for info in infos:
+                  path = PurePosixPath(info.filename)
+                  mode = info.external_attr >> 16
+                  if path.is_absolute() or ".." in path.parts or "\\" in info.filename:
+                      raise SystemExit("unsafe release handoff path")
+                  if stat.S_IFMT(mode) not in (0, stat.S_IFREG):
+                      raise SystemExit("non-regular release handoff entry")
+                  target = os.path.join(root, *path.parts)
+                  os.makedirs(os.path.dirname(target), mode=0o700, exist_ok=True)
+                  with open(target, "xb") as output:
+                      output.write(source.read(info))
+          PY
+          cd "$HANDOFF_ROOT"
+          sha256sum -c release-files.sha256
+          jq -e --arg version "$EXPECTED_VERSION" --arg tag "$EXPECTED_TAG" \
+            --arg source "$EXPECTED_SOURCE_SHA" --arg channel "$EXPECTED_CHANNEL" \
+            'type == "object" and (keys | sort) ==
+             ["channel","source_sha","tag","version"] and
+             .version == $version and .tag == $tag and .source_sha == $source and .channel == $channel' handoff.json >/dev/null
+      - name: Assert reviewed privileged code identity
+        shell: /bin/bash --noprofile --norc -p -e -o pipefail {0}
+        working-directory: ${{ runner.temp }}/release-handoff
+        run: |-
+          set -euo pipefail
+          {
+            printf '%s  %s\n' '42af7c5c8ffc3519dec9c33487d67bfdef52ebf8d7d417baeb8cdea07ad21879' 'scripts/check-release-integrity.mjs'
+            printf '%s  %s\n' '673b0c2ad935b052f348c7a63e8c1b464dd944520ebcfc62a238b5b4f29df0a8' 'scripts/npm-package-artifact.mjs'
+            printf '%s  %s\n' '31e3b1af3bf48c88149b20cd71fa948e492e8e0db45551ae7271a01c36d37b1b' 'scripts/lib/entrypoint.mjs'
+          } | sha256sum -c -
+      - name: Set up Node 24 for npm Trusted Publishing
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24
+      - name: Publish exact npm tarball with Trusted Publishing or verify rerun
+        id: npm_publication
+        shell: /bin/bash --noprofile --norc -p -e -o pipefail {0}
+        run: >
+          set -euo pipefail
+
+          builtin unset -v https_proxy http_proxy all_proxy
+
           npm_config_registry="$NPM_CONFIG_REGISTRY"
+
           npm_config_proxy="$NPM_CONFIG_PROXY"
+
           npm_config_https_proxy="$NPM_CONFIG_HTTPS_PROXY"
+
           npm_config_cafile="$NPM_CONFIG_CAFILE"
+
           npm_config_ca="$NPM_CONFIG_CA"
+
           npm_config_strict_ssl="$NPM_CONFIG_STRICT_SSL"
+
           npm_config_globalconfig="$NPM_CONFIG_GLOBALCONFIG"
+
           npm_config_fetch_timeout="$NPM_CONFIG_FETCH_TIMEOUT"
+
           npm_config_fetch_retries="$NPM_CONFIG_FETCH_RETRIES"
+
           export npm_config_registry npm_config_proxy npm_config_https_proxy npm_config_cafile npm_config_ca
+
           export npm_config_strict_ssl npm_config_globalconfig npm_config_fetch_timeout npm_config_fetch_retries
+
           GH_CONFIG_DIR=$(/usr/bin/mktemp -d "$RUNNER_TEMP/enquire-gh-config.XXXXXX")
+
           export GH_CONFIG_DIR
+
           NPM_CONFIG_USERCONFIG=$(/usr/bin/mktemp "$RUNNER_TEMP/enquire-npmrc.XXXXXX")
+
           npm_config_userconfig="$NPM_CONFIG_USERCONFIG"
+
           export NPM_CONFIG_USERCONFIG npm_config_userconfig
+
           chmod 600 "$NPM_CONFIG_USERCONFIG"
-          printf '%s\n' 'registry=https://registry.npmjs.org/' \
-            '//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}' > "$NPM_CONFIG_USERCONFIG"
+
+          printf '%s\n' 'registry=https://registry.npmjs.org/' > "$NPM_CONFIG_USERCONFIG"
+
           NPM_ENV_UNSETS=()
+
           while IFS='=' read -r NPM_ENV_KEY _; do
             NPM_ENV_KEY_CANONICAL=${NPM_ENV_KEY,,}
             NPM_ENV_KEY_CANONICAL=${NPM_ENV_KEY_CANONICAL//-/_}
             case "$NPM_ENV_KEY_CANONICAL" in
-              npm_config_registry|npm_config_@oomkapwn:registry|npm_config_proxy|npm_config_https_proxy|npm_config_ca|npm_config_cafile|npm_config_strict_ssl|npm_config_fetch_retries|npm_config_fetch_timeout|npm_config_userconfig|npm_config_globalconfig)
+              npm_config_registry|npm_config_@oomkapwn:registry|npm_config_proxy|npm_config_https_proxy|npm_config_ca|npm_config_cafile|npm_config_strict_ssl|npm_config_fetch_retries|npm_config_fetch_timeout|npm_config_userconfig|npm_config_globalconfig|npm_config_provenance|npm_config_provenance_file)
                 NPM_ENV_UNSETS+=("--unset=$NPM_ENV_KEY")
                 ;;
             esac
           done < <(/usr/bin/env)
+
           PACKAGE_NAME="@oomkapwn/enquire-mcp"
+
           PACKAGE_URL="https://registry.npmjs.org/%40oomkapwn%2Fenquire-mcp"
-          VERSION=$(node -p "require('./package.json').version")
-          SOURCE_SHA=$(git rev-parse HEAD)
+
+          VERSION="$EXPECTED_VERSION"
+
+          SOURCE_SHA="$EXPECTED_SOURCE_SHA"
+
           TAG="v$VERSION"
-          CHANNEL="${{ steps.dist_tag.outputs.tag }}"
+
+          CHANNEL="$EXPECTED_CHANNEL"
+
           EXPECTED_CHANNEL_VERSION="$VERSION"
+
           EXPECTED_POST_ACTION="reuse"
+
           NPM_PUBLISH_ATTEMPTED=false
+
           NPM_PUBLISH_EXIT=0
+
           CURL_BIN=$(type -P curl)
+
           GH_BIN=$(type -P gh)
+
           NODE_BIN=$(type -P node)
+
           NPM_BIN=$(type -P npm)
-          TAR_BIN=$(type -P tar)
+
           TIMEOUT_BIN=$(type -P timeout)
+
+          NODE_VERSION=$("$NODE_BIN" -p "process.versions.node")
+
+          NPM_VERSION=$("$NPM_BIN" --version)
+
+          NPM_MINIMUM_VERSION="11.5.1"
+
+          "$NODE_BIN" -e 'const
+          ok=(a,b)=>a.split(".").map(Number).some((n,i,x)=>n>b[i]&&!x.slice(0,i).some((v,j)=>v!==b[j]))||a===b.join(".");
+          if(!ok(process.argv[1],[22,14,0]))process.exit(1)' "$NODE_VERSION"
+
+          "$NODE_BIN" -e 'const a=process.argv[1].split(".").map(Number),b=process.argv[2].split(".").map(Number); for(let
+          i=0;i<3;i++){if(a[i]>b[i])process.exit(0);if(a[i]<b[i])process.exit(1)}' "$NPM_VERSION" "$NPM_MINIMUM_VERSION"
+
           gh_read() {
             if [ "${1:-}" != "api" ]; then
               echo "::error::gh_read accepts read-only gh api calls" >&2
@@ -1057,11 +1336,14 @@ jobs:
             if [ "$limit" -gt $((remaining - 10)) ]; then limit=$((remaining - 10)); fi
             "$TIMEOUT_BIN" --kill-after=5s "${limit}s" "$GH_BIN" "$@"
           }
+
           PACKUMENT=$(mktemp "$RUNNER_TEMP/enquire-npm-packument.XXXXXX")
+
           if [ ! -f "$PACKUMENT" ] || [ -L "$PACKUMENT" ]; then
             echo "::error::npm packument scratch file is missing, non-regular, or a symlink"
             exit 1
           fi
+
           registry_read() {
             local status request_exit
             set +e
@@ -1079,6 +1361,7 @@ jobs:
             fi
             return 0
           }
+
           npm_snapshot() {
             jq -ce --arg package "$PACKAGE_NAME" --arg version "$VERSION" --arg channel "$CHANNEL" '
               if type != "object" or .name != $package or (.versions | type) != "object" or
@@ -1109,6 +1392,7 @@ jobs:
               end
             ' "$PACKUMENT"
           }
+
           tarball_sri() {
             "$NODE_BIN" -e '
               const { createHash } = require("node:crypto");
@@ -1116,6 +1400,7 @@ jobs:
               process.stdout.write(`sha512-${createHash("sha512").update(readFileSync(process.argv[1])).digest("base64")}`);
             ' "$1"
           }
+
           require_job_reserve() {
             local required="$1"
             local label="$2"
@@ -1134,6 +1419,7 @@ jobs:
               exit 1
             fi
           }
+
           assert_remote_tag_identity() {
             if ! TAG_REF_JSON=$(gh_read api \
               "repos/${{ github.repository }}/git/ref/tags/$TAG"); then
@@ -1169,60 +1455,36 @@ jobs:
               exit 1
             fi
           }
-          PACK_JSON=$("$TIMEOUT_BIN" --kill-after=10s 600s "$NPM_BIN" pack --json --ignore-scripts \
-            --pack-destination "$RUNNER_TEMP")
-          if [ "$(printf '%s' "$PACK_JSON" | jq 'if type == "array" then length else -1 end')" -ne 1 ]; then
-            echo "::error::npm pack did not produce exactly one canonical tarball"
+
+          PACKAGE_TARBALL="$PWD/npm-package/enquire-mcp-npm.tgz"
+
+          PACKAGE_MANIFEST="npm-package/npm-package-manifest.json"
+
+          if [ ! -f "$PACKAGE_TARBALL" ] || [ -L "$PACKAGE_TARBALL" ] || \
+             [ ! -f "$PACKAGE_MANIFEST" ] || [ -L "$PACKAGE_MANIFEST" ]; then
+            echo "::error::downloaded canonical npm tarball or manifest is missing, non-regular, or a symlink"
             exit 1
           fi
-          PACK_NAME=$(printf '%s' "$PACK_JSON" | jq -er '.[0].name | select(type == "string" and length > 0)')
-          PACK_VERSION=$(printf '%s' "$PACK_JSON" | jq -er '.[0].version | select(type == "string" and length > 0)')
-          if [ "$PACK_NAME" != "$PACKAGE_NAME" ] || [ "$PACK_VERSION" != "$VERSION" ]; then
-            echo "::error::npm pack returned a divergent package name or version"
-            exit 1
-          fi
-          PACK_BASENAME=$(printf '%s' "$PACK_JSON" | jq -er \
-            '.[0].filename | select(type == "string" and length > 0)')
-          if [ "$(basename "$PACK_BASENAME")" != "$PACK_BASENAME" ]; then
-            echo "::error::npm pack returned a non-basename artifact path"
-            exit 1
-          fi
-          PACKAGE_TARBALL="$RUNNER_TEMP/$PACK_BASENAME"
-          if [ ! -f "$PACKAGE_TARBALL" ] || [ -L "$PACKAGE_TARBALL" ]; then
-            echo "::error::npm pack tarball is missing, non-regular, or a symlink"
-            exit 1
-          fi
-          PACK_MANIFEST_COUNT=$("$TIMEOUT_BIN" --kill-after=5s 30s "$TAR_BIN" -tzf "$PACKAGE_TARBALL" | awk \
-            '$0 == "package/package.json" { count++ } END { print count+0 }')
-          if [ "$PACK_MANIFEST_COUNT" -ne 1 ]; then
-            echo "::error::canonical npm tarball must contain exactly one package/package.json"
-            exit 1
-          fi
-          PACK_MANIFEST=$("$TIMEOUT_BIN" --kill-after=5s 30s "$TAR_BIN" -xOf "$PACKAGE_TARBALL" \
-            package/package.json)
-          PACKED_NAME=$(printf '%s' "$PACK_MANIFEST" | jq -er '.name | select(type == "string" and length > 0)')
-          PACKED_VERSION=$(printf '%s' "$PACK_MANIFEST" | jq -er '.version | select(type == "string" and length > 0)')
-          if [ "$PACKED_NAME" != "$PACKAGE_NAME" ] || [ "$PACKED_VERSION" != "$VERSION" ]; then
-            echo "::error::canonical npm tarball embeds a divergent package name or version"
-            exit 1
-          fi
-          REPORTED_INTEGRITY=$(printf '%s' "$PACK_JSON" | jq -er \
-            '.[0].integrity | select(type == "string" and test("^sha512-[A-Za-z0-9+/]{86}==$"))')
-          EXPECTED_INTEGRITY=$(tarball_sri "$PACKAGE_TARBALL")
-          if [ "$REPORTED_INTEGRITY" != "$EXPECTED_INTEGRITY" ]; then
-            echo "::error::npm pack metadata integrity differs from the canonical tarball bytes"
-            exit 1
-          fi
+
+          ARTIFACT_RECEIPT=$("$NODE_BIN" scripts/npm-package-artifact.mjs verify \
+            "$PACKAGE_MANIFEST" "$PACKAGE_TARBALL" "$SOURCE_SHA" \
+            "$NPM_ARTIFACT_RUN_ID" "$NPM_ARTIFACT_RUN_ATTEMPT")
+          EXPECTED_INTEGRITY=$(printf '%s' "$ARTIFACT_RECEIPT" | jq -er \
+            '.integrity | select(type == "string" and test("^sha512-[A-Za-z0-9+/]{86}==$"))')
 
           if ! registry_read; then
             echo "::error::npm preflight requires one authoritative, bounded full-packument HTTP 200"
             exit 1
           fi
+
           NPM_STATE=$(npm_snapshot)
+
           NPM_RESULT=$(printf '%s' "$NPM_STATE" | "$NODE_BIN" scripts/check-release-integrity.mjs \
             npm-state "$SOURCE_SHA" "$EXPECTED_INTEGRITY" "$VERSION" "$CHANNEL")
           NPM_ACTION=$(printf '%s' "$NPM_RESULT" | jq -er '.action')
+
           PUBLISHED_CHANNEL_VERSION=$(printf '%s' "$NPM_STATE" | jq -er '.channelVersion')
+
           if [ "$NPM_ACTION" = "reuse_superseded" ]; then
             EXPECTED_CHANNEL_VERSION="$PUBLISHED_CHANNEL_VERSION"
             EXPECTED_POST_ACTION="reuse_superseded"
@@ -1266,10 +1528,12 @@ jobs:
               set -e
               cd "$NPM_PUBLISH_CWD" || exit 125
               /usr/bin/env "${NPM_ENV_UNSETS[@]}" \
+                --unset=NPM_ID_TOKEN --unset=SIGSTORE_ID_TOKEN --unset=GITLAB_CI \
                 NPM_CONFIG_REGISTRY=https://registry.npmjs.org/ \
                 NPM_CONFIG_PROXY= NPM_CONFIG_HTTPS_PROXY= NPM_CONFIG_CA= NPM_CONFIG_CAFILE= \
                 NPM_CONFIG_STRICT_SSL=true NPM_CONFIG_FETCH_RETRIES=0 NPM_CONFIG_FETCH_TIMEOUT=60000 \
                 NPM_CONFIG_USERCONFIG="$NPM_CONFIG_USERCONFIG" NPM_CONFIG_GLOBALCONFIG=/dev/null \
+                NPM_CONFIG_PROVENANCE=true \
                 "$TIMEOUT_BIN" --kill-after=10s 600s "$NPM_BIN" publish "$PACKAGE_TARBALL" \
                 --userconfig="$NPM_CONFIG_USERCONFIG" --globalconfig=/dev/null \
                 --registry=https://registry.npmjs.org/ \
@@ -1284,9 +1548,13 @@ jobs:
             exit 1
           fi
 
+
           CONFIRMED_CHANNEL_VERSION=""
+
           CONFIRMED_INTEGRITY=""
+
           NPM_POST_ACTION=""
+
           for (( attempt=1; attempt<=12; attempt++ )); do
             if registry_read && NPM_POST_STATE=$(npm_snapshot); then
               if [ "$(printf '%s' "$NPM_POST_STATE" | jq -r '.exists')" = "true" ]; then
@@ -1312,22 +1580,28 @@ jobs:
               sleep 10
             fi
           done
+
           if [ "$NPM_POST_ACTION" != "$EXPECTED_POST_ACTION" ]; then
             echo "::error::npm exact SRI/channel state did not converge after 12 bounded reads; publish exit=$NPM_PUBLISH_EXIT"
             exit 1
           fi
+
           if [ "$CONFIRMED_INTEGRITY" != "$EXPECTED_INTEGRITY" ]; then
             echo "::error::npm did not expose the canonical tarball integrity; publish exit=$NPM_PUBLISH_EXIT"
             exit 1
           fi
+
           if [ "$CONFIRMED_CHANNEL_VERSION" != "$EXPECTED_CHANNEL_VERSION" ]; then
             echo "::error::npm dist-tag $CHANNEL does not resolve to expected $EXPECTED_CHANNEL_VERSION; publish exit=$NPM_PUBLISH_EXIT"
             exit 1
           fi
+
           assert_remote_tag_identity
+
           if [ "$NPM_PUBLISH_ATTEMPTED" = "true" ] && [ "$NPM_PUBLISH_EXIT" -ne 0 ]; then
             echo "::warning::npm publish exited $NPM_PUBLISH_EXIT, but exact tarball SRI, channel, and tag postconditions prove publication completed"
           fi
+
           {
             printf 'version=%s\n' "$VERSION"
             printf 'source_sha=%s\n' "$SOURCE_SHA"
@@ -1339,33 +1613,37 @@ jobs:
             printf 'run_attempt=%s\n' "$PROVENANCE_RUN_ATTEMPT"
           } >> "$GITHUB_OUTPUT"
         env:
-          BASH_ENV: ""
-          ENV: ""
-          SHELLOPTS: ""
-          PS4: ""
-          LD_PRELOAD: ""
-          LD_LIBRARY_PATH: ""
-          LD_AUDIT: ""
-          LD_DEBUG_OUTPUT: ""
-          LD_PROFILE: ""
-          GLIBC_TUNABLES: ""
-          TAR_OPTIONS: ""
-          OPENSSL_CONF: ""
-          NODE_DEBUG: ""
-          GODEBUG: ""
-          NODE_TLS_REJECT_UNAUTHORIZED: "1"
+          BASH_ENV: ''
+          ENV: ''
+          SHELLOPTS: ''
+          PS4: ''
+          LD_PRELOAD: ''
+          LD_LIBRARY_PATH: ''
+          LD_AUDIT: ''
+          LD_DEBUG_OUTPUT: ''
+          LD_PROFILE: ''
+          GLIBC_TUNABLES: ''
+          TAR_OPTIONS: ''
+          OPENSSL_CONF: ''
+          NODE_DEBUG: ''
+          GODEBUG: ''
+          NODE_TLS_REJECT_UNAUTHORIZED: '1'
           GH_HOST: github.com
-          GH_HTTP_UNIX_SOCKET: ""
-          HTTPS_PROXY: ""
-          HTTP_PROXY: ""
-          ALL_PROXY: ""
-          CURL_CA_BUNDLE: ""
-          SSL_CERT_FILE: ""
-          SSL_CERT_DIR: ""
-          NODE_EXTRA_CA_CERTS: ""
-          NODE_OPTIONS: ""
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          GH_HTTP_UNIX_SOCKET: ''
+          HTTPS_PROXY: ''
+          HTTP_PROXY: ''
+          ALL_PROXY: ''
+          CURL_CA_BUNDLE: ''
+          SSL_CERT_FILE: ''
+          SSL_CERT_DIR: ''
+          NODE_EXTRA_CA_CERTS: ''
+          NODE_OPTIONS: ''
+          NPM_ID_TOKEN: ''
+          SIGSTORE_ID_TOKEN: ''
+          GITLAB_CI: ''
+          GH_TOKEN: ${{ github.token }}
+          NPM_ARTIFACT_RUN_ID: ${{ needs.verify.outputs.build_run_id }}
+          NPM_ARTIFACT_RUN_ATTEMPT: ${{ needs.verify.outputs.npm_build_run_attempt }}
           PROVENANCE_EVENT_NAME: ${{ github.event_name }}
           PROVENANCE_REF: ${{ github.ref }}
           PROVENANCE_REF_NAME: ${{ github.ref_name }}
@@ -1380,42 +1658,46 @@ jobs:
           PROVENANCE_SHA: ${{ github.sha }}
           PROVENANCE_WORKFLOW_REF: ${{ github.workflow_ref }}
           PROVENANCE_WORKFLOW_SHA: ${{ github.workflow_sha }}
-          RELEASE_JOB_DEADLINE_EPOCH: ${{ steps.deadline.outputs.epoch }}
-          NPM_CONFIG_REGISTRY: "https://registry.npmjs.org/"
-          NPM_CONFIG_PROXY: ""
-          NPM_CONFIG_HTTPS_PROXY: ""
-          NPM_CONFIG_CAFILE: ""
-          NPM_CONFIG_CA: ""
-          NPM_CONFIG_STRICT_SSL: "true"
-          NPM_CONFIG_GLOBALCONFIG: "/dev/null"
-          NPM_CONFIG_FETCH_TIMEOUT: "60000"
-          NPM_CONFIG_FETCH_RETRIES: "0"
+          RELEASE_JOB_DEADLINE_EPOCH: ${{ needs.verify.outputs.deadline_epoch }}
+          NPM_CONFIG_REGISTRY: https://registry.npmjs.org/
+          NPM_CONFIG_PROXY: ''
+          NPM_CONFIG_HTTPS_PROXY: ''
+          NPM_CONFIG_CAFILE: ''
+          NPM_CONFIG_CA: ''
+          NPM_CONFIG_STRICT_SSL: 'true'
+          NPM_CONFIG_GLOBALCONFIG: /dev/null
+          NPM_CONFIG_FETCH_TIMEOUT: '60000'
+          NPM_CONFIG_FETCH_RETRIES: '0'
+          EXPECTED_VERSION: ${{ needs.verify.outputs.version }}
+          EXPECTED_SOURCE_SHA: ${{ needs.verify.outputs.source_sha }}
+          EXPECTED_CHANNEL: ${{ needs.verify.outputs.channel }}
+        working-directory: ${{ runner.temp }}/release-handoff
       - name: Verify exact npm provenance without credentials
         id: npm_provenance
         shell: /bin/bash --noprofile --norc -p -e -o pipefail {0}
         env:
-          BASH_ENV: ""
-          ENV: ""
-          SHELLOPTS: ""
-          PS4: ""
-          LD_PRELOAD: ""
-          LD_LIBRARY_PATH: ""
-          LD_AUDIT: ""
-          LD_DEBUG_OUTPUT: ""
-          LD_PROFILE: ""
-          GLIBC_TUNABLES: ""
-          TAR_OPTIONS: ""
-          OPENSSL_CONF: ""
-          NODE_DEBUG: ""
-          GODEBUG: ""
-          NODE_OPTIONS: ""
-          GH_TOKEN: ""
-          GITHUB_TOKEN: ""
-          NODE_AUTH_TOKEN: ""
-          NPM_TOKEN: ""
-          ACTIONS_ID_TOKEN_REQUEST_URL: ""
-          ACTIONS_ID_TOKEN_REQUEST_TOKEN: ""
-          RELEASE_JOB_DEADLINE_EPOCH: ${{ steps.deadline.outputs.epoch }}
+          BASH_ENV: ''
+          ENV: ''
+          SHELLOPTS: ''
+          PS4: ''
+          LD_PRELOAD: ''
+          LD_LIBRARY_PATH: ''
+          LD_AUDIT: ''
+          LD_DEBUG_OUTPUT: ''
+          LD_PROFILE: ''
+          GLIBC_TUNABLES: ''
+          TAR_OPTIONS: ''
+          OPENSSL_CONF: ''
+          NODE_DEBUG: ''
+          GODEBUG: ''
+          NODE_OPTIONS: ''
+          GH_TOKEN: ''
+          GITHUB_TOKEN: ''
+          NODE_AUTH_TOKEN: ''
+          NPM_TOKEN: ''
+          ACTIONS_ID_TOKEN_REQUEST_URL: ''
+          ACTIONS_ID_TOKEN_REQUEST_TOKEN: ''
+          RELEASE_JOB_DEADLINE_EPOCH: ${{ needs.verify.outputs.deadline_epoch }}
           EXPECTED_VERSION: ${{ steps.npm_publication.outputs.version }}
           EXPECTED_SOURCE_SHA: ${{ steps.npm_publication.outputs.source_sha }}
           EXPECTED_TAG: ${{ steps.npm_publication.outputs.tag }}
@@ -1423,10 +1705,10 @@ jobs:
           PUBLISH_ATTEMPTED: ${{ steps.npm_publication.outputs.publish_attempted }}
           CURRENT_RUN_ID: ${{ github.run_id }}
           CURRENT_RUN_ATTEMPT: ${{ github.run_attempt }}
-          NPM_CLI_VERSION: "11.18.0"
-          NPM_CLI_URL: "https://registry.npmjs.org/npm/-/npm-11.18.0.tgz"
-          NPM_CLI_SRI: "sha512-T67M4L5wNm0cZ7EBLErcEkY1SmzEW/WJ+SADBzsFUY1UdAPfFHXFQtZ6SEXiK0+vzXysCvAsepbMaBTwnrAD+w=="
-          NPM_CLI_SIZE: "2997746"
+          NPM_CLI_VERSION: 11.18.0
+          NPM_CLI_URL: https://registry.npmjs.org/npm/-/npm-11.18.0.tgz
+          NPM_CLI_SRI: sha512-T67M4L5wNm0cZ7EBLErcEkY1SmzEW/WJ+SADBzsFUY1UdAPfFHXFQtZ6SEXiK0+vzXysCvAsepbMaBTwnrAD+w==
+          NPM_CLI_SIZE: '2997746'
         run: |
           set -euo pipefail
           builtin unset -v GH_TOKEN GITHUB_TOKEN NODE_AUTH_TOKEN NPM_TOKEN
@@ -1598,7 +1880,7 @@ jobs:
 
           printf '%s\n' '{"name":"enquire-provenance-verifier","version":"0.0.0","private":true}' \
             > "$CONSUMER_ROOT/package.json"
-          CHECKER="$GITHUB_WORKSPACE/scripts/check-release-integrity.mjs"
+          CHECKER="scripts/check-release-integrity.mjs"
           if [ ! -f "$CHECKER" ] || [ -L "$CHECKER" ]; then
             echo "::error::npm provenance evaluator is missing, non-regular, or a symlink"
             exit 1
@@ -1661,49 +1943,158 @@ jobs:
             printf 'run_id=%s\n' "$ATTESTATION_RUN_ID"
             printf 'run_attempt=%s\n' "$ATTESTATION_RUN_ATTEMPT"
           } >> "$GITHUB_OUTPUT"
-      # v3.7.14 F5 — automate the GitHub Release (M13 from round-15 audit).
-      # Pre-3.7.14 the README claimed "npm + GitHub release per tag" but
-      # gh release create was a manual post-release step (CONTRIBUTING.md:87).
-      # Stable releases (latest dist-tag) get marked as Latest; prereleases
-      # (rc / alpha / beta etc.) get marked as prereleases. Notes are extracted
-      # from CHANGELOG.md for the just-published version — the per-section
-      # `## [X.Y.Z] — YYYY-MM-DD` heading is the canonical entry boundary.
-      # A retry may reuse an existing release only after validating its tag,
-      # remote annotated-tag source, channel, and draft/published identity.
+        working-directory: ${{ runner.temp }}/release-handoff
+  github_release:
+    name: Publish exact GitHub Release assets
+    needs:
+      - verify
+      - npm_publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      actions: read
+      contents: write
+    environment:
+      name: github-release
+    steps:
+      - name: Download and verify exact release handoff
+        shell: /bin/bash --noprofile --norc -p -e -o pipefail {0}
+        env:
+          BASH_ENV: ''
+          ENV: ''
+          SHELLOPTS: ''
+          PS4: ''
+          GH_HOST: github.com
+          GH_ENTERPRISE_TOKEN: ''
+          GITHUB_ENTERPRISE_TOKEN: ''
+          GH_TOKEN: ${{ github.token }}
+          HANDOFF_ARTIFACT_ID: ${{ needs.verify.outputs.handoff_artifact_id }}
+          EXPECTED_HANDOFF_DIGEST: ${{ needs.verify.outputs.handoff_digest }}
+          EXPECTED_VERSION: ${{ needs.verify.outputs.version }}
+          EXPECTED_TAG: ${{ needs.verify.outputs.tag }}
+          EXPECTED_SOURCE_SHA: ${{ needs.verify.outputs.source_sha }}
+          EXPECTED_CHANNEL: ${{ needs.verify.outputs.channel }}
+        run: |-
+          set -euo pipefail
+          builtin unset -v https_proxy http_proxy all_proxy
+          builtin umask 077
+          GH_BIN=$(type -P gh)
+          TIMEOUT_BIN=$(type -P timeout)
+          HANDOFF_ZIP="$RUNNER_TEMP/release-handoff.zip"
+          HANDOFF_ROOT="$RUNNER_TEMP/release-handoff"
+          if [ -e "$HANDOFF_ZIP" ] || [ -e "$HANDOFF_ROOT" ]; then
+            echo "::error::Release handoff target already exists"
+            exit 1
+          fi
+          "$TIMEOUT_BIN" --kill-after=10s 120s "$GH_BIN" api -H "Accept: application/vnd.github+json" \
+            "repos/$GITHUB_REPOSITORY/actions/artifacts/$HANDOFF_ARTIFACT_ID/zip" > "$HANDOFF_ZIP"
+          if [[ ! "$EXPECTED_HANDOFF_DIGEST" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "::error::Verify-job handoff digest is not the upload-artifact 64-hex wire format"
+            exit 1
+          fi
+          ACTUAL_HANDOFF_DIGEST="$(sha256sum "$HANDOFF_ZIP" | awk '{print $1}')"
+          if [ "$ACTUAL_HANDOFF_DIGEST" != "$EXPECTED_HANDOFF_DIGEST" ]; then
+            echo "::error::Downloaded handoff digest differs from verify-job identity"
+            exit 1
+          fi
+          python3 - "$HANDOFF_ZIP" "$HANDOFF_ROOT" "$EXPECTED_VERSION" <<'PY'
+          import os
+          import stat
+          import sys
+          import zipfile
+          from pathlib import PurePosixPath
+          archive, root, version = sys.argv[1:]
+          expected = {
+              "handoff.json",
+              "release-files.sha256",
+              "package.json",
+              "server.json",
+              "release-notes.md",
+              "npm-package/enquire-mcp-npm.tgz",
+              "npm-package/npm-package-manifest.json",
+              "scripts/check-release-integrity.mjs",
+              "scripts/npm-package-artifact.mjs",
+              "scripts/lib/entrypoint.mjs",
+              ".github/scripts/release-mcpb-github-transaction.sh",
+              f"artifacts/enquire-mcp-basic-{version}.mcpb",
+              f"artifacts/enquire-mcp-basic-{version}.mcpb.sha256",
+              f"artifacts/enquire-mcp-basic-{version}.mcpb.provenance.json",
+              f"artifacts/enquire-mcp-basic-{version}.content-manifest.json",
+              f"artifacts/enquire-mcp-basic-{version}.sbom.cdx.json",
+              f"artifacts/enquire-mcp-basic-{version}.third-party-licenses.json",
+          }
+          with zipfile.ZipFile(archive) as source:
+              infos = source.infolist()
+              names = [info.filename for info in infos]
+              if len(names) != len(set(names)) or set(names) != expected:
+                  raise SystemExit("unexpected release handoff inventory")
+              os.mkdir(root, 0o700)
+              for info in infos:
+                  path = PurePosixPath(info.filename)
+                  mode = info.external_attr >> 16
+                  if path.is_absolute() or ".." in path.parts or "\\" in info.filename:
+                      raise SystemExit("unsafe release handoff path")
+                  if stat.S_IFMT(mode) not in (0, stat.S_IFREG):
+                      raise SystemExit("non-regular release handoff entry")
+                  target = os.path.join(root, *path.parts)
+                  os.makedirs(os.path.dirname(target), mode=0o700, exist_ok=True)
+                  with open(target, "xb") as output:
+                      output.write(source.read(info))
+          PY
+          cd "$HANDOFF_ROOT"
+          sha256sum -c release-files.sha256
+          jq -e --arg version "$EXPECTED_VERSION" --arg tag "$EXPECTED_TAG" \
+            --arg source "$EXPECTED_SOURCE_SHA" --arg channel "$EXPECTED_CHANNEL" \
+            'type == "object" and (keys | sort) ==
+             ["channel","source_sha","tag","version"] and
+             .version == $version and .tag == $tag and .source_sha == $source and .channel == $channel' handoff.json >/dev/null
+      - name: Assert reviewed privileged code identity
+        shell: /bin/bash --noprofile --norc -p -e -o pipefail {0}
+        working-directory: ${{ runner.temp }}/release-handoff
+        run: |-
+          set -euo pipefail
+          {
+            printf '%s  %s\n' '7c0e384376eab7c7c37f4372164d729f61e50078812b5ec5eaead0d3afba58af' '.github/scripts/release-mcpb-github-transaction.sh'
+            printf '%s  %s\n' '42af7c5c8ffc3519dec9c33487d67bfdef52ebf8d7d417baeb8cdea07ad21879' 'scripts/check-release-integrity.mjs'
+            printf '%s  %s\n' '31e3b1af3bf48c88149b20cd71fa948e492e8e0db45551ae7271a01c36d37b1b' 'scripts/lib/entrypoint.mjs'
+          } | sha256sum -c -
       - name: Prepare draft GitHub Release
         shell: /bin/bash --noprofile --norc -p -e -o pipefail {0}
         env:
-          BASH_ENV: ""
-          ENV: ""
-          SHELLOPTS: ""
-          PS4: ""
-          LD_PRELOAD: ""
-          LD_LIBRARY_PATH: ""
-          LD_AUDIT: ""
-          LD_DEBUG_OUTPUT: ""
-          LD_PROFILE: ""
-          GLIBC_TUNABLES: ""
-          TAR_OPTIONS: ""
-          OPENSSL_CONF: ""
-          NODE_DEBUG: ""
-          GODEBUG: ""
-          NODE_TLS_REJECT_UNAUTHORIZED: "1"
+          BASH_ENV: ''
+          ENV: ''
+          SHELLOPTS: ''
+          PS4: ''
+          LD_PRELOAD: ''
+          LD_LIBRARY_PATH: ''
+          LD_AUDIT: ''
+          LD_DEBUG_OUTPUT: ''
+          LD_PROFILE: ''
+          GLIBC_TUNABLES: ''
+          TAR_OPTIONS: ''
+          OPENSSL_CONF: ''
+          NODE_DEBUG: ''
+          GODEBUG: ''
+          NODE_TLS_REJECT_UNAUTHORIZED: '1'
           GH_HOST: github.com
-          GH_HTTP_UNIX_SOCKET: ""
-          HTTPS_PROXY: ""
-          HTTP_PROXY: ""
-          ALL_PROXY: ""
-          CURL_CA_BUNDLE: ""
-          SSL_CERT_FILE: ""
-          SSL_CERT_DIR: ""
-          NODE_EXTRA_CA_CERTS: ""
-          NODE_OPTIONS: ""
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RELEASE_JOB_DEADLINE_EPOCH: ${{ steps.deadline.outputs.epoch }}
-          MCPB_RELEASE_BODY_PATH: ${{ steps.release_body.outputs.path }}
-          MCPB_RELEASE_BODY_SHA256: ${{ steps.release_body.outputs.sha256 }}
-          MCPB_RELEASE_BODY_BYTES: ${{ steps.release_body.outputs.bytes }}
-          MCPB_RELEASE_BODY_CHARS: ${{ steps.release_body.outputs.chars }}
+          GH_HTTP_UNIX_SOCKET: ''
+          HTTPS_PROXY: ''
+          HTTP_PROXY: ''
+          ALL_PROXY: ''
+          CURL_CA_BUNDLE: ''
+          SSL_CERT_FILE: ''
+          SSL_CERT_DIR: ''
+          NODE_EXTRA_CA_CERTS: ''
+          NODE_OPTIONS: ''
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_JOB_DEADLINE_EPOCH: ${{ needs.verify.outputs.deadline_epoch }}
+          MCPB_RELEASE_BODY_PATH: release-notes.md
+          MCPB_RELEASE_BODY_SHA256: ${{ needs.verify.outputs.release_body_sha256 }}
+          MCPB_RELEASE_BODY_BYTES: ${{ needs.verify.outputs.release_body_bytes }}
+          MCPB_RELEASE_BODY_CHARS: ${{ needs.verify.outputs.release_body_chars }}
+          MCPB_RELEASE_VERSION: ${{ needs.verify.outputs.version }}
+          MCPB_RELEASE_SOURCE_SHA: ${{ needs.verify.outputs.source_sha }}
+          MCPB_RELEASE_CHANNEL: ${{ needs.verify.outputs.channel }}
         run: |
           set -euo pipefail
           builtin unset -v https_proxy http_proxy all_proxy
@@ -1743,11 +2134,11 @@ jobs:
             if [ "$limit" -gt $((remaining - 10)) ]; then limit=$((remaining - 10)); fi
             "$TIMEOUT_BIN" --kill-after=5s "${limit}s" "$GH_BIN" "$@"
           }
-          VERSION=$(node -p "require('./package.json').version")
+          VERSION="$MCPB_RELEASE_VERSION"
           TAG="v$VERSION"
-          SOURCE_SHA=$(git rev-parse HEAD)
+          SOURCE_SHA="$MCPB_RELEASE_SOURCE_SHA"
           EXPECTED_PRERELEASE=false
-          if [ "${{ steps.dist_tag.outputs.tag }}" != "latest" ]; then
+          if [ "$MCPB_RELEASE_CHANNEL" != "latest" ]; then
             EXPECTED_PRERELEASE=true
           fi
           ASSET="artifacts/enquire-mcp-basic-$VERSION.mcpb"
@@ -1834,7 +2225,7 @@ jobs:
               echo "::error::Existing release $TAG has incompatible tag, channel, or draft identity"
               exit 1
             fi
-            if [ "$ACTUAL_DRAFT" = "false" ] && [ "${{ steps.dist_tag.outputs.tag }}" = "latest" ]; then
+            if [ "$ACTUAL_DRAFT" = "false" ] && [ "$MCPB_RELEASE_CHANNEL" = "latest" ]; then
               LATEST_TAG=$(gh_read api "repos/${{ github.repository }}/releases/latest" --jq '.tag_name')
               if [ "$LATEST_TAG" != "$TAG" ]; then
                 echo "::error::Existing stable release $TAG is not GitHub's latest release"
@@ -1868,7 +2259,7 @@ jobs:
           }
           CREATE_ARGS=(release create "$TAG" --repo "${{ github.repository }}" \
             --title "$TAG" --notes-file "$NOTES" --draft --verify-tag)
-          if [ "${{ steps.dist_tag.outputs.tag }}" != "latest" ]; then
+          if [ "$MCPB_RELEASE_CHANNEL" != "latest" ]; then
             CREATE_ARGS+=(--prerelease)
           fi
           require_job_reserve 3600 "GitHub draft creation"
@@ -1980,196 +2371,231 @@ jobs:
             echo "::warning::Draft $TAG is not visible yet (attempt $create_recovery_attempt/12); retrying in 5s"
             sleep 5
           done
-      - name: Upload Basic MCPB asset, checksum, and provenance
+        working-directory: ${{ runner.temp }}/release-handoff
+      - name: Upload and publish the exact reviewed GitHub Release transaction
         shell: /bin/bash --noprofile --norc -p -e -o pipefail {0}
+        working-directory: ${{ runner.temp }}/release-handoff
         env:
-          BASH_ENV: ""
-          ENV: ""
-          SHELLOPTS: ""
-          PS4: ""
-          LD_PRELOAD: ""
-          LD_LIBRARY_PATH: ""
-          LD_AUDIT: ""
-          LD_DEBUG_OUTPUT: ""
-          LD_PROFILE: ""
-          GLIBC_TUNABLES: ""
-          TAR_OPTIONS: ""
-          OPENSSL_CONF: ""
-          NODE_DEBUG: ""
-          GODEBUG: ""
-          NODE_TLS_REJECT_UNAUTHORIZED: "1"
-          GH_HOST: github.com
-          GH_HTTP_UNIX_SOCKET: ""
-          HTTPS_PROXY: ""
-          HTTP_PROXY: ""
-          ALL_PROXY: ""
-          CURL_CA_BUNDLE: ""
-          SSL_CERT_FILE: ""
-          SSL_CERT_DIR: ""
-          NODE_EXTRA_CA_CERTS: ""
-          NODE_OPTIONS: ""
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RELEASE_JOB_DEADLINE_EPOCH: ${{ steps.deadline.outputs.epoch }}
+          BASH_ENV: ''
+          ENV: ''
+          SHELLOPTS: ''
+          PS4: ''
+          LD_PRELOAD: ''
+          LD_LIBRARY_PATH: ''
+          NODE_OPTIONS: ''
+          NODE_TLS_REJECT_UNAUTHORIZED: '1'
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_JOB_DEADLINE_EPOCH: ${{ needs.verify.outputs.deadline_epoch }}
           MCPB_RELEASE_REPOSITORY: ${{ github.repository }}
-          MCPB_RELEASE_CHANNEL: ${{ steps.dist_tag.outputs.tag }}
-          MCPB_RELEASE_WORKFLOW_SHA: ${{ github.workflow_sha }}
-          MCPB_RELEASE_BODY_PATH: ${{ steps.release_body.outputs.path }}
-          MCPB_RELEASE_BODY_SHA256: ${{ steps.release_body.outputs.sha256 }}
-          MCPB_RELEASE_BODY_BYTES: ${{ steps.release_body.outputs.bytes }}
-          MCPB_RELEASE_BODY_CHARS: ${{ steps.release_body.outputs.chars }}
-        run: |
+          MCPB_RELEASE_CHANNEL: ${{ needs.verify.outputs.channel }}
+          MCPB_RELEASE_VERSION: ${{ needs.verify.outputs.version }}
+          MCPB_RELEASE_SOURCE_SHA: ${{ needs.verify.outputs.source_sha }}
+          MCPB_RELEASE_BODY_PATH: release-notes.md
+          MCPB_RELEASE_BODY_SHA256: ${{ needs.verify.outputs.release_body_sha256 }}
+          MCPB_RELEASE_BODY_BYTES: ${{ needs.verify.outputs.release_body_bytes }}
+          MCPB_RELEASE_BODY_CHARS: ${{ needs.verify.outputs.release_body_chars }}
+        run: |-
           set -euo pipefail
-          builtin unset -v https_proxy http_proxy all_proxy
-          RELEASE_TRANSACTION_PATH=".github/scripts/release-mcpb-github-transaction.sh"
-          if ! [[ "${MCPB_RELEASE_WORKFLOW_SHA:-}" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "::error::Workflow commit SHA is missing or malformed"
-            exit 1
-          fi
-          if ! RELEASE_TRANSACTION_SNAPSHOT=$(
-            /usr/bin/env -i \
-              GIT_CONFIG_NOSYSTEM=1 \
-              GIT_CONFIG_SYSTEM=/dev/null \
-              GIT_CONFIG_GLOBAL=/dev/null \
-              GIT_CONFIG_COUNT=0 \
-              GIT_NO_LAZY_FETCH=1 \
-              GIT_NO_REPLACE_OBJECTS=1 \
-              GIT_OPTIONAL_LOCKS=0 \
-              GIT_TERMINAL_PROMPT=0 \
-              /usr/bin/git --no-pager --no-replace-objects \
-              --git-dir="$GITHUB_WORKSPACE/.git" \
-              cat-file blob "$MCPB_RELEASE_WORKFLOW_SHA:$RELEASE_TRANSACTION_PATH"
-          ); then
-            echo "::error::GitHub Release transaction script could not be read from the workflow commit"
-            exit 1
-          fi
-          RELEASE_TRANSACTION_SHA256="979c4bdb99c64efdb1dd521f5d25cdb54a8c26dcf60963d366b03ea000c0d031"
-          if ! RELEASE_TRANSACTION_ACTUAL_SHA256=$(
-            builtin printf '%s' "$RELEASE_TRANSACTION_SNAPSHOT" | /usr/bin/sha256sum
-          ); then
-            echo "::error::GitHub Release transaction snapshot could not be hashed"
-            exit 1
-          fi
-          RELEASE_TRANSACTION_ACTUAL_SHA256=${RELEASE_TRANSACTION_ACTUAL_SHA256%% *}
-          if ! [[ "$RELEASE_TRANSACTION_ACTUAL_SHA256" =~ ^[0-9a-f]{64}$ ]] ||
-             [ "$RELEASE_TRANSACTION_ACTUAL_SHA256" != "$RELEASE_TRANSACTION_SHA256" ]; then
-            echo "::error::GitHub Release transaction script differs from the reviewed workflow identity"
-            exit 1
-          fi
-          builtin printf '%s\n' "$RELEASE_TRANSACTION_SNAPSHOT" |
-            /bin/bash --noprofile --norc -p -e -o pipefail -s --
-      # v3.9.0-rc.32 — automate the official MCP Registry publish via GitHub
-      # Actions OIDC (no interactive login, no dedicated secret — `id-token:
-      # write` above is the only requirement; the registry trusts the repo's
-      # OIDC identity for the `io.github.oomkapwn/*` namespace).
-      #
-      # STABLE-ONLY: the registry's `isLatest` should reflect what users get
-      # from `npm install @oomkapwn/enquire-mcp` (the `latest` dist-tag), NOT a
-      # prerelease — otherwise the canonical listing (which Glama / mcp.so /
-      # smithery auto-sync from) would advertise an `-rc.N` as current. RC tags
-      # publish to npm under `@rc` but are SKIPPED here. This closes the
-      # registry-drift class: pre-3.9.0-rc.32 the registry was published
-      # manually (`mcp-publisher publish` after each stable), and it silently
-      # fell ~7 versions behind (stuck at 3.8.4 while npm was at 3.8.8).
-      - name: Publish to MCP Registry (stable only)
-        if: steps.dist_tag.outputs.tag == 'latest'
+          /bin/bash --noprofile --norc -p -e -o pipefail .github/scripts/release-mcpb-github-transaction.sh
+  mcp_registry:
+    name: Publish stable release to MCP Registry with protected OIDC
+    needs:
+      - verify
+      - npm_publish
+      - github_release
+    if: ${{ needs.verify.outputs.channel == 'latest' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+    environment:
+      name: mcp-registry
+    steps:
+      - name: Download and verify exact release handoff
         shell: /bin/bash --noprofile --norc -p -e -o pipefail {0}
         env:
-          BASH_ENV: ""
-          ENV: ""
-          SHELLOPTS: ""
-          PS4: ""
-          LD_PRELOAD: ""
-          LD_LIBRARY_PATH: ""
-          LD_AUDIT: ""
-          LD_DEBUG_OUTPUT: ""
-          LD_PROFILE: ""
-          GLIBC_TUNABLES: ""
-          TAR_OPTIONS: ""
-          OPENSSL_CONF: ""
-          NODE_DEBUG: ""
-          GODEBUG: ""
-          NODE_TLS_REJECT_UNAUTHORIZED: "1"
+          BASH_ENV: ''
+          ENV: ''
+          SHELLOPTS: ''
+          PS4: ''
           GH_HOST: github.com
-          GH_HTTP_UNIX_SOCKET: ""
-          HTTPS_PROXY: ""
-          HTTP_PROXY: ""
-          ALL_PROXY: ""
-          CURL_CA_BUNDLE: ""
-          SSL_CERT_FILE: ""
-          SSL_CERT_DIR: ""
-          NODE_EXTRA_CA_CERTS: ""
-          NODE_OPTIONS: ""
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RELEASE_JOB_DEADLINE_EPOCH: ${{ steps.deadline.outputs.epoch }}
-          EXPECTED_VERSION: ${{ steps.npm_publication.outputs.version }}
-          EXPECTED_SOURCE_SHA: ${{ steps.npm_publication.outputs.source_sha }}
-          EXPECTED_TAG: ${{ steps.npm_publication.outputs.tag }}
-          NPM_PROVENANCE_VERIFIED: ${{ steps.npm_provenance.outputs.verified }}
-        run: |
+          GH_ENTERPRISE_TOKEN: ''
+          GITHUB_ENTERPRISE_TOKEN: ''
+          GH_TOKEN: ${{ github.token }}
+          HANDOFF_ARTIFACT_ID: ${{ needs.verify.outputs.handoff_artifact_id }}
+          EXPECTED_HANDOFF_DIGEST: ${{ needs.verify.outputs.handoff_digest }}
+          EXPECTED_VERSION: ${{ needs.verify.outputs.version }}
+          EXPECTED_TAG: ${{ needs.verify.outputs.tag }}
+          EXPECTED_SOURCE_SHA: ${{ needs.verify.outputs.source_sha }}
+          EXPECTED_CHANNEL: ${{ needs.verify.outputs.channel }}
+        run: |-
           set -euo pipefail
           builtin unset -v https_proxy http_proxy all_proxy
           builtin umask 077
+          GH_BIN=$(type -P gh)
+          TIMEOUT_BIN=$(type -P timeout)
+          HANDOFF_ZIP="$RUNNER_TEMP/release-handoff.zip"
+          HANDOFF_ROOT="$RUNNER_TEMP/release-handoff"
+          if [ -e "$HANDOFF_ZIP" ] || [ -e "$HANDOFF_ROOT" ]; then
+            echo "::error::Release handoff target already exists"
+            exit 1
+          fi
+          "$TIMEOUT_BIN" --kill-after=10s 120s "$GH_BIN" api -H "Accept: application/vnd.github+json" \
+            "repos/$GITHUB_REPOSITORY/actions/artifacts/$HANDOFF_ARTIFACT_ID/zip" > "$HANDOFF_ZIP"
+          if [[ ! "$EXPECTED_HANDOFF_DIGEST" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "::error::Verify-job handoff digest is not the upload-artifact 64-hex wire format"
+            exit 1
+          fi
+          ACTUAL_HANDOFF_DIGEST="$(sha256sum "$HANDOFF_ZIP" | awk '{print $1}')"
+          if [ "$ACTUAL_HANDOFF_DIGEST" != "$EXPECTED_HANDOFF_DIGEST" ]; then
+            echo "::error::Downloaded handoff digest differs from verify-job identity"
+            exit 1
+          fi
+          python3 - "$HANDOFF_ZIP" "$HANDOFF_ROOT" "$EXPECTED_VERSION" <<'PY'
+          import os
+          import stat
+          import sys
+          import zipfile
+          from pathlib import PurePosixPath
+          archive, root, version = sys.argv[1:]
+          expected = {
+              "handoff.json",
+              "release-files.sha256",
+              "package.json",
+              "server.json",
+              "release-notes.md",
+              "npm-package/enquire-mcp-npm.tgz",
+              "npm-package/npm-package-manifest.json",
+              "scripts/check-release-integrity.mjs",
+              "scripts/npm-package-artifact.mjs",
+              "scripts/lib/entrypoint.mjs",
+              ".github/scripts/release-mcpb-github-transaction.sh",
+              f"artifacts/enquire-mcp-basic-{version}.mcpb",
+              f"artifacts/enquire-mcp-basic-{version}.mcpb.sha256",
+              f"artifacts/enquire-mcp-basic-{version}.mcpb.provenance.json",
+              f"artifacts/enquire-mcp-basic-{version}.content-manifest.json",
+              f"artifacts/enquire-mcp-basic-{version}.sbom.cdx.json",
+              f"artifacts/enquire-mcp-basic-{version}.third-party-licenses.json",
+          }
+          with zipfile.ZipFile(archive) as source:
+              infos = source.infolist()
+              names = [info.filename for info in infos]
+              if len(names) != len(set(names)) or set(names) != expected:
+                  raise SystemExit("unexpected release handoff inventory")
+              os.mkdir(root, 0o700)
+              for info in infos:
+                  path = PurePosixPath(info.filename)
+                  mode = info.external_attr >> 16
+                  if path.is_absolute() or ".." in path.parts or "\\" in info.filename:
+                      raise SystemExit("unsafe release handoff path")
+                  if stat.S_IFMT(mode) not in (0, stat.S_IFREG):
+                      raise SystemExit("non-regular release handoff entry")
+                  target = os.path.join(root, *path.parts)
+                  os.makedirs(os.path.dirname(target), mode=0o700, exist_ok=True)
+                  with open(target, "xb") as output:
+                      output.write(source.read(info))
+          PY
+          cd "$HANDOFF_ROOT"
+          sha256sum -c release-files.sha256
+          jq -e --arg version "$EXPECTED_VERSION" --arg tag "$EXPECTED_TAG" \
+            --arg source "$EXPECTED_SOURCE_SHA" --arg channel "$EXPECTED_CHANNEL" \
+            'type == "object" and (keys | sort) ==
+             ["channel","source_sha","tag","version"] and
+             .version == $version and .tag == $tag and .source_sha == $source and .channel == $channel' handoff.json >/dev/null
+      - name: Assert reviewed privileged code identity
+        shell: /bin/bash --noprofile --norc -p -e -o pipefail {0}
+        working-directory: ${{ runner.temp }}/release-handoff
+        run: |-
+          set -euo pipefail
+          {
+            printf '%s  %s\n' '42af7c5c8ffc3519dec9c33487d67bfdef52ebf8d7d417baeb8cdea07ad21879' 'scripts/check-release-integrity.mjs'
+            printf '%s  %s\n' '31e3b1af3bf48c88149b20cd71fa948e492e8e0db45551ae7271a01c36d37b1b' 'scripts/lib/entrypoint.mjs'
+          } | sha256sum -c -
+      - name: Publish exact stable manifest to MCP Registry with OIDC
+        shell: /bin/bash --noprofile --norc -p -e -o pipefail {0}
+        working-directory: ${{ runner.temp }}/release-handoff
+        env:
+          BASH_ENV: ''
+          ENV: ''
+          SHELLOPTS: ''
+          PS4: ''
+          LD_PRELOAD: ''
+          LD_LIBRARY_PATH: ''
+          NODE_OPTIONS: ''
+          NODE_TLS_REJECT_UNAUTHORIZED: '1'
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_JOB_DEADLINE_EPOCH: ${{ needs.verify.outputs.deadline_epoch }}
+          EXPECTED_VERSION: ${{ needs.verify.outputs.version }}
+          EXPECTED_SOURCE_SHA: ${{ needs.verify.outputs.source_sha }}
+          EXPECTED_TAG: ${{ needs.verify.outputs.tag }}
+          NPM_PROVENANCE_VERIFIED: ${{ needs.npm_publish.outputs.provenance_verified }}
+        run: >
+          set -euo pipefail
+
+          builtin unset -v https_proxy http_proxy all_proxy
+
+          builtin umask 077
+
           VERSION="$EXPECTED_VERSION"
+
           SOURCE_SHA="$EXPECTED_SOURCE_SHA"
+
           TAG="$EXPECTED_TAG"
+
           if ! [[ "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] ||
              ! [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] ||
              [ "$TAG" != "v$VERSION" ] || [ "$NPM_PROVENANCE_VERIFIED" != "true" ]; then
             echo "::error::Registry publication identity is not one exact provenance-verified stable release"
             exit 1
           fi
+
           TIMEOUT_BIN=$(type -P timeout)
+
           CURL_BIN=$(type -P curl)
+
           GH_BIN=$(type -P gh)
+
           JQ_BIN=$(type -P jq)
+
           NODE_BIN=$(type -P node)
+
           TAR_BIN=$(type -P tar)
+
           WORK_ROOT=$(/usr/bin/mktemp -d "$RUNNER_TEMP/enquire-mcp-registry.XXXXXX")
+
           MCP_REGISTRY_HOME="$WORK_ROOT/home"
+
           PUBLISHER_ROOT="$WORK_ROOT/publisher"
+
           GH_CONFIG_DIR="$WORK_ROOT/gh-config"
+
           /bin/mkdir -m 0700 "$MCP_REGISTRY_HOME" "$PUBLISHER_ROOT" "$GH_CONFIG_DIR"
+
           export GH_CONFIG_DIR
-          PACKAGE_JSON_SNAPSHOT="$WORK_ROOT/package.json"
-          SERVER_JSON_SNAPSHOT="$WORK_ROOT/server.json"
-          EVALUATOR="$GITHUB_WORKSPACE/scripts/check-release-integrity.mjs"
-          if [ ! -f "$EVALUATOR" ] || [ -L "$EVALUATOR" ]; then
-            echo "::error::Registry evaluator is missing, non-regular, or a symlink"
-            exit 1
-          fi
-          registry_git() {
-            "$TIMEOUT_BIN" --kill-after=3s 15s /usr/bin/env -i \
-              PATH=/usr/bin:/bin GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_SYSTEM=/dev/null \
-              GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_COUNT=0 GIT_NO_LAZY_FETCH=1 \
-              GIT_NO_REPLACE_OBJECTS=1 GIT_OPTIONAL_LOCKS=0 GIT_TERMINAL_PROMPT=0 \
-              /usr/bin/git -C "$GITHUB_WORKSPACE" --no-pager --no-replace-objects "$@"
-          }
-          if [ "$(registry_git rev-parse HEAD)" != "$SOURCE_SHA" ] ||
-             ! registry_git diff --quiet "$SOURCE_SHA" -- package.json server.json; then
-            echo "::error::Tracked Registry manifests differ from the exact npm source"
-            exit 1
-          fi
-          for MANIFEST in package.json server.json; do
-            if [ ! -f "$GITHUB_WORKSPACE/$MANIFEST" ] || [ -L "$GITHUB_WORKSPACE/$MANIFEST" ]; then
-              echo "::error::$MANIFEST is missing, non-regular, or a symlink"
-              exit 1
-            fi
-            SNAPSHOT="$WORK_ROOT/$MANIFEST"
-            /bin/cp -- "$GITHUB_WORKSPACE/$MANIFEST" "$SNAPSHOT"
-            /bin/chmod 0400 "$SNAPSHOT"
-            if [ "$(registry_git rev-parse "$SOURCE_SHA:$MANIFEST")" != "$(registry_git hash-object "$SNAPSHOT")" ]; then
-              echo "::error::$MANIFEST snapshot differs from the exact source blob"
+
+          PACKAGE_JSON_SNAPSHOT="$PWD/package.json"
+
+          SERVER_JSON_SNAPSHOT="$PWD/server.json"
+
+          EVALUATOR="$PWD/scripts/check-release-integrity.mjs"
+
+          for SNAPSHOT in "$PACKAGE_JSON_SNAPSHOT" "$SERVER_JSON_SNAPSHOT" "$EVALUATOR"; do
+            if [ ! -f "$SNAPSHOT" ] || [ -L "$SNAPSHOT" ]; then
+              echo "::error::Verified Registry handoff input is missing, non-regular, or a symlink"
               exit 1
             fi
           done
-          if ! registry_git diff --quiet "$SOURCE_SHA" -- package.json server.json; then
-            echo "::error::Tracked Registry manifests changed during snapshot"
-            exit 1
-          fi
+
           PACKAGE_JSON_SHA256=$(/usr/bin/sha256sum "$PACKAGE_JSON_SNAPSHOT")
+
           PACKAGE_JSON_SHA256=${PACKAGE_JSON_SHA256%% *}
+
           SERVER_JSON_SHA256=$(/usr/bin/sha256sum "$SERVER_JSON_SNAPSHOT")
+
           SERVER_JSON_SHA256=${SERVER_JSON_SHA256%% *}
+
           assert_manifest_snapshots() {
             local package_digest server_digest
             if [ ! -f "$PACKAGE_JSON_SNAPSHOT" ] || [ -L "$PACKAGE_JSON_SNAPSHOT" ] ||
@@ -2186,10 +2612,15 @@ jobs:
               exit 1
             fi
           }
+
           PACKAGE_NAME=$($JQ_BIN -er '.name | select(type == "string")' "$PACKAGE_JSON_SNAPSHOT")
+
           PACKAGE_VERSION=$($JQ_BIN -er '.version | select(type == "string")' "$PACKAGE_JSON_SNAPSHOT")
+
           MCP_NAME=$($JQ_BIN -er '.mcpName | select(type == "string")' "$PACKAGE_JSON_SNAPSHOT")
+
           EXPECTED_SERVER_JSON=$($JQ_BIN -ce '.' "$SERVER_JSON_SNAPSHOT")
+
           if [ "$PACKAGE_NAME" != "@oomkapwn/enquire-mcp" ] || [ "$PACKAGE_VERSION" != "$VERSION" ] ||
              [ "$MCP_NAME" != "io.github.oomkapwn/enquire-mcp" ] ||
              ! $JQ_BIN -e --arg name "$MCP_NAME" --arg package "$PACKAGE_NAME" --arg version "$VERSION" '
@@ -2200,6 +2631,7 @@ jobs:
             echo "::error::Registry manifest identity differs from npm publication outputs"
             exit 1
           fi
+
           require_job_reserve() {
             local required="$1"
             local label="$2"
@@ -2218,6 +2650,7 @@ jobs:
               exit 1
             fi
           }
+
           deadline_timeout() {
             local cap="$1" reserve="$2" label="$3"
             shift 3
@@ -2236,6 +2669,7 @@ jobs:
             if [ "$cap" -gt "$limit" ]; then cap="$limit"; fi
             "$TIMEOUT_BIN" --kill-after=5s "${cap}s" "$@"
           }
+
           gh_read() {
             if [ "${1:-}" != "api" ]; then
               echo "::error::gh_read accepts read-only gh api calls" >&2
@@ -2268,6 +2702,7 @@ jobs:
             if [ "$limit" -gt $((remaining - 10)) ]; then limit=$((remaining - 10)); fi
             "$TIMEOUT_BIN" --kill-after=5s "${limit}s" "$GH_BIN" "$@"
           }
+
           assert_remote_tag_identity() {
             if ! TAG_REF_JSON=$(gh_read api \
               "repos/${{ github.repository }}/git/ref/tags/$TAG"); then
@@ -2303,10 +2738,15 @@ jobs:
               exit 1
             fi
           }
+
           SERVER_NAME_ENCODED=$(printf '%s' "$MCP_NAME" | $JQ_BIN -sRr @uri)
+
           VERSION_ENCODED=$(printf '%s' "$VERSION" | $JQ_BIN -sRr @uri)
+
           REGISTRY_EXACT_URL="https://registry.modelcontextprotocol.io/v0.1/servers/${SERVER_NAME_ENCODED}/versions/${VERSION_ENCODED}?include_deleted=true"
+
           REGISTRY_LATEST_URL="https://registry.modelcontextprotocol.io/v0.1/servers/${SERVER_NAME_ENCODED}/versions/latest?include_deleted=true"
+
           registry_http_read() {
             local url="$1" body_file="$2" response request_exit
             : > "$body_file"
@@ -2324,6 +2764,7 @@ jobs:
             REGISTRY_CONTENT_TYPE=$(printf '%s\n' "$response" | /usr/bin/sed -n '2p')
             if [ -z "$REGISTRY_HTTP_STATUS" ]; then REGISTRY_HTTP_STATUS="000"; fi
           }
+
           registry_snapshot() {
             local phase="$1" exact_exit exact_status exact_type latest_exit latest_status latest_type payload
             local exact_body="$WORK_ROOT/exact-body.json" latest_body="$WORK_ROOT/latest-body.json"
@@ -2350,24 +2791,36 @@ jobs:
               HOME="$MCP_REGISTRY_HOME" PATH=/usr/bin:/bin NODE_TLS_REJECT_UNAUTHORIZED=1 \
               "$NODE_BIN" "$EVALUATOR" mcp-registry-state "$phase"
           }
+
           registry_action() {
             printf '%s' "$1" | $JQ_BIN -er --arg first "$2" --arg second "$3" \
               '.action | select(. == $first or . == $second)'
           }
+
           assert_remote_tag_identity
+
           PREFLIGHT_RESULT=$(registry_snapshot preflight)
+
           PREFLIGHT_ACTION=$(registry_action "$PREFLIGHT_RESULT" publish reuse)
+
           if [ "$PREFLIGHT_ACTION" = "reuse" ]; then
             assert_remote_tag_identity
             echo "MCP Registry already exposes exact active/latest $MCP_NAME@$VERSION"
             exit 0
           fi
+
           require_job_reserve 3300 "MCP publisher preparation"
+
           MCP_PUBLISHER_TAG="v1.7.9"
+
           MCP_PUBLISHER_SHA256="ab128162b0616090b47cf245afe0a23f3ef08936fdce19074f5ba0a4469281ac"
+
           MCP_PUBLISHER_SIZE="7297012"
+
           MCP_PUBLISHER_URL="https://github.com/modelcontextprotocol/registry/releases/download/${MCP_PUBLISHER_TAG}/mcp-publisher_linux_amd64.tar.gz"
+
           MCP_PUBLISHER_ARCHIVE="$PUBLISHER_ROOT/mcp-publisher_linux_amd64.tar.gz"
+
           deadline_timeout 70 10 "MCP publisher download" "$CURL_BIN" --disable --fail \
             --silent --show-error --proxy '' --connect-timeout 10 --max-time 60 \
             --max-filesize "$MCP_PUBLISHER_SIZE" --retry 0 --location --max-redirs 1 \
@@ -2378,35 +2831,46 @@ jobs:
             echo "::error::Pinned MCP publisher archive size or type differs"
             exit 1
           fi
+
           printf '%s  %s\n' "$MCP_PUBLISHER_SHA256" "$MCP_PUBLISHER_ARCHIVE" | /usr/bin/sha256sum -c -
+
           PUBLISHER_ENTRIES=$(deadline_timeout 30 10 "MCP publisher inventory" "$TAR_BIN" -tzf "$MCP_PUBLISHER_ARCHIVE")
+
           if [ "$PUBLISHER_ENTRIES" != "mcp-publisher" ]; then
             echo "::error::Pinned MCP publisher archive must contain exactly one root binary"
             exit 1
           fi
+
           deadline_timeout 30 10 "MCP publisher extraction" "$TAR_BIN" -xzf "$MCP_PUBLISHER_ARCHIVE" \
             --no-same-owner --no-same-permissions -C "$PUBLISHER_ROOT" -- mcp-publisher
           MCP_PUBLISHER_BIN="$PUBLISHER_ROOT/mcp-publisher"
+
           if [ ! -f "$MCP_PUBLISHER_BIN" ] || [ -L "$MCP_PUBLISHER_BIN" ]; then
             echo "::error::Extracted MCP publisher is missing, non-regular, or a symlink"
             exit 1
           fi
+
           /bin/chmod 0500 "$MCP_PUBLISHER_BIN"
+
           assert_manifest_snapshots
+
           deadline_timeout 180 10 "MCP manifest validation" /usr/bin/env -i \
             HOME="$MCP_REGISTRY_HOME" PATH=/usr/bin:/bin \
             "$MCP_PUBLISHER_BIN" validate "$SERVER_JSON_SNAPSHOT"
           require_job_reserve 2700 "MCP Registry OIDC login"
+
           if [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ] || [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ]; then
             echo "::error::GitHub OIDC request identity is unavailable"
             exit 1
           fi
+
           deadline_timeout 180 10 "MCP Registry OIDC login" /usr/bin/env -i \
             HOME="$MCP_REGISTRY_HOME" PATH=/usr/bin:/bin \
             ACTIONS_ID_TOKEN_REQUEST_URL="$ACTIONS_ID_TOKEN_REQUEST_URL" \
             ACTIONS_ID_TOKEN_REQUEST_TOKEN="$ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
             "$MCP_PUBLISHER_BIN" login github-oidc --registry=https://registry.modelcontextprotocol.io
           TOKEN_FILE="$MCP_REGISTRY_HOME/.config/mcp-publisher/token.json"
+
           if [ ! -f "$TOKEN_FILE" ] || [ -L "$TOKEN_FILE" ] ||
              ! $JQ_BIN -e '
                type == "object" and keys == ["method","registry","token"] and
@@ -2416,25 +2880,38 @@ jobs:
             echo "::error::MCP publisher OIDC token file is malformed"
             exit 1
           fi
+
           SECOND_RESULT=$(registry_snapshot preflight)
+
           SECOND_ACTION=$(registry_action "$SECOND_RESULT" publish reuse)
+
           if [ "$SECOND_ACTION" = "reuse" ]; then
             assert_remote_tag_identity
             echo "MCP Registry converged before the sole publish boundary"
             exit 0
           fi
+
           require_job_reserve 2200 "MCP Registry publish and convergence"
+
           assert_manifest_snapshots
+
           assert_remote_tag_identity
+
           MCP_PUBLISH_ATTEMPTED=true
+
           MCP_PUBLISH_EXIT=0
+
           set +e
+
           deadline_timeout 300 1700 "MCP Registry publish" /usr/bin/env -i \
             HOME="$MCP_REGISTRY_HOME" PATH=/usr/bin:/bin \
             "$MCP_PUBLISHER_BIN" publish "$SERVER_JSON_SNAPSHOT"
           MCP_PUBLISH_EXIT=$?
+
           set -e
+
           MCP_REGISTRY_CONFIRMED=false
+
           for attempt in {1..12}; do
             CONVERGENCE_RESULT=$(registry_snapshot convergence)
             CONVERGENCE_ACTION=$(registry_action "$CONVERGENCE_RESULT" confirmed retry)
@@ -2447,12 +2924,16 @@ jobs:
               deadline_timeout 11 10 "MCP Registry convergence wait" /bin/sleep 10
             fi
           done
+
           if [ "$MCP_PUBLISH_ATTEMPTED" != "true" ] || [ "$MCP_REGISTRY_CONFIRMED" != "true" ]; then
             echo "::error::MCP Registry did not converge after the sole publish invocation; exit=$MCP_PUBLISH_EXIT"
             exit 1
           fi
+
           assert_remote_tag_identity
+
           if [ "$MCP_PUBLISH_EXIT" -ne 0 ]; then
             echo "::warning::MCP publisher exited $MCP_PUBLISH_EXIT, but exact active/latest readback proves completion"
           fi
+
           echo "MCP Registry exact publication is confirmed for $MCP_NAME@$VERSION"

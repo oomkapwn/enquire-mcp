@@ -2582,7 +2582,7 @@ async function main() {
   let materializedCorpusReport = null;
   let recencyReferenceMs = null;
   let notesWritten = 0;
-  let embedFile = "";
+  let embedFile = null;
   try {
     const materializeStarted = performance.now();
     for (const { inst } of scorable) {

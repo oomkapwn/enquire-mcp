@@ -22,6 +22,8 @@ import { readdirSync, readFileSync } from "node:fs";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 
+import { replaceExactly } from "./helpers/exact-source-mutation.js";
+
 const repoRoot = path.resolve(__dirname, "..");
 
 /** Concatenated text of every `src/**.ts` — the guard-symbol search space. */
@@ -319,6 +321,32 @@ function persistedEgressGuardViolations(search: string): string[] {
   return violations;
 }
 
+/** Pin the MCP chunk-resource boundary to the live FTS receipt guard extracted from the registry. */
+function chunkResourceAdmissionViolations(registry: string, resourceAdmission: string): string[] {
+  const violations: string[] = [];
+  const delegation = "async (uri, params) => readChunkResource(vault, idx, uri, params)";
+  if (!registry.includes(delegation)) {
+    violations.push("chunk resource registry: readChunkResource delegation missing");
+  }
+
+  const start = resourceAdmission.indexOf("export async function readChunkResource(");
+  if (start < 0) return [...violations, "chunk resource admission: helper region missing"];
+  const body = resourceAdmission.slice(start);
+  const decoded = body.indexOf("const decoded = decodeNotePath(notePathRaw);");
+  const liveRead = body.indexOf("const payload = await readLiveFtsChunk(vault, idx, decoded, chunkIndex);");
+  const serialized = body.indexOf("JSON.stringify(payload, null, 2)");
+  if (decoded < 0) violations.push("chunk resource admission: canonical path decode missing");
+  if (liveRead < 0) violations.push("chunk resource admission: live readLiveFtsChunk guard missing");
+  if (serialized < 0) violations.push("chunk resource admission: admitted payload serialization missing");
+  if (!(decoded >= 0 && liveRead > decoded && serialized > liveRead)) {
+    violations.push("chunk resource admission: decode/live-guard/serialize order broken");
+  }
+  for (const bypass of ["idx.getChunk(", "idx.getChunkWithReceipt("]) {
+    if (body.includes(bypass)) violations.push(`chunk resource admission: direct index bypass via ${bypass}`);
+  }
+  return violations;
+}
+
 /** Public result construction must strip both halves of the internal receipt. */
 function publicReceiptLeakViolations(search: string, registry: string): string[] {
   const slice = (text: string, start: string, end: string): string => {
@@ -355,6 +383,215 @@ function publicReceiptLeakViolations(search: string, registry: string): string[]
   });
 }
 
+/** Pin embedding-namespace admission ahead of every direct exported-route I/O boundary. */
+function embedNamespaceAdmissionViolations(sources: {
+  search: string;
+  meta: string;
+  doctor: string;
+  evalSource: string;
+}): string[] {
+  const after = (source: string, marker: string): string => {
+    const start = source.indexOf(marker);
+    return start < 0 ? "" : source.slice(start);
+  };
+  const routes = [
+    {
+      label: "embeddingsSearch",
+      body: after(sources.search, "export async function embeddingsSearch("),
+      admission: "if (embedFile !== null) assertEmbedDbFilePath(embedFile);",
+      io: ["await vault.ensureExists()"]
+    },
+    {
+      label: "searchHybrid",
+      body: after(sources.search, "export async function searchHybrid("),
+      admission: "if (ctx.embedFile !== null) assertEmbedDbFilePath(ctx.embedFile);",
+      io: ["await vault.ensureExists()", 'import("node:fs")']
+    },
+    {
+      label: "searchHybridMulti",
+      body: after(sources.search, "export async function searchHybridMulti("),
+      admission: "if (ctx.embedFile !== null) assertEmbedDbFilePath(ctx.embedFile);",
+      io: ['import("../rrf.js")']
+    },
+    {
+      label: "contextPack",
+      body: after(sources.meta, "export async function contextPack("),
+      admission: "if (ctx.embedFile !== null) assertEmbedDbFilePath(ctx.embedFile);",
+      io: ["await vault.ensureExists()"]
+    },
+    {
+      label: "runDoctor",
+      body: after(sources.doctor, "export async function runDoctor("),
+      admission: "if (opts.embedFile !== undefined) assertEmbedDbFilePath(opts.embedFile);",
+      io: ["new Vault(opts.vault"]
+    },
+    {
+      label: "runEval",
+      body: after(sources.evalSource, "export async function runEval("),
+      admission: "assertEmbedDbFilePath(opts.embedFile);",
+      io: ["validateEvalQueryCohort(opts.queries)", "await searchHybrid("]
+    }
+  ];
+  return routes.flatMap(({ label, body, admission, io }) => {
+    if (!body) return [`${label}: source region missing`];
+    const admittedAt = body.indexOf(admission);
+    if (admittedAt < 0) return [`${label}: embedding namespace admission missing`];
+    return io.flatMap((boundary) => {
+      const ioAt = body.indexOf(boundary);
+      if (ioAt < 0) return [`${label}: I/O boundary ${boundary} missing`];
+      return admittedAt < ioAt ? [] : [`${label}: namespace admission occurs after ${boundary}`];
+    });
+  });
+}
+
+/** Pin FTS namespace admission ahead of constructor state and readonly filesystem/native boundaries. */
+function ftsNamespaceAdmissionViolations(sources: { fts: string; doctor: string }): string[] {
+  const after = (source: string, startMarker: string, endMarker?: string): string => {
+    const start = source.indexOf(startMarker);
+    if (start < 0) return "";
+    if (endMarker === undefined) return source.slice(start);
+    const end = source.indexOf(endMarker, start + startMarker.length);
+    return end > start ? source.slice(start, end) : "";
+  };
+  const routes = [
+    {
+      label: "FtsIndex constructor",
+      body: after(sources.fts, "  constructor(opts: { file: string; vaultRoot: string; tokenize?: TokenizeMode })"),
+      admission: "assertFtsIndexFilePath(opts.file);",
+      boundaries: ["this.file = opts.file;"]
+    },
+    {
+      label: "discoverFtsIndexConfig",
+      body: after(
+        sources.fts,
+        "export async function discoverFtsIndexConfig(",
+        "export async function peekFtsMetaSafe(\n"
+      ),
+      admission: "assertFtsIndexFilePath(file);",
+      boundaries: ["await preflightSqliteArtifactFamily(file)", 'await import("better-sqlite3")']
+    },
+    {
+      label: "peekFtsMetaSafe",
+      body: after(sources.fts, "export async function peekFtsMetaSafe(\n"),
+      admission: "assertFtsIndexFilePath(file);",
+      boundaries: ["await preflightSqliteArtifactFamily(file)", 'await import("better-sqlite3")']
+    },
+    {
+      label: "runDoctor",
+      body: after(sources.doctor, "export async function runDoctor("),
+      admission: "if (opts.indexFile !== undefined) assertFtsIndexFilePath(opts.indexFile);",
+      boundaries: ["new Vault(opts.vault"]
+    }
+  ];
+  return routes.flatMap(({ label, body, admission, boundaries }) => {
+    if (!body) return [`${label}: source region missing`];
+    const admittedAt = body.indexOf(admission);
+    if (admittedAt < 0) return [`${label}: FTS namespace admission missing`];
+    return boundaries.flatMap((boundary) => {
+      const boundaryAt = body.indexOf(boundary);
+      if (boundaryAt < 0) return [`${label}: boundary ${boundary} missing`];
+      return admittedAt < boundaryAt ? [] : [`${label}: namespace admission occurs after ${boundary}`];
+    });
+  });
+}
+
+/** Keep sensitive writers on the shared mode-0700 missing-parent acquisition path
+ * without inferring directory ownership then path-chmodding a race winner. */
+function writerParentModeProblems(sources: {
+  vault: string;
+  feedback: string;
+  hnsw: string;
+  fts: string;
+  embed: string;
+  persistenceCoordination: string;
+  watcherGuard: string;
+}): string[] {
+  const between = (source: string, startMarker: string, endMarker: string): string => {
+    const start = source.indexOf(startMarker);
+    const end = source.indexOf(endMarker, start + startMarker.length);
+    return start >= 0 && end > start ? source.slice(start, end) : "";
+  };
+  const routes = [
+    {
+      label: "Vault parse cache",
+      body: between(
+        sources.vault,
+        "  private async saveDiskCacheOnce(request: DiskCacheSaveRequest)",
+        "  /**\n   * Resolve a vault-relative"
+      ),
+      mkdir: "await this.mkdirSafe(cacheDir, { recursive: true, mode: 0o700 });",
+      forbidden: ["parentExisted", "statSafe(cacheDir", "fs.stat(cacheDir", "chmod(cacheDir"]
+    },
+    {
+      label: "Feedback",
+      body: between(
+        sources.feedback,
+        "  static async open(file: string, vaultRoot?: string): Promise<FeedbackStore> {",
+        "  /**\n   * Record a usefulness mark"
+      ),
+      mkdir: "const lifetime = await acquirePersistenceFamilyLease({",
+      forbidden: ["dirExisted", "fs.stat(dir", "fs.chmod(dir"]
+    },
+    {
+      label: "HNSW",
+      body: between(sources.hnsw, "    async saveTo(file", "interface HnswMetaPointer"),
+      mkdir: "await fs.mkdir(parentDir, { recursive: true, mode: 0o700 });",
+      forbidden: ["parentExisted", "fs.stat(parentDir", "fs.chmod(parentDir"]
+    },
+    {
+      label: "FTS",
+      body: between(
+        sources.fts,
+        "  async open(expectedDiscovery?: FtsIndexDiscovery)",
+        "  /**\n   * Remove the index file"
+      ),
+      mkdir: "await fs.mkdir(parentDir, { recursive: true, mode: 0o700 });",
+      forbidden: ["parentExisted", "fs.stat(parentDir", "fs.chmod(parentDir"]
+    },
+    {
+      label: "EmbedDb",
+      body: between(
+        sources.embed,
+        "  private async acquireSharedPersistenceRole(): Promise<PersistenceFamilyLeaseHandle> {",
+        "  private releasePersistenceLifetime(): Promise<void> {"
+      ),
+      mkdir: ": await acquirePersistenceFamilyLease({",
+      forbidden: ["parentExisted", "fs.stat(parentDir", "fs.chmod(parentDir"]
+    },
+    {
+      label: "Persistence coordinator",
+      body: between(
+        sources.persistenceCoordination,
+        "export async function acquirePersistenceFamilyLease(",
+        "/**\n * Acquire a coordinated family role through"
+      ),
+      mkdir: "await fs.mkdir(path.dirname(path.resolve(options.targetPath)), { recursive: true, mode: 0o700 });",
+      forbidden: [
+        "parentExisted",
+        "fs.stat(path.dirname(path.resolve(options.targetPath))",
+        "fs.chmod(path.dirname(path.resolve(options.targetPath))"
+      ]
+    },
+    {
+      label: "watcher guard",
+      body: between(
+        sources.watcherGuard,
+        "export async function armWatcherActivationGuard(",
+        "export async function releaseWatcherActivationGuard("
+      ),
+      mkdir: "await fs.mkdir(guardPath, { mode: 0o700 });",
+      forbidden: ["fs.stat(guardPath", "fs.chmod(guardPath"]
+    }
+  ];
+  return routes.flatMap(({ label, body, mkdir, forbidden }) => {
+    if (!body) return [`${label}: writer region missing`];
+    const problems = body.includes(mkdir) ? [] : [`${label}: mode-0700 mkdir missing`];
+    return problems.concat(
+      forbidden.filter((needle) => body.includes(needle)).map((needle) => `${label}: forbidden ${needle}`)
+    );
+  });
+}
+
 describe("enforcement-guarantee → code-guard invariant (rc.3, overclaim #15/#16 class)", () => {
   it("every curated SECURITY.md guarantee still maps to a present code guard", () => {
     const security = readFileSync(path.join(repoRoot, "SECURITY.md"), "utf8");
@@ -362,9 +599,18 @@ describe("enforcement-guarantee → code-guard invariant (rc.3, overclaim #15/#1
     const offenders = GUARANTEES.map((g) => checkGuarantee(g, security, src)).filter(Boolean) as string[];
     expect(offenders, offenders.join("\n")).toEqual([]);
     const registry = readFileSync(path.join(repoRoot, "src/tool-registry.ts"), "utf8");
+    const resourceAdmission = readFileSync(path.join(repoRoot, "src/resource-admission.ts"), "utf8");
     const hnsw = readFileSync(path.join(repoRoot, "src/hnsw.ts"), "utf8");
     const search = readFileSync(path.join(repoRoot, "src/tools/search.ts"), "utf8");
+    const meta = readFileSync(path.join(repoRoot, "src/tools/meta.ts"), "utf8");
+    const doctor = readFileSync(path.join(repoRoot, "src/doctor.ts"), "utf8");
+    const evalSource = readFileSync(path.join(repoRoot, "src/eval.ts"), "utf8");
     const vault = readFileSync(path.join(repoRoot, "src/vault.ts"), "utf8");
+    const feedback = readFileSync(path.join(repoRoot, "src/feedback.ts"), "utf8");
+    const fts = readFileSync(path.join(repoRoot, "src/fts5.ts"), "utf8");
+    const embed = readFileSync(path.join(repoRoot, "src/embed-db.ts"), "utf8");
+    const persistenceCoordination = readFileSync(path.join(repoRoot, "src/persistence-coordination.ts"), "utf8");
+    const watcherGuard = readFileSync(path.join(repoRoot, "src/watcher-activation-guard.ts"), "utf8");
     expect(registry).toContain("const admittedMatches = await searchLiveFts(vault, idx, {");
     expect(registry).toContain("const matches = admittedMatches.map((match) => ({");
     expect(registry).not.toContain("matches: admittedMatches");
@@ -376,12 +622,17 @@ describe("enforcement-guarantee → code-guard invariant (rc.3, overclaim #15/#1
     expect(diagnosticMap).not.toContain("...match");
     expect(diagnosticMap).not.toContain("indexed_mtime_ms");
     expect(diagnosticMap).not.toContain("indexed_revision");
-    expect(registry).toContain("const payload = await readLiveFtsChunk(vault, idx, decoded, chunkIndex);");
+    expect(chunkResourceAdmissionViolations(registry, resourceAdmission)).toEqual([]);
     expect(search).toContain("const hits = await filterLiveVaultHits(");
     expect(search).toContain("const ftsHits = await filterLiveVaultHits(");
     expect(search).toContain("const hydratedRows = db.getSearchRowsByIds(labels);");
     expect(persistedEgressGuardViolations(search)).toEqual([]);
     expect(publicReceiptLeakViolations(search, registry)).toEqual([]);
+    expect(embedNamespaceAdmissionViolations({ search, meta, doctor, evalSource })).toEqual([]);
+    expect(ftsNamespaceAdmissionViolations({ fts, doctor })).toEqual([]);
+    expect(
+      writerParentModeProblems({ vault, feedback, hnsw, fts, embed, persistenceCoordination, watcherGuard })
+    ).toEqual([]);
     expect(hnsw).toContain('rowByLabel: ReadonlyMap<number, Omit<EmbedReceiptSearchHit, "score">>');
     expect(hnsw).toContain("indexed_mtime_ms: row.indexed_mtime_ms,");
     expect(hnsw).toContain("indexed_revision: row.indexed_revision");
@@ -472,7 +723,18 @@ describe("enforcement-guarantee → code-guard invariant (rc.3, overclaim #15/#1
     expect(err).toMatch(/MISSING from src/);
 
     const search = readFileSync(path.join(repoRoot, "src/tools/search.ts"), "utf8");
+    const meta = readFileSync(path.join(repoRoot, "src/tools/meta.ts"), "utf8");
+    const doctor = readFileSync(path.join(repoRoot, "src/doctor.ts"), "utf8");
+    const evalSource = readFileSync(path.join(repoRoot, "src/eval.ts"), "utf8");
     const registry = readFileSync(path.join(repoRoot, "src/tool-registry.ts"), "utf8");
+    const resourceAdmission = readFileSync(path.join(repoRoot, "src/resource-admission.ts"), "utf8");
+    const vault = readFileSync(path.join(repoRoot, "src/vault.ts"), "utf8");
+    const feedback = readFileSync(path.join(repoRoot, "src/feedback.ts"), "utf8");
+    const hnsw = readFileSync(path.join(repoRoot, "src/hnsw.ts"), "utf8");
+    const fts = readFileSync(path.join(repoRoot, "src/fts5.ts"), "utf8");
+    const embed = readFileSync(path.join(repoRoot, "src/embed-db.ts"), "utf8");
+    const persistenceCoordination = readFileSync(path.join(repoRoot, "src/persistence-coordination.ts"), "utf8");
+    const watcherGuard = readFileSync(path.join(repoRoot, "src/watcher-activation-guard.ts"), "utf8");
     const ftsReceipt = "(match) => match,";
     const ftsMask = "(receipts) => idx.currentSourceReceiptMask(receipts)";
     expect(search).toContain(ftsReceipt);
@@ -482,6 +744,19 @@ describe("enforcement-guarantee → code-guard invariant (rc.3, overclaim #15/#1
     );
     expect(persistedEgressGuardViolations(search.replace(ftsMask, "() => []"))).toContain(
       `diagnostic FTS: missing ${ftsMask}`
+    );
+
+    const liveChunkRead = "const payload = await readLiveFtsChunk(vault, idx, decoded, chunkIndex);";
+    const chunkGuardMutant = replaceExactly(
+      resourceAdmission,
+      liveChunkRead,
+      "const payload = idx.getChunk(decoded, chunkIndex);"
+    );
+    expect(chunkResourceAdmissionViolations(registry, chunkGuardMutant)).toEqual(
+      expect.arrayContaining([
+        "chunk resource admission: live readLiveFtsChunk guard missing",
+        "chunk resource admission: direct index bypass via idx.getChunk("
+      ])
     );
 
     const authoritativeHydration = "let h = hnswResultsToReceiptHits({ labels, distances }, hydratedRows);";
@@ -496,6 +771,155 @@ describe("enforcement-guarantee → code-guard invariant (rc.3, overclaim #15/#1
     expect(persistedEgressGuardViolations(legacyHnswEgress)).toContain(
       "standalone embeddings plus current DB hydration: forbidden legacy receipt egress via hnswResultsToHits({ labels, distances }"
     );
+
+    const removeSearchAdmissionAfter = (marker: string, replacement: string): string => {
+      const start = search.indexOf(marker);
+      expect(start).toBeGreaterThanOrEqual(0);
+      return `${search.slice(0, start)}${search
+        .slice(start)
+        .replace("if (ctx.embedFile !== null) assertEmbedDbFilePath(ctx.embedFile);", replacement)}`;
+    };
+    const directAdmissionMutants = [
+      {
+        ...{ search, meta, doctor, evalSource },
+        search: search.replace("if (embedFile !== null) assertEmbedDbFilePath(embedFile);", "// admission removed")
+      },
+      {
+        ...{ search, meta, doctor, evalSource },
+        search: removeSearchAdmissionAfter("export async function searchHybrid(", "// searchHybrid admission removed")
+      },
+      {
+        ...{ search, meta, doctor, evalSource },
+        search: removeSearchAdmissionAfter(
+          "export async function searchHybridMulti(",
+          "// searchHybridMulti admission removed"
+        )
+      },
+      {
+        ...{ search, meta, doctor, evalSource },
+        meta: meta.replace("if (ctx.embedFile !== null) assertEmbedDbFilePath(ctx.embedFile);", "// admission removed")
+      },
+      {
+        ...{ search, meta, doctor, evalSource },
+        doctor: doctor.replace(
+          "if (opts.embedFile !== undefined) assertEmbedDbFilePath(opts.embedFile);",
+          "// admission removed"
+        )
+      },
+      {
+        ...{ search, meta, doctor, evalSource },
+        evalSource: evalSource.replace("assertEmbedDbFilePath(opts.embedFile);", "// admission removed")
+      }
+    ];
+    for (const mutant of directAdmissionMutants) {
+      expect(embedNamespaceAdmissionViolations(mutant)).not.toEqual([]);
+    }
+
+    const peekStart = fts.indexOf("export async function peekFtsMetaSafe(");
+    expect(peekStart).toBeGreaterThanOrEqual(0);
+    const peekMutant = `${fts.slice(0, peekStart)}${fts
+      .slice(peekStart)
+      .replace("assertFtsIndexFilePath(file);", "// peek admission removed")}`;
+    const discoveryAfterFamilyPreflight = replaceExactly(
+      fts,
+      "  assertFtsIndexFilePath(file);\n" +
+        "  let fileExisted: boolean;\n" +
+        "  try {\n" +
+        "    fileExisted = await preflightSqliteArtifactFamily(file);",
+      "  let fileExisted: boolean;\n" +
+        "  try {\n" +
+        "    fileExisted = await preflightSqliteArtifactFamily(file);\n" +
+        "    assertFtsIndexFilePath(file);"
+    );
+    const peekAfterFamilyPreflight = replaceExactly(
+      fts,
+      "  assertFtsIndexFilePath(file);\n" +
+        "  try {\n" +
+        "    if (!(await preflightSqliteArtifactFamily(file))) return null;",
+      "  try {\n" +
+        "    if (!(await preflightSqliteArtifactFamily(file))) return null;\n" +
+        "    assertFtsIndexFilePath(file);"
+    );
+    expect(ftsNamespaceAdmissionViolations({ fts: discoveryAfterFamilyPreflight, doctor })).toContain(
+      "discoverFtsIndexConfig: namespace admission occurs after await preflightSqliteArtifactFamily(file)"
+    );
+    expect(ftsNamespaceAdmissionViolations({ fts: peekAfterFamilyPreflight, doctor })).toContain(
+      "peekFtsMetaSafe: namespace admission occurs after await preflightSqliteArtifactFamily(file)"
+    );
+    for (const mutant of [
+      {
+        fts: fts.replace("assertFtsIndexFilePath(opts.file);", "// constructor admission removed"),
+        doctor
+      },
+      {
+        fts: fts.replace("assertFtsIndexFilePath(file);", "// discovery admission removed"),
+        doctor
+      },
+      { fts: peekMutant, doctor },
+      {
+        fts,
+        doctor: doctor.replace(
+          "if (opts.indexFile !== undefined) assertFtsIndexFilePath(opts.indexFile);",
+          "// doctor FTS admission removed"
+        )
+      }
+    ]) {
+      expect(ftsNamespaceAdmissionViolations(mutant)).not.toEqual([]);
+    }
+
+    const writerSources = { vault, feedback, hnsw, fts, embed, persistenceCoordination, watcherGuard };
+    const parentModeMutants = [
+      {
+        ...writerSources,
+        vault: vault.replace(
+          "await this.mkdirSafe(cacheDir",
+          "const parentExisted = true;\n    await this.mkdirSafe(cacheDir"
+        )
+      },
+      {
+        ...writerSources,
+        feedback: feedback.replace(
+          "const lifetime = await acquirePersistenceFamilyLease({",
+          "const lifetime = await acquirePersistenceFamilyLeaseInScopes({"
+        )
+      },
+      {
+        ...writerSources,
+        hnsw: hnsw.replace(
+          "await fs.mkdir(parentDir",
+          "await fs.chmod(parentDir, 0o700);\n          await fs.mkdir(parentDir"
+        )
+      },
+      {
+        ...writerSources,
+        fts: fts.replace("await fs.mkdir(parentDir", "const parentExisted = true;\n      await fs.mkdir(parentDir")
+      },
+      {
+        ...writerSources,
+        embed: embed.replace(
+          ": await acquirePersistenceFamilyLease({",
+          ": await acquirePersistenceFamilyLeaseInScopes({"
+        )
+      },
+      {
+        ...writerSources,
+        persistenceCoordination: persistenceCoordination.replace(
+          "await fs.mkdir(path.dirname(path.resolve(options.targetPath)), { recursive: true, mode: 0o700 });",
+          "await fs.stat(path.dirname(path.resolve(options.targetPath)));\n    " +
+            "await fs.mkdir(path.dirname(path.resolve(options.targetPath)), { recursive: true, mode: 0o700 });"
+        )
+      },
+      {
+        ...writerSources,
+        watcherGuard: watcherGuard.replace(
+          "await fs.mkdir(guardPath",
+          "await fs.chmod(guardPath, 0o700);\n    await fs.mkdir(guardPath"
+        )
+      }
+    ];
+    for (const mutant of parentModeMutants) {
+      expect(writerParentModeProblems(mutant)).not.toEqual([]);
+    }
 
     for (const [label, receiptCall, legacyCall, forbiddenCall] of [
       [

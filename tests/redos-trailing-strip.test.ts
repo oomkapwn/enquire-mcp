@@ -9,9 +9,10 @@
 // NEGATIVE control: an INLINED copy of the old regex is provably slow on the same shape
 // (proving the timing assertion is not vacuous).
 
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import ts from "typescript";
 import { describe, expect, it } from "vitest";
 import {
   stripSurroundingSlashes,
@@ -28,46 +29,114 @@ function ms(fn: () => void): number {
   return Number(process.hrtime.bigint() - a) / 1e6;
 }
 
-function hasPolynomialTrailingRunReplace(line: string): boolean {
-  const callNeedle = ".replace(/";
-  let searchFrom = 0;
-  while (searchFrom < line.length) {
-    const call = line.indexOf(callNeedle, searchFrom);
-    if (call < 0) return false;
-    const patternStart = call + callNeedle.length;
-    let escaped = false;
-    let inClass = false;
-    let patternEnd = -1;
-    for (let i = patternStart; i < line.length; i += 1) {
-      const character = line[i];
-      if (character === undefined) break;
-      if (escaped) {
-        escaped = false;
-        continue;
-      }
-      if (character === "\\") {
-        escaped = true;
-        continue;
-      }
-      if (character === "[") inClass = true;
-      else if (character === "]") inClass = false;
-      else if (character === "/" && !inClass) {
-        patternEnd = i;
-        break;
-      }
+function regexLiteralPattern(literal: string): string | null {
+  if (!literal.startsWith("/")) return null;
+  const patternStart = 1;
+  let escaped = false;
+  let inClass = false;
+  for (let i = patternStart; i < literal.length; i += 1) {
+    const character = literal[i];
+    if (character === undefined) break;
+    if (escaped) {
+      escaped = false;
+      continue;
     }
-    if (patternEnd >= 0 && /^[dgimsuvy]*\s*,/.test(line.slice(patternEnd + 1))) {
-      const pattern = line.slice(patternStart, patternEnd);
-      if (pattern.endsWith("+$")) {
-        const atom = pattern.slice(0, -2);
-        if (atom.length === 1 || (atom.length === 2 && atom.startsWith("\\")) || /^\[.*\]$/.test(atom)) {
-          return true;
+    if (character === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (character === "[") inClass = true;
+    else if (character === "]") inClass = false;
+    else if (character === "/" && !inClass) {
+      return /^[dgimsuvy]*$/u.test(literal.slice(i + 1)) ? literal.slice(patternStart, i) : null;
+    }
+  }
+  return null;
+}
+
+function isPolynomialTrailingRunPattern(pattern: string): boolean {
+  const absoluteEnd = ["+$", "+(?![\\s\\S])"].find((suffix) => pattern.endsWith(suffix));
+  if (!absoluteEnd) return false;
+  const atom = pattern.slice(0, -absoluteEnd.length);
+  return atom.length === 1 || (atom.length === 2 && atom.startsWith("\\")) || /^\[.*\]$/u.test(atom);
+}
+
+function hasPolynomialTrailingRunReplace(source: string): boolean {
+  const sourceFile = ts.createSourceFile("detector.ts", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  let found = false;
+  const visit = (node: ts.Node): void => {
+    if (found) return;
+    if (
+      ts.isCallExpression(node) &&
+      ts.isPropertyAccessExpression(node.expression) &&
+      node.expression.name.text === "replace"
+    ) {
+      const patternArg = node.arguments[0];
+      if (patternArg && ts.isRegularExpressionLiteral(patternArg)) {
+        const pattern = regexLiteralPattern(patternArg.getText(sourceFile));
+        if (pattern !== null && isPolynomialTrailingRunPattern(pattern)) {
+          found = true;
+          return;
         }
       }
     }
-    searchFrom = patternStart;
-  }
-  return false;
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  return found;
+}
+
+function polynomialTrailingRunLocations(rel: string, source: string): string[] {
+  const sourceFile = ts.createSourceFile(rel, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const offenders: string[] = [];
+  const visit = (node: ts.Node): void => {
+    if (
+      ts.isCallExpression(node) &&
+      ts.isPropertyAccessExpression(node.expression) &&
+      node.expression.name.text === "replace"
+    ) {
+      const patternArg = node.arguments[0];
+      if (patternArg && ts.isRegularExpressionLiteral(patternArg)) {
+        const pattern = regexLiteralPattern(patternArg.getText(sourceFile));
+        if (pattern !== null && isPolynomialTrailingRunPattern(pattern)) {
+          const { line } = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile));
+          const sourceLine = source.split("\n")[line]?.trim() ?? node.getText(sourceFile);
+          offenders.push(`${rel}:${line + 1}: ${sourceLine}`);
+        }
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  return offenders;
+}
+
+interface ProductionSource {
+  rel: string;
+  source: string;
+}
+
+function productionTypeScriptSources(): ProductionSource[] {
+  const sources: ProductionSource[] = [];
+  const walk = (dir: string): void => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        walk(full);
+      } else if (entry.isFile() && entry.name.endsWith(".ts")) {
+        sources.push({
+          rel: path.relative(repoRoot, full).replace(/\\/gu, "/"),
+          source: readFileSync(full, "utf8")
+        });
+      }
+    }
+  };
+  walk(path.join(repoRoot, "src"));
+  return sources.sort((left, right) => left.rel.localeCompare(right.rel));
+}
+
+function polynomialTrailingRunOffenders(sources: readonly ProductionSource[]): string[] {
+  return sources.flatMap(({ rel, source }) => polynomialTrailingRunLocations(rel, source));
 }
 
 describe("ReDoS — trailing-run strips are linear (CodeQL js/polynomial-redos #13)", () => {
@@ -94,29 +163,10 @@ describe("ReDoS — trailing-run strips are linear (CodeQL js/polynomial-redos #
   });
 
   it("no folder/body sink still uses a trailing-run `replace(/<class>+$/)` regex (static guard)", () => {
-    // The polynomial anti-pattern, scoped to the sinks that were fixed. Doc-comment prose
-    // in wildcard-match.ts legitimately names the old pattern, so that file is excluded.
-    const SINK_FILES = [
-      "src/fts5.ts",
-      "src/embed-db.ts",
-      "src/periodic.ts",
-      "src/prompts.ts",
-      "src/vault-path-policy.ts",
-      "src/tools/search.ts",
-      "src/tools/write.ts",
-      "src/tools/read.ts"
-    ];
-    // The polynomial shape is a SINGLE literal, simple escape, or char-class run anchored at end-of-string:
-    // `.replace(/<class>+$/...)`. (A leading `^<class>+` is start-anchored → linear; a
-    // two-part `#\d+$` fails fast; a global `\s+/g` has no `$` → linear. None match.)
-    const offenders: string[] = [];
-    for (const rel of SINK_FILES) {
-      const src = readFileSync(path.join(repoRoot, rel), "utf8");
-      for (const [i, line] of src.split("\n").entries()) {
-        if (line.trimStart().startsWith("//")) continue; // skip comment lines
-        if (hasPolynomialTrailingRunReplace(line)) offenders.push(`${rel}:${i + 1}: ${line.trim()}`);
-      }
-    }
+    const sources = productionTypeScriptSources();
+    expect(sources.some(({ rel }) => rel === "src/persistence-path.ts")).toBe(true);
+    expect(sources.some(({ rel }) => rel === "src/tools/read.ts")).toBe(true);
+    const offenders = polynomialTrailingRunOffenders(sources);
     expect(offenders, offenders.join("\n")).toEqual([]);
   });
 
@@ -129,10 +179,24 @@ describe("ReDoS — trailing-run strips are linear (CodeQL js/polynomial-redos #
     expect(hasPolynomialTrailingRunReplace('body.replace(/\\n+$/d, "")')).toBe(true);
     expect(hasPolynomialTrailingRunReplace('rawSegment.replace(/[. ]+$/u, "")')).toBe(true);
     expect(hasPolynomialTrailingRunReplace('rawSegment.replace(/[\\/.]+$/v, "")')).toBe(true);
+    expect(hasPolynomialTrailingRunReplace('rawSegment.replace(/[ .]+(?![\\s\\S])/u, "")')).toBe(true);
+    expect(hasPolynomialTrailingRunReplace('rawSegment.replace(\n  /[ .]+$/u,\n  ""\n)')).toBe(true);
     expect(hasPolynomialTrailingRunReplace('id.replace(/#\\d+$/, "")')).toBe(false);
     expect(hasPolynomialTrailingRunReplace('body.replace(/^\\/+$/, "")')).toBe(false);
     expect(hasPolynomialTrailingRunReplace("stripTrailingSlashes(opts.folder)")).toBe(false); // fixed form
     expect(hasPolynomialTrailingRunReplace("stripTrailingRun(rawSegment, isWindowsIgnoredSuffix)")).toBe(false);
+  });
+
+  it("the production census rejects a polynomial strip in a future source file (NEGATIVE control)", () => {
+    const offenders = polynomialTrailingRunOffenders([
+      {
+        rel: "src/new-persistence-sink.ts",
+        source: 'export const strip = (value: string) => value.replace(/[ .]+(?![\\s\\S])/u, "");'
+      }
+    ]);
+    expect(offenders).toEqual([
+      'src/new-persistence-sink.ts:1: export const strip = (value: string) => value.replace(/[ .]+(?![\\s\\S])/u, "");'
+    ]);
   });
 });
 

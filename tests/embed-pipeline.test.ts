@@ -15,7 +15,7 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { type EmbedRow, embedSingleNote, embedSinglePdf } from "../src/embed-pipeline.js";
 import { Vault } from "../src/vault.js";
 import { makePdf } from "./helpers/make-pdf.js";
@@ -27,6 +27,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await fs.rm(root, { recursive: true, force: true });
 });
 
@@ -359,5 +360,29 @@ describe("embedSinglePdf", () => {
       { preExtractedPages: [] }
     );
     expect(result).toBeNull();
+  });
+
+  it("rejects a failed pre-extracted OCR page before embedding", async () => {
+    const v = new Vault(root);
+    await v.ensureExists();
+    const filePath = path.join(root, "failed-ocr-page.pdf");
+    await fs.writeFile(filePath, "irrelevant — failed evidence must stop before disk parsing");
+    const stat = await fs.stat(filePath);
+    const embedSpy = vi.spyOn(mockEmbedder, "embed");
+
+    await expect(
+      embedSinglePdf(
+        v,
+        mockEmbedder,
+        { relPath: "failed-ocr-page.pdf", absPath: filePath, mtimeMs: stat.mtimeMs },
+        {
+          preExtractedPages: [
+            { pageNumber: 1, text: "partial text", status: "ok" },
+            { pageNumber: 2, text: "", status: "failed" }
+          ]
+        }
+      )
+    ).rejects.toThrow(/incomplete pre-extracted page evidence.*2/);
+    expect(embedSpy).not.toHaveBeenCalled();
   });
 });

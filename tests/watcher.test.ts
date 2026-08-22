@@ -3,10 +3,19 @@ import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { FSWatcher } from "chokidar";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type {
+  HnswBuildSnapshot,
+  HnswPersistenceReceipt,
+  HnswPersistenceRow,
+  HnswReceiptSnapshot
+} from "../src/embed-db.js";
 import { defaultIndexFile, FtsIndex } from "../src/fts5.js";
+import type { HnswIndex } from "../src/hnsw.js";
+import * as hnswModule from "../src/hnsw.js";
+import type { PersistenceFamilyScopes } from "../src/persistence-coordination.js";
 import { Vault } from "../src/vault.js";
-import { VaultWatcher } from "../src/watcher.js";
+import { type HnswRowMeta, VaultWatcher } from "../src/watcher.js";
 import { makePdf } from "./helpers/make-pdf.js";
 
 let root: string;
@@ -469,7 +478,7 @@ describe("VaultWatcher (v1.2 — opt-in --watch)", () => {
       }
     } finally {
       process.stderr.write = origWrite;
-      fts.close();
+      await fts.closeAndRelease();
     }
   });
 });
@@ -510,7 +519,7 @@ describe("VaultWatcher with FTS5 index (v3.6 — reindex branches)", () => {
         await w.close();
       }
     } finally {
-      fts.close();
+      await fts.closeAndRelease();
     }
   });
 
@@ -549,7 +558,7 @@ describe("VaultWatcher with FTS5 index (v3.6 — reindex branches)", () => {
         await w.close();
       }
     } finally {
-      fts.close();
+      await fts.closeAndRelease();
     }
   });
 
@@ -582,7 +591,7 @@ describe("VaultWatcher with FTS5 index (v3.6 — reindex branches)", () => {
         await w.close();
       }
     } finally {
-      fts.close();
+      await fts.closeAndRelease();
     }
   });
 
@@ -653,8 +662,8 @@ describe("VaultWatcher with FTS5 index (v3.6 — reindex branches)", () => {
         await w.close();
       }
     } finally {
-      embedDb.close();
-      fts.close();
+      await embedDb.closeAndRelease();
+      await fts.closeAndRelease();
     }
   });
 
@@ -715,8 +724,8 @@ describe("VaultWatcher with FTS5 index (v3.6 — reindex branches)", () => {
         await w.close();
       }
     } finally {
-      embedDb.close();
-      fts.close();
+      await embedDb.closeAndRelease();
+      await fts.closeAndRelease();
     }
   });
 
@@ -811,8 +820,8 @@ describe("VaultWatcher with FTS5 index (v3.6 — reindex branches)", () => {
       if (w) await w.close().catch(() => {});
       if (activationWatcher) await activationWatcher.close().catch(() => {});
       process.stderr.write = origWrite;
-      embedDb.close();
-      fts.close();
+      await embedDb.closeAndRelease();
+      await fts.closeAndRelease();
     }
 
     await assertEqualMtimePreparationQuarantine();
@@ -871,8 +880,8 @@ describe("VaultWatcher with FTS5 index (v3.6 — reindex branches)", () => {
       await fs.writeFile(absPath, "new generation with the same mtime\n");
       await fs.utimes(absPath, new Date(indexedMtimeMs), new Date(indexedMtimeMs));
       expect((await fs.stat(absPath)).mtimeMs).toBe(indexedMtimeMs);
-      const originalReadNote = v.readNote;
-      v.readNote = async () => {
+      const originalReadNoteUncached = v.readNoteUncached;
+      v.readNoteUncached = async () => {
         throw new Error("synthetic equal-mtime source-read failure");
       };
       try {
@@ -882,7 +891,7 @@ describe("VaultWatcher with FTS5 index (v3.6 — reindex branches)", () => {
           }
         ).handle(absPath, "change");
       } finally {
-        v.readNote = originalReadNote;
+        v.readNoteUncached = originalReadNoteUncached;
       }
 
       // Mutation control: physical old rows remain, but durable source-scoped
@@ -895,8 +904,8 @@ describe("VaultWatcher with FTS5 index (v3.6 — reindex branches)", () => {
       expect(fts.diff([{ relPath, mtimeMs: indexedMtimeMs }], "md").updated).toContain(relPath);
     } finally {
       await w.close();
-      embedDb.close();
-      fts.close();
+      await embedDb.closeAndRelease();
+      await fts.closeAndRelease();
     }
   }
 
@@ -981,8 +990,8 @@ describe("VaultWatcher with FTS5 index (v3.6 — reindex branches)", () => {
       expect(fts.auditKind("md").mismatched_files).toBe(0);
     } finally {
       await w.close();
-      embedDb.close();
-      fts.close();
+      await embedDb.closeAndRelease();
+      await fts.closeAndRelease();
     }
   }
 
@@ -1020,10 +1029,10 @@ describe("VaultWatcher with FTS5 index (v3.6 — reindex branches)", () => {
       await fs.utimes(aPath, pinnedTime, pinnedTime);
       expect((await fs.stat(aPath)).mtimeMs).toBe(pinnedMtimeMs);
       expect((await fs.stat(bPath)).mtimeMs).toBe(pinnedMtimeMs);
-      const originalReadNote = v.readNote.bind(v);
-      v.readNote = async (...args: Parameters<Vault["readNote"]>) => {
+      const originalReadNoteUncached = v.readNoteUncached.bind(v);
+      v.readNoteUncached = async (...args: Parameters<Vault["readNoteUncached"]>) => {
         if (args[0] === aPath) throw new Error("synthetic alias preparation failure");
-        return originalReadNote(...args);
+        return originalReadNoteUncached(...args);
       };
       try {
         await (w as unknown as { handle(absPath: string, kind: "add" | "change" | "unlink"): Promise<void> }).handle(
@@ -1031,7 +1040,7 @@ describe("VaultWatcher with FTS5 index (v3.6 — reindex branches)", () => {
           "change"
         );
       } finally {
-        v.readNote = originalReadNote;
+        v.readNoteUncached = originalReadNoteUncached;
       }
 
       expect(fts.search("alias_old_secret", { limit: 10 })).toEqual([]);
@@ -1040,7 +1049,7 @@ describe("VaultWatcher with FTS5 index (v3.6 — reindex branches)", () => {
       expect(fts.diff([{ relPath: bRel, mtimeMs: pinnedMtimeMs }], "md").unchanged).toContain(bRel);
     } finally {
       await w.close();
-      fts.close();
+      await fts.closeAndRelease();
     }
   }
 
@@ -1072,11 +1081,11 @@ describe("VaultWatcher with FTS5 index (v3.6 — reindex branches)", () => {
     fts.reindexFile(aRel, pinnedMtimeMs, "alias_commit_old", [], []);
     fts.reindexFile(bRel, pinnedMtimeMs, "alias_commit_old", [], []);
     const w = new VaultWatcher({ vault: v, ftsIndex: fts, silent: true });
-    const originalReadNote = v.readNote.bind(v);
+    const originalReadNoteUncached = v.readNoteUncached.bind(v);
     const stagedReads = new Set<string>();
-    v.readNote = async (...args: Parameters<Vault["readNote"]>) => {
+    v.readNoteUncached = async (...args: Parameters<Vault["readNoteUncached"]>) => {
       if (args[0] === aPath || args[0] === bPath) stagedReads.add(args[0]);
-      return originalReadNote(...args);
+      return originalReadNoteUncached(...args);
     };
     const originalReindexFile = fts.reindexFile.bind(fts);
     let commitFailureInjected = false;
@@ -1115,9 +1124,9 @@ describe("VaultWatcher with FTS5 index (v3.6 — reindex branches)", () => {
       );
     } finally {
       fts.reindexFile = originalReindexFile;
-      v.readNote = originalReadNote;
+      v.readNoteUncached = originalReadNoteUncached;
       await w.close();
-      fts.close();
+      await fts.closeAndRelease();
     }
   }
 
@@ -1167,7 +1176,7 @@ describe("VaultWatcher with FTS5 index (v3.6 — reindex branches)", () => {
       ).toEqual([aRel, bRel]);
     } finally {
       await w.close();
-      fts.close();
+      await fts.closeAndRelease();
     }
   }
 
@@ -1195,7 +1204,7 @@ describe("VaultWatcher with FTS5 index (v3.6 — reindex branches)", () => {
         await w.close();
       }
     } finally {
-      fts.close();
+      await fts.closeAndRelease();
     }
     await assertImageOnlyPdfMarkerClears();
   });
@@ -1218,19 +1227,18 @@ describe("VaultWatcher with FTS5 index (v3.6 — reindex branches)", () => {
       fts.quarantineFile(relPath, "pdf");
       expect(fts.auditKind("pdf").mismatched_files).toBe(1);
 
-      // Server bootstrap is intentionally registration boilerplate and cannot
-      // be a static test dependency. Load only the real PDF sync integration
-      // at the causal boundary, matching the existing server integration tests.
-      const { syncPdfFtsIndex } = await import("../src/server.js");
+      // The PDF sync lives with the FTS persistence implementation rather than
+      // registration-only server bootstrap, so tests can exercise it directly.
+      const { syncPdfFtsIndex } = await import("../src/fts5.js");
       const report = await syncPdfFtsIndex(v, fts);
 
-      expect(report).toMatchObject({ added: 1, updated: 0, total_chunks: 0 });
+      expect(report).toMatchObject({ added: 0, updated: 0, skipped: 1, failed: 0, total_chunks: 0 });
       expect(fts.auditKind("pdf").mismatched_files).toBe(0);
       expect(
         fts.diff([{ relPath, mtimeMs: (await fs.stat(v.resolveInside(relPath))).mtimeMs }], "pdf").added
       ).toContain(relPath);
     } finally {
-      fts.close();
+      await fts.closeAndRelease();
     }
   }
 
@@ -1315,7 +1323,7 @@ describe("VaultWatcher with FTS5 index (v3.6 — reindex branches)", () => {
         await w.close();
       }
     } finally {
-      fts.close();
+      await fts.closeAndRelease();
     }
   });
 });
@@ -1386,17 +1394,159 @@ describe("VaultWatcher HNSW disk persistence (v3.9.0-rc.6)", () => {
     const persistFile = path.join(root, ".cache", "test.hnsw");
     const w = new VaultWatcher({ vault: v, ftsIndex: fts, silent: true });
     w.attachEmbed(embedDb, mockEmbedder, 0);
-    w.attachHnsw(index, rowsByLabel, persist ? persistFile : undefined);
-    return { w, embedDb, index, rowsByLabel, persistFile, v, fts };
+    const sharedGenerationAuthority = { ...embedDb.captureGenerationIdentity() };
+    w.attachHnsw(index, rowsByLabel, persist ? persistFile : undefined, sharedGenerationAuthority);
+    return { w, embedDb, index, rowsByLabel, persistFile, sharedGenerationAuthority, v, fts };
   }
+
+  it("publishes a live upsert generation only after the synchronous HNSW diff", async () => {
+    const { w, embedDb, index, sharedGenerationAuthority, fts } = await setup(false);
+    const applyDiff = vi.spyOn(index, "applyDiff");
+    const internals = w as unknown as {
+      upsertEmbedAndSyncHnsw(
+        relPath: string,
+        mtimeMs: number,
+        rows: ReadonlyArray<{
+          chunkIndex: number;
+          lineStart: number;
+          lineEnd: number;
+          textPreview: string;
+          vector: Float32Array;
+        }>,
+        kind: "md" | "pdf"
+      ): { oldIds: number[]; newIds: number[]; hnswResult: { removed: number; added: number } | null };
+    };
+    try {
+      const priorEpoch = sharedGenerationAuthority.dbMutationEpoch;
+      const vector = (await mockEmbedder.embed(["watcher-owned generation"]))[0] as Float32Array;
+      const result = internals.upsertEmbedAndSyncHnsw(
+        "watcher-owned.md",
+        2,
+        [{ chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "watcher-owned", vector }],
+        "md"
+      );
+
+      expect(applyDiff).toHaveBeenCalledOnce();
+      expect(result.hnswResult).toEqual({ removed: 0, added: 1 });
+      expect(sharedGenerationAuthority.dbMutationEpoch).toBeGreaterThan(priorEpoch);
+      expect(sharedGenerationAuthority).toEqual(embedDb.captureGenerationIdentity());
+      expect(w.searchHealth).toEqual({ semanticUsable: true, hnswUsable: true });
+    } finally {
+      await w.close();
+      await embedDb.closeAndRelease();
+      await fts.closeAndRelease();
+    }
+  });
+
+  it("refuses a stale shared authority before attaching an HNSW candidate", async () => {
+    const { w, embedDb, index, rowsByLabel, sharedGenerationAuthority, v, fts } = await setup(false);
+    const { EmbedDb } = await import("../src/embed-db.js");
+    const external = new EmbedDb({
+      file: path.join(root, ".cache", "test.embed.db"),
+      vaultRoot: root,
+      modelAlias: "test-mock",
+      dim: mockDim
+    });
+    const candidateWatcher = new VaultWatcher({ vault: v, ftsIndex: fts, silent: true });
+    candidateWatcher.attachEmbed(embedDb, mockEmbedder, 0);
+    await external.open();
+    try {
+      const vector = (await mockEmbedder.embed(["external attach drift"]))[0] as Float32Array;
+      external.upsertNote("attach-drift.md", 2, [
+        { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "attach drift", vector }
+      ]);
+
+      expect(() => candidateWatcher.attachHnsw(index, rowsByLabel, undefined, sharedGenerationAuthority)).toThrow(
+        "shared HNSW authority does not match the current EmbedDb generation"
+      );
+      const internals = candidateWatcher as unknown as {
+        hnsw: HnswIndex | null;
+        hnswGenerationAuthority: object | null;
+      };
+      expect(internals.hnsw).toBeNull();
+      expect(internals.hnswGenerationAuthority).toBeNull();
+    } finally {
+      await external.closeAndRelease();
+      await candidateWatcher.close();
+      await w.close();
+      await embedDb.closeAndRelease();
+      await fts.closeAndRelease();
+    }
+  });
+
+  it("never blesses an external writer and keeps authoritative EmbedDb search usable", async () => {
+    const { w, embedDb, index, sharedGenerationAuthority, fts } = await setup(false);
+    const { EmbedDb } = await import("../src/embed-db.js");
+    const external = new EmbedDb({
+      file: path.join(root, ".cache", "test.embed.db"),
+      vaultRoot: root,
+      modelAlias: "test-mock",
+      dim: mockDim
+    });
+    await external.open();
+    const applyDiff = vi.spyOn(index, "applyDiff");
+    const internals = w as unknown as {
+      hnswPersistUnsafe: boolean;
+      upsertEmbedAndSyncHnsw(
+        relPath: string,
+        mtimeMs: number,
+        rows: ReadonlyArray<{
+          chunkIndex: number;
+          lineStart: number;
+          lineEnd: number;
+          textPreview: string;
+          vector: Float32Array;
+        }>,
+        kind: "md" | "pdf"
+      ): { hnswResult: { removed: number; added: number } | null };
+    };
+    try {
+      const attachedAuthority = { ...sharedGenerationAuthority };
+      const externalVector = (await mockEmbedder.embed(["external generation"]))[0] as Float32Array;
+      external.upsertNote("external.md", 2, [
+        { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "external", vector: externalVector }
+      ]);
+      const externalAuthority = external.captureGenerationIdentity();
+      expect(externalAuthority.dbMutationEpoch).toBeGreaterThan(attachedAuthority.dbMutationEpoch);
+
+      const watcherVector = (await mockEmbedder.embed(["watcher fallback generation"]))[0] as Float32Array;
+      const result = internals.upsertEmbedAndSyncHnsw(
+        "watcher-fallback.md",
+        3,
+        [{ chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "watcher fallback", vector: watcherVector }],
+        "md"
+      );
+
+      expect(result.hnswResult).toBeNull();
+      expect(applyDiff).not.toHaveBeenCalled();
+      expect(sharedGenerationAuthority).toEqual(attachedAuthority);
+      expect(sharedGenerationAuthority).not.toEqual(externalAuthority);
+      expect(embedDb.getSourceStates().map((row) => row.rel_path)).toEqual([
+        "a.md",
+        "external.md",
+        "watcher-fallback.md"
+      ]);
+      expect(internals.hnswPersistUnsafe).toBe(true);
+      expect(w.searchHealth).toEqual({ semanticUsable: true, hnswUsable: false });
+    } finally {
+      await external.closeAndRelease();
+      await w.close();
+      await embedDb.closeAndRelease();
+      await fts.closeAndRelease();
+    }
+  });
 
   it("flushHnswToDisk skips a clean index and every generation with an uncertain live graph", async () => {
     const { w, embedDb, index, persistFile, v, fts } = await setup(true);
+    const { isHnswGenerationBasename } = await import("../src/hnsw.js");
+    const generationNames = async () =>
+      (await fs.readdir(path.dirname(persistFile))).filter((entry) => isHnswGenerationBasename(persistFile, entry));
     try {
       const flushed = await w.flushHnswToDisk();
       expect(flushed).toBe(false);
-      // No sidecar should be written.
-      await expect(fs.access(`${persistFile}.bin`)).rejects.toMatchObject({ code: "ENOENT" });
+      // Neither the stable pointer nor an immutable generation may be written.
+      await expect(fs.access(`${persistFile}.meta.json`)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(await generationNames()).toEqual([]);
 
       const watcherInternals = w as unknown as {
         hnswPersistUnsafe: boolean;
@@ -1449,29 +1599,36 @@ describe("VaultWatcher HNSW disk persistence (v3.9.0-rc.6)", () => {
       // before syncHnswForFile. Prove the surrounding markdown catch sets the
       // same permanent latch instead of laundering that stale graph on close.
       watcherInternals.hnswPersistUnsafe = false;
-      const originalUpsertNote = embedDb.upsertNote.bind(embedDb);
+      w.searchHealth.hnswUsable = true;
+      const originalConditionalUpsert = embedDb.upsertNoteWithCanonicalVectorsIfGeneration.bind(embedDb);
       let mismatchInjectedAfterCommit = false;
-      embedDb.upsertNote = (...args: Parameters<typeof embedDb.upsertNote>) => {
-        const result = originalUpsertNote(...args);
-        mismatchInjectedAfterCommit = args[2].length > 0 && result.newIds.length === args[2].length;
-        return { ...result, newIds: result.newIds.slice(1) };
+      embedDb.upsertNoteWithCanonicalVectorsIfGeneration = (
+        ...args: Parameters<typeof embedDb.upsertNoteWithCanonicalVectorsIfGeneration>
+      ) => {
+        const result = originalConditionalUpsert(...args);
+        if (result.kind !== "committed") return result;
+        mismatchInjectedAfterCommit = args[3].length > 0 && result.value.newIds.length === args[3].length;
+        return {
+          ...result,
+          value: { ...result.value, newIds: result.value.newIds.slice(1) }
+        };
       };
       try {
         await watcherInternals.handle(v.resolveInside("a.md"), "change");
       } finally {
-        embedDb.upsertNote = originalUpsertNote;
+        embedDb.upsertNoteWithCanonicalVectorsIfGeneration = originalConditionalUpsert;
       }
       expect(mismatchInjectedAfterCommit).toBe(true);
       expect(watcherInternals.hnswPersistUnsafe).toBe(true);
       expect(w.searchHealth.semanticUsable).toBe(false);
 
       await expect(w.flushHnswToDisk()).resolves.toBe(false);
-      await expect(fs.access(`${persistFile}.bin`)).rejects.toMatchObject({ code: "ENOENT" });
       await expect(fs.access(`${persistFile}.meta.json`)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(await generationNames()).toEqual([]);
     } finally {
       await w.close();
-      embedDb.close();
-      fts.close();
+      await embedDb.closeAndRelease();
+      await fts.closeAndRelease();
     }
   });
 
@@ -1479,22 +1636,26 @@ describe("VaultWatcher HNSW disk persistence (v3.9.0-rc.6)", () => {
     const { w, embedDb, index, fts } = await setup(false); // persist=false → no persistFile
     try {
       // Force a live update directly on the index via the public applyDiff,
-      // but the watcher's dirty flag is only set by syncHnswForFile. We
-      // assert the no-persistFile guard: even if dirty were set, flush
-      // returns false without a persistFile.
+      // then set the watcher's dirty flag explicitly. This makes the test a
+      // causal negative control for the missing-persistFile guard rather than
+      // letting the earlier clean-index guard vacuously return false.
       index.applyDiff([], [{ label: 999, vector: new Float32Array([0.5, 0.5, 0.5, 0.5]) }]);
+      const watcherInternals = w as unknown as { hnswDirty: boolean };
+      watcherInternals.hnswDirty = true;
+      expect(watcherInternals.hnswDirty).toBe(true);
       const flushed = await w.flushHnswToDisk();
       expect(flushed).toBe(false);
+      expect(watcherInternals.hnswDirty).toBe(true);
     } finally {
       await w.close();
-      embedDb.close();
-      fts.close();
+      await embedDb.closeAndRelease();
+      await fts.closeAndRelease();
     }
   });
 
   it("close() flushes the live-updated index to a loadable sidecar with matching signature", async () => {
     const { w, embedDb, persistFile, fts } = await setup(true);
-    const { loadHnswFromDisk } = await import("../src/hnsw.js");
+    const { isHnswGenerationBasename, loadHnswFromDisk } = await import("../src/hnsw.js");
     await w.start();
     try {
       // chokidar FSEvents warm-up (W-FLAKE-2 pattern).
@@ -1511,17 +1672,19 @@ describe("VaultWatcher HNSW disk persistence (v3.9.0-rc.6)", () => {
       // close() triggers flushHnswToDisk.
       await w.close();
     }
-    // Sidecar must now exist + load back with the post-edit signature.
-    const binExists = await fs
-      .access(`${persistFile}.bin`)
-      .then(() => true)
-      .catch(() => false);
-    expect(binExists, "close() should have persisted the live-updated HNSW sidecar").toBe(true);
-    const signature = embedDb.computeSignature();
-    const loaded = await loadHnswFromDisk(persistFile, signature);
+    // Stable metadata must point to one strict immutable generation that exists.
+    const meta = JSON.parse(await fs.readFile(`${persistFile}.meta.json`, "utf8")) as { binFile: string };
+    expect(isHnswGenerationBasename(persistFile, meta.binFile)).toBe(true);
+    await expect(fs.access(path.join(path.dirname(persistFile), meta.binFile))).resolves.toBeUndefined();
+    const snapshot = embedDb.captureHnswLoadSnapshot();
+    const loaded = await loadHnswFromDisk(persistFile, snapshot.receipt.signature, {
+      expectedDim: snapshot.receipt.dim,
+      expectedRowsByLabel: snapshot.rowsByLabel,
+      expectedVectorsByLabel: snapshot.vectorsByLabel
+    });
     expect(loaded, "persisted sidecar should load with the post-edit signature").not.toBeNull();
-    embedDb.close();
-    fts.close();
+    await embedDb.closeAndRelease();
+    await fts.closeAndRelease();
   });
 
   // v3.9.0-rc.11 (H1) — per-file serialization + close() drain. chokidar
@@ -1545,7 +1708,254 @@ describe("VaultWatcher HNSW disk persistence (v3.9.0-rc.6)", () => {
     for (const label of rowsByLabel.keys()) {
       expect(dbLabels.has(label), `rowsByLabel label ${label} must exist in embed-db (no ghost)`).toBe(true);
     }
-    embedDb.close();
-    fts.close();
+    await embedDb.closeAndRelease();
+    await fts.closeAndRelease();
+  });
+});
+
+describe("VaultWatcher direct HNSW flush generation binding", () => {
+  interface DirectFlushInternals {
+    hnswDirty: boolean;
+    hnswPersistUnsafe: boolean;
+    hnsw: object | null;
+    hnswRowsByLabel: Map<number, HnswRowMeta> | null;
+    hnswPersistFile: string | null;
+    embedDb: {
+      captureHnswBuildSnapshot(): HnswBuildSnapshot;
+      captureHnswReceiptSnapshot(): HnswReceiptSnapshot;
+      getPersistenceFamilyScopes(): PersistenceFamilyScopes;
+    } | null;
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const row = (textPreview = "current"): HnswPersistenceRow => ({
+    rel_path: "direct.md",
+    chunk_index: 0,
+    line_start: 1,
+    line_end: 1,
+    text_preview: textPreview,
+    kind: "md"
+  });
+
+  const receipt = (payloadByte: "a" | "b"): HnswPersistenceReceipt => ({
+    version: 3,
+    signature: `direct-flush-${payloadByte}`,
+    dbInstanceUuid: "d".repeat(32),
+    dbMutationEpoch: payloadByte === "a" ? 11 : 12,
+    dim: 4,
+    activeRows: 1,
+    maxLabel: 7,
+    liveLabelSha256: "c".repeat(64),
+    dbPayloadSha256: payloadByte.repeat(64)
+  });
+
+  const snapshot = (payloadByte: "a" | "b"): HnswReceiptSnapshot => ({
+    receipt: receipt(payloadByte),
+    rowsByLabel: new Map([[7, row()]])
+  });
+
+  const buildSnapshot = (payloadByte: "a" | "b"): HnswBuildSnapshot => {
+    const current = snapshot(payloadByte);
+    return {
+      ...current,
+      vectors: [
+        {
+          label: 7,
+          vector: new Float32Array([1, 0, 0, 0]),
+          ...row()
+        }
+      ]
+    };
+  };
+
+  const compactIndex = (saveTo: HnswIndex["saveTo"]): HnswIndex => ({
+    dim: 4,
+    size: 1,
+    searchKnn: () => ({ labels: [], distances: [] }),
+    saveTo,
+    applyDiff: () => ({ removed: 0, added: 0 }),
+    resize: () => {},
+    capacity: () => ({ currentCount: 1, maxElements: 1 })
+  });
+
+  const configure = (
+    watcher: VaultWatcher,
+    before: HnswBuildSnapshot,
+    receipts: ReadonlyArray<HnswReceiptSnapshot>,
+    persistFile: string | null = path.join(root, ".cache", "direct.hnsw")
+  ): {
+    internals: DirectFlushInternals;
+    persistenceScopes: PersistenceFamilyScopes;
+    receiptCaptures: () => number;
+  } => {
+    const internals = watcher as unknown as DirectFlushInternals;
+    // The direct unit tests mock both native persistence and erasure. This
+    // opaque sentinel proves that the watcher's exact pinned family authority
+    // is threaded through both boundaries without creating real lease state.
+    const persistenceScopes = Object.freeze({}) as PersistenceFamilyScopes;
+    let receiptIndex = 0;
+    internals.hnswDirty = true;
+    internals.hnswPersistUnsafe = false;
+    internals.hnsw = {};
+    internals.hnswRowsByLabel = new Map(before.rowsByLabel);
+    internals.hnswPersistFile = persistFile;
+    internals.embedDb = {
+      captureHnswBuildSnapshot: () => before,
+      captureHnswReceiptSnapshot: () => {
+        const next = receipts[receiptIndex];
+        if (!next) throw new Error(`unexpected receipt capture ${receiptIndex + 1}`);
+        receiptIndex += 1;
+        return next;
+      },
+      getPersistenceFamilyScopes: () => persistenceScopes
+    };
+    return { internals, persistenceScopes, receiptCaptures: () => receiptIndex };
+  };
+
+  it("rejects a rowsByLabel mismatch before building a compact graph", async () => {
+    const watcher = new VaultWatcher({ vault: new Vault(root), silent: true });
+    const before = buildSnapshot("a");
+    const fixture = configure(watcher, before, []);
+    const { internals } = fixture;
+    internals.hnswRowsByLabel = new Map([[7, row("stale")]]);
+    const build = vi.spyOn(hnswModule, "buildHnsw");
+    const clear = vi.spyOn(hnswModule, "clearHnswPersistedArtifacts");
+
+    await expect(watcher.flushHnswToDisk()).resolves.toBe(false);
+    expect(build).not.toHaveBeenCalled();
+    expect(clear).not.toHaveBeenCalled();
+    expect(fixture.receiptCaptures()).toBe(0);
+    expect(internals.hnswPersistUnsafe).toBe(true);
+    expect(internals.hnswDirty).toBe(true);
+    expect(watcher.searchHealth.hnswUsable).toBe(false);
+  });
+
+  it("rejects generation drift after compact build and never invokes saveTo", async () => {
+    const watcher = new VaultWatcher({ vault: new Vault(root), silent: true });
+    const before = buildSnapshot("a");
+    const fixture = configure(watcher, before, [snapshot("b")]);
+    const { internals } = fixture;
+    const saveTo = vi.fn<HnswIndex["saveTo"]>().mockResolvedValue(true);
+    const compact = compactIndex(saveTo);
+    const build = vi.spyOn(hnswModule, "buildHnsw").mockResolvedValue(compact);
+    const clear = vi.spyOn(hnswModule, "clearHnswPersistedArtifacts");
+
+    await expect(watcher.flushHnswToDisk()).resolves.toBe(false);
+    expect(build).toHaveBeenCalledWith([{ label: 7, vector: before.vectors[0]?.vector }], {
+      dim: 4,
+      maxElements: 1
+    });
+    expect(saveTo).not.toHaveBeenCalled();
+    expect(clear).not.toHaveBeenCalled();
+    expect(fixture.receiptCaptures()).toBe(1);
+    expect(internals.hnswPersistUnsafe).toBe(true);
+    expect(internals.hnswDirty).toBe(true);
+    expect(watcher.searchHealth.hnswUsable).toBe(false);
+  });
+
+  it("keeps the dirty retry state when compact saveTo returns false", async () => {
+    const watcher = new VaultWatcher({ vault: new Vault(root), silent: true });
+    const before = buildSnapshot("a");
+    const fixture = configure(watcher, before, [snapshot("a")]);
+    const { internals } = fixture;
+    const saveTo = vi.fn<HnswIndex["saveTo"]>().mockResolvedValue(false);
+    vi.spyOn(hnswModule, "buildHnsw").mockResolvedValue(compactIndex(saveTo));
+    const clear = vi.spyOn(hnswModule, "clearHnswPersistedArtifacts");
+
+    await expect(watcher.flushHnswToDisk()).resolves.toBe(false);
+    expect(saveTo).toHaveBeenCalledWith(
+      internals.hnswPersistFile,
+      before.rowsByLabel,
+      before.receipt.signature,
+      {
+        dbInstanceUuid: before.receipt.dbInstanceUuid,
+        dbMutationEpoch: before.receipt.dbMutationEpoch
+      },
+      fixture.persistenceScopes
+    );
+    expect(clear).not.toHaveBeenCalled();
+    expect(fixture.receiptCaptures()).toBe(1);
+    expect(internals.hnswPersistUnsafe).toBe(false);
+    expect(internals.hnswDirty).toBe(true);
+    expect(watcher.searchHealth.hnswUsable).toBe(true);
+  });
+
+  it("clears the just-published family when the DB drifts after saveTo", async () => {
+    const watcher = new VaultWatcher({ vault: new Vault(root), silent: true });
+    const before = buildSnapshot("a");
+    const fixture = configure(watcher, before, [snapshot("a"), snapshot("b")]);
+    const { internals } = fixture;
+    const events: string[] = [];
+    const saveTo = vi.fn<HnswIndex["saveTo"]>().mockImplementation(async () => {
+      events.push("save");
+      return true;
+    });
+    vi.spyOn(hnswModule, "buildHnsw").mockImplementation(async () => {
+      events.push("build");
+      return compactIndex(saveTo);
+    });
+    const clear = vi.spyOn(hnswModule, "clearHnswPersistedArtifacts").mockImplementation(async () => {
+      events.push("clear");
+      return true;
+    });
+
+    await expect(watcher.flushHnswToDisk()).resolves.toBe(false);
+    expect(events).toEqual(["build", "save", "clear"]);
+    expect(clear).toHaveBeenCalledWith(internals.hnswPersistFile, fixture.persistenceScopes);
+    expect(fixture.receiptCaptures()).toBe(2);
+    expect(internals.hnswPersistUnsafe).toBe(true);
+    expect(internals.hnswDirty).toBe(true);
+    expect(watcher.searchHealth.hnswUsable).toBe(false);
+  });
+
+  it("persists a healthy compact snapshot and clears the dirty bit", async () => {
+    const watcher = new VaultWatcher({ vault: new Vault(root), silent: true });
+    const before = buildSnapshot("a");
+    const fixture = configure(watcher, before, [snapshot("a"), snapshot("a")]);
+    const { internals } = fixture;
+    const saveTo = vi.fn<HnswIndex["saveTo"]>().mockResolvedValue(true);
+    const compact = compactIndex(saveTo);
+    const build = vi.spyOn(hnswModule, "buildHnsw").mockResolvedValue(compact);
+    const clear = vi.spyOn(hnswModule, "clearHnswPersistedArtifacts");
+
+    await expect(watcher.flushHnswToDisk()).resolves.toBe(true);
+    expect(build).toHaveBeenCalledWith([{ label: 7, vector: before.vectors[0]?.vector }], {
+      dim: 4,
+      maxElements: 1
+    });
+    expect(saveTo).toHaveBeenCalledWith(
+      internals.hnswPersistFile,
+      before.rowsByLabel,
+      before.receipt.signature,
+      {
+        dbInstanceUuid: before.receipt.dbInstanceUuid,
+        dbMutationEpoch: before.receipt.dbMutationEpoch
+      },
+      fixture.persistenceScopes
+    );
+    expect(clear).not.toHaveBeenCalled();
+    expect(fixture.receiptCaptures()).toBe(2);
+    expect(internals.hnswPersistUnsafe).toBe(false);
+    expect(internals.hnswDirty).toBe(false);
+    expect(watcher.searchHealth.hnswUsable).toBe(true);
+  });
+
+  it("(NEGATIVE control) keeps a dirty graph unpersisted when persistFile is absent", async () => {
+    const watcher = new VaultWatcher({ vault: new Vault(root), silent: true });
+    const before = buildSnapshot("a");
+    const fixture = configure(watcher, before, [], null);
+    const { internals } = fixture;
+    const build = vi.spyOn(hnswModule, "buildHnsw");
+    const clear = vi.spyOn(hnswModule, "clearHnswPersistedArtifacts");
+
+    expect(internals.hnswDirty).toBe(true);
+    await expect(watcher.flushHnswToDisk()).resolves.toBe(false);
+    expect(build).not.toHaveBeenCalled();
+    expect(clear).not.toHaveBeenCalled();
+    expect(fixture.receiptCaptures()).toBe(0);
+    expect(internals.hnswDirty).toBe(true);
   });
 });

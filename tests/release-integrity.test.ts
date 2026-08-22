@@ -5,6 +5,7 @@ import {
   existsSync,
   linkSync,
   lstatSync,
+  mkdirSync,
   readdirSync,
   readFileSync,
   realpathSync,
@@ -53,7 +54,37 @@ import {
   runNpmCiAttempt,
   runNpmCiWithRetry
 } from "../scripts/npm-ci-with-retry.mjs";
+import {
+  NPM_CI_ALWAYS_CONDITION,
+  NPM_CI_AUDIT_COMMAND,
+  NPM_CI_BASH_DEFAULT_JOBS,
+  NPM_CI_COMMAND_DIGESTS,
+  NPM_CI_ENTRYPOINT_SOURCE_SHA256,
+  NPM_CI_HELPER_COMMAND,
+  NPM_CI_HELPER_POLICY_PROBLEM,
+  NPM_CI_HELPER_SOURCE_SHA256,
+  NPM_CI_INSTALL_STEP_NAME,
+  NPM_CI_JOB_ENVIRONMENTS,
+  NPM_CI_JOB_RUNNERS,
+  NPM_CI_MAIN_REF_CONDITION,
+  NPM_CI_PREAUDIT_DIGESTS,
+  NPM_CI_PREINSTALL_DIGESTS,
+  NPM_CI_SETUP_INPUTS,
+  NPM_CI_WORKFLOW_JOB_TIMEOUTS,
+  NPM_CI_WORKFLOW_PROBLEM
+} from "./npm-ci-workflow-contract-fixtures.ts";
 import { ReleaseMutationPlan } from "./release-mutation-plan.js";
+import {
+  SPLIT_CONTRACT_SHA256,
+  SPLIT_HANDOFF_FILES,
+  SPLIT_REVIEWED_IDENTITY_BODIES,
+  SPLIT_STEP_OWNERS,
+  SPLIT_VERIFY_OUTPUTS
+} from "./release-split-contract-fixtures.ts";
+
+const SPLIT_FIXTURE_SHA256 = "8096105d1acb35f436f3f72f58addfba1a883c5f4f5f9fc6c3ef6eb953e8b93f";
+const SPLIT_PROJECTION_SHA256 = "30ddc2aa8a0bd0697b19ee2a62517347869c64214f52f1f1ab837272204a3c6d";
+const NPM_CI_CONTRACT_FIXTURE_SHA256 = "5e9f3bda1e7105d5d6bf4ea9fd5c28ef94c0409c9f3066e9d9fca94fe9d63034";
 
 interface WorkflowJob {
   id: number;
@@ -166,17 +197,18 @@ const MUTATED_RAW_NPM_RESERVE_DEADLINE_GUARD = `${rawClockGuard(MUTATED_RELEASE_
             if [ "$remaining" -lt "$required" ]; then`;
 const GH_READ_GUARD_COUNT = 6;
 const GH_READ_HELPER_COUNT = 7;
-const GH_READ_API_CALL_COUNT = 46;
-const RELEASE_DEADLINE_ENV_BINDING_COUNT = 7;
+const GH_READ_API_CALL_COUNT = 47;
+const RELEASE_DEADLINE_ENV_BINDING_COUNT = 2;
 const RELEASE_FIXTURE_GH_CONFIG_COUNT = 6;
-const RELEASE_FIXTURE_PROXY_UNSET_COUNT = 9;
-const RELEASE_HARDENED_ENV_COUNT = 8;
-const RELEASE_HARDENED_SHELL_COUNT = 8;
-const RELEASE_TLS_PIN_COUNT = 7;
+const RELEASE_FIXTURE_PROXY_UNSET_COUNT = 11;
+const RELEASE_FULL_GUARD_ENV_COUNT = 3;
+const RELEASE_SHELL_GUARD_ENV_COUNT = 8;
+const RELEASE_HARDENED_SHELL_COUNT = 15;
+const RELEASE_TLS_PIN_COUNT = 4;
 const RELEASE_RESERVE_GUARD_COUNT = 4;
 const RELEASE_SECRET_GITHUB_TOKEN_COUNT = 6;
 const RELEASE_SINGLETON_DECODER_COUNT = 2;
-const MCP_REGISTRY_STEP_NAME = "Publish to MCP Registry (stable only)";
+const MCP_REGISTRY_STEP_NAME = "Publish exact stable manifest to MCP Registry with OIDC";
 const TRUSTED_CI_RUN = Object.freeze({
   id: 30_726_087_813,
   name: "CI",
@@ -976,12 +1008,12 @@ const RELEASE_MUTATION_MATRIX_START = [
   'new URL("../.github/workflows/release.yml", import.meta.url), "utf8");'
 ].join("");
 const RELEASE_MUTATION_SELF_CONTROL_COUNT = 21;
-const RELEASE_MUTATION_PROJECT_FIRST_COUNT = 538;
-const RELEASE_MUTATION_PROJECT_ALL_COUNT = 22;
+const RELEASE_MUTATION_PROJECT_FIRST_COUNT = 590;
+const RELEASE_MUTATION_PROJECT_ALL_COUNT = 27;
 const RELEASE_MUTATION_PROJECT_TOTAL_COUNT = RELEASE_MUTATION_PROJECT_FIRST_COUNT + RELEASE_MUTATION_PROJECT_ALL_COUNT;
-const RELEASE_MUTATION_PROJECT_ROOT_COUNT = 536;
-const RELEASE_MUTATION_PROJECT_EXPECTATION_COUNT = 541;
-const RELEASE_MUTATION_PROJECT_DEPENDENCY_ONLY_COUNT = 24;
+const RELEASE_MUTATION_PROJECT_ROOT_COUNT = 592;
+const RELEASE_MUTATION_PROJECT_EXPECTATION_COUNT = 597;
+const RELEASE_MUTATION_PROJECT_DEPENDENCY_ONLY_COUNT = 25;
 const RELEASE_MUTATION_REGISTRY_ADAPTER_PROPERTY = "registryEvaluatorProblems";
 const RELEASE_MUTATION_REGISTRY_STEP_ADAPTER_PROPERTY = "registryStepProblems";
 const RELEASE_MUTATION_NPM_ADAPTER_PROPERTY = "npmContractProblems";
@@ -1482,8 +1514,8 @@ function releaseTransactionExpectationIdentityProblems(source: string): string[]
  * Pin the executable hybrid inventory that the declarative 5f.5a migration must consume exactly once.
  *
  * @param source - Complete release-integrity test source.
- * @returns Stable inventory diagnostics; empty only for 20 helper controls plus 560 explicit legacy or
- * declarative project mutations.
+ * @returns Stable inventory diagnostics; empty only for 21 helper controls plus exactly 617 project
+ * mutations: 523 legacy calls and 94 declarative descriptors.
  */
 function releaseMutationInventoryProblems(source: string): string[] {
   const sourceFile = ts.createSourceFile(
@@ -2486,6 +2518,20 @@ function releaseMutationInventoryProblems(source: string): string[] {
           problems.push(
             `release mutation matrix expect may only be one direct call or an allowlisted static matcher at ${position.line + 1}:${position.character + 1}`
           );
+        }
+        if (directExpect && start >= matrixStart && start < callbackEnd) {
+          const nonStraightLine = nonStraightLineAncestor(parent);
+          const reviewedNestedOwner =
+            nonStraightLine !== null &&
+            (ts.isForOfStatement(nonStraightLine) ||
+              ts.isForStatement(nonStraightLine) ||
+              ts.isTryStatement(nonStraightLine));
+          if (nonStraightLine !== null && !reviewedNestedOwner) {
+            const position = sourceFile.getLineAndCharacterOfPosition(start);
+            problems.push(
+              `release mutation matrix expect must be one straight-line matcher or belong to an exact shared loop, not nested under ${ts.SyntaxKind[nonStraightLine.kind]} at ${position.line + 1}:${position.character + 1}`
+            );
+          }
         }
       }
     }
@@ -3808,164 +3854,6 @@ if (releaseTransactionExpectationIdentityBootstrapProblems.length !== 0) {
   );
 }
 
-const NPM_CI_HELPER_COMMAND = "node scripts/npm-ci-with-retry.mjs";
-const NPM_CI_INSTALL_STEP_NAME = "Install deps (npm ci with retry)";
-const NPM_CI_AUDIT_COMMAND = "/usr/bin/timeout --kill-after=10s 300s npm run check:audit";
-const NPM_CI_HELPER_SOURCE_SHA256 = "97e1ea18490e4cd2d334b0fdc75831e6de32718fe614d6ed32737b797d840797";
-const NPM_CI_ENTRYPOINT_SOURCE_SHA256 = "31e3b1af3bf48c88149b20cd71fa948e492e8e0db45551ae7271a01c36d37b1b";
-const NPM_CI_WORKFLOW_JOB_TIMEOUTS = [
-  ["ci.yml", "lint", 5],
-  ["ci.yml", "test", 10],
-  ["ci.yml", "test-windows", 20],
-  ["ci.yml", "test-macos", 15],
-  ["ci.yml", "coverage", 10],
-  ["ci.yml", "docs", 10],
-  ["ci.yml", "oia", 10],
-  ["ci.yml", "smoke", 10],
-  ["ci.yml", "protocol-conformance-matrix", 20],
-  ["ci.yml", "package-consumer-matrix", 30],
-  ["ci.yml", "mcpb-basic-package", 40],
-  ["ci.yml", "mcpb-basic-matrix", 30],
-  ["ci.yml", "audit", 12],
-  ["publish-docs.yml", "build", 10],
-  ["release.yml", "publish", 240]
-] as const;
-const NPM_CI_WORKFLOW_PROBLEM =
-  "workflow npm-ci installs must retain the exact bounded helper inventory and composed job budgets";
-const NPM_CI_HELPER_POLICY_PROBLEM =
-  "npm-ci helper must retain POSIX 3x60s, Windows 1x180s, 10s cleanup and the configured 240-second maximum";
-const NPM_CI_MATRIX_SCRIPT_SHELL = `\${{ matrix.script_shell }}`;
-const NPM_CI_MATRIX_OS = `\${{ matrix.os }}`;
-const NPM_CI_MATRIX_NODE_VERSION = `\${{ matrix.node-version }}`;
-const NPM_CI_ALWAYS_CONDITION = `\${{ always() }}`;
-const NPM_CI_JOB_ENVIRONMENTS = new Map<string, Readonly<Record<string, string>>>([
-  ["ci.yml#test", { NPM_CONFIG_ENGINE_STRICT: "true" }],
-  [
-    "ci.yml#test-windows",
-    {
-      NPM_CONFIG_ENGINE_STRICT: "true",
-      NPM_CONFIG_SCRIPT_SHELL: "C:\\Program Files\\Git\\bin\\bash.exe"
-    }
-  ],
-  ["ci.yml#smoke", { NPM_CONFIG_ENGINE_STRICT: "true" }],
-  [
-    "ci.yml#protocol-conformance-matrix",
-    { NPM_CONFIG_ENGINE_STRICT: "true", NPM_CONFIG_SCRIPT_SHELL: NPM_CI_MATRIX_SCRIPT_SHELL }
-  ],
-  [
-    "ci.yml#package-consumer-matrix",
-    { NPM_CONFIG_ENGINE_STRICT: "true", NPM_CONFIG_SCRIPT_SHELL: NPM_CI_MATRIX_SCRIPT_SHELL }
-  ],
-  ["ci.yml#mcpb-basic-package", { NPM_CONFIG_ENGINE_STRICT: "true", NPM_CONFIG_SCRIPT_SHELL: "/bin/bash" }],
-  [
-    "ci.yml#mcpb-basic-matrix",
-    { NPM_CONFIG_ENGINE_STRICT: "true", NPM_CONFIG_SCRIPT_SHELL: NPM_CI_MATRIX_SCRIPT_SHELL }
-  ],
-  ["release.yml#publish", { BASH_ENV: "" }]
-]);
-const NPM_CI_JOB_RUNNERS = new Map<string, string>([
-  ["ci.yml#lint", "ubuntu-latest"],
-  ["ci.yml#test", "ubuntu-latest"],
-  ["ci.yml#test-windows", "windows-2025"],
-  ["ci.yml#test-macos", "macos-latest"],
-  ["ci.yml#coverage", "ubuntu-latest"],
-  ["ci.yml#docs", "ubuntu-latest"],
-  ["ci.yml#oia", "ubuntu-latest"],
-  ["ci.yml#smoke", "ubuntu-latest"],
-  ["ci.yml#protocol-conformance-matrix", NPM_CI_MATRIX_OS],
-  ["ci.yml#package-consumer-matrix", NPM_CI_MATRIX_OS],
-  ["ci.yml#mcpb-basic-package", "ubuntu-latest"],
-  ["ci.yml#mcpb-basic-matrix", NPM_CI_MATRIX_OS],
-  ["ci.yml#audit", "ubuntu-latest"],
-  ["publish-docs.yml#build", "ubuntu-latest"],
-  ["release.yml#publish", "ubuntu-latest"]
-]);
-const NPM_CI_SETUP_INPUTS = new Map<string, Readonly<Record<string, unknown>>>([
-  ["ci.yml#lint", { "node-version": 22, cache: "npm" }],
-  [
-    "ci.yml#test",
-    { "node-version": NPM_CI_MATRIX_NODE_VERSION, cache: "npm", "cache-dependency-path": "package-lock.json" }
-  ],
-  ["ci.yml#test-windows", { "node-version": "22.13.0", cache: "npm", "cache-dependency-path": "package-lock.json" }],
-  ["ci.yml#test-macos", { "node-version": 22, cache: "npm", "cache-dependency-path": "package-lock.json" }],
-  ["ci.yml#coverage", { "node-version": 22, cache: "npm" }],
-  ["ci.yml#docs", { "node-version": 22, cache: "npm" }],
-  ["ci.yml#oia", { "node-version": 22, cache: "npm" }],
-  ["ci.yml#smoke", { "node-version": "22.13.0", cache: "npm" }],
-  [
-    "ci.yml#protocol-conformance-matrix",
-    { "node-version": "22.13.0", cache: "npm", "cache-dependency-path": "package-lock.json" }
-  ],
-  [
-    "ci.yml#package-consumer-matrix",
-    { "node-version": "22.13.0", cache: "npm", "cache-dependency-path": "package-lock.json" }
-  ],
-  [
-    "ci.yml#mcpb-basic-package",
-    { "node-version": "22.13.0", cache: "npm", "cache-dependency-path": "package-lock.json" }
-  ],
-  [
-    "ci.yml#mcpb-basic-matrix",
-    { "node-version": "22.13.0", cache: "npm", "cache-dependency-path": "package-lock.json" }
-  ],
-  ["ci.yml#audit", { "node-version": 22, cache: "npm" }],
-  ["publish-docs.yml#build", { "node-version": 22, cache: "npm" }],
-  [
-    "release.yml#publish",
-    {
-      "node-version": "22.13.0",
-      "registry-url": "https://registry.npmjs.org",
-      cache: "npm",
-      "cache-dependency-path": "package-lock.json"
-    }
-  ]
-]);
-const NPM_CI_PREINSTALL_DIGESTS = new Map<string, string>([
-  ["ci.yml#lint", "559a7e13a198905e6ac358a1914d6e9fa087ad055f55b27c380ae171424f3d6b"],
-  ["ci.yml#test", "0b00c055e9a2707a37043a75423ce6b68004d5750b872ce6cf40e3dcadd1c4db"],
-  ["ci.yml#test-windows", "da943043234f9a375c085802079dc10cf411019cbc03b4747de9af178dc6a9ca"],
-  ["ci.yml#test-macos", "bad0645f602426986294fd032eac707a60440bd897f27a5105c05d54f054cc4e"],
-  ["ci.yml#coverage", "559a7e13a198905e6ac358a1914d6e9fa087ad055f55b27c380ae171424f3d6b"],
-  ["ci.yml#docs", "559a7e13a198905e6ac358a1914d6e9fa087ad055f55b27c380ae171424f3d6b"],
-  ["ci.yml#oia", "559a7e13a198905e6ac358a1914d6e9fa087ad055f55b27c380ae171424f3d6b"],
-  ["ci.yml#smoke", "44d845e567d5c3e9e38e265a970b7d2cbce33377b7ba78137effe85ca99e9110"],
-  ["ci.yml#protocol-conformance-matrix", "7ec0b012fca4c5f77005997e6e4c43ce04b44e55dbf1d1f7ffcc313d1d3c552f"],
-  ["ci.yml#package-consumer-matrix", "7ec0b012fca4c5f77005997e6e4c43ce04b44e55dbf1d1f7ffcc313d1d3c552f"],
-  ["ci.yml#mcpb-basic-package", "7ec0b012fca4c5f77005997e6e4c43ce04b44e55dbf1d1f7ffcc313d1d3c552f"],
-  ["ci.yml#mcpb-basic-matrix", "7ec0b012fca4c5f77005997e6e4c43ce04b44e55dbf1d1f7ffcc313d1d3c552f"],
-  ["ci.yml#audit", "559a7e13a198905e6ac358a1914d6e9fa087ad055f55b27c380ae171424f3d6b"],
-  ["publish-docs.yml#build", "559a7e13a198905e6ac358a1914d6e9fa087ad055f55b27c380ae171424f3d6b"],
-  ["release.yml#publish", "45d78043dcd5f1d0d38219d315b55674296d868fa1faef009ba630af06ced2f6"]
-]);
-const NPM_CI_COMMAND_DIGESTS = new Map<string, string>([
-  ["ci.yml#lint", "85cb42a92181265d2458eb8b7a7aa737143eda0c7d4a6dd3349b4955e49adfcf"],
-  ["ci.yml#test", "530375edb43b6e8f47eae64f7d01e5ebef01db57516588af24110937ac31e5d1"],
-  ["ci.yml#test-windows", "1fee0ec9bd5a5e93e87f317b82dcae8ffc24e8dbacb9dad21ccfe05f4c50d2a6"],
-  ["ci.yml#test-macos", "530375edb43b6e8f47eae64f7d01e5ebef01db57516588af24110937ac31e5d1"],
-  ["ci.yml#coverage", "3e8733a08a6fe5b873546ac5284f4ffaadb924dd4dd04cd8b9557cd56837efe7"],
-  ["ci.yml#docs", "31ee2597c84a4669a98435b0e9bfb95b685b10aaa70205ad8749647e2ab43be5"],
-  ["ci.yml#oia", "03789343a6bc223162c6f26dba4e44d7704d14ecfadb083f32065825f48a8d6b"],
-  ["ci.yml#smoke", "4158b622c017e1e9463d27732c2ef0d4277807309f5e18a3867fb6500837585a"],
-  ["ci.yml#protocol-conformance-matrix", "4158b622c017e1e9463d27732c2ef0d4277807309f5e18a3867fb6500837585a"],
-  ["ci.yml#package-consumer-matrix", "4158b622c017e1e9463d27732c2ef0d4277807309f5e18a3867fb6500837585a"],
-  ["ci.yml#mcpb-basic-package", "72f8f9db912e223c63e5245d948adc6c23299a60262bd7ba22d2c106654181f6"],
-  ["ci.yml#mcpb-basic-matrix", "428a7037595e3943656994b9fd69aec7639287929316ef9ffbe017c37490ae82"],
-  ["ci.yml#audit", "257a09114a4e895df831ace40f70115b66d7ae38a41eb166ff5dca10df1b245c"],
-  ["dist-tag-cleanup.yml#cleanup", "80391e9a5a0ba770920e7798c6b4d8066035884c9b95b9cb5b4d9ff10768e5d5"],
-  ["publish-docs.yml#build", "476bc2a8aea0d3def4c805b616058ba0c4aea7f9d940e73a5d9da4b5b977cfba"],
-  ["release.yml#publish", "1336676a0ee7b70b0c1ba51a7d28b8d32dc553cd93eec2b28f83781280bd1905"]
-]);
-const NPM_CI_PREAUDIT_DIGESTS = new Map<string, string>([
-  ["ci.yml#audit", "877eb535025aaf14a917f52fd1a871e38a2c26836a6df19f5cc42a31f32eb6f6"],
-  ["release.yml#publish", "308eefba014372d2abb1f79273996ce4c8840cb956d3436c7ab2fddcc178d00a"]
-]);
-const NPM_CI_BASH_DEFAULT_JOBS = new Set([
-  "ci.yml#test-windows",
-  "ci.yml#protocol-conformance-matrix",
-  "ci.yml#package-consumer-matrix",
-  "ci.yml#mcpb-basic-matrix"
-]);
-
 function exactNpmCiRecord(value: unknown, expected: Readonly<Record<string, unknown>> | undefined): boolean {
   if (expected === undefined) return value === undefined;
   const record = yamlRecord(value);
@@ -4059,7 +3947,7 @@ function npmCiWorkflowProblems(workflows: ReadonlyMap<string, string>): string[]
   let auditTokenCount = 0;
   const observedNpmCommandIdentities = new Set<string>();
   const expectedIdentities = new Set(NPM_CI_WORKFLOW_JOB_TIMEOUTS.map(([file, job]) => `${file}#${job}`));
-  const expectedAuditIdentities = new Set(["ci.yml#audit", "release.yml#publish"]);
+  const expectedAuditIdentities = new Set(["ci.yml#audit", "release.yml#verify"]);
   for (const [filename, document] of parsed) {
     const jobs = yamlRecord(document.jobs) ?? {};
     for (const [jobId, value] of Object.entries(jobs)) {
@@ -4143,7 +4031,12 @@ function npmCiWorkflowProblems(workflows: ReadonlyMap<string, string>): string[]
         defaultRun.shell === "bash"
       : job.defaults === undefined;
     const expectedContinueOnError = identity === "ci.yml#test-macos" ? true : undefined;
-    const expectedIf = identity === "ci.yml#smoke" ? NPM_CI_ALWAYS_CONDITION : undefined;
+    const expectedIf =
+      identity === "ci.yml#smoke"
+        ? NPM_CI_ALWAYS_CONDITION
+        : identity === "publish-docs.yml#build"
+          ? NPM_CI_MAIN_REF_CONDITION
+          : undefined;
     if (
       job["timeout-minutes"] !== expectedTimeout ||
       job["runs-on"] !== NPM_CI_JOB_RUNNERS.get(identity) ||
@@ -4184,7 +4077,7 @@ function npmCiWorkflowProblems(workflows: ReadonlyMap<string, string>): string[]
   let boundedAuditCount = 0;
   for (const [filename, jobId] of [
     ["ci.yml", "audit"],
-    ["release.yml", "publish"]
+    ["release.yml", "verify"]
   ] as const) {
     const job = yamlRecord(yamlRecord(parsed.get(filename)?.jobs)?.[jobId]);
     const steps = yamlSteps(job ?? {});
@@ -4240,6 +4133,11 @@ function mutableNpmCiInstallStep(job: YamlRecord): YamlRecord {
 }
 
 async function assertNpmCiWorkflowContract(): Promise<void> {
+  const contractFixtureSource = readFileSync(
+    new URL("./npm-ci-workflow-contract-fixtures.ts", import.meta.url),
+    "utf8"
+  );
+  expect(createHash("sha256").update(contractFixtureSource, "utf8").digest("hex")).toBe(NPM_CI_CONTRACT_FIXTURE_SHA256);
   const workflowDirectory = new URL("../.github/workflows/", import.meta.url);
   const workflowSources = new Map(
     readdirSync(workflowDirectory)
@@ -4396,10 +4294,40 @@ async function assertNpmCiWorkflowContract(): Promise<void> {
   expect(exhaustedAttemptCalls).toBe(3);
   expect(exhaustedWaits).toEqual([15_000, 15_000]);
 
-  const npmSpec = npmCiProcessSpec();
-  expect(npmSpec.command).toBe(process.execPath);
-  expect(npmSpec.args.at(-1)).toBe("ci");
-  expect(JSON.stringify(npmSpec)).not.toMatch(/npm\.cmd|cmd\.exe/iu);
+  const npmSpecScratch = createOwnedScratch();
+  try {
+    const posixRuntime = join(npmSpecScratch.path, "posix-runtime");
+    const posixExec = join(posixRuntime, "bin", "node");
+    const posixCli = join(posixRuntime, "lib", "node_modules", "npm", "bin", "npm-cli.js");
+    mkdirSync(join(posixRuntime, "bin"), { recursive: true });
+    mkdirSync(join(posixRuntime, "lib", "node_modules", "npm", "bin"), { recursive: true });
+    writeFileSync(posixExec, "");
+    writeFileSync(posixCli, "");
+    expect(npmCiProcessSpec(posixExec, "darwin")).toEqual({
+      command: posixExec,
+      args: [realpathSync(posixCli), "ci"]
+    });
+
+    const windowsRuntime = join(npmSpecScratch.path, "windows-runtime");
+    const windowsExec = join(windowsRuntime, "node.exe");
+    const windowsCli = join(windowsRuntime, "node_modules", "npm", "bin", "npm-cli.js");
+    mkdirSync(join(windowsRuntime, "node_modules", "npm", "bin"), { recursive: true });
+    writeFileSync(windowsExec, "");
+    writeFileSync(windowsCli, "");
+    const windowsSpec = npmCiProcessSpec(windowsExec, "win32");
+    expect(windowsSpec).toEqual({ command: windowsExec, args: [realpathSync(windowsCli), "ci"] });
+    expect(JSON.stringify(windowsSpec)).not.toMatch(/npm\.cmd|cmd\.exe/iu);
+
+    const missingRuntime = join(npmSpecScratch.path, "missing-runtime");
+    const missingExec = join(missingRuntime, "bin", "node");
+    mkdirSync(join(missingRuntime, "bin"), { recursive: true });
+    writeFileSync(missingExec, "");
+    expect(() => npmCiProcessSpec(missingExec, "linux")).toThrow(
+      "npm CLI is not colocated with the active Node runtime (linux)"
+    );
+  } finally {
+    removeOwnedScratch(npmSpecScratch);
+  }
   const childListeners = new Map<string, (...args: unknown[]) => void>();
   const spawnCalls: Array<{ command: string; args: string[]; options: Record<string, unknown> }> = [];
   const fakeChild = {
@@ -4969,13 +4897,40 @@ async function assertNpmCiWorkflowContract(): Promise<void> {
   expect(latchWaits).toEqual([]);
 
   expect(npmCiWorkflowProblems(workflowSources)).toEqual([]);
+  for (const [jobId, staleTimeout] of [
+    ["test", 10],
+    ["test-macos", 15]
+  ] as const) {
+    expect(
+      npmCiWorkflowProblems(
+        mutateNpmCiWorkflow(workflowSources, "ci.yml", (document) => {
+          mutableNpmCiJob(document, jobId)["timeout-minutes"] = staleTimeout;
+        })
+      )
+    ).toContain(`${NPM_CI_WORKFLOW_PROBLEM}: invalid ci.yml#${jobId}`);
+  }
+  for (const jobId of ["npm_publish", "github_release", "mcp_registry"] as const) {
+    expect(
+      npmCiWorkflowProblems(
+        mutateNpmCiWorkflow(workflowSources, "release.yml", (document) => {
+          const downloader = yamlSteps(mutableNpmCiJob(document, jobId)).find(
+            (step) => step.name === "Download and verify exact release handoff"
+          );
+          if (downloader === undefined || typeof downloader.run !== "string") {
+            throw new Error(`missing split handoff downloader for ${jobId}`);
+          }
+          downloader.run += "\ntrue";
+        })
+      )
+    ).toEqual([`${NPM_CI_WORKFLOW_PROBLEM}: literal npm command inventory drifted in release.yml#${jobId}`]);
+  }
   expectProblemFragments(
     npmCiWorkflowProblems(
       mutateNpmCiWorkflow(workflowSources, "ci.yml", (document) => {
         mutableNpmCiInstallStep(mutableNpmCiJob(document, "lint")).run = "true";
       })
     ),
-    ["invalid ci.yml#lint", "found 14"]
+    ["invalid ci.yml#lint", "found 15"]
   );
   expectProblemFragments(
     npmCiWorkflowProblems(
@@ -5124,7 +5079,7 @@ async function assertNpmCiWorkflowContract(): Promise<void> {
         mutableNpmCiInstallStep(mutableNpmCiJob(document, "lint")).run = "node scripts/npm-ci-with-retry.mjs || true";
       })
     ),
-    ["noncanonical helper in ci.yml#lint", "invalid ci.yml#lint", "expected 15 helpers, found 14"]
+    ["noncanonical helper in ci.yml#lint", "invalid ci.yml#lint", "expected 16 helpers, found 15"]
   );
   expectProblemFragments(
     npmCiWorkflowProblems(
@@ -5137,7 +5092,7 @@ async function assertNpmCiWorkflowContract(): Promise<void> {
         steps.splice(installIndex + 1, 0, JSON.parse(JSON.stringify(steps[installIndex])));
       })
     ),
-    ["invalid ci.yml#lint", "found 16"]
+    ["invalid ci.yml#lint", "found 17"]
   );
   expect(
     npmCiWorkflowProblems(
@@ -5253,7 +5208,7 @@ async function assertNpmCiWorkflowContract(): Promise<void> {
   expect(
     npmCiWorkflowProblems(
       mutateNpmCiWorkflow(workflowSources, "release.yml", (document) => {
-        const auditStep = yamlSteps(mutableNpmCiJob(document, "publish")).find(
+        const auditStep = yamlSteps(mutableNpmCiJob(document, "verify")).find(
           (step) => step.run === NPM_CI_AUDIT_COMMAND
         );
         if (auditStep === undefined) throw new Error("release audit mutation requires bounded command");
@@ -5262,8 +5217,8 @@ async function assertNpmCiWorkflowContract(): Promise<void> {
     )
   ).toEqual(
     expect.arrayContaining([
-      `${NPM_CI_WORKFLOW_PROBLEM}: unbounded check:audit in release.yml#publish`,
-      `${NPM_CI_WORKFLOW_PROBLEM}: invalid bounded audit in release.yml#publish`,
+      `${NPM_CI_WORKFLOW_PROBLEM}: unbounded check:audit in release.yml#verify`,
+      `${NPM_CI_WORKFLOW_PROBLEM}: invalid bounded audit in release.yml#verify`,
       `${NPM_CI_WORKFLOW_PROBLEM}: expected 2 bounded audits, found 1`
     ])
   );
@@ -5375,10 +5330,10 @@ async function assertNpmCiWorkflowContract(): Promise<void> {
   expect(
     npmCiWorkflowProblems(
       mutateNpmCiWorkflow(workflowSources, "release.yml", (document) => {
-        mutableNpmCiInstallStep(mutableNpmCiJob(document, "publish")).run = "true";
+        mutableNpmCiInstallStep(mutableNpmCiJob(document, "verify")).run = "true";
       })
     )
-  ).toContain(`${NPM_CI_WORKFLOW_PROBLEM}: invalid release.yml#publish`);
+  ).toContain(`${NPM_CI_WORKFLOW_PROBLEM}: invalid release.yml#verify`);
   expectProblemFragments(
     npmCiWorkflowProblems(
       mutateNpmCiWorkflow(workflowSources, "ci.yml", (document) => {
@@ -5387,7 +5342,7 @@ async function assertNpmCiWorkflowContract(): Promise<void> {
         jobs["unexpected-install"] = JSON.parse(JSON.stringify(mutableNpmCiJob(document, "lint")));
       })
     ),
-    ["unexpected ci.yml#unexpected-install", "found 16"]
+    ["unexpected ci.yml#unexpected-install", "found 17"]
   );
 }
 
@@ -5667,6 +5622,7 @@ function nodeFloorCiProblems(workflow: string, enginesNode: unknown): string[] {
     const jobEnv = yamlRecord(job.env);
     const jobSteps = yamlSteps(job);
     const isMcpb = id === "mcpb-basic";
+    const isPackageConsumer = id === "package-consumer";
     const setup = jobSteps.find((step) => typeof step.uses === "string" && step.uses.startsWith("actions/setup-node@"));
     const install = namedStep(jobSteps, "Install deps (npm ci with retry)");
     if (
@@ -5674,14 +5630,18 @@ function nodeFloorCiProblems(workflow: string, enginesNode: unknown): string[] {
       job["runs-on"] !== `\${{ matrix.os }}` ||
       "continue-on-error" in job ||
       "if" in job ||
-      (isMcpb ? job.needs !== "mcpb-basic-package" : "needs" in job) ||
+      (isMcpb
+        ? job.needs !== "mcpb-basic-package"
+        : isPackageConsumer
+          ? job.needs !== "npm-package"
+          : "needs" in job) ||
       yamlRecord(yamlRecord(job.defaults)?.run)?.shell !== "bash" ||
       jobEnv?.NPM_CONFIG_ENGINE_STRICT !== "true" ||
       jobEnv?.NPM_CONFIG_SCRIPT_SHELL !== `\${{ matrix.script_shell }}` ||
       yamlRecord(setup?.with)?.["node-version"] !== floor ||
       install?.run !== NPM_CI_HELPER_COMMAND ||
       (!isMcpb && !jobSteps.some((step) => step.run === "npm run build")) ||
-      !scripts.every((script) => jobSteps.some((step) => step.run === script)) ||
+      !scripts.every((script) => jobSteps.some((step) => runBody(step).trimEnd() === script.trimEnd())) ||
       jobSteps.some((step) => "continue-on-error" in step || "if" in step)
     ) {
       problems.push(
@@ -5735,7 +5695,12 @@ function nodeFloorCiProblems(workflow: string, enginesNode: unknown): string[] {
       { label: "windows", os: "windows-2025", scriptShell: "C:\\Program Files\\Git\\bin\\bash.exe" },
       { label: "macos", os: "macos-latest", scriptShell: "/bin/bash" }
     ],
-    ["node scripts/package-consumer.mjs"]
+    [
+      "node scripts/package-consumer.mjs \\\n" +
+        "  --tarball artifacts/npm-package/enquire-mcp-npm.tgz \\\n" +
+        "  --manifest artifacts/npm-package/npm-package-manifest.json \\\n" +
+        '  --source-sha "$SOURCE_SHA" --run-id "$SOURCE_RUN_ID" --run-attempt "$SOURCE_RUN_ATTEMPT"'
+    ]
   );
   matrixGateProblems(
     mcpbMatrixJob,
@@ -6033,13 +5998,48 @@ function remoteGateScriptProblems(packageConsumer: string, protocolConformance: 
     problems.push("package-consumer must execute npm through a cross-platform JavaScript entrypoint");
   }
   if (
+    !packageConsumer.includes("export function packageCliProcessSpec(") ||
+    !packageConsumer.includes('const binDirectory = path.join(consumerDir, "node_modules", ".bin")') ||
+    !packageConsumer.includes('args: ["/d", "/s", "/c", "enquire-mcp.cmd --version"]') ||
+    !packageConsumer.includes('const shim = path.join(binDirectory, "enquire-mcp")') ||
+    !packageConsumer.includes("verifyPackagedCli(consumerDir, packageRoot, rootPackage.version, mode)") ||
+    packageConsumer.includes('spawnSync(process.execPath, [path.join(packageRoot, "dist", "index.js")')
+  ) {
+    problems.push("package-consumer must exercise the installed npm bin shim on every platform");
+  }
+  if (
     !packageConsumer.includes('runNpm(["install", "--no-audit"') ||
     packageConsumer.includes('runNpm(["install", "--ignore-scripts"')
   ) {
     problems.push("package-consumer normal installs must execute lifecycle and optional dependency paths");
   }
-  if (!packageConsumer.includes("Object.keys(rootPackage.optionalDependencies ?? {})")) {
+  if (mutationMatchCount(packageConsumer, "Object.keys(rootPackage.optionalDependencies ?? {})") !== 1) {
     problems.push("package-consumer omit lane must derive the complete optional dependency inventory");
+  }
+  if (
+    !packageConsumer.includes("export const OPTIONAL_DEPENDENCY_PROBES = Object.freeze([") ||
+    !packageConsumer.includes(
+      '{ packageName: "pdfjs-dist", specifier: "pdfjs-dist/legacy/build/pdf.mjs", exportPaths: [["getDocument"]] }'
+    ) ||
+    !packageConsumer.includes("function writeOptionalLoadabilityProbe(consumerDir, optionalProbes)") ||
+    mutationMatchCount(packageConsumer, "allowedMissingPlatforms") !== 2 ||
+    !packageConsumer.includes('allowedMissingPlatforms: Object.freeze(["win32"])') ||
+    !packageConsumer.includes("export function optionalDependencyMayBeMissing(probe, platform = process.platform)") ||
+    !packageConsumer.includes("return probe.allowedMissingPlatforms?.includes(platform) === true;") ||
+    !packageConsumer.includes("optionalDependencyMayBeMissing(optionalProbe, process.platform)") ||
+    !packageConsumer.includes("const loadableOptionalProbes = []") ||
+    !packageConsumer.includes("optional dependency probe inventory differs from package.json") ||
+    !packageConsumer.includes("const resolved = import.meta.resolve(importSpecifier)") ||
+    !packageConsumer.includes('const expectedPackageRoot = path.join(nodeModulesRoot, ...packageName.split("/"))') ||
+    !packageConsumer.includes("const loaded = await import(importSpecifier)") ||
+    !packageConsumer.includes('assert.equal(typeof capability, "function"') ||
+    !packageConsumer.includes('database.prepare("SELECT 1 AS ok").get().ok') ||
+    !packageConsumer.includes("writeOptionalLoadabilityProbe(consumerDir, loadableOptionalProbes)") ||
+    !packageConsumer.includes(
+      'run(process.execPath, [path.join(consumerDir, "optional-loadability.mjs")], { cwd: consumerDir })'
+    )
+  ) {
+    problems.push("package-consumer full lane must resolve and load every declared optional dependency");
   }
   if (
     !packageConsumer.includes("if (rejection === undefined)") ||
@@ -6425,7 +6425,7 @@ function releasePaginationRetryProblems(
         readWait: "sleep 5",
         reset: 'RELEASE_PREVIOUS_INVENTORY=""',
         decode:
-          "if ! RELEASES=$(printf '%s' \"$RELEASE_PAGES\" | node scripts/check-release-integrity.mjs flatten-pages release); then",
+          'if ! RELEASES=$(printf \'%s\' "$RELEASE_PAGES" | node "$RELEASE_EVALUATOR" flatten-pages release); then',
         decodeWait: "sleep 5",
         terminal: 'if [ "$release_attempt" -eq 12 ]; then',
         failure: "pages remained unstable after 12 bounded checks",
@@ -6441,7 +6441,7 @@ function releasePaginationRetryProblems(
         readWait: "sleep 5",
         reset: 'PUBLISHED_PREVIOUS_INVENTORY=""',
         decode:
-          "if ! RELEASES=$(printf '%s' \"$RELEASE_PAGES\" | node scripts/check-release-integrity.mjs flatten-pages release); then",
+          'if ! RELEASES=$(printf \'%s\' "$RELEASE_PAGES" | node "$RELEASE_EVALUATOR" flatten-pages release); then',
         decodeWait: "sleep 5",
         terminal: 'if [ "$published_list_attempt" -eq 12 ]; then',
         failure: "Published release pages remained unstable after 12 bounded checks",
@@ -6457,7 +6457,7 @@ function releasePaginationRetryProblems(
         readWait: "sleep 5",
         reset: 'POST_ASSET_PREVIOUS_INVENTORY=""',
         decode:
-          "if ! POST_ASSETS=$(printf '%s' \"$POST_ASSET_PAGES\" | node scripts/check-release-integrity.mjs flatten-pages asset); then",
+          'if ! POST_ASSETS=$(printf \'%s\' "$POST_ASSET_PAGES" | node "$RELEASE_EVALUATOR" flatten-pages asset); then',
         decodeWait: "sleep 5",
         terminal: 'if [ "$post_publish_asset_attempt" -eq 12 ]; then',
         failure: "Published asset pages remained unstable after 12 bounded checks",
@@ -6605,12 +6605,30 @@ function releasePollProblems(workflow: string): string[] {
   }
   const triggerProblems = releaseTriggerProblems(workflow);
   if (triggerProblems.length > 0) return triggerProblems;
+  const jobs = yamlRecord(document?.jobs);
+  const legacyPublish = yamlRecord(jobs?.publish);
+  const verify = yamlRecord(jobs?.verify);
+  const npmPublish = yamlRecord(jobs?.npm_publish);
+  const githubRelease = yamlRecord(jobs?.github_release);
+  const mcpRegistry = yamlRecord(jobs?.mcp_registry);
+  const splitRelease =
+    legacyPublish === null && verify !== null && npmPublish !== null && githubRelease !== null && mcpRegistry !== null;
   const permissions = yamlRecord(document?.permissions) ?? {};
-  if (permissions.actions !== "read" || "checks" in permissions) {
+  const authorityPermissions = yamlRecord((splitRelease ? verify : legacyPublish)?.permissions) ?? {};
+  if (
+    splitRelease
+      ? Object.keys(permissions).length !== 0 ||
+        authorityPermissions.actions !== "read" ||
+        authorityPermissions.contents !== "read" ||
+        "checks" in authorityPermissions
+      : permissions.actions !== "read" || "checks" in permissions
+  ) {
     return ["release must grant read-only Actions API access for the exact-SHA MCPB artifact"];
   }
-  const publish = yamlRecord(yamlRecord(document?.jobs)?.publish);
-  const steps = yamlSteps(publish ?? {});
+  const publish = splitRelease ? verify : legacyPublish;
+  const steps = splitRelease
+    ? [...yamlSteps(verify), ...yamlSteps(npmPublish), ...yamlSteps(githubRelease), ...yamlSteps(mcpRegistry)]
+    : yamlSteps(legacyPublish ?? {});
   const releaseTransaction = releaseTransactionFixtureBody(document);
   const deadline = namedStep(steps, "Establish global release deadline");
   const gate = namedStep(steps, "Assert tag is on main and required CI checks passed");
@@ -6671,14 +6689,37 @@ function releasePollProblems(workflow: string): string[] {
   const globalReadSteps = [
     namedStep(steps, "Download exact CI-gated Basic MCPB release asset"),
     namedStep(steps, "Preflight existing GitHub release and every Basic asset before npm"),
-    namedStep(steps, "Publish with provenance or verify an exact prior publication"),
+    namedStep(
+      steps,
+      splitRelease
+        ? "Publish exact npm tarball with Trusted Publishing or verify rerun"
+        : "Publish with provenance or verify an exact prior publication"
+    ),
     namedStep(steps, "Prepare draft GitHub Release"),
-    namedStep(steps, "Upload Basic MCPB asset, checksum, and provenance"),
+    namedStep(
+      steps,
+      splitRelease
+        ? "Upload and publish the exact reviewed GitHub Release transaction"
+        : "Upload Basic MCPB asset, checksum, and provenance"
+    ),
     namedStep(steps, MCP_REGISTRY_STEP_NAME)
   ];
   const globalReadBodies = globalReadSteps.map((step) =>
-    step?.name === "Upload Basic MCPB asset, checksum, and provenance" ? releaseTransaction : runBody(step)
+    step?.name === "Upload Basic MCPB asset, checksum, and provenance" ||
+    step?.name === "Upload and publish the exact reviewed GitHub Release transaction"
+      ? releaseTransaction
+      : runBody(step)
   );
+  const expectedDeadlineBindings = splitRelease
+    ? [
+        `\${{ steps.deadline.outputs.epoch }}`,
+        `\${{ steps.deadline.outputs.epoch }}`,
+        `\${{ needs.verify.outputs.deadline_epoch }}`,
+        `\${{ needs.verify.outputs.deadline_epoch }}`,
+        `\${{ needs.verify.outputs.deadline_epoch }}`,
+        `\${{ needs.verify.outputs.deadline_epoch }}`
+      ]
+    : Array.from({ length: globalReadSteps.length }, () => `\${{ steps.deadline.outputs.epoch }}`);
   const ghReadMutationArgs =
     "graphql|--method|--method=*|-X*|--input|--input=*|-f*|-F*|--field|--field=*|--raw-field|--raw-field=*";
   const rawGhApiLines = workflow
@@ -6688,7 +6729,7 @@ function releasePollProblems(workflow: string): string[] {
   if (
     releaseTransaction.length === 0 ||
     globalReadSteps.some(
-      (step) => yamlRecord(step?.env)?.RELEASE_JOB_DEADLINE_EPOCH !== `\${{ steps.deadline.outputs.epoch }}`
+      (step, index) => yamlRecord(step?.env)?.RELEASE_JOB_DEADLINE_EPOCH !== expectedDeadlineBindings[index]
     ) ||
     globalReadBodies.some(
       (readBody) =>
@@ -6733,21 +6774,27 @@ function releasePollProblems(workflow: string): string[] {
     .join(" ")
     .split(/\s+/u)
     .join(" ");
-  const paginationBinding = (result: string, pages: string, decoder: string) =>
-    `${result}=$(printf '%s' "$${pages}" | node scripts/check-release-integrity.mjs ${decoder})`;
+  const paginationBinding = (
+    result: string,
+    pages: string,
+    decoder: string,
+    evaluator = "scripts/check-release-integrity.mjs"
+  ) => `${result}=$(printf '%s' "$${pages}" | node ${evaluator} ${decoder})`;
   const strictPaginationBindings: Array<[string, number]> = [
     [paginationBinding("CI_RUNS", "CI_RUN_PAGES", "flatten-field workflow_runs"), 1],
     [paginationBinding("JOBS", "JOB_PAGES", "flatten-field jobs"), 2],
     [paginationBinding("RUNS", "RUN_PAGES", "flatten-field workflow_runs"), 1],
     [paginationBinding("CANDIDATE_ARTIFACTS", "ARTIFACT_PAGES", "flatten-field artifacts"), 1],
-    [paginationBinding("RELEASES", "RELEASE_PAGES", "flatten-pages release"), 5],
+    [paginationBinding("RELEASES", "RELEASE_PAGES", "flatten-pages release"), 3],
+    [paginationBinding("RELEASES", "RELEASE_PAGES", "flatten-pages release", '"$RELEASE_EVALUATOR"'), 2],
     [paginationBinding("RELEASE_ASSETS", "RELEASE_ASSET_PAGES", "flatten-pages asset"), 1],
-    [paginationBinding("REMOTE_ASSETS", "ASSET_PAGES", "flatten-pages asset"), 3],
-    [paginationBinding("CURRENT_ASSETS", "CURRENT_ASSET_PAGES", "flatten-pages asset"), 1],
+    [paginationBinding("REMOTE_ASSETS", "ASSET_PAGES", "flatten-pages asset"), 2],
+    [paginationBinding("REMOTE_ASSETS", "ASSET_PAGES", "flatten-pages asset", '"$RELEASE_EVALUATOR"'), 1],
+    [paginationBinding("CURRENT_ASSETS", "CURRENT_ASSET_PAGES", "flatten-pages asset", '"$RELEASE_EVALUATOR"'), 1],
     [paginationBinding("RECOVERY_RELEASES", "RECOVERY_PAGES", "flatten-pages release"), 1],
     [paginationBinding("RECOVERY_ASSETS", "RECOVERY_ASSET_PAGES", "flatten-pages asset"), 1],
-    [paginationBinding("CONFIRM_ASSETS", "CONFIRM_ASSET_PAGES", "flatten-pages asset"), 1],
-    [paginationBinding("POST_ASSETS", "POST_ASSET_PAGES", "flatten-pages asset"), 1]
+    [paginationBinding("CONFIRM_ASSETS", "CONFIRM_ASSET_PAGES", "flatten-pages asset", '"$RELEASE_EVALUATOR"'), 1],
+    [paginationBinding("POST_ASSETS", "POST_ASSET_PAGES", "flatten-pages asset", '"$RELEASE_EVALUATOR"'), 1]
   ];
   if (
     strictPaginationBindings.some(
@@ -6827,14 +6874,57 @@ function releasePollProblems(workflow: string): string[] {
   return [];
 }
 
-function githubReleaseTransactionProblems(workflow: string): string[] {
+function githubReleaseTransactionProblems(workflow: string, splitReleaseTransaction?: string): string[] {
   let steps: YamlRecord[];
   let releaseTransaction: string;
+  let splitJobs: {
+    readonly githubRelease: YamlRecord;
+    readonly mcpRegistry: YamlRecord;
+    readonly npmPublish: YamlRecord;
+    readonly verify: YamlRecord;
+  } | null = null;
   try {
     const document = yamlRecord(load(workflow));
-    const publish = yamlRecord(yamlRecord(document?.jobs)?.publish);
-    steps = yamlSteps(publish ?? {});
-    releaseTransaction = releaseTransactionFixtureBody(document);
+    const jobs = yamlRecord(document?.jobs);
+    const legacyPublish = yamlRecord(jobs?.publish);
+    const verify = yamlRecord(jobs?.verify);
+    const npmPublish = yamlRecord(jobs?.npm_publish);
+    const githubRelease = yamlRecord(jobs?.github_release);
+    const mcpRegistry = yamlRecord(jobs?.mcp_registry);
+    if (
+      legacyPublish === null &&
+      verify !== null &&
+      npmPublish !== null &&
+      githubRelease !== null &&
+      mcpRegistry !== null
+    ) {
+      splitJobs = { verify, npmPublish, githubRelease, mcpRegistry };
+    }
+    steps =
+      splitJobs !== null
+        ? [
+            ...yamlSteps(splitJobs.verify),
+            ...yamlSteps(splitJobs.npmPublish),
+            ...yamlSteps(splitJobs.githubRelease),
+            ...yamlSteps(splitJobs.mcpRegistry)
+          ]
+        : yamlSteps(legacyPublish);
+    const embeddedReleaseTransaction = releaseTransactionFixtureBody(document);
+    if (splitJobs !== null && splitReleaseTransaction !== undefined) {
+      const normalizedSplitTransaction = normalizedReleaseTransactionFixture(splitReleaseTransaction);
+      if (
+        normalizedSplitTransaction.length === 0 ||
+        (embeddedReleaseTransaction.length > 0 && embeddedReleaseTransaction !== normalizedSplitTransaction)
+      ) {
+        return ["GitHub Release transaction steps must exist"];
+      }
+      releaseTransaction = normalizedSplitTransaction;
+      if (embeddedReleaseTransaction.length === 0) {
+        workflow = releaseWorkflowFixture(workflow, splitReleaseTransaction);
+      }
+    } else {
+      releaseTransaction = embeddedReleaseTransaction;
+    }
   } catch {
     return ["GitHub Release transaction workflow must parse"];
   }
@@ -6844,7 +6934,9 @@ function githubReleaseTransactionProblems(workflow: string): string[] {
   const preflight = runBody(preflightStep);
   const prepareStep = namedStep(steps, "Prepare draft GitHub Release");
   const prepare = runBody(prepareStep);
-  const uploadStep = namedStep(steps, "Upload Basic MCPB asset, checksum, and provenance");
+  const uploadStep =
+    namedStep(steps, "Upload and publish the exact reviewed GitHub Release transaction") ??
+    namedStep(steps, "Upload Basic MCPB asset, checksum, and provenance");
   const uploadWrapper = runBody(uploadStep);
   const upload = releaseTransaction;
   if (preflight.length === 0 || prepare.length === 0 || upload.length === 0) {
@@ -6950,7 +7042,7 @@ function githubReleaseTransactionProblems(workflow: string): string[] {
       (("GH_TOKEN" in env && env.GH_TOKEN !== "") || ("NODE_AUTH_TOKEN" in env && env.NODE_AUTH_TOKEN !== ""))
     );
   };
-  const secretStepEnvIsSealed =
+  const legacySecretStepEnvIsSealed =
     [...githubSecretSteps, ...otherSecretSteps].every(
       (name) => steps.filter((step) => step.name === name).length === 1
     ) &&
@@ -7000,7 +7092,40 @@ function githubReleaseTransactionProblems(workflow: string): string[] {
         clearedSecretEnv.every((key) => env?.[key] === "")
       );
     });
-  if (!secretStepEnvIsSealed) {
+  const splitTokenSteps = steps.filter(hasInjectedSecret);
+  const splitTokenBodies = splitTokenSteps.map((step) => (step === uploadStep ? upload : runBody(step)));
+  const npmTrustedPublishingStep = namedStep(
+    steps,
+    "Publish exact npm tarball with Trusted Publishing or verify rerun"
+  );
+  const splitSecretStepEnvIsSealed =
+    splitJobs !== null &&
+    splitTokenSteps.length === 10 &&
+    !workflow.includes("secrets.") &&
+    checkoutSteps.length === 1 &&
+    yamlRecord(checkout?.with)?.ref === `\${{ github.ref }}` &&
+    yamlRecord(checkout?.with)?.["fetch-depth"] === 0 &&
+    yamlRecord(checkout?.with)?.["persist-credentials"] === false &&
+    splitTokenSteps.every((step) => {
+      const env = yamlRecord(step.env);
+      return (
+        step.shell === protectedShell &&
+        env?.GH_TOKEN === `\${{ github.token }}` &&
+        env?.BASH_ENV === "" &&
+        env?.ENV === "" &&
+        env?.SHELLOPTS === "" &&
+        env?.PS4 === "" &&
+        clearedSecretEnv.every((key) => !(key in env) || env[key] === "") &&
+        (!("NODE_TLS_REJECT_UNAUTHORIZED" in env) || env.NODE_TLS_REJECT_UNAUTHORIZED === "1") &&
+        env?.NODE_AUTH_TOKEN === undefined
+      );
+    }) &&
+    splitTokenBodies.every(
+      (stepBody) => stepBody.startsWith("set -euo pipefail\n") && stepBody.includes(LOWERCASE_PROXY_UNSET)
+    ) &&
+    mutationMatchCount(splitTokenBodies.join("\n"), freshGithubConfig) === 6 &&
+    runBody(npmTrustedPublishingStep).includes(NPM_LOWERCASE_PIN_BLOCK);
+  if (splitJobs === null ? !legacySecretStepEnvIsSealed : !splitSecretStepEnvIsSealed) {
     problems.push(
       "token-bearing shells must clear inherited shell, loader, network, CA, Node, and GitHub config injection"
     );
@@ -7008,10 +7133,26 @@ function githubReleaseTransactionProblems(workflow: string): string[] {
   const expectedUploadHash = createHash("sha256")
     .update(releaseTransactionRuntimeSnapshot(upload), "utf8")
     .digest("hex");
-  if (
-    uploadWrapper !== releaseTransactionWrapper(expectedUploadHash) ||
-    yamlRecord(uploadStep?.env)?.MCPB_RELEASE_WORKFLOW_SHA !== `\${{ github.workflow_sha }}`
-  ) {
+  const reviewedCodeStep = namedStep(
+    yamlSteps(splitJobs?.githubRelease ?? {}),
+    "Assert reviewed privileged code identity"
+  );
+  const reviewedCodeRun = runBody(reviewedCodeStep);
+  const splitUploadIsExact =
+    splitJobs !== null &&
+    uploadWrapper ===
+      "set -euo pipefail\n/bin/bash --noprofile --norc -p -e -o pipefail .github/scripts/release-mcpb-github-transaction.sh" &&
+    uploadStep?.["working-directory"] === `\${{ runner.temp }}/release-handoff` &&
+    reviewedCodeStep?.["working-directory"] === `\${{ runner.temp }}/release-handoff` &&
+    mutationMatchCount(
+      reviewedCodeRun,
+      `printf '%s  %s\\n' '${sha256(`${releaseTransactionRuntimeSnapshot(upload)}\n`)}' '.github/scripts/release-mcpb-github-transaction.sh'`
+    ) === 1 &&
+    mutationMatchCount(reviewedCodeRun, "} | sha256sum -c -") === 1;
+  const legacyUploadIsExact =
+    uploadWrapper === releaseTransactionWrapper(expectedUploadHash) &&
+    yamlRecord(uploadStep?.env)?.MCPB_RELEASE_WORKFLOW_SHA === `\${{ github.workflow_sha }}`;
+  if (splitJobs === null ? !legacyUploadIsExact : !splitUploadIsExact) {
     problems.push("GitHub Release transaction must execute only one exact hash-pinned in-memory script snapshot");
   }
   const releaseTestStep = namedStep(steps, "Test exact source without npm or contents-write tokens");
@@ -7042,10 +7183,11 @@ function githubReleaseTransactionProblems(workflow: string): string[] {
       workflow,
       '.documentation_url == "https://docs.github.com/rest/releases/releases#get-the-latest-release"'
     ) !== 2 ||
-    preflightLatestHelper !== uploadLatestHelper ||
+    (splitJobs === null && preflightLatestHelper !== uploadLatestHelper) ||
     sha256(preflightLatestHelper) !== "46b6a5d80735d489f616088c0bfb839adb89332e86a3edc23df20aa3dbbab817" ||
     sha256(preflightLatestCaller) !== "454974092ffab8215eadcf379d249cf79f7f6f70e0de22590c2f325e397a61e8" ||
-    sha256(uploadLatestCaller) !== "55946514a824216a1c78ded2dba1e48ec8fcbb675da99d6243c911fd5f531ef2"
+    sha256(uploadLatestHelper) !== "3ff4d38b6abb734fd8cb602da3bee64942e4d086912946856943a2ec76601224" ||
+    sha256(uploadLatestCaller) !== "cf1b541a23bccf326d04456e9497f82f0b06fe07367d0d16576dfb4059cf2418"
   ) {
     problems.push("GitHub latest-release absence must be one strict HTTP identity, never stderr text");
   }
@@ -7057,7 +7199,9 @@ function githubReleaseTransactionProblems(workflow: string): string[] {
     (step) => step.name === "Preflight existing GitHub release and every Basic asset before npm"
   );
   const npmPublicationIndex = steps.findIndex(
-    (step) => step.name === "Publish with provenance or verify an exact prior publication"
+    (step) =>
+      step.name === "Publish exact npm tarball with Trusted Publishing or verify rerun" ||
+      step.name === "Publish with provenance or verify an exact prior publication"
   );
   const releaseBodyEnvPins = {
     MCPB_RELEASE_BODY_PATH: `\${{ steps.release_body.outputs.path }}`,
@@ -7071,7 +7215,7 @@ function githubReleaseTransactionProblems(workflow: string): string[] {
     const env = yamlRecord(step.env);
     return env !== null && releaseBodyEnvKeys.some((key) => Object.hasOwn(env, key));
   });
-  const releaseBodyConsumerEnvIsExact =
+  const legacyReleaseBodyConsumerEnvIsExact =
     releaseBodyEnvCarriers.length === 3 &&
     releaseBodyConsumerSteps.every((step) => {
       const env = yamlRecord(step?.env);
@@ -7080,6 +7224,20 @@ function githubReleaseTransactionProblems(workflow: string): string[] {
         releaseBodyEnvKeys.every((key) => env[key] === releaseBodyEnvPins[key as keyof typeof releaseBodyEnvPins])
       );
     });
+  const splitReleaseBodyConsumerEnvIsExact =
+    releaseBodyEnvCarriers.length === 3 &&
+    Object.entries(releaseBodyEnvPins).every(([key, value]) => yamlRecord(preflightStep?.env)?.[key] === value) &&
+    [prepareStep, uploadStep].every((step) => {
+      const env = yamlRecord(step?.env);
+      return (
+        env?.MCPB_RELEASE_BODY_PATH === "release-notes.md" &&
+        env?.MCPB_RELEASE_BODY_SHA256 === `\${{ needs.verify.outputs.release_body_sha256 }}` &&
+        env?.MCPB_RELEASE_BODY_BYTES === `\${{ needs.verify.outputs.release_body_bytes }}` &&
+        env?.MCPB_RELEASE_BODY_CHARS === `\${{ needs.verify.outputs.release_body_chars }}`
+      );
+    });
+  const releaseBodyConsumerEnvIsExact =
+    splitJobs === null ? legacyReleaseBodyConsumerEnvIsExact : splitReleaseBodyConsumerEnvIsExact;
   const frozenAwkAnchor = '# Frozen release.m389 identity anchor only: awk -v heading="## [$VERSION] — "';
   const receiptKeys = '(keys | sort) == ["bytes", "chars", "path", "sha256"]';
   const receiptByteBound = '(.bytes | type == "number" and floor == . and . > 0 and . <= 125000)';
@@ -7144,7 +7302,9 @@ function githubReleaseTransactionProblems(workflow: string): string[] {
   const createReserve = 'require_job_reserve 3600 "GitHub draft creation"';
   const createArgs = `CREATE_ARGS=(release create "$TAG" --repo "\${{ github.repository }}" \\\n  --title "$TAG" --notes-file "$NOTES" --draft --verify-tag)`;
   const createChannelBlock =
-    `if [ "\${{ steps.dist_tag.outputs.tag }}" != "latest" ]; then\n` + "  CREATE_ARGS+=(--prerelease)\n" + "fi";
+    splitJobs === null
+      ? `if [ "\${{ steps.dist_tag.outputs.tag }}" != "latest" ]; then\n` + "  CREATE_ARGS+=(--prerelease)\n" + "fi"
+      : 'if [ "$MCPB_RELEASE_CHANNEL" != "latest" ]; then\n  CREATE_ARGS+=(--prerelease)\nfi';
   const createCommand = `"$TIMEOUT_BIN" --kill-after=10s 300s "$GH_BIN" "\${CREATE_ARGS[@]}"`;
   const createRecovery = "for (( create_recovery_attempt=1; create_recovery_attempt<=12;";
   const createReserveIndex = prepare.indexOf(createReserve);
@@ -7623,7 +7783,12 @@ function githubReleaseTransactionProblems(workflow: string): string[] {
   }
   if (
     mutationMatchCount(upload, projection) !== 5 ||
-    mutationMatchCount(upload, "node scripts/check-release-integrity.mjs visibility") !== 2 ||
+    mutationMatchCount(
+      upload,
+      splitJobs === null
+        ? "node scripts/check-release-integrity.mjs visibility"
+        : 'node "$RELEASE_EVALUATOR" visibility'
+    ) !== 2 ||
     !upload.includes('[ "$PUBLISH_ASSET_IDENTITY" != "$FINAL_ASSET_IDENTITY" ]') ||
     !upload.includes('[ "$POST_ASSET_IDENTITY" != "$FINAL_ASSET_IDENTITY" ]') ||
     !upload.includes("download_exact_release_asset()") ||
@@ -7632,7 +7797,7 @@ function githubReleaseTransactionProblems(workflow: string): string[] {
   ) {
     problems.push("the exact six-asset identity and bytes must remain frozen across publication");
   }
-  const allRunBodies = steps.map(runBody).concat(upload).join("\n");
+  const allRunBodies = splitJobs === null ? steps.map(runBody).concat(upload).join("\n") : [prepare, upload].join("\n");
   const explicitWriteMethods =
     allRunBodies.match(/(?:(?:--method|--request)(?:=|\s+)|-X\s*)(?:POST|PATCH|PUT|DELETE)\b/giu) ?? [];
   const ghApiSurfaceLines = allRunBodies
@@ -7652,7 +7817,7 @@ function githubReleaseTransactionProblems(workflow: string): string[] {
     mutationMatchCount(allRunBodies, "--request POST") !== 1 ||
     mutationMatchCount(allRunBodies, "--method PATCH") !== 1 ||
     mutationMatchCount(allRunBodies, '"$GH_BIN" api --method PATCH') !== 1 ||
-    ghApiSurfaceLines.length !== 15 ||
+    ghApiSurfaceLines.length !== (splitJobs === null ? 15 : 5) ||
     directGhApiLines.length !== 1 ||
     !directGhApiLines[0]?.startsWith(
       'PUBLISHED_RELEASE=$("$TIMEOUT_BIN" --kill-after=10s 120s "$GH_BIN" api --method PATCH'
@@ -7702,13 +7867,18 @@ const MCPB_NPM_CHANNEL_ADVANCE =
   "            node scripts/check-release-integrity.mjs channel-advance \\\n" +
   '              "$VERSION" "$PRE_WRITE_CHANNEL_VERSION" "$CHANNEL"\n' +
   '            PRE_PUBLISH_INTEGRITY=$(tarball_sri "$PACKAGE_TARBALL")';
-const MCPB_EXACT_NPM_PACK = '"$TIMEOUT_BIN" --kill-after=10s 600s "$NPM_BIN" pack --json --ignore-scripts';
+const MCPB_NPM_TARBALL_ASSIGNMENT = 'PACKAGE_TARBALL="$PWD/npm-package/enquire-mcp-npm.tgz"';
+const MCPB_NPM_MANIFEST_ASSIGNMENT = 'PACKAGE_MANIFEST="npm-package/npm-package-manifest.json"';
+const MCPB_NPM_ARTIFACT_VERIFY_HEAD = 'ARTIFACT_RECEIPT=$("$NODE_BIN" scripts/npm-package-artifact.mjs verify \\';
+const NPM_PROVENANCE_IDENTITY_CARRIERS = ["NPM_ID_TOKEN", "SIGSTORE_ID_TOKEN", "GITLAB_CI"] as const;
 const MCPB_EXACT_NPM_PUBLISH =
   `              /usr/bin/env "\${NPM_ENV_UNSETS[@]}" \\\n` +
+  "                --unset=NPM_ID_TOKEN --unset=SIGSTORE_ID_TOKEN --unset=GITLAB_CI \\\n" +
   "                NPM_CONFIG_REGISTRY=https://registry.npmjs.org/ \\\n" +
   "                NPM_CONFIG_PROXY= NPM_CONFIG_HTTPS_PROXY= NPM_CONFIG_CA= NPM_CONFIG_CAFILE= \\\n" +
   "                NPM_CONFIG_STRICT_SSL=true NPM_CONFIG_FETCH_RETRIES=0 NPM_CONFIG_FETCH_TIMEOUT=60000 \\\n" +
   '                NPM_CONFIG_USERCONFIG="$NPM_CONFIG_USERCONFIG" NPM_CONFIG_GLOBALCONFIG=/dev/null \\\n' +
+  "                NPM_CONFIG_PROVENANCE=true \\\n" +
   '                "$TIMEOUT_BIN" --kill-after=10s 600s "$NPM_BIN" publish "$PACKAGE_TARBALL" \\\n' +
   '                --userconfig="$NPM_CONFIG_USERCONFIG" --globalconfig=/dev/null \\\n' +
   "                --registry=https://registry.npmjs.org/ \\\n" +
@@ -7716,6 +7886,20 @@ const MCPB_EXACT_NPM_PUBLISH =
   "                --fetch-retries=0 --fetch-timeout=60000 --strict-ssl=true \\\n" +
   '                --provenance --access public --tag "$CHANNEL" --ignore-scripts';
 const MCPB_EXACT_NPM_PUBLISH_RUN =
+  `    /usr/bin/env "\${NPM_ENV_UNSETS[@]}" \\\n` +
+  "      --unset=NPM_ID_TOKEN --unset=SIGSTORE_ID_TOKEN --unset=GITLAB_CI \\\n" +
+  "      NPM_CONFIG_REGISTRY=https://registry.npmjs.org/ \\\n" +
+  "      NPM_CONFIG_PROXY= NPM_CONFIG_HTTPS_PROXY= NPM_CONFIG_CA= NPM_CONFIG_CAFILE= \\\n" +
+  "      NPM_CONFIG_STRICT_SSL=true NPM_CONFIG_FETCH_RETRIES=0 NPM_CONFIG_FETCH_TIMEOUT=60000 \\\n" +
+  '      NPM_CONFIG_USERCONFIG="$NPM_CONFIG_USERCONFIG" NPM_CONFIG_GLOBALCONFIG=/dev/null \\\n' +
+  "      NPM_CONFIG_PROVENANCE=true \\\n" +
+  '      "$TIMEOUT_BIN" --kill-after=10s 600s "$NPM_BIN" publish "$PACKAGE_TARBALL" \\\n' +
+  '      --userconfig="$NPM_CONFIG_USERCONFIG" --globalconfig=/dev/null \\\n' +
+  "      --registry=https://registry.npmjs.org/ \\\n" +
+  "      --@oomkapwn:registry=https://registry.npmjs.org/ \\\n" +
+  "      --fetch-retries=0 --fetch-timeout=60000 --strict-ssl=true \\\n" +
+  '      --provenance --access public --tag "$CHANNEL" --ignore-scripts';
+const MCPB_LEGACY_EXACT_NPM_PUBLISH_RUN =
   `    /usr/bin/env "\${NPM_ENV_UNSETS[@]}" \\\n` +
   "      NPM_CONFIG_REGISTRY=https://registry.npmjs.org/ \\\n" +
   "      NPM_CONFIG_PROXY= NPM_CONFIG_HTTPS_PROXY= NPM_CONFIG_CA= NPM_CONFIG_CAFILE= \\\n" +
@@ -7762,6 +7946,7 @@ const MCP_REGISTRY_EVALUATOR_CONTRACT_PROBLEM =
   "MCP Registry reconciliation must retain exact identity, lifecycle, absence, and convergence semantics";
 const MCP_REGISTRY_WORKFLOW_CONTRACT_PROBLEM =
   "stable MCP Registry publication must bind exact source manifests, one pinned publisher write, and bounded readback";
+const MCP_REGISTRY_TAG_PROOF_SHA256 = "1c4171ada2237d39b1bcbd02a23ce69a6db4ed3843421d865ebb8795b7bdba76";
 const NPM_PROVENANCE_STEP_NAME = "Verify exact npm provenance without credentials";
 const NPM_PROVENANCE_CONTEXT_COMMAND =
   '"$NODE_BIN" scripts/check-release-integrity.mjs npm-provenance-context "$SOURCE_SHA" "$TAG"';
@@ -7773,18 +7958,33 @@ const NPM_PROVENANCE_CLI_SRI =
 
 function npmProvenanceWorkflowProblems(release: string): string[] {
   let steps: YamlRecord[];
+  let githubReleaseSteps: YamlRecord[] = [];
+  let npmPublishJob: YamlRecord | null = null;
+  let githubReleaseJob: YamlRecord | null = null;
+  let splitWorkflow = false;
   try {
     const releaseDocument = yamlRecord(load(release));
-    const releaseJob = yamlRecord(yamlRecord(releaseDocument?.jobs)?.publish);
-    steps = yamlSteps(releaseJob ?? {});
+    const jobs = yamlRecord(releaseDocument?.jobs);
+    const legacyPublishJob = yamlRecord(jobs?.publish);
+    npmPublishJob = yamlRecord(jobs?.npm_publish);
+    githubReleaseJob = yamlRecord(jobs?.github_release);
+    splitWorkflow =
+      legacyPublishJob === null &&
+      yamlRecord(jobs?.verify) !== null &&
+      npmPublishJob !== null &&
+      githubReleaseJob !== null &&
+      yamlRecord(jobs?.mcp_registry) !== null;
+    steps = yamlSteps(splitWorkflow ? (npmPublishJob ?? {}) : (legacyPublishJob ?? {}));
+    githubReleaseSteps = splitWorkflow ? yamlSteps(githubReleaseJob ?? {}) : steps;
   } catch {
     return [NPM_PROVENANCE_CONTRACT_PROBLEM];
   }
-  const publishIndex = steps.findIndex(
-    (step) => step.name === "Publish with provenance or verify an exact prior publication"
-  );
+  const publishStepName = splitWorkflow
+    ? "Publish exact npm tarball with Trusted Publishing or verify rerun"
+    : "Publish with provenance or verify an exact prior publication";
+  const publishIndex = steps.findIndex((step) => step.name === publishStepName);
   const verificationIndex = steps.findIndex((step) => step.name === NPM_PROVENANCE_STEP_NAME);
-  const draftIndex = steps.findIndex((step) => step.name === "Prepare draft GitHub Release");
+  const draftIndex = githubReleaseSteps.findIndex((step) => step.name === "Prepare draft GitHub Release");
   const publishStep = publishIndex >= 0 ? steps[publishIndex] : undefined;
   const verificationStep = verificationIndex >= 0 ? steps[verificationIndex] : undefined;
   const publishRun = runBody(publishStep);
@@ -7808,7 +8008,9 @@ function npmProvenanceWorkflowProblems(release: string): string[] {
     PROVENANCE_WORKFLOW_SHA: `\${{ github.workflow_sha }}`
   };
   const verifierBindings: Record<string, string> = {
-    RELEASE_JOB_DEADLINE_EPOCH: `\${{ steps.deadline.outputs.epoch }}`,
+    RELEASE_JOB_DEADLINE_EPOCH: splitWorkflow
+      ? `\${{ needs.verify.outputs.deadline_epoch }}`
+      : `\${{ steps.deadline.outputs.epoch }}`,
     EXPECTED_VERSION: `\${{ steps.npm_publication.outputs.version }}`,
     EXPECTED_SOURCE_SHA: `\${{ steps.npm_publication.outputs.source_sha }}`,
     EXPECTED_TAG: `\${{ steps.npm_publication.outputs.tag }}`,
@@ -7827,7 +8029,8 @@ function npmProvenanceWorkflowProblems(release: string): string[] {
   );
   const contextIndex = publishRun.indexOf(NPM_PROVENANCE_CONTEXT_COMMAND, prewriteRehashIndex);
   const attemptedIndex = publishRun.indexOf("NPM_PUBLISH_ATTEMPTED=true", contextIndex);
-  const solePublishIndex = publishRun.indexOf(MCPB_EXACT_NPM_PUBLISH_RUN, attemptedIndex);
+  const exactPublishRun = splitWorkflow ? MCPB_EXACT_NPM_PUBLISH_RUN : MCPB_LEGACY_EXACT_NPM_PUBLISH_RUN;
+  const solePublishIndex = publishRun.indexOf(exactPublishRun, attemptedIndex);
   const publishOutputIndex = publishRun.indexOf("printf 'publish_attempted=%s\\n'", solePublishIndex);
 
   const verifierReserveIndex = verificationRun.indexOf(
@@ -7897,12 +8100,32 @@ function npmProvenanceWorkflowProblems(release: string): string[] {
   const isExact =
     publishIndex >= 0 &&
     verificationIndex === publishIndex + 1 &&
-    draftIndex === verificationIndex + 1 &&
+    (splitWorkflow ? draftIndex >= 0 : draftIndex === verificationIndex + 1) &&
     publishStep?.id === "npm_publication" &&
     verificationStep?.id === "npm_provenance" &&
     Object.entries(contextBindings).every(([name, value]) => publishEnv?.[name] === value) &&
     Object.entries(verifierBindings).every(([name, value]) => verificationEnv?.[name] === value) &&
-    publishEnv?.NODE_AUTH_TOKEN === `\${{ secrets.NPM_TOKEN }}` &&
+    (splitWorkflow
+      ? publishEnv?.NODE_AUTH_TOKEN === undefined &&
+        !release.includes("secrets.") &&
+        mutationMatchCount(publishRun, "--provenance") === 1 &&
+        mutationMatchCount(publishRun, "NPM_CONFIG_PROVENANCE=true") === 1 &&
+        mutationMatchCount(publishRun, "npm_config_provenance|npm_config_provenance_file") === 1 &&
+        NPM_PROVENANCE_IDENTITY_CARRIERS.every(
+          (carrier) => publishEnv?.[carrier] === "" && mutationMatchCount(publishRun, `--unset=${carrier}`) === 1
+        ) &&
+        !publishRun.includes("--provenance-file") &&
+        npmPublishJob?.needs !== undefined &&
+        JSON.stringify(npmPublishJob.needs) === JSON.stringify(["verify"]) &&
+        JSON.stringify(yamlRecord(npmPublishJob.permissions)) ===
+          JSON.stringify({ actions: "read", contents: "read", "id-token": "write" }) &&
+        JSON.stringify(yamlRecord(npmPublishJob.environment)) === JSON.stringify({ name: "npm-publish" }) &&
+        Number(npmPublishJob["timeout-minutes"]) === 120 &&
+        JSON.stringify(githubReleaseJob?.needs) === JSON.stringify(["verify", "npm_publish"]) &&
+        publishStep?.["working-directory"] === `\${{ runner.temp }}/release-handoff` &&
+        verificationStep?.["working-directory"] === `\${{ runner.temp }}/release-handoff` &&
+        publishRun.includes('PACKAGE_TARBALL="$PWD/npm-package/enquire-mcp-npm.tgz"')
+      : publishEnv?.NODE_AUTH_TOKEN === `\${{ secrets.NPM_TOKEN }}`) &&
     verificationEnv?.GH_TOKEN === "" &&
     verificationEnv?.GITHUB_TOKEN === "" &&
     verificationEnv?.NODE_AUTH_TOKEN === "" &&
@@ -7923,7 +8146,7 @@ function npmProvenanceWorkflowProblems(release: string): string[] {
     solePublishIndex > attemptedIndex &&
     publishOutputIndex > solePublishIndex &&
     mutationMatchCount(publishRun, NPM_PROVENANCE_CONTEXT_COMMAND) === 1 &&
-    mutationMatchCount(allRunBodies, MCPB_EXACT_NPM_PUBLISH_RUN) === 1 &&
+    mutationMatchCount(allRunBodies, exactPublishRun) === 1 &&
     verifierReserveIndex >= 0 &&
     userConfigIndex > verifierReserveIndex &&
     globalConfigIndex > userConfigIndex &&
@@ -8136,7 +8359,7 @@ function mcpRegistryEvaluatorProblems(integrity: string): string[] {
 
 const MCP_REGISTRY_WORK_ROOT_INIT = 'WORK_ROOT=$(/usr/bin/mktemp -d "$RUNNER_TEMP/enquire-mcp-registry.XXXXXX")';
 const MCP_REGISTRY_HTTP_WRITE_OUT_ANSI_C = "$'%{http_code}\\n%{content_type}'";
-const MCP_REGISTRY_EXACT_STEP_ENV: Readonly<Record<string, string>> = Object.freeze({
+const MCP_REGISTRY_LEGACY_EXACT_STEP_ENV: Readonly<Record<string, string>> = Object.freeze({
   BASH_ENV: "",
   ENV: "",
   SHELLOPTS: "",
@@ -8169,12 +8392,83 @@ const MCP_REGISTRY_EXACT_STEP_ENV: Readonly<Record<string, string>> = Object.fre
   EXPECTED_TAG: `\${{ steps.npm_publication.outputs.tag }}`,
   NPM_PROVENANCE_VERIFIED: `\${{ steps.npm_provenance.outputs.verified }}`
 });
-const MCP_REGISTRY_EXACT_STEP_METADATA: Readonly<YamlRecord> = Object.freeze({
+const MCP_REGISTRY_EXACT_STEP_ENV: Readonly<Record<string, string>> = Object.freeze({
+  BASH_ENV: "",
+  ENV: "",
+  SHELLOPTS: "",
+  PS4: "",
+  LD_PRELOAD: "",
+  LD_LIBRARY_PATH: "",
+  NODE_OPTIONS: "",
+  NODE_TLS_REJECT_UNAUTHORIZED: "1",
+  GH_TOKEN: `\${{ github.token }}`,
+  RELEASE_JOB_DEADLINE_EPOCH: `\${{ needs.verify.outputs.deadline_epoch }}`,
+  EXPECTED_VERSION: `\${{ needs.verify.outputs.version }}`,
+  EXPECTED_SOURCE_SHA: `\${{ needs.verify.outputs.source_sha }}`,
+  EXPECTED_TAG: `\${{ needs.verify.outputs.tag }}`,
+  NPM_PROVENANCE_VERIFIED: `\${{ needs.npm_publish.outputs.provenance_verified }}`
+});
+const MCP_REGISTRY_LEGACY_EXACT_STEP_METADATA: Readonly<YamlRecord> = Object.freeze({
   name: MCP_REGISTRY_STEP_NAME,
   if: "steps.dist_tag.outputs.tag == 'latest'",
   shell: "/bin/bash --noprofile --norc -p -e -o pipefail {0}",
-  env: MCP_REGISTRY_EXACT_STEP_ENV
+  env: MCP_REGISTRY_LEGACY_EXACT_STEP_ENV
 });
+const MCP_REGISTRY_EXACT_STEP_METADATA: Readonly<YamlRecord> = Object.freeze({
+  name: MCP_REGISTRY_STEP_NAME,
+  shell: "/bin/bash --noprofile --norc -p -e -o pipefail {0}",
+  env: MCP_REGISTRY_EXACT_STEP_ENV,
+  "working-directory": `\${{ runner.temp }}/release-handoff`
+});
+const MCP_REGISTRY_SPLIT_HANDOFF_SNAPSHOT_BLOCK = [
+  'PACKAGE_JSON_SNAPSHOT="$PWD/package.json"',
+  'SERVER_JSON_SNAPSHOT="$PWD/server.json"',
+  'EVALUATOR="$PWD/scripts/check-release-integrity.mjs"',
+  'for SNAPSHOT in "$PACKAGE_JSON_SNAPSHOT" "$SERVER_JSON_SNAPSHOT" "$EVALUATOR"; do',
+  '  if [ ! -f "$SNAPSHOT" ] || [ -L "$SNAPSHOT" ]; then',
+  '    echo "::error::Verified Registry handoff input is missing, non-regular, or a symlink"',
+  "    exit 1",
+  "  fi",
+  "done"
+].join("\n");
+const MCP_REGISTRY_LEGACY_CHECKOUT_SNAPSHOT_BLOCK = [
+  'PACKAGE_JSON_SNAPSHOT="$WORK_ROOT/package.json"',
+  'SERVER_JSON_SNAPSHOT="$WORK_ROOT/server.json"',
+  'EVALUATOR="$GITHUB_WORKSPACE/scripts/check-release-integrity.mjs"',
+  'if [ ! -f "$EVALUATOR" ] || [ -L "$EVALUATOR" ]; then',
+  '  echo "::error::Registry evaluator is missing, non-regular, or a symlink"',
+  "  exit 1",
+  "fi",
+  "registry_git() {",
+  '  "$TIMEOUT_BIN" --kill-after=3s 15s /usr/bin/env -i \\',
+  "    PATH=/usr/bin:/bin GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_SYSTEM=/dev/null \\",
+  "    GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_COUNT=0 GIT_NO_LAZY_FETCH=1 \\",
+  "    GIT_NO_REPLACE_OBJECTS=1 GIT_OPTIONAL_LOCKS=0 GIT_TERMINAL_PROMPT=0 \\",
+  '    /usr/bin/git -C "$GITHUB_WORKSPACE" --no-pager --no-replace-objects "$@"',
+  "}",
+  'if [ "$(registry_git rev-parse HEAD)" != "$SOURCE_SHA" ] ||',
+  '   ! registry_git diff --quiet "$SOURCE_SHA" -- package.json server.json; then',
+  '  echo "::error::Tracked Registry manifests differ from the exact npm source"',
+  "  exit 1",
+  "fi",
+  "for MANIFEST in package.json server.json; do",
+  '  if [ ! -f "$GITHUB_WORKSPACE/$MANIFEST" ] || [ -L "$GITHUB_WORKSPACE/$MANIFEST" ]; then',
+  '    echo "::error::$MANIFEST is missing, non-regular, or a symlink"',
+  "    exit 1",
+  "  fi",
+  '  SNAPSHOT="$WORK_ROOT/$MANIFEST"',
+  '  /bin/cp -- "$GITHUB_WORKSPACE/$MANIFEST" "$SNAPSHOT"',
+  '  /bin/chmod 0400 "$SNAPSHOT"',
+  '  if [ "$(registry_git rev-parse "$SOURCE_SHA:$MANIFEST")" != "$(registry_git hash-object "$SNAPSHOT")" ]; then',
+  '    echo "::error::$MANIFEST snapshot differs from the exact source blob"',
+  "    exit 1",
+  "  fi",
+  "done",
+  'if ! registry_git diff --quiet "$SOURCE_SHA" -- package.json server.json; then',
+  '  echo "::error::Tracked Registry manifests changed during snapshot"',
+  "  exit 1",
+  "fi"
+].join("\n");
 
 function logicalShellLines(run: string): string[] {
   return run
@@ -8270,13 +8564,32 @@ function hasForbiddenRegistryWriteArguments(run: string): boolean {
 }
 
 function mcpRegistryStepProblems(step: YamlRecord | undefined, integrity: string): string[] {
-  const run = runBody(step);
+  const originalRun = runBody(step);
   const env = yamlRecord(step?.env);
+  const splitStep = env?.NPM_PROVENANCE_VERIFIED === `\${{ needs.npm_publish.outputs.provenance_verified }}`;
+  const splitSnapshotIndex = originalRun.indexOf(MCP_REGISTRY_SPLIT_HANDOFF_SNAPSHOT_BLOCK);
+  const run =
+    splitStep &&
+    splitSnapshotIndex >= 0 &&
+    mutationMatchCount(originalRun, MCP_REGISTRY_SPLIT_HANDOFF_SNAPSHOT_BLOCK) === 1
+      ? originalRun.slice(0, splitSnapshotIndex) +
+        MCP_REGISTRY_LEGACY_CHECKOUT_SNAPSHOT_BLOCK +
+        originalRun.slice(splitSnapshotIndex + MCP_REGISTRY_SPLIT_HANDOFF_SNAPSHOT_BLOCK.length)
+      : originalRun;
+  const expectedEnvironment = splitStep ? MCP_REGISTRY_EXACT_STEP_ENV : MCP_REGISTRY_LEGACY_EXACT_STEP_ENV;
+  const expectedMetadata = splitStep ? MCP_REGISTRY_EXACT_STEP_METADATA : MCP_REGISTRY_LEGACY_EXACT_STEP_METADATA;
+  const tagProofStart = originalRun.indexOf("assert_remote_tag_identity() {");
+  const tagProofEnd = originalRun.indexOf("\n}", tagProofStart) + 2;
+  const splitTagProofIsExact =
+    tagProofStart >= 0 &&
+    tagProofEnd > tagProofStart &&
+    createHash("sha256").update(originalRun.slice(tagProofStart, tagProofEnd)).digest("hex") ===
+      MCP_REGISTRY_TAG_PROOF_SHA256;
   const envIsExact =
     env !== null &&
-    JSON.stringify(Object.keys(env).sort()) === JSON.stringify(Object.keys(MCP_REGISTRY_EXACT_STEP_ENV).sort()) &&
-    Object.entries(MCP_REGISTRY_EXACT_STEP_ENV).every(([key, value]) => env[key] === value);
-  const containsExactEmptyEnvironmentReference = hasExactEmptyEnvironmentReference(run, MCP_REGISTRY_EXACT_STEP_ENV);
+    JSON.stringify(Object.keys(env).sort()) === JSON.stringify(Object.keys(expectedEnvironment).sort()) &&
+    Object.entries(expectedEnvironment).every(([key, value]) => env[key] === value);
+  const containsExactEmptyEnvironmentReference = hasExactEmptyEnvironmentReference(run, expectedEnvironment);
   const capturePositiveInteger = (pattern: RegExp) => {
     const value = Number(pattern.exec(run)?.[1] ?? Number.NaN);
     return Number.isSafeInteger(value) && value > 0 ? value : Number.NaN;
@@ -8542,10 +8855,12 @@ function mcpRegistryStepProblems(step: YamlRecord | undefined, integrity: string
   const publishExitCaptureIndex = run.indexOf("MCP_PUBLISH_EXIT=$?", publishIndex);
   const publishSetMinusIndex = run.indexOf("set -e", publishExitCaptureIndex);
   const workflowIsExact =
-    step?.name === MCP_REGISTRY_EXACT_STEP_METADATA.name &&
-    step?.if === MCP_REGISTRY_EXACT_STEP_METADATA.if &&
-    step?.shell === MCP_REGISTRY_EXACT_STEP_METADATA.shell &&
+    step?.name === expectedMetadata.name &&
+    (splitStep ? !("if" in (step ?? {})) : step?.if === expectedMetadata.if) &&
+    step?.shell === expectedMetadata.shell &&
+    (!splitStep || step?.["working-directory"] === expectedMetadata["working-directory"]) &&
     envIsExact &&
+    (!splitStep || splitTagProofIsExact) &&
     run.length > 0 &&
     run.length <= GITHUB_RUN_CHARACTER_LIMIT &&
     run.startsWith(`set -euo pipefail\n${LOWERCASE_PROXY_UNSET}\nbuiltin umask 077\n`) &&
@@ -8748,12 +9063,19 @@ function mcpRegistryContractProblems(steps: YamlRecord[], integrity: string, per
     .filter((index) => index >= 0);
   const uploadIndex = steps.findIndex((step) => step.name === "Upload Basic MCPB asset, checksum, and provenance");
   const registryIndex = registryIndices[0] ?? -1;
+  const splitStepInventory = [
+    "Download and verify exact release handoff",
+    "Assert reviewed privileged code identity",
+    MCP_REGISTRY_STEP_NAME
+  ];
+  const isSplitRegistryJob =
+    JSON.stringify(steps.map((step) => step.name)) === JSON.stringify(splitStepInventory) &&
+    registryIndex === steps.length - 1;
   if (
     permissions["id-token"] !== "write" ||
     registryIndices.length !== 1 ||
-    uploadIndex < 0 ||
-    registryIndex !== uploadIndex + 1 ||
-    registryIndex !== steps.length - 1
+    registryIndex !== steps.length - 1 ||
+    (!isSplitRegistryJob && (uploadIndex < 0 || registryIndex !== uploadIndex + 1))
   ) {
     return [MCP_REGISTRY_WORKFLOW_CONTRACT_PROBLEM];
   }
@@ -8766,7 +9088,7 @@ function npmProvenanceContractProblems(release: string, integrity: string): stri
   return npmProvenanceEvaluatorProblems(integrity);
 }
 
-function mcpbContractProblems(inputs: {
+function legacyMcpbContractProblems(inputs: {
   manifest: string;
   cli: string;
   cliHelp: string;
@@ -8774,7 +9096,9 @@ function mcpbContractProblems(inputs: {
   build: string;
   consumer: string;
   docsApi: string;
+  entrypoint: string;
   integrity: string;
+  npmArtifact: string;
   packageLock: string;
   packageJson: string;
   release: string;
@@ -8985,31 +9309,25 @@ function mcpbContractProblems(inputs: {
     .split("\n")
     .map((line) => line.trim())
     .filter((line) => /^(?:(?:command|exec)\s+)?(?:npm|"\$NPM_BIN"|\$NPM_BIN)\s+(?:dist-tag|unpublish)\b/u.test(line));
-  const npmPackPublishExpectedTail = [
-    'echo "::error::npm pack did not produce exactly one canonical tarball"',
-    'echo "::error::npm pack returned a divergent package name or version"',
-    'echo "::error::npm pack returned a non-basename artifact path"',
-    'echo "::error::npm pack tarball is missing, non-regular, or a symlink"',
-    'echo "::error::npm pack metadata integrity differs from the canonical tarball bytes"',
+  const npmPackPublishExpected = [
     'require_job_reserve 4500 "npm publish"',
     'echo "::error::npm publish scratch directory is missing, non-directory, or a symlink"',
     MCPB_EXACT_NPM_PUBLISH_HEAD,
     'echo "::warning::npm publish exited $NPM_PUBLISH_EXIT, but exact tarball SRI, channel, and tag postconditions prove publication completed"'
   ];
   const npmCommandSurfaceIsClosed =
-    npmPackPublishSurface.length === npmPackPublishExpectedTail.length + 1 &&
-    npmPackPublishSurface[0]?.startsWith(`PACK_JSON=$(${MCPB_EXACT_NPM_PACK}`) === true &&
-    npmPackPublishSurface[0]?.endsWith("\\") === true &&
-    JSON.stringify(npmPackPublishSurface.slice(1)) === JSON.stringify(npmPackPublishExpectedTail) &&
-    (npmPublishRun.match(/\bnpm\b/gu) ?? []).length === 33 &&
-    (npmPublishRun.match(/\bNPM_BIN\b/gu) ?? []).length === 3;
+    JSON.stringify(npmPackPublishSurface) === JSON.stringify(npmPackPublishExpected) &&
+    (npmPublishRun.match(/\bnpm\b/gu) ?? []).length === 32 &&
+    (npmPublishRun.match(/\bNPM_BIN\b/gu) ?? []).length === 2 &&
+    !npmPublishRun.includes("--pack-destination");
   const npmPublicationIsByteBound =
     npmAssignmentLineCount("NPM_BIN") === 1 &&
     npmAssignmentLineCount("NODE_BIN") === 1 &&
     npmAssignmentLineCount("CURL_BIN") === 1 &&
-    npmAssignmentLineCount("TAR_BIN") === 1 &&
+    npmAssignmentLineCount("TAR_BIN") === 0 &&
     npmAssignmentLineCount("TIMEOUT_BIN") === 1 &&
     npmAssignmentLineCount("PACKAGE_TARBALL") === 1 &&
+    npmAssignmentLineCount("PACKAGE_MANIFEST") === 1 &&
     npmAssignmentLineCount("NPM_CONFIG_USERCONFIG") === 2 &&
     npmAssignmentLineCount("NPM_PUBLISH_CWD") === 1 &&
     npmAssignmentLineCount("NPM_ENV_UNSETS") === 1 &&
@@ -9024,6 +9342,8 @@ function mcpbContractProblems(inputs: {
     npmPublishEnv?.NPM_CONFIG_STRICT_SSL === "true" &&
     npmPublishEnv?.NPM_CONFIG_FETCH_TIMEOUT === "60000" &&
     npmPublishEnv?.NPM_CONFIG_FETCH_RETRIES === "0" &&
+    npmPublishEnv?.NPM_ARTIFACT_RUN_ID === `\${{ steps.mcpb_candidate.outputs.build_run_id }}` &&
+    npmPublishEnv?.NPM_ARTIFACT_RUN_ATTEMPT === `\${{ steps.mcpb_candidate.outputs.npm_build_run_attempt }}` &&
     npmPublishRun.includes('PACKAGE_URL="https://registry.npmjs.org/%40oomkapwn%2Fenquire-mcp"') &&
     npmPublishRun.startsWith(
       `set -euo pipefail\n${LOWERCASE_PROXY_UNSET}\n${NPM_LOWERCASE_PIN_BLOCK}\n` +
@@ -9066,21 +9386,17 @@ function mcpbContractProblems(inputs: {
     (npmPublishRun.match(/registry_read\(\) \{/g) ?? []).length === 1 &&
     (npmPublishRun.match(/if ! registry_read; then/g) ?? []).length === 2 &&
     (npmPublishRun.match(/if registry_read && NPM_POST_STATE=\$\(npm_snapshot\); then/g) ?? []).length === 1 &&
-    (npmPublishRun.match(/"\$NPM_BIN" pack --json/g) ?? []).length === 1 &&
-    npmPublishRun.includes(MCPB_EXACT_NPM_PACK) &&
-    npmPublishRun.includes('--pack-destination "$RUNNER_TEMP"') &&
-    npmPublishRun.includes('PACKAGE_TARBALL="$RUNNER_TEMP/$PACK_BASENAME"') &&
-    npmPublishRun.includes('[ ! -f "$PACKAGE_TARBALL" ] || [ -L "$PACKAGE_TARBALL" ]') &&
-    npmPublishRun.includes('PACK_MANIFEST_COUNT=$("$TIMEOUT_BIN" --kill-after=5s 30s "$TAR_BIN" -tzf') &&
-    npmPublishRun.includes('$0 == "package/package.json" { count++ }') &&
-    npmPublishRun.includes('[ "$PACK_MANIFEST_COUNT" -ne 1 ]') &&
-    npmPublishRun.includes("package/package.json)") &&
-    npmPublishRun.includes('[ "$PACKED_NAME" != "$PACKAGE_NAME" ] || [ "$PACKED_VERSION" != "$VERSION" ]') &&
-    npmPublishRun.includes("REPORTED_INTEGRITY=$(printf '%s' \"$PACK_JSON\" | jq -er") &&
-    npmPublishRun.includes('.[0].integrity | select(type == "string" and test("^sha512-') &&
+    npmPublishRun.includes('PACKAGE_TARBALL="npm-package/enquire-mcp-npm.tgz"') &&
+    npmPublishRun.includes('PACKAGE_MANIFEST="npm-package/npm-package-manifest.json"') &&
+    npmPublishRun.includes('[ ! -f "$PACKAGE_TARBALL" ] || [ -L "$PACKAGE_TARBALL" ] ||') &&
+    npmPublishRun.includes('[ ! -f "$PACKAGE_MANIFEST" ] || [ -L "$PACKAGE_MANIFEST" ]') &&
+    npmPublishRun.includes('ARTIFACT_RECEIPT=$("$NODE_BIN" scripts/npm-package-artifact.mjs verify') &&
+    npmPublishRun.includes('"$PACKAGE_MANIFEST" "$PACKAGE_TARBALL" "$SOURCE_SHA"') &&
+    npmPublishRun.includes('"$NPM_ARTIFACT_RUN_ID" "$NPM_ARTIFACT_RUN_ATTEMPT")') &&
+    npmPublishRun.includes("EXPECTED_INTEGRITY=$(printf '%s' \"$ARTIFACT_RECEIPT\" | jq -er") &&
+    npmPublishRun.includes('.integrity | select(type == "string" and test("^sha512-') &&
     npmPublishRun.includes(MCPB_NPM_TARBALL_SRI) &&
-    (npmPublishRun.match(/tarball_sri "\$PACKAGE_TARBALL"/g) ?? []).length === 2 &&
-    npmPublishRun.includes('[ "$REPORTED_INTEGRITY" != "$EXPECTED_INTEGRITY" ]') &&
+    (npmPublishRun.match(/tarball_sri "\$PACKAGE_TARBALL"/g) ?? []).length === 1 &&
     npmPublishRun.includes('[ "$PRE_PUBLISH_INTEGRITY" != "$EXPECTED_INTEGRITY" ]') &&
     npmPublishRun.split(npmStateInvocation).length - 1 === 3 &&
     mutationMatchCount(npmPublishRun, MCPB_EXACT_NPM_PUBLISH_RUN) === 1 &&
@@ -9145,10 +9461,11 @@ function mcpbContractProblems(inputs: {
   }
   const scripts = yamlRecord(pkg.scripts);
   if (
-    !inputs.versionCheck.includes('new URL("../mcpb/manifest.json"') ||
-    !inputs.versionCheck.includes('"mcpb/manifest.json:version"') ||
-    !inputs.versionSync.includes('path.join(repoRoot, "mcpb", "manifest.json")') ||
-    !inputs.versionSync.includes("mcpbManifest.version = version") ||
+    !inputs.versionCheck.includes('sources.get("mcpb/manifest.json")') ||
+    !inputs.versionCheck.includes('surfaces["mcpb/manifest.json:version"] = ownValue') ||
+    !inputs.versionSync.includes('const mcpbInput = input("mcpb/manifest.json")') ||
+    !inputs.versionSync.includes('requireSpan(mcpbParsed, "/version"') ||
+    !inputs.versionSync.includes('["mcpb/manifest.json", mcpbOutput]') ||
     !String(scripts?.version ?? "").includes("server.json mcpb/manifest.json")
   ) {
     problems.push("version lifecycle must synchronize and stage all eight published version surfaces");
@@ -9360,7 +9677,7 @@ function mcpbContractProblems(inputs: {
     inputs.integrity.includes("release.target_commitish") ||
     !inputs.release.includes('node scripts/check-release-integrity.mjs asset-version "$VERSION"') ||
     !inputs.release.includes("node scripts/check-release-integrity.mjs candidate-runs") ||
-    !inputs.release.includes('candidate "$SOURCE_SHA"') ||
+    !inputs.release.includes('\n              candidate "$SOURCE_SHA"') ||
     !inputs.release.includes("{workflow_run: $workflow_run, jobs: $jobs, artifacts: $artifacts}") ||
     !/node scripts\/check-release-integrity\.mjs \\\s+candidate/u.test(inputs.release) ||
     (inputs.release.match(/node scripts\/check-release-integrity\.mjs release-state/g) ?? []).length !== 3 ||
@@ -9466,6 +9783,442 @@ function mcpbContractProblems(inputs: {
     );
   }
   return problems;
+}
+
+const MCPB_SPLIT_RELEASE_CONTRACT_PROBLEM =
+  "split release jobs must preserve exact handoff, authority, publication, and stable-only registry semantics";
+const MCPB_RELEASE_STATE_CONTRACT_PROBLEM =
+  "release state machine must preflight all deterministic assets before npm, then draft/upload/publish";
+const MCPB_CI_ARTIFACT_CONTRACT_PROBLEM =
+  "release must reuse exact CI-gated MCPB bytes, re-verify them, and attach transparency records with checkout provenance";
+
+function mcpbSplitReleaseProblems(inputs: {
+  entrypoint: string;
+  integrity: string;
+  npmArtifact: string;
+  release: string;
+  releaseTransaction: string;
+}): string[] {
+  const fail = (_stage: string) => [
+    MCPB_SPLIT_RELEASE_CONTRACT_PROBLEM,
+    NPM_PROVENANCE_CONTRACT_PROBLEM,
+    MCP_REGISTRY_WORKFLOW_CONTRACT_PROBLEM,
+    MCPB_RELEASE_STATE_CONTRACT_PROBLEM,
+    MCPB_CI_ARTIFACT_CONTRACT_PROBLEM
+  ];
+  const normalizedTransactionFixture = normalizedReleaseTransactionFixture(inputs.releaseTransaction);
+  const serializedTransactionFixture = normalizedTransactionFixture
+    .split("\n")
+    .map((line) => `          ${line}`)
+    .join("\n");
+  const transactionFixtureSuffix =
+    normalizedTransactionFixture.length > 0
+      ? `\n${RELEASE_TRANSACTION_FIXTURE_KEY}: |\n${serializedTransactionFixture}\n`
+      : "";
+  const releaseWorkflow =
+    transactionFixtureSuffix.length > 0 && inputs.release.endsWith(transactionFixtureSuffix)
+      ? `${inputs.release.slice(0, -transactionFixtureSuffix.length)}\n`
+      : inputs.release;
+  let document: YamlRecord | null;
+  let jobs: YamlRecord | null;
+  try {
+    document = yamlRecord(load(releaseWorkflow));
+    jobs = yamlRecord(document?.jobs);
+  } catch {
+    return fail("parse");
+  }
+  if (document === null || jobs === null) return fail("document");
+
+  const splitJobIds = ["verify", "npm_publish", "github_release", "mcp_registry"] as const;
+  const exactArray = (value: unknown, expected: readonly string[]) =>
+    Array.isArray(value) && JSON.stringify(value) === JSON.stringify(expected);
+  const exactKeys = (value: YamlRecord | null, expected: readonly string[]) =>
+    value !== null && JSON.stringify(Object.keys(value).sort()) === JSON.stringify([...expected].sort());
+  const exactRecord = (value: unknown, expected: Readonly<Record<string, unknown>>) => {
+    const record = yamlRecord(value);
+    return (
+      record !== null &&
+      JSON.stringify(Object.keys(record).sort()) === JSON.stringify(Object.keys(expected).sort()) &&
+      Object.entries(expected).every(([key, expectedValue]) => record[key] === expectedValue)
+    );
+  };
+  const digest = (source: string) => createHash("sha256").update(source, "utf8").digest("hex");
+  if (
+    digest(readFileSync(new URL("./release-split-contract-fixtures.ts", import.meta.url), "utf8")) !==
+      SPLIT_FIXTURE_SHA256 ||
+    digest(
+      JSON.stringify({
+        SPLIT_CONTRACT_SHA256,
+        SPLIT_HANDOFF_FILES,
+        SPLIT_REVIEWED_IDENTITY_BODIES,
+        SPLIT_STEP_OWNERS,
+        SPLIT_VERIFY_OUTPUTS
+      })
+    ) !== SPLIT_PROJECTION_SHA256 ||
+    digest(inputs.integrity) !== SPLIT_CONTRACT_SHA256.integritySource ||
+    digest(inputs.npmArtifact) !== SPLIT_CONTRACT_SHA256.npmArtifactSource ||
+    digest(inputs.entrypoint) !== SPLIT_CONTRACT_SHA256.entrypointSource ||
+    digest(inputs.releaseTransaction) !== SPLIT_CONTRACT_SHA256.githubTransactionSource
+  ) {
+    return fail("privileged-sources");
+  }
+  const verify = yamlRecord(jobs.verify);
+  const npmPublish = yamlRecord(jobs.npm_publish);
+  const githubRelease = yamlRecord(jobs.github_release);
+  const mcpRegistry = yamlRecord(jobs.mcp_registry);
+  if (
+    verify === null ||
+    npmPublish === null ||
+    githubRelease === null ||
+    mcpRegistry === null ||
+    "publish" in jobs ||
+    !exactKeys(document, ["concurrency", "jobs", "name", "on", "permissions"]) ||
+    document.name !== "Release to npm" ||
+    !exactRecord(document.concurrency, { group: "release-publication", "cancel-in-progress": false }) ||
+    JSON.stringify(Object.keys(jobs)) !== JSON.stringify(splitJobIds) ||
+    !exactRecord(document.permissions, {}) ||
+    !exactKeys(verify, ["env", "name", "outputs", "permissions", "runs-on", "steps", "timeout-minutes"]) ||
+    verify.name !== "Verify exact tagged SHA and assemble canonical handoff" ||
+    verify["runs-on"] !== "ubuntu-latest" ||
+    !exactRecord(verify.env, { BASH_ENV: "" }) ||
+    !exactRecord(verify.outputs, SPLIT_VERIFY_OUTPUTS) ||
+    Number(verify["timeout-minutes"]) !== 240 ||
+    !exactRecord(verify.permissions, { actions: "read", contents: "read" }) ||
+    !exactKeys(npmPublish, [
+      "environment",
+      "name",
+      "needs",
+      "outputs",
+      "permissions",
+      "runs-on",
+      "steps",
+      "timeout-minutes"
+    ]) ||
+    npmPublish.name !== "Publish npm with protected Trusted Publishing OIDC" ||
+    npmPublish["runs-on"] !== "ubuntu-latest" ||
+    !exactRecord(npmPublish.outputs, {
+      provenance_verified: `\${{ steps.npm_provenance.outputs.verified }}`
+    }) ||
+    !exactArray(npmPublish.needs, ["verify"]) ||
+    Number(npmPublish["timeout-minutes"]) !== 120 ||
+    !exactRecord(npmPublish.permissions, { actions: "read", contents: "read", "id-token": "write" }) ||
+    !exactRecord(npmPublish.environment, { name: "npm-publish" }) ||
+    !exactKeys(githubRelease, ["environment", "name", "needs", "permissions", "runs-on", "steps", "timeout-minutes"]) ||
+    githubRelease.name !== "Publish exact GitHub Release assets" ||
+    githubRelease["runs-on"] !== "ubuntu-latest" ||
+    !exactArray(githubRelease.needs, ["verify", "npm_publish"]) ||
+    Number(githubRelease["timeout-minutes"]) !== 120 ||
+    !exactRecord(githubRelease.permissions, { actions: "read", contents: "write" }) ||
+    !exactRecord(githubRelease.environment, { name: "github-release" }) ||
+    !exactKeys(mcpRegistry, [
+      "environment",
+      "if",
+      "name",
+      "needs",
+      "permissions",
+      "runs-on",
+      "steps",
+      "timeout-minutes"
+    ]) ||
+    mcpRegistry.name !== "Publish stable release to MCP Registry with protected OIDC" ||
+    mcpRegistry["runs-on"] !== "ubuntu-latest" ||
+    !exactArray(mcpRegistry.needs, ["verify", "npm_publish", "github_release"]) ||
+    mcpRegistry.if !== `\${{ needs.verify.outputs.channel == 'latest' }}` ||
+    Number(mcpRegistry["timeout-minutes"]) !== 60 ||
+    !exactRecord(mcpRegistry.permissions, { actions: "read", contents: "read", "id-token": "write" }) ||
+    !exactRecord(mcpRegistry.environment, { name: "mcp-registry" })
+  ) {
+    return fail("topology");
+  }
+
+  const jobSteps = new Map<string, YamlRecord[]>([
+    ["verify", yamlSteps(verify)],
+    ["npm_publish", yamlSteps(npmPublish)],
+    ["github_release", yamlSteps(githubRelease)],
+    ["mcp_registry", yamlSteps(mcpRegistry)]
+  ]);
+  const ownerOf = (name: string) =>
+    Array.from(jobSteps, ([jobId, steps]) => ({
+      jobId,
+      count: steps.filter((step) => step.name === name).length
+    })).filter(({ count }) => count > 0);
+  const privilegedSteps = Array.from(jobSteps)
+    .filter(([jobId]) => jobId !== "verify")
+    .flatMap(([, steps]) => steps);
+  const allReleaseSteps = Array.from(jobSteps).flatMap(([, steps]) => steps);
+  if (
+    digest(JSON.stringify(jobSteps.get("verify") ?? [])) !== SPLIT_CONTRACT_SHA256.verifySteps ||
+    SPLIT_STEP_OWNERS.some(([name, expectedJob]) => {
+      const owners = ownerOf(name);
+      return owners.length !== 1 || owners[0]?.jobId !== expectedJob || owners[0].count !== 1;
+    }) ||
+    allReleaseSteps.some((step) => "continue-on-error" in step || "if" in step) ||
+    privilegedSteps.some((step) => {
+      const uses = String(step.uses ?? "");
+      const body = runBody(step);
+      return (
+        uses.startsWith("actions/checkout@") ||
+        uses.startsWith("./") ||
+        body.includes("$GITHUB_WORKSPACE") ||
+        /^\s*(?:npm|npx|pnpm|yarn)\s+(?:ci|exec|install|pack|run|test)\b/mu.test(body)
+      );
+    })
+  ) {
+    return fail("owners");
+  }
+
+  const verifySteps = jobSteps.get("verify") ?? [];
+  const npmSteps = jobSteps.get("npm_publish") ?? [];
+  const githubSteps = jobSteps.get("github_release") ?? [];
+  const registrySteps = jobSteps.get("mcp_registry") ?? [];
+  const npmStepNames = npmSteps.map((step) => step.name ?? step.uses);
+  const githubStepNames = githubSteps.map((step) => step.name ?? step.uses);
+  const registryStepNames = registrySteps.map((step) => step.name ?? step.uses);
+  if (
+    JSON.stringify(npmStepNames) !==
+      JSON.stringify([
+        "Download and verify exact release handoff",
+        "Assert reviewed privileged code identity",
+        "Set up Node 24 for npm Trusted Publishing",
+        "Publish exact npm tarball with Trusted Publishing or verify rerun",
+        NPM_PROVENANCE_STEP_NAME
+      ]) ||
+    JSON.stringify(githubStepNames) !==
+      JSON.stringify([
+        "Download and verify exact release handoff",
+        "Assert reviewed privileged code identity",
+        "Prepare draft GitHub Release",
+        "Upload and publish the exact reviewed GitHub Release transaction"
+      ]) ||
+    JSON.stringify(registryStepNames) !==
+      JSON.stringify([
+        "Download and verify exact release handoff",
+        "Assert reviewed privileged code identity",
+        MCP_REGISTRY_STEP_NAME
+      ])
+  ) {
+    return fail("step-inventory");
+  }
+
+  const handoffStep = namedStep(verifySteps, "Assemble exact verified release handoff");
+  const handoffUpload = namedStep(verifySteps, "Upload exact verified release handoff");
+  const handoffRun = runBody(handoffStep);
+  const handoffUploadWith = yamlRecord(handoffUpload?.with);
+  const downstreamDownloadSteps = [npmSteps, githubSteps, registrySteps].map((steps) =>
+    namedStep(steps, "Download and verify exact release handoff")
+  );
+  const downstreamDownloadRuns = downstreamDownloadSteps.map(runBody);
+  const canonicalDownloadRun = downstreamDownloadRuns[0] ?? "";
+  const reviewedIdentitySteps = [npmSteps, githubSteps, registrySteps].map((steps) =>
+    namedStep(steps, "Assert reviewed privileged code identity")
+  );
+  const recordDigest = (value: unknown) => {
+    const record = yamlRecord(value);
+    if (record === null) return "";
+    const sorted = Object.fromEntries(Object.entries(record).sort(([left], [right]) => left.localeCompare(right)));
+    return digest(JSON.stringify(sorted));
+  };
+  if (
+    handoffStep?.id !== "handoff" ||
+    digest(handoffRun) !== SPLIT_CONTRACT_SHA256.handoffAssembly ||
+    !handoffRun.includes("find . -type f ! -name release-files.sha256 -print0 | LC_ALL=C sort -z |") ||
+    !handoffRun.includes("xargs -0 sha256sum > release-files.sha256") ||
+    !handoffRun.includes("sha256sum -c release-files.sha256") ||
+    handoffUpload?.id !== "handoff_upload" ||
+    handoffUpload?.uses !== "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a" ||
+    handoffUploadWith?.name !== `release-handoff-\${{ github.sha }}-\${{ github.run_attempt }}` ||
+    handoffUploadWith?.path !== `\${{ runner.temp }}/release-handoff` ||
+    handoffUploadWith?.["if-no-files-found"] !== "error" ||
+    handoffUploadWith?.["include-hidden-files"] !== true ||
+    handoffUploadWith?.["retention-days"] !== 2 ||
+    handoffUploadWith?.["compression-level"] !== 0 ||
+    canonicalDownloadRun.length === 0 ||
+    digest(canonicalDownloadRun) !== SPLIT_CONTRACT_SHA256.handoffDownload ||
+    downstreamDownloadRuns.some((body) => body !== canonicalDownloadRun) ||
+    !canonicalDownloadRun.includes('ACTUAL_HANDOFF_DIGEST="$(sha256sum "$HANDOFF_ZIP" | awk') ||
+    !canonicalDownloadRun.includes(
+      '"repos/$GITHUB_REPOSITORY/actions/artifacts/$HANDOFF_ARTIFACT_ID/zip" > "$HANDOFF_ZIP"'
+    ) ||
+    !canonicalDownloadRun.includes('[ "$ACTUAL_HANDOFF_DIGEST" != "$EXPECTED_HANDOFF_DIGEST" ]') ||
+    !canonicalDownloadRun.includes("len(names) != len(set(names)) or set(names) != expected") ||
+    !canonicalDownloadRun.includes('path.is_absolute() or ".." in path.parts or "\\\\" in info.filename') ||
+    !canonicalDownloadRun.includes("stat.S_IFMT(mode) not in (0, stat.S_IFREG)") ||
+    !canonicalDownloadRun.includes("sha256sum -c release-files.sha256") ||
+    SPLIT_HANDOFF_FILES.some((entry) => !canonicalDownloadRun.includes(entry)) ||
+    downstreamDownloadSteps.some((step) => {
+      const env = yamlRecord(step?.env);
+      return (
+        !exactKeys(step ?? null, ["env", "name", "run", "shell"]) ||
+        step?.shell !== "/bin/bash --noprofile --norc -p -e -o pipefail {0}" ||
+        !exactRecord(env, {
+          BASH_ENV: "",
+          ENV: "",
+          SHELLOPTS: "",
+          PS4: "",
+          GH_HOST: "github.com",
+          GH_ENTERPRISE_TOKEN: "",
+          GITHUB_ENTERPRISE_TOKEN: "",
+          GH_TOKEN: `\${{ github.token }}`,
+          HANDOFF_ARTIFACT_ID: `\${{ needs.verify.outputs.handoff_artifact_id }}`,
+          EXPECTED_HANDOFF_DIGEST: `\${{ needs.verify.outputs.handoff_digest }}`,
+          EXPECTED_VERSION: `\${{ needs.verify.outputs.version }}`,
+          EXPECTED_TAG: `\${{ needs.verify.outputs.tag }}`,
+          EXPECTED_SOURCE_SHA: `\${{ needs.verify.outputs.source_sha }}`,
+          EXPECTED_CHANNEL: `\${{ needs.verify.outputs.channel }}`
+        })
+      );
+    }) ||
+    reviewedIdentitySteps.some((step, index) => {
+      const body = runBody(step);
+      return (
+        JSON.stringify(Object.keys(step ?? {}).sort()) !==
+          JSON.stringify(["name", "run", "shell", "working-directory"]) ||
+        step?.shell !== "/bin/bash --noprofile --norc -p -e -o pipefail {0}" ||
+        step?.["working-directory"] !== `\${{ runner.temp }}/release-handoff` ||
+        body !== SPLIT_REVIEWED_IDENTITY_BODIES[index]
+      );
+    })
+  ) {
+    return fail("handoff");
+  }
+
+  const npmPublishStep = namedStep(npmSteps, "Publish exact npm tarball with Trusted Publishing or verify rerun");
+  const npmPublishRun = runBody(npmPublishStep);
+  const npmPublishEnv = yamlRecord(npmPublishStep?.env);
+  const npmProvenanceStep = namedStep(npmSteps, NPM_PROVENANCE_STEP_NAME);
+  const setupNode = namedStep(npmSteps, "Set up Node 24 for npm Trusted Publishing");
+  const setupNodeWith = yamlRecord(setupNode?.with);
+  if (
+    !exactKeys(setupNode ?? null, ["name", "uses", "with"]) ||
+    setupNode?.uses !== "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020" ||
+    setupNodeWith?.["node-version"] !== 24 ||
+    JSON.stringify(Object.keys(setupNodeWith ?? {})) !== JSON.stringify(["node-version"]) ||
+    npmPublishStep?.id !== "npm_publication" ||
+    !exactKeys(npmPublishStep ?? null, ["env", "id", "name", "run", "shell", "working-directory"]) ||
+    npmPublishStep?.shell !== "/bin/bash --noprofile --norc -p -e -o pipefail {0}" ||
+    digest(npmPublishRun) !== SPLIT_CONTRACT_SHA256.npmPublishRun ||
+    recordDigest(npmPublishStep?.env) !== SPLIT_CONTRACT_SHA256.npmPublishEnv ||
+    !exactKeys(npmProvenanceStep ?? null, ["env", "id", "name", "run", "shell", "working-directory"]) ||
+    npmProvenanceStep?.shell !== "/bin/bash --noprofile --norc -p -e -o pipefail {0}" ||
+    npmProvenanceStep?.["working-directory"] !== `\${{ runner.temp }}/release-handoff` ||
+    digest(runBody(npmProvenanceStep)) !== SPLIT_CONTRACT_SHA256.npmProvenanceRun ||
+    recordDigest(npmProvenanceStep?.env) !== SPLIT_CONTRACT_SHA256.npmProvenanceEnv ||
+    npmPublishStep?.["working-directory"] !== `\${{ runner.temp }}/release-handoff` ||
+    npmPublishEnv?.NODE_AUTH_TOKEN !== undefined ||
+    npmPublishEnv?.NPM_TOKEN !== undefined ||
+    JSON.stringify(npmPublishStep).includes("secrets.") ||
+    npmSteps.some((step) => {
+      const env = yamlRecord(step.env);
+      return (
+        JSON.stringify(step).includes("secrets.") ||
+        (env?.NODE_AUTH_TOKEN !== undefined && env.NODE_AUTH_TOKEN !== "") ||
+        (env?.NPM_TOKEN !== undefined && env.NPM_TOKEN !== "")
+      );
+    }) ||
+    mutationMatchCount(npmPublishRun, "--provenance") !== 1 ||
+    mutationMatchCount(npmPublishRun, "NPM_CONFIG_PROVENANCE=true") !== 1 ||
+    mutationMatchCount(npmPublishRun, "npm_config_provenance|npm_config_provenance_file") !== 1 ||
+    NPM_PROVENANCE_IDENTITY_CARRIERS.some(
+      (carrier) => npmPublishEnv?.[carrier] !== "" || mutationMatchCount(npmPublishRun, `--unset=${carrier}`) !== 1
+    ) ||
+    npmPublishRun.includes("--provenance-file") ||
+    !npmPublishRun.includes('PACKAGE_TARBALL="$PWD/npm-package/enquire-mcp-npm.tgz"') ||
+    !npmPublishRun.includes('--access public --tag "$CHANNEL" --ignore-scripts') ||
+    mutationMatchCount(npmPublishRun, MCPB_EXACT_NPM_PUBLISH_RUN) !== 1 ||
+    !npmPublishRun.includes(MCPB_NPM_ARTIFACT_VERIFY_HEAD) ||
+    npmProvenanceContractProblems(releaseWorkflow, inputs.integrity).length !== 0 ||
+    npmProvenanceEvaluatorProblems(inputs.integrity).length !== 0
+  ) {
+    return fail("npm");
+  }
+
+  const registryStep = namedStep(registrySteps, MCP_REGISTRY_STEP_NAME);
+  const githubPrepareStep = namedStep(githubSteps, "Prepare draft GitHub Release");
+  const githubTransactionStep = namedStep(
+    githubSteps,
+    "Upload and publish the exact reviewed GitHub Release transaction"
+  );
+  const releaseTransactionHasCanonicalLf =
+    inputs.releaseTransaction.endsWith("\n") && !inputs.releaseTransaction.endsWith("\n\n");
+  const tagProofCounts = [
+    "git/ref/tags/$TAG",
+    "git/tags/$TAG_OBJECT_SHA",
+    ".sha == $tag_object_sha and .tag == $tag",
+    '.type == "commit" and .sha == $sha',
+    '.type == "tag" and .sha == $sha'
+  ].map((needle) => mutationMatchCount(releaseWorkflow, needle));
+  const transactionTagProofCounts = [
+    "git/ref/tags/$TAG",
+    "git/tags/$TAG_OBJECT_SHA",
+    ".sha == $tag_object_sha and .tag == $tag",
+    '.type == "commit" and .sha == $sha',
+    '.type == "tag" and .sha == $sha'
+  ].map((needle) => mutationMatchCount(inputs.releaseTransaction, needle));
+  const completeTagProofCounts = tagProofCounts.map((count, index) => count + (transactionTagProofCounts[index] ?? 0));
+  if (
+    !releaseTransactionHasCanonicalLf ||
+    !exactKeys(githubPrepareStep ?? null, ["env", "name", "run", "shell", "working-directory"]) ||
+    githubPrepareStep?.shell !== "/bin/bash --noprofile --norc -p -e -o pipefail {0}" ||
+    githubPrepareStep?.["working-directory"] !== `\${{ runner.temp }}/release-handoff` ||
+    digest(runBody(githubPrepareStep)) !== SPLIT_CONTRACT_SHA256.githubPrepareRun ||
+    recordDigest(githubPrepareStep?.env) !== SPLIT_CONTRACT_SHA256.githubPrepareEnv ||
+    !exactKeys(githubTransactionStep ?? null, ["env", "name", "run", "shell", "working-directory"]) ||
+    githubTransactionStep?.shell !== "/bin/bash --noprofile --norc -p -e -o pipefail {0}" ||
+    githubTransactionStep?.["working-directory"] !== `\${{ runner.temp }}/release-handoff` ||
+    digest(runBody(githubTransactionStep)) !== SPLIT_CONTRACT_SHA256.githubTransactionRun ||
+    recordDigest(githubTransactionStep?.env) !== SPLIT_CONTRACT_SHA256.githubTransactionEnv ||
+    !exactKeys(registryStep ?? null, ["env", "name", "run", "shell", "working-directory"]) ||
+    registryStep?.shell !== "/bin/bash --noprofile --norc -p -e -o pipefail {0}" ||
+    registryStep?.["working-directory"] !== `\${{ runner.temp }}/release-handoff` ||
+    digest(runBody(registryStep)) !== SPLIT_CONTRACT_SHA256.registryRun ||
+    recordDigest(registryStep?.env) !== SPLIT_CONTRACT_SHA256.registryEnv ||
+    mcpRegistryContractProblems(registrySteps, inputs.integrity, yamlRecord(mcpRegistry.permissions) ?? {}).length !==
+      0 ||
+    mcpRegistryStepProblems(registryStep, inputs.integrity).length !== 0 ||
+    mcpRegistryEvaluatorProblems(inputs.integrity).length !== 0 ||
+    githubReleaseTransactionProblems(inputs.release, inputs.releaseTransaction).length !== 0 ||
+    !releaseWorkflow.includes("Download exact CI-gated Basic MCPB release asset") ||
+    !releaseWorkflow.includes("Re-verify exact CI-gated Basic MCPB release asset") ||
+    releaseWorkflow.includes("npm run mcpb:build") ||
+    !releaseWorkflow.includes("npm run mcpb:verify") ||
+    !releaseWorkflow.includes("build_artifact_id:") ||
+    !releaseWorkflow.includes("build_artifact_digest:") ||
+    !releaseWorkflow.includes("npm_build_artifact_digest:") ||
+    !releaseWorkflow.includes("content_manifest_sha256: process.env.CONTENT_SHA256") ||
+    !releaseWorkflow.includes("sbom_sha256: process.env.SBOM_SHA256") ||
+    !releaseWorkflow.includes("third_party_licenses_sha256: process.env.LICENSES_SHA256") ||
+    !releaseWorkflow.includes("Existing release provenance does not identify this source/artifact") ||
+    JSON.stringify(tagProofCounts) !== JSON.stringify([8, 4, 4, 4, 4]) ||
+    JSON.stringify(transactionTagProofCounts) !== JSON.stringify([2, 1, 1, 1, 1]) ||
+    JSON.stringify(completeTagProofCounts) !== JSON.stringify([10, 5, 5, 5, 5]) ||
+    !releaseWorkflow.includes("--verify-tag") ||
+    !releaseWorkflow.includes("--draft")
+  ) {
+    return fail("registry-release");
+  }
+  return [];
+}
+
+function mcpbContractProblems(inputs: Parameters<typeof legacyMcpbContractProblems>[0]): string[] {
+  const legacyProblems = legacyMcpbContractProblems(inputs);
+  let splitCandidate = false;
+  try {
+    const jobs = yamlRecord(yamlRecord(load(inputs.release))?.jobs);
+    splitCandidate = ["verify", "npm_publish", "github_release", "mcp_registry"].some((jobId) => jobId in (jobs ?? {}));
+  } catch {
+    return legacyProblems;
+  }
+  if (!splitCandidate) return legacyProblems;
+  const replacedLegacyProblems = new Set([
+    NPM_PROVENANCE_CONTRACT_PROBLEM,
+    MCP_REGISTRY_WORKFLOW_CONTRACT_PROBLEM,
+    MCPB_RELEASE_STATE_CONTRACT_PROBLEM,
+    MCPB_CI_ARTIFACT_CONTRACT_PROBLEM
+  ]);
+  return [
+    ...legacyProblems.filter((problem) => !replacedLegacyProblems.has(problem)),
+    ...mcpbSplitReleaseProblems(inputs)
+  ];
 }
 
 function assertMcpRegistryEvaluatorContract() {
@@ -11329,7 +12082,7 @@ done`;
   // This mutation oracle intentionally exercises thousands of structural checks.
   // PR #443's first full coverage run completed the expanded 560-case oracle in
   // 217.8s, leaving too little headroom under the former 240s bound. Keep scoped
-  // 330s hang detection below the unchanged 10-minute job circuit breaker.
+  // 330s hang detection below the 20-minute full-suite job circuit breaker.
   it("keeps release.yml wired to the shared evaluator and an exact mirrored inventory", () => {
     assertMcpRegistryEvaluatorContract();
     assertNpmProvenanceEvaluatorContract();
@@ -11628,7 +12381,7 @@ done`;
       "      - name: Prepare draft GitHub Release"
     );
     const npmPublicationStart = releaseBodyWorkflowWithoutProducer.indexOf(
-      "      - name: Publish with provenance or verify an exact prior publication"
+      "      - name: Publish exact npm tarball with Trusted Publishing or verify rerun"
     );
     expect(npmPublicationStart).toBeGreaterThan(releaseBodyProducerStart);
     expect(lateReleaseBodyProducerStart).toBeGreaterThan(npmPublicationStart);
@@ -11961,7 +12714,7 @@ done`;
       oracleSource.slice(matrixBodyOffset)
     ].join("");
     expect(releaseMutationInventoryProblems(extraProjectMutation)).toContain(
-      "release mutation hybrid inventory expected 538 first / 22 all, found 539 first / 22 all (legacy 448/19; declarative 91/3; cases 91)"
+      "release mutation hybrid inventory expected 590 first / 27 all, found 591 first / 27 all (legacy 500/24; declarative 91/3; cases 91)"
     );
     const outsideMutation = `${oracleSource}\nvoid replaceAllExactly("inventory", "inventory", "mutant");\n`;
     expect(releaseMutationInventoryProblems(outsideMutation)).toContain(
@@ -11975,7 +12728,7 @@ done`;
       oracleSource.slice(firstProjectCallOffset + "replaceExactly(".length)
     ].join("");
     expect(releaseMutationInventoryProblems(projectModeDrift)).toContain(
-      "release mutation hybrid inventory expected 538 first / 22 all, found 537 first / 23 all (legacy 446/20; declarative 91/3; cases 91)"
+      "release mutation hybrid inventory expected 590 first / 27 all, found 589 first / 28 all (legacy 498/25; declarative 91/3; cases 91)"
     );
     const hybridDeclarativeMutation = oracleSource;
     const declarativeBatchStartToken = "    const releaseIntegrityText = mcpbInputs.integrity;";
@@ -12815,7 +13568,7 @@ done`;
         .join("legacyMigratedExactly(")
     ].join("");
     expect(releaseMutationInventoryProblems(legacyFreeMatrix)).toContain(
-      "release mutation final closed graph expected 560 unique descriptors / 536 cases and roots / 541 expectations / 24 dependency-only, found 94 descriptors / 91 cases / 91 roots / 91 expectations / 3 dependency-only"
+      "release mutation final closed graph expected 617 unique descriptors / 592 cases and roots / 597 expectations / 25 dependency-only, found 94 descriptors / 91 cases / 91 roots / 91 expectations / 3 dependency-only"
     );
     const loopGeneratedDeclarative = [
       oracleSource.slice(0, matrixBodyOffset),
@@ -12958,7 +13711,7 @@ done`;
       expect.stringMatching(/must be one explicit straight-line case/)
     );
     expect(iterableLiteralProblems).toContain(
-      "release mutation hybrid inventory expected 538 first / 22 all, found 539 first / 22 all (legacy 448/19; declarative 91/3; cases 91)"
+      "release mutation hybrid inventory expected 590 first / 27 all, found 591 first / 27 all (legacy 500/24; declarative 91/3; cases 91)"
     );
     const nestedStraightLineMutation = [
       oracleSource.slice(0, matrixBodyOffset),
@@ -12970,7 +13723,7 @@ done`;
       expect.stringMatching(/must be one explicit straight-line case/)
     );
     expect(nestedStraightLineProblems).toContain(
-      "release mutation hybrid inventory expected 538 first / 22 all, found 540 first / 22 all (legacy 449/19; declarative 91/3; cases 91)"
+      "release mutation hybrid inventory expected 590 first / 27 all, found 592 first / 27 all (legacy 501/24; declarative 91/3; cases 91)"
     );
     const earlyReturnMutation = [
       oracleSource.slice(0, matrixBodyOffset),
@@ -15264,7 +16017,7 @@ done`;
       new URL("../.github/scripts/release-mcpb-github-transaction.sh", import.meta.url),
       "utf8"
     );
-    const releaseTransactionSha256 = createHash("sha256").update(releaseTransaction.slice(0, -1), "utf8").digest("hex");
+    const releaseTransactionSha256 = createHash("sha256").update(releaseTransaction, "utf8").digest("hex");
     const workflow = releaseWorkflowFixture(releaseWorkflow, releaseTransaction);
     const tagProofCounts = (source: string, repository: string) =>
       [
@@ -15292,9 +16045,9 @@ done`;
     }
     const caseFoldedEnvMutation = replaceExactly(
       releaseWorkflow,
-      '          NPM_CONFIG_REGISTRY: "https://registry.npmjs.org/"\n',
-      '          NPM_CONFIG_REGISTRY: "https://registry.npmjs.org/"\n' +
-        '          npm_config_registry: "https://registry.npmjs.org/"\n'
+      "          NPM_CONFIG_REGISTRY: https://registry.npmjs.org/\n",
+      "          NPM_CONFIG_REGISTRY: https://registry.npmjs.org/\n" +
+        "          npm_config_registry: https://registry.npmjs.org/\n"
     );
     expect(githubWorkflowSchemaProblems(caseFoldedEnvMutation)).toContainEqual(
       expect.stringMatching(/case-insensitive duplicate NPM_CONFIG_REGISTRY\/npm_config_registry/)
@@ -15329,7 +16082,9 @@ done`;
       build: readFileSync(new URL("../scripts/build-mcpb.mjs", import.meta.url), "utf8"),
       consumer: readFileSync(new URL("../scripts/mcpb-consumer.mjs", import.meta.url), "utf8"),
       docsApi: readFileSync(new URL("../docs/api.md", import.meta.url), "utf8"),
+      entrypoint: readFileSync(new URL("../scripts/lib/entrypoint.mjs", import.meta.url), "utf8"),
       integrity: readFileSync(new URL("../scripts/check-release-integrity.mjs", import.meta.url), "utf8"),
+      npmArtifact: readFileSync(new URL("../scripts/npm-package-artifact.mjs", import.meta.url), "utf8"),
       packageLock: readFileSync(new URL("../package-lock.json", import.meta.url), "utf8"),
       packageJson,
       release: workflow,
@@ -15345,10 +16100,292 @@ done`;
     expect(releasePollProblems(workflow)).toEqual([]);
     expect(githubReleaseTransactionProblems(workflow)).toEqual([]);
     expect(mcpbContractProblems(mcpbInputs)).toEqual([]);
+    const splitReleaseMutants = [
+      replaceExactly(mcpbInputs.release, "jobs:\n  verify:", "jobs:\n  publish: {}\n  verify:"),
+      replaceExactly(mcpbInputs.release, "  npm_publish:\n", "  renamed_npm_publish:\n"),
+      replaceExactly(
+        mcpbInputs.release,
+        "Publish exact npm tarball with Trusted Publishing or verify rerun",
+        "Publish exact npm tarball from the wrong owner"
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        "  npm_publish:\n    name: Publish npm with protected Trusted Publishing OIDC\n    needs:\n      - verify",
+        "  npm_publish:\n    name: Publish npm with protected Trusted Publishing OIDC\n    needs: []"
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        "  github_release:\n    name: Publish exact GitHub Release assets\n    needs:\n      - verify\n      - npm_publish",
+        "  github_release:\n    name: Publish exact GitHub Release assets\n    needs:\n      - verify"
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        "  mcp_registry:\n    name: Publish stable release to MCP Registry with protected OIDC\n    needs:\n" +
+          "      - verify\n      - npm_publish\n      - github_release",
+        "  mcp_registry:\n    name: Publish stable release to MCP Registry with protected OIDC\n    needs:\n" +
+          "      - verify\n      - npm_publish"
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        `    if: \${{ needs.verify.outputs.channel == 'latest' }}`,
+        `    if: \${{ always() }}`
+      ),
+      replaceExactly(mcpbInputs.release, "      name: npm-publish", "      name: unprotected-npm"),
+      replaceExactly(mcpbInputs.release, "permissions: {}", "permissions:\n  contents: read"),
+      replaceExactly(
+        mcpbInputs.release,
+        '[ "$ACTUAL_HANDOFF_DIGEST" != "$EXPECTED_HANDOFF_DIGEST" ]',
+        '[ "$ACTUAL_HANDOFF_DIGEST" = "$EXPECTED_HANDOFF_DIGEST" ]',
+        3
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        "sha256sum -c release-files.sha256",
+        "true # inner handoff checksums bypassed",
+        4
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        '              "handoff.json",',
+        '              "handoff.json",\n              "attacker.sh",',
+        3
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        "    steps:\n      - name: Download and verify exact release handoff",
+        "    steps:\n      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1\n" +
+          "      - name: Download and verify exact release handoff",
+        3
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        "      - name: Assert reviewed privileged code identity\n" +
+          "        shell: /bin/bash --noprofile --norc -p -e -o pipefail {0}\n" +
+          `        working-directory: \${{ runner.temp }}/release-handoff\n` +
+          "        run: |-\n          set -euo pipefail",
+        "      - name: Assert reviewed privileged code identity\n" +
+          "        shell: /bin/bash --noprofile --norc -p -e -o pipefail {0}\n" +
+          `        working-directory: \${{ runner.temp }}/release-handoff\n` +
+          "        run: |-\n          set -euo pipefail\n          npm run attacker",
+        3
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        "42af7c5c8ffc3519dec9c33487d67bfdef52ebf8d7d417baeb8cdea07ad21879",
+        "0000000000000000000000000000000000000000000000000000000000000000",
+        3
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        "      - name: Assert reviewed privileged code identity\n" +
+          "        shell: /bin/bash --noprofile --norc -p -e -o pipefail {0}",
+        "      - name: Assert reviewed privileged code identity\n        shell: /bin/bash -c 'exit 0' -- {0}",
+        3
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        "      - name: Assert reviewed privileged code identity",
+        `      - name: Assert reviewed privileged code identity\n        if: \${{ false }}`,
+        3
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        "          NODE_AUTH_TOKEN: ''",
+        `          NODE_AUTH_TOKEN: \${{ secrets.NPM_TOKEN }}`
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        '                --provenance --access public --tag "$CHANNEL" --ignore-scripts',
+        '                --access public --tag "$CHANNEL" --ignore-scripts'
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        "                NPM_CONFIG_PROVENANCE=true \\\n",
+        "                NPM_CONFIG_PROVENANCE=false \\\n"
+      ),
+      replaceExactly(mcpbInputs.release, "--unset=NPM_ID_TOKEN", ""),
+      replaceExactly(mcpbInputs.release, "          NPM_ID_TOKEN: ''", "          NPM_ID_TOKEN: inherited"),
+      replaceExactly(mcpbInputs.release, "--unset=SIGSTORE_ID_TOKEN", ""),
+      replaceExactly(mcpbInputs.release, "          SIGSTORE_ID_TOKEN: ''", "          SIGSTORE_ID_TOKEN: inherited"),
+      replaceExactly(mcpbInputs.release, "--unset=GITLAB_CI", ""),
+      replaceExactly(mcpbInputs.release, "          GITLAB_CI: ''", "          GITLAB_CI: inherited"),
+      replaceExactly(
+        mcpbInputs.release,
+        "|npm_config_provenance|npm_config_provenance_file)",
+        "|npm_config_provenance_file)"
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        "|npm_config_provenance|npm_config_provenance_file)",
+        "|npm_config_provenance)"
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        '                --provenance --access public --tag "$CHANNEL" --ignore-scripts',
+        '                --provenance --access public --tag "$CHANNEL"'
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        '          PACKAGE_TARBALL="$PWD/npm-package/enquire-mcp-npm.tgz"',
+        '          PACKAGE_TARBALL="npm-package/enquire-mcp-npm.tgz"'
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        MCPB_EXACT_NPM_PUBLISH,
+        `${MCPB_EXACT_NPM_PUBLISH}\n            "$NPM_BIN" publish "$PACKAGE_TARBALL" --tag "$CHANNEL"`
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        'MCP_PUBLISHER_SHA256="ab128162b0616090b47cf245afe0a23f3ef08936fdce19074f5ba0a4469281ac"',
+        `MCP_PUBLISHER_SHA256="${"0".repeat(64)}"`
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        "login github-oidc --registry=https://registry.modelcontextprotocol.io",
+        "login github-oidc --registry=https://attacker.invalid"
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        "CONVERGENCE_RESULT=$(registry_snapshot convergence)",
+        "CONVERGENCE_RESULT=$(registry_snapshot preflight)"
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        "  github_release:\n    name: Publish exact GitHub Release assets\n    needs:",
+        `  github_release:\n    name: Publish exact GitHub Release assets\n    if: \${{ always() }}\n    needs:`
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        "      - name: Upload and publish the exact reviewed GitHub Release transaction\n        shell:",
+        "      - name: Upload and publish the exact reviewed GitHub Release transaction\n" +
+          "        continue-on-error: true\n        shell:"
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        "      - name: Publish exact stable manifest to MCP Registry with OIDC\n        shell:",
+        "      - name: Publish exact stable manifest to MCP Registry with OIDC\n" +
+          "        continue-on-error: true\n        shell:"
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        "  npm_publish:\n" +
+          "    name: Publish npm with protected Trusted Publishing OIDC\n" +
+          "    needs:\n      - verify\n    runs-on: ubuntu-latest",
+        "  npm_publish:\n" +
+          "    name: Publish npm with protected Trusted Publishing OIDC\n" +
+          "    needs:\n      - verify\n    runs-on: self-hosted"
+      ),
+      replaceAllExactly(
+        mcpbInputs.release,
+        'if [ "$ACTUAL_HANDOFF_DIGEST" != "$EXPECTED_HANDOFF_DIGEST" ]; then',
+        'if [ "$ACTUAL_HANDOFF_DIGEST" != "$EXPECTED_HANDOFF_DIGEST" ] && false; then',
+        3
+      ),
+      replaceAllExactly(
+        mcpbInputs.release,
+        "          sha256sum -c release-files.sha256",
+        "          sha256sum -c release-files.sha256 || true",
+        4
+      ),
+      replaceAllExactly(
+        mcpbInputs.release,
+        "              if len(names) != len(set(names)) or set(names) != expected:",
+        "              if (len(names) != len(set(names)) or set(names) != expected) and False:",
+        3
+      ),
+      replaceAllExactly(
+        replaceExactly(
+          mcpbInputs.release,
+          '          cp -- .github/scripts/release-mcpb-github-transaction.sh "$HANDOFF_ROOT/.github/scripts/"',
+          '          cp -- .github/scripts/release-mcpb-github-transaction.sh "$HANDOFF_ROOT/.github/scripts/"\n' +
+            '          cp -- SECURITY.md "$HANDOFF_ROOT/"'
+        ),
+        '              "handoff.json",',
+        '              "handoff.json",\n              "SECURITY.md",',
+        3
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        "          NPM_BIN=$(type -P npm)",
+        "          NPM_BIN=$(type -P npm)\n          NPM_BIN=/tmp/unreviewed-npm"
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        '          PACKAGE_TARBALL="$PWD/npm-package/enquire-mcp-npm.tgz"',
+        '          PACKAGE_TARBALL="$PWD/npm-package/enquire-mcp-npm.tgz"\n' +
+          "          PACKAGE_TARBALL=/tmp/unreviewed.tgz"
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        "      - name: Upload exact verified release handoff",
+        "      - name: Replace verified bytes after handoff assembly\n        run: true\n" +
+          "      - name: Upload exact verified release handoff"
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        '          NODE_TLS_REJECT_UNAUTHORIZED: "1"\n          GH_HOST: github.com',
+        '          NODE_TLS_REJECT_UNAUTHORIZED: "1"\n          GH_HOST: attacker.invalid',
+        3
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        `          GH_TOKEN: \${{ github.token }}\n` +
+          `          RELEASE_JOB_DEADLINE_EPOCH: \${{ needs.verify.outputs.deadline_epoch }}\n` +
+          `          MCPB_RELEASE_REPOSITORY: \${{ github.repository }}`,
+        `          GH_TOKEN: \${{ github.token }}\n` +
+          `          GH_ENTERPRISE_TOKEN: \${{ github.token }}\n` +
+          `          RELEASE_JOB_DEADLINE_EPOCH: \${{ needs.verify.outputs.deadline_epoch }}\n` +
+          `          MCPB_RELEASE_REPOSITORY: \${{ github.repository }}`
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        "      - name: Re-verify exact CI-gated Basic MCPB release asset",
+        "      - name: Re-verify exact CI-gated Basic MCPB release asset\n        continue-on-error: true"
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        "      - name: Test exact source without npm or contents-write tokens",
+        "      - name: Test exact source without npm or contents-write tokens\n" +
+          "        shell: /bin/bash -c 'exit 0' -- {0}"
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        "permissions: {}\n\njobs:",
+        "permissions: {}\n\ndefaults:\n  run:\n    shell: /bin/bash -c 'exit 0' -- {0}\n\njobs:"
+      ),
+      replaceExactly(
+        mcpbInputs.release,
+        "permissions: {}\n\njobs:",
+        `permissions: {}\n\nenv:\n  GH_HOST: attacker.invalid\n  GH_ENTERPRISE_TOKEN: \${{ github.token }}\n\njobs:`
+      ),
+      replaceExactly(mcpbInputs.release, "  cancel-in-progress: false", "  cancel-in-progress: true"),
+      replaceExactly(
+        mcpbInputs.release,
+        "      - name: Set up Node 24 for npm Trusted Publishing\n        uses:",
+        "      - name: Set up Node 24 for npm Trusted Publishing\n        env:\n          NODE_OPTIONS: --require=/tmp/attacker.cjs\n        uses:"
+      )
+    ];
+    for (const splitReleaseMutant of splitReleaseMutants) {
+      expect(mcpbContractProblems({ ...mcpbInputs, release: splitReleaseMutant })).toContain(
+        MCPB_SPLIT_RELEASE_CONTRACT_PROBLEM
+      );
+    }
+    const taintedTransaction = `${mcpbInputs.releaseTransaction.slice(0, -1)}\n/usr/bin/curl https://attacker.invalid\n`;
+    const taintedTransactionHash = createHash("sha256").update(taintedTransaction).digest("hex");
+    expect(
+      mcpbContractProblems({
+        ...mcpbInputs,
+        release: replaceExactly(
+          mcpbInputs.release,
+          SPLIT_CONTRACT_SHA256.githubTransactionSource,
+          taintedTransactionHash
+        ),
+        releaseTransaction: taintedTransaction
+      })
+    ).toContain(MCPB_SPLIT_RELEASE_CONTRACT_PROBLEM);
     expect(npmProvenanceContractProblems(mcpbInputs.release, mcpbInputs.integrity)).toEqual([]);
     expect(npmProvenanceEvaluatorProblems(mcpbInputs.integrity)).toEqual([]);
     expect(mcpRegistryEvaluatorProblems(mcpbInputs.integrity)).toEqual([]);
-
     const releaseIntegrityText = mcpbInputs.integrity;
     const releaseMutationPlan = new ReleaseMutationPlan({
       total: 94,
@@ -16513,9 +17550,9 @@ done`;
       ]
     });
     const registryReleaseDocument = yamlRecord(load(mcpbInputs.release));
-    const registryReleaseJob = yamlRecord(yamlRecord(registryReleaseDocument?.jobs)?.publish);
+    const registryReleaseJob = yamlRecord(yamlRecord(registryReleaseDocument?.jobs)?.mcp_registry);
     const registryReleaseSteps = yamlSteps(registryReleaseJob ?? {});
-    const registryReleasePermissions = yamlRecord(registryReleaseDocument?.permissions) ?? {};
+    const registryReleasePermissions = yamlRecord(registryReleaseJob?.permissions) ?? {};
     const registryStep = namedStep(registryReleaseSteps, MCP_REGISTRY_STEP_NAME);
     expect(mcpRegistryContractProblems(registryReleaseSteps, mcpbInputs.integrity, registryReleasePermissions)).toEqual(
       []
@@ -16912,7 +17949,7 @@ done`;
       source: releaseWorkflowFixtureSource,
       needle:
         // biome-ignore lint/suspicious/noTemplateCurlyInString: GitHub expressions must remain one literal StringLiteral.
-        "          RELEASE_JOB_DEADLINE_EPOCH: ${{ steps.deadline.outputs.epoch }}\n          EXPECTED_VERSION: ${{ steps.npm_publication.outputs.version }}\n          EXPECTED_SOURCE_SHA: ${{ steps.npm_publication.outputs.source_sha }}\n          EXPECTED_TAG: ${{ steps.npm_publication.outputs.tag }}\n          EXPECTED_INTEGRITY: ${{ steps.npm_publication.outputs.integrity }}",
+        "          RELEASE_JOB_DEADLINE_EPOCH: ${{ needs.verify.outputs.deadline_epoch }}\n          EXPECTED_VERSION: ${{ steps.npm_publication.outputs.version }}\n          EXPECTED_SOURCE_SHA: ${{ steps.npm_publication.outputs.source_sha }}\n          EXPECTED_TAG: ${{ steps.npm_publication.outputs.tag }}\n          EXPECTED_INTEGRITY: ${{ steps.npm_publication.outputs.integrity }}",
       replacement:
         // biome-ignore lint/suspicious/noTemplateCurlyInString: GitHub expressions must remain one literal StringLiteral.
         "          RELEASE_JOB_DEADLINE_EPOCH: 9999999999\n          EXPECTED_VERSION: ${{ steps.npm_publication.outputs.version }}\n          EXPECTED_SOURCE_SHA: ${{ steps.npm_publication.outputs.source_sha }}\n          EXPECTED_TAG: ${{ steps.npm_publication.outputs.tag }}\n          EXPECTED_INTEGRITY: ${{ steps.npm_publication.outputs.integrity }}",
@@ -16921,7 +17958,7 @@ done`;
         kind: "token",
         anchor:
           // biome-ignore lint/suspicious/noTemplateCurlyInString: GitHub expressions must remain one literal StringLiteral.
-          "          RELEASE_JOB_DEADLINE_EPOCH: ${{ steps.deadline.outputs.epoch }}\n          EXPECTED_VERSION: ${{ steps.npm_publication.outputs.version }}\n          EXPECTED_SOURCE_SHA: ${{ steps.npm_publication.outputs.source_sha }}\n          EXPECTED_TAG: ${{ steps.npm_publication.outputs.tag }}\n          EXPECTED_INTEGRITY: ${{ steps.npm_publication.outputs.integrity }}",
+          "          RELEASE_JOB_DEADLINE_EPOCH: ${{ needs.verify.outputs.deadline_epoch }}\n          EXPECTED_VERSION: ${{ steps.npm_publication.outputs.version }}\n          EXPECTED_SOURCE_SHA: ${{ steps.npm_publication.outputs.source_sha }}\n          EXPECTED_TAG: ${{ steps.npm_publication.outputs.tag }}\n          EXPECTED_INTEGRITY: ${{ steps.npm_publication.outputs.integrity }}",
         before: 1,
         after: 0
       }
@@ -16948,13 +17985,13 @@ done`;
     const releaseMutationM120 = releaseMutationPlan.registerMutation("release.m120", {
       mode: "first",
       source: releaseWorkflowFixtureSource,
-      needle: '          NPM_TOKEN: ""',
+      needle: "          NPM_TOKEN: ''",
       // biome-ignore lint/suspicious/noTemplateCurlyInString: GitHub expression must remain a literal StringLiteral.
       replacement: "          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}",
       expectedOccurrences: 1,
       witness: {
         kind: "token",
-        anchor: '          NPM_TOKEN: ""',
+        anchor: "          NPM_TOKEN: ''",
         before: 1,
         after: 0
       }
@@ -16981,12 +18018,12 @@ done`;
     const releaseMutationM121 = releaseMutationPlan.registerMutation("release.m121", {
       mode: "first",
       source: releaseWorkflowFixtureSource,
-      needle: '          NPM_CLI_VERSION: "11.18.0"',
-      replacement: '          NPM_CLI_VERSION: "latest"',
+      needle: "          NPM_CLI_VERSION: 11.18.0",
+      replacement: "          NPM_CLI_VERSION: latest",
       expectedOccurrences: 1,
       witness: {
         kind: "token",
-        anchor: '          NPM_CLI_VERSION: "11.18.0"',
+        anchor: "          NPM_CLI_VERSION: 11.18.0",
         before: 1,
         after: 0
       }
@@ -17013,12 +18050,12 @@ done`;
     const releaseMutationM122 = releaseMutationPlan.registerMutation("release.m122", {
       mode: "first",
       source: releaseWorkflowFixtureSource,
-      needle: '          NPM_CLI_URL: "https://registry.npmjs.org/npm/-/npm-11.18.0.tgz"',
-      replacement: '          NPM_CLI_URL: "https://registry.npmjs.org/npm/-/npm-latest.tgz"',
+      needle: "          NPM_CLI_URL: https://registry.npmjs.org/npm/-/npm-11.18.0.tgz",
+      replacement: "          NPM_CLI_URL: https://registry.npmjs.org/npm/-/npm-latest.tgz",
       expectedOccurrences: 1,
       witness: {
         kind: "token",
-        anchor: '          NPM_CLI_URL: "https://registry.npmjs.org/npm/-/npm-11.18.0.tgz"',
+        anchor: "          NPM_CLI_URL: https://registry.npmjs.org/npm/-/npm-11.18.0.tgz",
         before: 1,
         after: 0
       }
@@ -17046,13 +18083,13 @@ done`;
       mode: "first",
       source: releaseWorkflowFixtureSource,
       needle:
-        '          NPM_CLI_SRI: "sha512-T67M4L5wNm0cZ7EBLErcEkY1SmzEW/WJ+SADBzsFUY1UdAPfFHXFQtZ6SEXiK0+vzXysCvAsepbMaBTwnrAD+w=="',
-      replacement: '          NPM_CLI_SRI: "sha512-unpinned"',
+        "          NPM_CLI_SRI: sha512-T67M4L5wNm0cZ7EBLErcEkY1SmzEW/WJ+SADBzsFUY1UdAPfFHXFQtZ6SEXiK0+vzXysCvAsepbMaBTwnrAD+w==",
+      replacement: "          NPM_CLI_SRI: sha512-unpinned",
       expectedOccurrences: 1,
       witness: {
         kind: "token",
         anchor:
-          '          NPM_CLI_SRI: "sha512-T67M4L5wNm0cZ7EBLErcEkY1SmzEW/WJ+SADBzsFUY1UdAPfFHXFQtZ6SEXiK0+vzXysCvAsepbMaBTwnrAD+w=="',
+          "          NPM_CLI_SRI: sha512-T67M4L5wNm0cZ7EBLErcEkY1SmzEW/WJ+SADBzsFUY1UdAPfFHXFQtZ6SEXiK0+vzXysCvAsepbMaBTwnrAD+w==",
         before: 1,
         after: 0
       }
@@ -17079,12 +18116,12 @@ done`;
     const releaseMutationM124 = releaseMutationPlan.registerMutation("release.m124", {
       mode: "first",
       source: releaseWorkflowFixtureSource,
-      needle: '          NPM_CLI_SIZE: "2997746"',
-      replacement: '          NPM_CLI_SIZE: "0"',
+      needle: "          NPM_CLI_SIZE: '2997746'",
+      replacement: "          NPM_CLI_SIZE: '0'",
       expectedOccurrences: 1,
       witness: {
         kind: "token",
-        anchor: '          NPM_CLI_SIZE: "2997746"',
+        anchor: "          NPM_CLI_SIZE: '2997746'",
         before: 1,
         after: 0
       }
@@ -18538,11 +19575,7 @@ done`;
         replaceExactly(registryRun, 'GH_CONFIG_DIR="$WORK_ROOT/gh-config"', 'GH_CONFIG_DIR="$GITHUB_WORKSPACE"')
       ),
       registryStepWithRun(
-        replaceExactly(
-          registryRun,
-          'if [ "$(registry_git rev-parse HEAD)" != "$SOURCE_SHA" ] ||',
-          'if [ "$(registry_git rev-parse HEAD)" = "$SOURCE_SHA" ] ||'
-        )
+        replaceExactly(registryRun, '.type == "commit" and .sha == $sha', '.type == "commit" and .sha != $sha')
       ),
       registryStepWithRun(replaceAllExactly(registryRun, "?include_deleted=true", "?include_deleted=false", 2)),
       registryStepWithRun(replaceExactly(registryRun, 'mcp-registry-state "$phase"', 'mcp-registry-read "$phase"')),
@@ -19542,6 +20575,26 @@ done`;
     ).toContain("package-consumer omit lane must derive the complete optional dependency inventory");
     expect(
       remoteGateScriptProblems(
+        replaceExactly(
+          packageConsumer,
+          'const shim = path.join(binDirectory, "enquire-mcp")',
+          'const shim = path.join(packageRoot, "dist", "index.js")'
+        ),
+        protocolConformance
+      )
+    ).toContain("package-consumer must exercise the installed npm bin shim on every platform");
+    expect(
+      remoteGateScriptProblems(
+        replaceExactly(
+          packageConsumer,
+          "const loaded = await import(importSpecifier)",
+          "const loaded = await Promise.resolve(importSpecifier)"
+        ),
+        protocolConformance
+      )
+    ).toContain("package-consumer full lane must resolve and load every declared optional dependency");
+    expect(
+      remoteGateScriptProblems(
         packageConsumer,
         replaceExactly(protocolConformance, "server was not live after traversal refusal", "traversal refusal finished")
       )
@@ -19609,7 +20662,7 @@ done`;
     expect(
       releasePollProblems(replaceExactly(workflow, `"$GH_BIN" api --method PATCH`, `gh_read api --method PATCH`))
     ).toContain("all post-gate GitHub reads must consume the global deadline without shadowing release writes");
-    expect(releasePollProblems(replaceExactly(workflow, "  actions: read", "  actions: none"))).toContain(
+    expect(releasePollProblems(replaceExactly(workflow, "  actions: read", "  actions: none", 4))).toContain(
       "release must grant read-only Actions API access for the exact-SHA MCPB artifact"
     );
     expect(
@@ -19758,7 +20811,11 @@ done`;
     expect(
       mcpbContractProblems({
         ...mcpbInputs,
-        versionSync: replaceExactly(mcpbInputs.versionSync, "mcpbManifest.version = version", "void version")
+        versionSync: replaceExactly(
+          mcpbInputs.versionSync,
+          'requireSpan(mcpbParsed, "/version"',
+          'requireSpan(mcpbParsed, "/missing-version"'
+        )
       })
     ).toContain("version lifecycle must synchronize and stage all eight published version surfaces");
     expect(
@@ -19850,13 +20907,13 @@ done`;
     );
     const releaseWithSwappedPublication = replaceExactly(
       releaseWithOrderSentinel,
-      "Publish with provenance or verify an exact prior publication",
+      "Publish exact npm tarball with Trusted Publishing or verify rerun",
       "Prepare deterministic Basic release records"
     );
     const reorderedRelease = replaceExactly(
       releaseWithSwappedPublication,
       "__MCPB_RELEASE_ORDER_SENTINEL__",
-      "Publish with provenance or verify an exact prior publication"
+      "Publish exact npm tarball with Trusted Publishing or verify rerun"
     );
     expect(mcpbContractProblems({ ...mcpbInputs, release: reorderedRelease })).toContain(
       "release state machine must preflight all deterministic assets before npm, then draft/upload/publish"
@@ -19876,7 +20933,11 @@ done`;
     expect(
       mcpbContractProblems({
         ...mcpbInputs,
-        release: replaceExactly(mcpbInputs.release, 'candidate "$SOURCE_SHA"', 'candidate "$CANDIDATE_RUN_ID"')
+        release: replaceExactly(
+          mcpbInputs.release,
+          '\n              candidate "$SOURCE_SHA"',
+          '\n              candidate "$CANDIDATE_RUN_ID"'
+        )
       })
     ).toContain(
       "release must reuse exact CI-gated MCPB bytes, re-verify them, and attach transparency records with checkout provenance"
@@ -19962,31 +21023,36 @@ done`;
       "              exit 1\n" +
       "            fi";
     const npmPrewriteTagProof = `            assert_remote_tag_identity\n${npmPrewriteRegistryGuard}`;
-    const npmFinalTagProof = '          assert_remote_tag_identity\n          if [ "$NPM_PUBLISH_ATTEMPTED" = "true" ]';
+    const npmFinalTagProof =
+      '          assert_remote_tag_identity\n\n          if [ "$NPM_PUBLISH_ATTEMPTED" = "true" ]';
     expect(mutationMatchCount(mcpbInputs.release, RAW_NPM_RESERVE_DEADLINE_GUARD)).toBe(RELEASE_RESERVE_GUARD_COUNT);
     for (const weakenedNpmTransaction of [
       replaceExactly(
         mcpbInputs.release,
-        MCPB_EXACT_NPM_PACK,
-        replaceExactly(MCPB_EXACT_NPM_PACK, " --kill-after=10s", "")
+        MCPB_NPM_TARBALL_ASSIGNMENT,
+        replaceExactly(MCPB_NPM_TARBALL_ASSIGNMENT, "enquire-mcp-npm.tgz", "attacker.tgz")
       ),
       replaceExactly(
         mcpbInputs.release,
-        MCPB_EXACT_NPM_PACK,
-        replaceExactly(MCPB_EXACT_NPM_PACK, " --ignore-scripts", "")
+        MCPB_NPM_MANIFEST_ASSIGNMENT,
+        replaceExactly(MCPB_NPM_MANIFEST_ASSIGNMENT, "npm-package-manifest.json", "attacker.json")
       ),
       replaceExactly(
         mcpbInputs.release,
-        MCPB_EXACT_NPM_PACK,
-        `${MCPB_EXACT_NPM_PACK}\n          : ${MCPB_EXACT_NPM_PACK}`
+        MCPB_NPM_ARTIFACT_VERIFY_HEAD,
+        'ARTIFACT_RECEIPT=$("$NODE_BIN" scripts/npm-package-artifact.mjs create \\'
       ),
-      replaceExactly(mcpbInputs.release, '[ "$PACK_MANIFEST_COUNT" -ne 1 ]', "false"),
       replaceExactly(
         mcpbInputs.release,
-        '$0 == "package/package.json" { count++ }',
-        '$0 == "package/other.json" { count++ }'
+        '"$PACKAGE_MANIFEST" "$PACKAGE_TARBALL" "$SOURCE_SHA"',
+        '"$PACKAGE_MANIFEST" "$PACKAGE_TARBALL" "$TAG"'
       ),
-      replaceExactly(mcpbInputs.release, '[ "$REPORTED_INTEGRITY" != "$EXPECTED_INTEGRITY" ]', "false"),
+      replaceExactly(mcpbInputs.release, '"$NPM_ARTIFACT_RUN_ID" "$NPM_ARTIFACT_RUN_ATTEMPT")', '"1" "1")'),
+      replaceExactly(
+        mcpbInputs.release,
+        '.integrity | select(type == "string" and test("^sha512-[A-Za-z0-9+/]{86}==$"))',
+        ".integrity"
+      ),
       replaceExactly(mcpbInputs.release, '[ "$PRE_PUBLISH_INTEGRITY" != "$EXPECTED_INTEGRITY" ]', "false"),
       replaceExactly(
         mcpbInputs.release,
@@ -20039,8 +21105,8 @@ done`;
         '            case "$NPM_ENV_KEY_CANONICAL" in',
         '            NPM_ENV_KEY_CANONICAL=other\n            case "$NPM_ENV_KEY_CANONICAL" in'
       ),
-      replaceExactly(mcpbInputs.release, 'NPM_CONFIG_STRICT_SSL: "true"', 'NPM_CONFIG_STRICT_SSL: "false"'),
-      replaceExactly(mcpbInputs.release, 'NPM_CONFIG_FETCH_RETRIES: "0"', 'NPM_CONFIG_FETCH_RETRIES: "1"'),
+      replaceExactly(mcpbInputs.release, "NPM_CONFIG_STRICT_SSL: 'true'", "NPM_CONFIG_STRICT_SSL: 'false'"),
+      replaceExactly(mcpbInputs.release, "NPM_CONFIG_FETCH_RETRIES: '0'", "NPM_CONFIG_FETCH_RETRIES: '1'"),
       replaceExactly(mcpbInputs.release, "--max-filesize 67108864 --retry 0", "--max-filesize 67108864 --retry 1"),
       replaceExactly(mcpbInputs.release, '[ "$status" != "200" ]', '[ "$status" = "500" ]'),
       replaceExactly(
@@ -20193,7 +21259,7 @@ done`;
       "          fi\n" +
       "          assert_remote_tag_identity";
     const rawCreateChannel =
-      `          if [ "\${{ steps.dist_tag.outputs.tag }}" != "latest" ]; then\n` +
+      `          if [ "$MCPB_RELEASE_CHANNEL" != "latest" ]; then\n` +
       "            CREATE_ARGS+=(--prerelease)\n" +
       "          fi";
     const uploadConfirmationMutations = [
@@ -20455,44 +21521,41 @@ done`;
       {
         mutant: replaceExactly(
           mcpbInputs.release,
-          `          RELEASE_TRANSACTION_SHA256="${releaseTransactionSha256}"`,
-          `          RELEASE_TRANSACTION_SHA256="${"0".repeat(64)}"`
+          `            printf '%s  %s\\n' '${releaseTransactionSha256}' '.github/scripts/release-mcpb-github-transaction.sh'`,
+          `            printf '%s  %s\\n' '${"0".repeat(64)}' '.github/scripts/release-mcpb-github-transaction.sh'`
         ),
         expectedProblem: "GitHub Release transaction must execute only one exact hash-pinned in-memory script snapshot"
       },
       {
         mutant: replaceExactly(
           mcpbInputs.release,
-          "            /bin/bash --noprofile --norc -p -e -o pipefail -s --",
-          '            /bin/bash --noprofile --norc -p -e -o pipefail "$RELEASE_TRANSACTION_PATH"'
+          "          /bin/bash --noprofile --norc -p -e -o pipefail .github/scripts/release-mcpb-github-transaction.sh",
+          "          /bin/bash --noprofile --norc -p -e -o pipefail /tmp/unreviewed-transaction.sh"
         ),
         expectedProblem: "GitHub Release transaction must execute only one exact hash-pinned in-memory script snapshot"
       },
       {
         mutant: replaceExactly(
           mcpbInputs.release,
-          `          MCPB_RELEASE_WORKFLOW_SHA: \${{ github.workflow_sha }}`,
-          `          MCPB_RELEASE_WORKFLOW_SHA: \${{ github.sha }}`
+          `            printf '%s  %s\\n' '${releaseTransactionSha256}' '.github/scripts/release-mcpb-github-transaction.sh'`,
+          `            printf '%s  %s\\n' '${releaseTransactionSha256}' '/tmp/unreviewed-transaction.sh'`
         ),
         expectedProblem: "GitHub Release transaction must execute only one exact hash-pinned in-memory script snapshot"
       },
       {
         mutant: replaceExactly(
           mcpbInputs.release,
-          "            /bin/bash --noprofile --norc -p -e -o pipefail -s --",
-          "            /bin/bash --noprofile --norc -p -e -o pipefail -s --\n          echo unsafe-wrapper-tail"
+          "          /bin/bash --noprofile --norc -p -e -o pipefail .github/scripts/release-mcpb-github-transaction.sh",
+          "          /bin/bash --noprofile --norc -p -e -o pipefail .github/scripts/release-mcpb-github-transaction.sh\n          echo unsafe-wrapper-tail"
         ),
         expectedProblem: "GitHub Release transaction must execute only one exact hash-pinned in-memory script snapshot"
       },
       {
         mutant: replaceExactly(
           mcpbInputs.release,
-          "          builtin printf '%s\\n' \"$RELEASE_TRANSACTION_SNAPSHOT\" |\n" +
-            "            /bin/bash --noprofile --norc -p -e -o pipefail -s --",
-          "          builtin printf '%s\\n' \"$RELEASE_TRANSACTION_SNAPSHOT\" |\n" +
-            "            /bin/bash --noprofile --norc -p -e -o pipefail -s --\n" +
-            "          builtin printf '%s\\n' \"$RELEASE_TRANSACTION_SNAPSHOT\" |\n" +
-            "            /bin/bash --noprofile --norc -p -e -o pipefail -s --"
+          `            printf '%s  %s\\n' '${releaseTransactionSha256}' '.github/scripts/release-mcpb-github-transaction.sh'`,
+          `            printf '%s  %s\\n' '${releaseTransactionSha256}' '.github/scripts/release-mcpb-github-transaction.sh'\n` +
+            `            printf '%s  %s\\n' '${releaseTransactionSha256}' '.github/scripts/release-mcpb-github-transaction.sh'`
         ),
         expectedProblem: "GitHub Release transaction must execute only one exact hash-pinned in-memory script snapshot"
       },
@@ -20519,9 +21582,9 @@ done`;
       {
         mutant: replaceExactly(
           mcpbInputs.release,
-          '          SHELLOPTS: ""',
-          '          SHELLOPTS: "xtrace"',
-          RELEASE_HARDENED_ENV_COUNT
+          "          SHELLOPTS: ''",
+          "          SHELLOPTS: 'xtrace'",
+          RELEASE_SHELL_GUARD_ENV_COUNT
         ),
         expectedProblem:
           "token-bearing shells must clear inherited shell, loader, network, CA, Node, and GitHub config injection"
@@ -20529,9 +21592,9 @@ done`;
       {
         mutant: replaceExactly(
           mcpbInputs.release,
-          '          LD_AUDIT: ""',
-          '          LD_AUDIT: "/tmp/evil.so"',
-          RELEASE_HARDENED_ENV_COUNT
+          "          LD_AUDIT: ''",
+          "          LD_AUDIT: '/tmp/evil.so'",
+          RELEASE_FULL_GUARD_ENV_COUNT
         ),
         expectedProblem:
           "token-bearing shells must clear inherited shell, loader, network, CA, Node, and GitHub config injection"
@@ -20539,9 +21602,9 @@ done`;
       {
         mutant: replaceExactly(
           mcpbInputs.release,
-          '          TAR_OPTIONS: ""',
-          '          TAR_OPTIONS: "--checkpoint=1 --checkpoint-action=exec=/tmp/evil"',
-          RELEASE_HARDENED_ENV_COUNT
+          "          TAR_OPTIONS: ''",
+          "          TAR_OPTIONS: '--checkpoint=1 --checkpoint-action=exec=/tmp/evil'",
+          RELEASE_FULL_GUARD_ENV_COUNT
         ),
         expectedProblem:
           "token-bearing shells must clear inherited shell, loader, network, CA, Node, and GitHub config injection"
@@ -20549,9 +21612,9 @@ done`;
       {
         mutant: replaceExactly(
           mcpbInputs.release,
-          '          GODEBUG: ""',
-          '          GODEBUG: "http2debug=2"',
-          RELEASE_HARDENED_ENV_COUNT
+          "          GODEBUG: ''",
+          "          GODEBUG: 'http2debug=2'",
+          RELEASE_FULL_GUARD_ENV_COUNT
         ),
         expectedProblem:
           "token-bearing shells must clear inherited shell, loader, network, CA, Node, and GitHub config injection"
@@ -20559,8 +21622,8 @@ done`;
       {
         mutant: replaceExactly(
           mcpbInputs.release,
-          '          NODE_TLS_REJECT_UNAUTHORIZED: "1"',
-          '          NODE_TLS_REJECT_UNAUTHORIZED: "0"',
+          "          NODE_TLS_REJECT_UNAUTHORIZED: '1'",
+          "          NODE_TLS_REJECT_UNAUTHORIZED: '0'",
           RELEASE_TLS_PIN_COUNT
         ),
         expectedProblem:
@@ -20578,7 +21641,7 @@ done`;
       {
         mutant: replaceExactly(
           mcpbInputs.release,
-          `          ref: \${{ github.event.inputs.tag || github.ref }}`,
+          `          ref: \${{ github.ref }}`,
           `          ref: \${{ github.workflow_sha }}`
         ),
         expectedProblem:
@@ -20592,17 +21655,17 @@ done`;
       {
         mutant: replaceExactly(
           mcpbInputs.release,
-          "              GIT_NO_LAZY_FETCH=1 \\",
-          "              GIT_NO_LAZY_FETCH=0 \\"
+          "      - name: Upload and publish the exact reviewed GitHub Release transaction\n" +
+            "        shell: /bin/bash --noprofile --norc -p -e -o pipefail {0}\n" +
+            `        working-directory: \${{ runner.temp }}/release-handoff`,
+          "      - name: Upload and publish the exact reviewed GitHub Release transaction\n" +
+            "        shell: /bin/bash --noprofile --norc -p -e -o pipefail {0}\n" +
+            "        working-directory: /tmp/unreviewed-handoff"
         ),
         expectedProblem: "GitHub Release transaction must execute only one exact hash-pinned in-memory script snapshot"
       },
       {
-        mutant: replaceExactly(
-          mcpbInputs.release,
-          '              --git-dir="$GITHUB_WORKSPACE/.git" \\',
-          '              --git-dir="$RUNNER_TEMP/attacker.git" \\'
-        ),
+        mutant: replaceAllExactly(mcpbInputs.release, "          } | sha256sum -c -", "          } | sha256sum", 3),
         expectedProblem: "GitHub Release transaction must execute only one exact hash-pinned in-memory script snapshot"
       },
       {
@@ -20710,11 +21773,11 @@ done`;
           `      - name: Prepare draft GitHub Release
         shell: /bin/bash --noprofile --norc -p -e -o pipefail {0}
         env:
-          BASH_ENV: ""`,
+          BASH_ENV: ''`,
           `      - name: Prepare draft GitHub Release
         shell: /bin/bash --noprofile --norc -p -e -o pipefail {0}
         env:
-          BASH_ENV: "/tmp/untrusted-hook"`
+          BASH_ENV: '/tmp/untrusted-hook'`
         ),
         expectedProblem:
           "token-bearing shells must clear inherited shell, loader, network, CA, Node, and GitHub config injection"
@@ -21368,13 +22431,13 @@ done`;
     // NEGATIVE controls: the invariant rejects both the old floating-22 leg
     // and a floor that no longer matches package.json.
     expect(
-      nodeFloorCiProblems(replaceExactly(ci, 'node-version: "22.13.0"', "node-version: 22", 7), pkg.engines?.node)
+      nodeFloorCiProblems(replaceExactly(ci, 'node-version: "22.13.0"', "node-version: 22", 8), pkg.engines?.node)
     ).toContain("test (22) must run exact engines.node floor 22.13.0");
     expect(nodeFloorCiProblems(ci, ">=22.14.0")).toContain("test (22) must run exact engines.node floor 22.14.0");
     expect(nodeFloorCiProblems(ci, "22.13.0")).toEqual(["engines.node must be one exact >=X.Y.Z floor"]);
     expect(
       nodeFloorCiProblems(
-        replaceExactly(ci, '      NPM_CONFIG_ENGINE_STRICT: "true"', '      NPM_CONFIG_ENGINE_STRICT: "false"', 7),
+        replaceExactly(ci, '      NPM_CONFIG_ENGINE_STRICT: "true"', '      NPM_CONFIG_ENGINE_STRICT: "false"', 8),
         pkg.engines?.node
       )
     ).toContain("test job must enforce npm engine-strict");
@@ -21401,8 +22464,8 @@ done`;
       nodeFloorCiProblems(
         replaceExactly(
           ci,
-          "    timeout-minutes: 10\n    env:",
-          "    timeout-minutes: 10\n    continue-on-error: true\n    env:"
+          '    timeout-minutes: 20\n    env:\n      NPM_CONFIG_ENGINE_STRICT: "true"\n    strategy:',
+          '    timeout-minutes: 20\n    continue-on-error: true\n    env:\n      NPM_CONFIG_ENGINE_STRICT: "true"\n    strategy:'
         ),
         pkg.engines?.node
       )
@@ -21622,8 +22685,8 @@ done`;
       nodeFloorCiProblems(
         replaceExactly(
           ci,
-          "          - label: windows\n            os: windows-2025\n            script_shell: 'C:\\Program Files\\Git\\bin\\bash.exe'",
-          "          - label: windows\n            os: ubuntu-latest\n            script_shell: /bin/bash",
+          "          - label: windows\n            os: windows-2025",
+          "          - label: windows\n            os: ubuntu-latest",
           3
         ),
         pkg.engines?.node
@@ -21656,8 +22719,8 @@ done`;
       nodeFloorCiProblems(
         replaceExactly(
           ci,
-          "        run: node scripts/package-consumer.mjs",
-          "        run: echo package-consumer-disabled"
+          "          node scripts/package-consumer.mjs \\\n",
+          "          node scripts/package-consumer-disabled.mjs \\\n"
         ),
         pkg.engines?.node
       )
@@ -21750,8 +22813,9 @@ done`;
       nodeFloorCiProblems(
         replaceExactly(
           ci,
-          "      NPM_CONFIG_SCRIPT_SHELL: /bin/bash\n",
-          '      NPM_CONFIG_SCRIPT_SHELL: /bin/bash\n      BASH_ENV: "/tmp/bypass"\n'
+          '    env:\n      NPM_CONFIG_ENGINE_STRICT: "true"\n      NPM_CONFIG_SCRIPT_SHELL: /bin/bash\n    steps:\n',
+          '    env:\n      NPM_CONFIG_ENGINE_STRICT: "true"\n      NPM_CONFIG_SCRIPT_SHELL: /bin/bash\n' +
+            '      BASH_ENV: "/tmp/bypass"\n    steps:\n'
         ),
         pkg.engines?.node
       )
@@ -21833,8 +22897,8 @@ done`;
       nodeFloorCiProblems(
         replaceExactly(
           ci,
-          "    outputs:\n      artifact_name:",
-          '    defaults:\n      run:\n        shell: "echo {0}"\n    outputs:\n      artifact_name:'
+          "      contents: read\n    outputs:\n      artifact_name:",
+          '      contents: read\n    defaults:\n      run:\n        shell: "echo {0}"\n    outputs:\n      artifact_name:'
         ),
         pkg.engines?.node
       )
@@ -21871,7 +22935,11 @@ done`;
     ).toContain(artifactCanaryProblem);
     expect(
       nodeFloorCiProblems(
-        replaceExactly(ci, "          set -euo pipefail\n", "          set -euo pipefail\n          exit 0\n"),
+        replaceExactly(
+          ci,
+          '          set -euo pipefail\n          if [[ ! "$ARTIFACT_ID" =~',
+          '          set -euo pipefail\n          exit 0\n          if [[ ! "$ARTIFACT_ID" =~'
+        ),
         pkg.engines?.node
       )
     ).toContain(artifactCanaryProblem);
@@ -21954,20 +23022,32 @@ done`;
       nodeFloorCiProblems(
         replaceExactly(
           ci,
-          "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1",
-          "actions/download-artifact@v8"
+          "      - name: Download canonical Linux MCPB candidate\n" +
+            "        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1",
+          "      - name: Download canonical Linux MCPB candidate\n" + "        uses: actions/download-artifact@v8"
         ),
         pkg.engines?.node
       )
     ).toContain("mcpb-basic matrix must consume the exact pinned canonical Linux artifact on every OS");
     expect(
       nodeFloorCiProblems(
-        replaceExactly(ci, "          digest-mismatch: error", "          digest-mismatch: warn"),
+        replaceExactly(
+          ci,
+          "          path: artifacts\n          digest-mismatch: error",
+          "          path: artifacts\n          digest-mismatch: warn"
+        ),
         pkg.engines?.node
       )
     ).toContain("mcpb-basic matrix must consume the exact pinned canonical Linux artifact on every OS");
     expect(
-      nodeFloorCiProblems(replaceExactly(ci, "          path: artifacts", "          path: ."), pkg.engines?.node)
+      nodeFloorCiProblems(
+        replaceExactly(
+          ci,
+          "          path: artifacts\n          digest-mismatch: error",
+          "          path: .\n          digest-mismatch: error"
+        ),
+        pkg.engines?.node
+      )
     ).toContain("mcpb-basic matrix must consume the exact pinned canonical Linux artifact on every OS");
     const dockerTimeoutProblem = "docker smoke probes must be exactly bounded and fail closed on process status";
     expect(

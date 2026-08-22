@@ -29,14 +29,35 @@ describe("frontmatter_get", () => {
     await v.ensureExists();
     const result = await frontmatterGet(v, { path: "draft.md" });
     expect(result.frontmatter).toEqual({ status: "draft", tags: ["project", "idea"] });
-    expect(result.value).toBeUndefined();
+    expect(result).toMatchObject({ path: "draft.md", title: "draft" });
+    expect("value" in result).toBe(false);
   });
 
   it("returns single-key value with `key`", async () => {
     const v = new Vault(root);
     await v.ensureExists();
     const result = await frontmatterGet(v, { path: "draft.md", key: "status" });
-    expect(result.value).toBe("draft");
+    expect(result).toEqual({ path: "draft.md", title: "draft", key: "status", value: "draft" });
+    expect("frontmatter" in result).toBe(false);
+  });
+
+  it("returns explicit null for a missing keyed value without duplicating the full map", async () => {
+    const v = new Vault(root);
+    await v.ensureExists();
+    const result = await frontmatterGet(v, { path: "draft.md", key: "missing" });
+    expect(result).toEqual({ path: "draft.md", title: "draft", key: "missing", value: null });
+    expect("frontmatter" in result).toBe(false);
+  });
+
+  it("rejects an empty direct key before touching the vault", async () => {
+    let touched = false;
+    const fake = {
+      ensureExists: async () => {
+        touched = true;
+      }
+    } as unknown as Vault;
+    await expect(frontmatterGet(fake, { path: "draft.md", key: "" })).rejects.toThrow(/must be non-empty/);
+    expect(touched).toBe(false);
   });
 
   it("returns empty frontmatter for note without one", async () => {
@@ -171,6 +192,46 @@ describe("frontmatter_search", () => {
     await v.ensureExists();
     const result = await frontmatterSearch(v, { key: "status", exists: true });
     expect(result.total_matches).toBe(2);
+    expect(result.returned_count).toBe(2);
+    expect(result.truncated).toBe(false);
+  });
+
+  it("counts the complete admitted corpus while retaining only the requested rows", async () => {
+    const v = new Vault(root);
+    await v.ensureExists();
+    const result = await frontmatterSearch(v, { key: "status", exists: true, limit: 1 });
+    expect(result.total_matches).toBe(2);
+    expect(result.returned_count).toBe(1);
+    expect(result.matches).toHaveLength(1);
+    expect(result.truncated).toBe(true);
+  });
+
+  it("rejects exists:false before touching the vault instead of silently matching nothing", async () => {
+    let touched = false;
+    const fake = {
+      ensureExists: async () => {
+        touched = true;
+        throw new Error("vault must not be touched");
+      }
+    } as unknown as Vault;
+    await expect(
+      frontmatterSearch(fake, { key: "status", exists: false } as unknown as Parameters<typeof frontmatterSearch>[1])
+    ).rejects.toThrow(/exactly true/);
+    expect(touched).toBe(false);
+  });
+
+  it("refuses an incomplete bounded inventory before reading any note", async () => {
+    let reads = 0;
+    const fake = {
+      ensureExists: async () => undefined,
+      listFilesByExtensionsBounded: async () => ({ entries: [], visitedEntries: 7, complete: false }),
+      readNote: async () => {
+        reads += 1;
+        throw new Error("unreachable");
+      }
+    } as unknown as Vault;
+    await expect(frontmatterSearch(fake, { key: "status", exists: true })).rejects.toThrow(/inventory is incomplete/);
+    expect(reads).toBe(0);
   });
 
   it("`contains` finds array-typed values that contain the target", async () => {

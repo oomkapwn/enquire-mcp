@@ -91,11 +91,12 @@ describe("peekEmbedDbMetaCached (v3.7.0 L-1)", () => {
     db.close();
     const first = await peekEmbedDbMetaCached(file);
     expect(first?.model_alias).toBe("bge");
-    // Delete the file + the SQLite WAL/SHM sidecars to ensure complete
+    // Delete the file + the SQLite WAL/SHM/rollback-journal sidecars to ensure complete
     // removal (otherwise re-opening the same path might still see the meta).
     await fs.rm(file, { force: true });
     await fs.rm(`${file}-wal`, { force: true });
     await fs.rm(`${file}-shm`, { force: true });
+    await fs.rm(`${file}-journal`, { force: true });
     const second = await peekEmbedDbMetaCached(file);
     expect(second).toBeNull();
   });

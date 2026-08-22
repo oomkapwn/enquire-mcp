@@ -7,6 +7,13 @@ import { embedSingleNote } from "../src/embed-pipeline.js";
 import type { Embedder } from "../src/embeddings.js";
 import { FtsIndex } from "../src/fts5.js";
 import type { HnswIndex } from "../src/hnsw.js";
+import {
+  assertCacheFilePath,
+  assertEmbedDbFilePath,
+  assertFeedbackFilePath,
+  assertFtsIndexFilePath,
+  assertHnswFilePath
+} from "../src/persistence-path.js";
 import { renameNote } from "../src/tools/write.js";
 import { Vault } from "../src/vault.js";
 import { type HnswRowMeta, VaultWatcher } from "../src/watcher.js";
@@ -814,12 +821,26 @@ describe("VaultWatcher physical-alias convergence (S-8e)", () => {
       expect(`${aStat.dev}:${aStat.ino}`).not.toBe(`${bStat.dev}:${bStat.ino}`);
 
       const reconciled = await snapshotWindowsWatcherState(fixture, markers);
-      expectMarkerPaths(reconciled, "replacementraceoldmarker", []);
-      expectMarkerPaths(reconciled, "replacementracegroupmarker", ["A.md"]);
-      expectMarkerPaths(reconciled, "replacementracenewinodemarker", ["B.md"]);
+      expect(markerPaths(reconciled.ftsByMarker, "replacementraceoldmarker")).toEqual([]);
+      expect(markerPaths(reconciled.embedByMarker, "replacementraceoldmarker")).toEqual([]);
+      expect(markerPaths(reconciled.ftsByMarker, "replacementracegroupmarker")).toEqual(["A.md"]);
+      expect(markerPaths(reconciled.embedByMarker, "replacementracegroupmarker")).toEqual(["A.md"]);
+      expect(markerPaths(reconciled.ftsByMarker, "replacementracenewinodemarker")).toEqual(["B.md"]);
+      expect(markerPaths(reconciled.embedByMarker, "replacementracenewinodemarker")).toEqual(["B.md"]);
+      // The first plan observed a physical-membership drift after staging A.
+      // SQLite is fully replanned and authoritative, while the process-local
+      // graph is deliberately quarantined until restart rather than adopting
+      // a piecemeal generation. Its retained metadata cannot be an egress while
+      // hnswUsable is false.
+      expect(markerPathsInHnsw(reconciled, "replacementraceoldmarker")).toEqual(["A.md", "B.md"]);
+      expect(markerPathsInHnsw(reconciled, "replacementracegroupmarker")).toEqual([]);
+      expect(markerPathsInHnsw(reconciled, "replacementracenewinodemarker")).toEqual([]);
+      expect(fixture.watcher.searchHealth.hnswUsable).toBe(false);
       expect(reconciled.embedPaths).toEqual(["A.md", "B.md"]);
       expect([...new Set(fixture.reindexedPaths)].sort()).toEqual(["A.md", "B.md"]);
-      expect(watcherAuditsMatch(reconciled, 2)).toBe(true);
+      expect(reconciled.ftsAudit).toMatchObject({ declared_files: 2, indexed_files: 2, mismatched_files: 0 });
+      expect(reconciled.embedAudit).toMatchObject({ indexed_files: 2, mismatched_files: 0 });
+      expect(watcherAuditsMatch(reconciled, 2)).toBe(false);
     } finally {
       stageSpy.mockRestore();
       await closeWindowsWatcherFixture(fixture);
@@ -1499,6 +1520,152 @@ describe("renameNote native case-insensitive filesystem contracts", () => {
 const windowsDescribe = process.platform === "win32" ? describe : describe.skip;
 
 windowsDescribe("Windows hostile-filesystem contracts", () => {
+  type PersistencePathAdmitter = (file: unknown) => void;
+
+  const persistencePathFamilies: ReadonlyArray<{
+    namespace: "cache" | "embed" | "feedback" | "fts" | "hnsw";
+    suffix: string;
+    admit: PersistencePathAdmitter;
+  }> = [
+    { namespace: "cache", suffix: ".json", admit: assertCacheFilePath },
+    { namespace: "embed", suffix: ".embed.db", admit: assertEmbedDbFilePath },
+    { namespace: "feedback", suffix: ".feedback.json", admit: assertFeedbackFilePath },
+    { namespace: "fts", suffix: ".fts5.db", admit: assertFtsIndexFilePath },
+    { namespace: "hnsw", suffix: ".hnsw", admit: assertHnswFilePath }
+  ];
+
+  const portablePersistencePaths = persistencePathFamilies.flatMap(({ namespace, suffix, admit }) => [
+    { namespace, admit, boundary: "ordinary component", file: `C:\\Enquire\\Vault${suffix}` },
+    { namespace, admit, boundary: "non-device COM10 component", file: `C:\\Enquire\\COM10${suffix}` },
+    { namespace, admit, boundary: "UNC root", file: `\\\\server\\share\\Vault${suffix}` }
+  ]);
+
+  const rejectedPersistencePaths = persistencePathFamilies.flatMap(({ namespace, suffix, admit }) =>
+    [
+      {
+        hazard: "alternate data stream",
+        file: `C:\\Enquire\\Vault${suffix}:stream${suffix}`,
+        error: /alternate data stream/
+      },
+      {
+        hazard: "drive-relative path",
+        file: `C:Vault${suffix}`,
+        error: /device namespace or drive-relative path/
+      },
+      {
+        hazard: "device namespace",
+        file: `\\\\?\\C:\\Enquire\\Vault${suffix}`,
+        error: /device namespace or drive-relative path/
+      },
+      {
+        hazard: "mixed-separator GLOBALROOT device namespace",
+        file: `/\\?/GLOBALROOT/Device/HarddiskVolume1/Vault${suffix}`,
+        error: /device namespace or drive-relative path/
+      },
+      {
+        hazard: "mixed-separator pipe device namespace",
+        file: `\\/./pipe/Vault${suffix}`,
+        error: /device namespace or drive-relative path/
+      },
+      {
+        hazard: "DOS device basename",
+        file: `C:\\Enquire\\CON${suffix}`,
+        error: /reserved Windows device basename/
+      },
+      {
+        hazard: "DOS device basename with an ignored trailing space",
+        file: `C:\\Enquire\\CON ${suffix}`,
+        error: /reserved Windows device basename/
+      },
+      {
+        hazard: "numbered DOS device basename with an ignored trailing space",
+        file: `C:\\Enquire\\COM1 ${suffix}`,
+        error: /reserved Windows device basename/
+      },
+      {
+        hazard: "trailing-dot component",
+        file: `C:\\Enquire.\\Vault${suffix}`,
+        error: /trailing-dot or trailing-space path component/
+      },
+      {
+        hazard: "trailing-space component",
+        file: `C:\\Enquire \\Vault${suffix}`,
+        error: /trailing-dot or trailing-space path component/
+      },
+      {
+        hazard: "forbidden-character component",
+        file: `C:\\Bad?\\Vault${suffix}`,
+        error: /portable Windows path/
+      },
+      {
+        hazard: "control-character component",
+        file: `C:\\Bad\u001f\\Vault${suffix}`,
+        error: /portable Windows path/
+      },
+      {
+        hazard: "current-directory alias",
+        file: `C:\\Enquire\\.\\Vault${suffix}`,
+        error: /portable Windows path/
+      },
+      {
+        hazard: "parent-directory alias",
+        file: `C:\\Enquire\\..\\Vault${suffix}`,
+        error: /portable Windows path/
+      },
+      {
+        hazard: "repeated mixed-separator alias",
+        file: `C:\\Enquire\\/Vault${suffix}`,
+        error: /portable Windows path/
+      },
+      {
+        hazard: "zero-index DOS device basename",
+        file: `C:\\Enquire\\COM0${suffix}`,
+        error: /reserved Windows device basename/
+      }
+    ].map((testCase) => ({ namespace, admit, ...testCase }))
+  );
+
+  function expectPersistenceAdmissionBeforeFilesystem(
+    admit: PersistencePathAdmitter,
+    file: string,
+    expectedError?: RegExp
+  ): void {
+    const accessSpy = vi.spyOn(fs, "access");
+    const lstatSpy = vi.spyOn(fs, "lstat");
+    const openSpy = vi.spyOn(fs, "open");
+    const readFileSpy = vi.spyOn(fs, "readFile");
+    const statSpy = vi.spyOn(fs, "stat");
+    try {
+      if (expectedError) expect(() => admit(file)).toThrow(expectedError);
+      else expect(() => admit(file)).not.toThrow();
+      expect(accessSpy).not.toHaveBeenCalled();
+      expect(lstatSpy).not.toHaveBeenCalled();
+      expect(openSpy).not.toHaveBeenCalled();
+      expect(readFileSpy).not.toHaveBeenCalled();
+      expect(statSpy).not.toHaveBeenCalled();
+    } finally {
+      accessSpy.mockRestore();
+      lstatSpy.mockRestore();
+      openSpy.mockRestore();
+      readFileSpy.mockRestore();
+      statSpy.mockRestore();
+    }
+  }
+
+  it.for(portablePersistencePaths)(
+    "$namespace persistence admission accepts a $boundary before filesystem I/O",
+    ({ admit, file }) => {
+      expectPersistenceAdmissionBeforeFilesystem(admit, file);
+    }
+  );
+
+  it.for(rejectedPersistencePaths)(
+    "$namespace persistence admission rejects a $hazard before filesystem I/O",
+    ({ admit, file, error }) => {
+      expectPersistenceAdmissionBeforeFilesystem(admit, file, error);
+    }
+  );
+
   it("rejects reserved names, ADS, forbidden components, and traversal before filesystem I/O", async () => {
     const rejected = [
       "CON",

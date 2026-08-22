@@ -1,12 +1,19 @@
+import { createHash } from "node:crypto";
 import * as path from "node:path";
-import type { EmbedReceiptReader, EmbedReceiptSearchHit, EmbedSourceReceipt } from "../embed-db.js";
+import type {
+  EmbedDbGenerationIdentity,
+  EmbedReceiptReader,
+  EmbedReceiptSearchHit,
+  EmbedSourceReceipt
+} from "../embed-db.js";
 import type { FtsIndex, FtsSearchHit, FtsSourceReceipt } from "../fts5.js";
 import { foldName, foldTag, lookupFoldedKey, nfcLower } from "../name-fold.js";
+import { assertEmbedDbFilePath } from "../persistence-path.js";
 import { computeStaleness, recencyScore } from "../staleness.js";
 import type { FileEntry, Vault } from "../vault.js";
 import { assertWatcherActivationGuardClear } from "../watcher-activation-guard.js";
 import { foldForMatch, splitLines, stripTrailingSlashes } from "../wildcard-match.js";
-import { capScanEntries } from "./limits.js";
+import { listExactScanEntries } from "./limits.js";
 import { findBestMatch, intersectionSize, jaccard, ngrams, stripMd } from "./meta.js";
 import { resolveTarget } from "./write.js";
 
@@ -32,7 +39,7 @@ export interface SearchHit {
   path: string;
   /** ~120-char excerpt centered on the first matched token, with `…` truncation. */
   snippet: string;
-  /** Total occurrences of all matched tokens. Sort key (desc). */
+  /** Total overlapping occurrences of all matched tokens. Sort key (desc). */
   score: number;
   /** 1-based line number where the first match starts. `0` when no match. */
   line: number;
@@ -58,13 +65,128 @@ export interface SearchResponse {
   matches: SearchHit[];
 }
 
+interface FoldedPatternMatches {
+  counts: number[];
+  firstStarts: number[];
+}
+
+interface FoldedMatcherNode {
+  next: Map<string, number>;
+  fail: number;
+  visits: number;
+  firstEnd: number;
+}
+
+/**
+ * Match every folded query pattern in one pass over a folded note body.
+ *
+ * The trie/failure automaton records only the reached state per haystack code
+ * unit. A reverse failure-tree accumulation then derives occurrence counts and
+ * the earliest end position for every terminal pattern. This keeps work at
+ * `O(body + total query length)` even for thousands of query tokens; duplicate
+ * tokens reuse one terminal and retain their historical duplicate score weight.
+ * Occurrences overlap, which is the conventional substring-frequency meaning.
+ */
+function matchFoldedPatterns(folded: string, patterns: readonly string[]): FoldedPatternMatches {
+  const nodes: FoldedMatcherNode[] = [{ next: new Map(), fail: 0, visits: 0, firstEnd: -1 }];
+  const terminalByPattern = new Map<string, number>();
+  const terminalForInput: number[] = [];
+
+  for (const pattern of patterns) {
+    if (pattern.length === 0) {
+      terminalForInput.push(-1);
+      continue;
+    }
+    const known = terminalByPattern.get(pattern);
+    if (known !== undefined) {
+      terminalForInput.push(known);
+      continue;
+    }
+    let state = 0;
+    for (let index = 0; index < pattern.length; index++) {
+      const unit = pattern[index];
+      if (unit === undefined) continue;
+      let next = nodes[state]?.next.get(unit);
+      if (next === undefined) {
+        next = nodes.length;
+        nodes[state]?.next.set(unit, next);
+        nodes.push({ next: new Map(), fail: 0, visits: 0, firstEnd: -1 });
+      }
+      state = next;
+    }
+    terminalByPattern.set(pattern, state);
+    terminalForInput.push(state);
+  }
+
+  const breadthFirst: number[] = [];
+  const queue: number[] = [];
+  for (const child of nodes[0]?.next.values() ?? []) queue.push(child);
+  for (let head = 0; head < queue.length; head++) {
+    const state = queue[head];
+    if (state === undefined) continue;
+    breadthFirst.push(state);
+    const node = nodes[state];
+    if (!node) continue;
+    for (const [unit, child] of node.next) {
+      let fallback = node.fail;
+      while (fallback !== 0 && nodes[fallback]?.next.get(unit) === undefined) {
+        fallback = nodes[fallback]?.fail ?? 0;
+      }
+      const fallbackChild = nodes[fallback]?.next.get(unit);
+      const childNode = nodes[child];
+      if (childNode) childNode.fail = fallbackChild ?? 0;
+      queue.push(child);
+    }
+  }
+
+  let state = 0;
+  for (let index = 0; index < folded.length; index++) {
+    const unit = folded[index];
+    if (unit === undefined) continue;
+    while (state !== 0 && nodes[state]?.next.get(unit) === undefined) {
+      state = nodes[state]?.fail ?? 0;
+    }
+    state = nodes[state]?.next.get(unit) ?? 0;
+    const node = nodes[state];
+    if (!node) continue;
+    node.visits += 1;
+    if (node.firstEnd === -1) node.firstEnd = index;
+  }
+
+  for (let index = breadthFirst.length - 1; index >= 0; index--) {
+    const stateIndex = breadthFirst[index];
+    if (stateIndex === undefined) continue;
+    const node = nodes[stateIndex];
+    if (!node) continue;
+    const failure = nodes[node.fail];
+    if (!failure) continue;
+    failure.visits += node.visits;
+    if (node.firstEnd !== -1 && (failure.firstEnd === -1 || node.firstEnd < failure.firstEnd)) {
+      failure.firstEnd = node.firstEnd;
+    }
+  }
+
+  const counts: number[] = [];
+  const firstStarts: number[] = [];
+  for (let index = 0; index < patterns.length; index++) {
+    const pattern = patterns[index] ?? "";
+    const terminal = terminalForInput[index] ?? -1;
+    const node = terminal >= 0 ? nodes[terminal] : undefined;
+    counts.push(node?.visits ?? 0);
+    firstStarts.push(node?.firstEnd === undefined || node.firstEnd < 0 ? -1 : node.firstEnd - pattern.length + 1);
+  }
+  return { counts, firstStarts };
+}
+
 /**
  * Substring-grep search over the vault: scans every `.md` body for token
- * occurrences in `all` / `any` / `phrase` mode and ranks by occurrence count.
+ * occurrences in `all` / `any` / `phrase` mode and ranks by overlapping
+ * occurrence count. All query tokens share one failure-automaton body pass.
  *
  * This is the simplest retrieval primitive — no index, no embeddings, no
  * native deps. Useful when the agent already knows specific keywords; for
- * fuzzier semantic recall prefer {@link searchHybrid} or {@link semanticSearch}.
+ * frequency-weighted exact-token ranking use {@link semanticSearch}. Conceptual
+ * recall requires the embedding signal available through {@link searchHybrid}.
  * Read concurrency is bounded to 16 to avoid blowing the fd limit on large
  * vaults. Tokenization is whitespace-split + lowercased; case-insensitive.
  *
@@ -98,6 +220,7 @@ export async function searchText(
   const mode: SearchMode = args.mode ?? "all";
   const q = args.query;
   if (!q.trim()) throw new Error("query must not be empty");
+  if (q.length > 4096) throw new Error("query must not exceed 4096 UTF-16 code units");
 
   // Tokenize on whitespace for "all" / "any". Phrase mode keeps the raw query.
   const tokens = mode === "phrase" ? [q] : q.trim().split(/\s+/);
@@ -113,7 +236,7 @@ export async function searchText(
   // (parity with findSimilar/validateNoteProposal). This tool is gated behind
   // --diagnostic-search-tools, but a bounded scan keeps a pathological vault from
   // a sustained per-note read+tokenize amplifier on serve-http.
-  const entries = capScanEntries(await vault.listMarkdown(args.folder), "obsidian_search_text");
+  const entries = await listExactScanEntries(vault, args.folder, "obsidian_search_text");
 
   // Parallel file reads — was sequential, slow on large vaults. Chunk to
   // bound concurrency (avoid blowing the open-fd limit on huge vaults).
@@ -131,20 +254,15 @@ export async function searchText(
         let firstHit = -1;
         let firstHitLen = 0;
         const matched: string[] = [];
+        const patternMatches = matchFoldedPatterns(lower, lowerTokens);
         for (let t = 0; t < lowerTokens.length; t++) {
           const lowerT = lowerTokens[t];
           if (lowerT === undefined || lowerT === "") continue;
-          let tokenScore = 0;
-          let from = 0;
-          while (true) {
-            const idx = lower.indexOf(lowerT, from);
-            if (idx === -1) break;
-            tokenScore += 1;
-            if (firstHit === -1 || idx < firstHit) {
-              firstHit = idx;
-              firstHitLen = lowerT.length;
-            }
-            from = idx + lowerT.length;
+          const tokenScore = patternMatches.counts[t] ?? 0;
+          const idx = patternMatches.firstStarts[t] ?? -1;
+          if (idx >= 0 && (firstHit === -1 || idx < firstHit)) {
+            firstHit = idx;
+            firstHitLen = lowerT.length;
           }
           if (tokenScore > 0) {
             totalScore += tokenScore;
@@ -262,11 +380,10 @@ export async function findSimilar(
   const limit = args.limit ?? 10;
   const minScore = args.min_score ?? 0.05;
   const target = await resolveTarget(vault, args);
-  // rc.36 F-4 (R-5/AS#5 sibling) — cap the whole-vault scan: findSimilar builds
-  // a vault-sized `metas` + `inboundFor` graph and scores pairwise against the
-  // target. Defense-in-depth against a pathological vault over serve-http;
-  // 50_000 ≫ any real vault, so a partial scan only trims the similarity tail.
-  const entries = capScanEntries(await vault.listMarkdown(), "obsidian_find_similar");
+  // findSimilar builds a vault-sized `metas` + `inboundFor` graph. Discovery
+  // is bounded inside the walker and must be complete: accepting an arbitrary
+  // prefix would make both similarity and graph authority path-order dependent.
+  const entries = await listExactScanEntries(vault, undefined, "obsidian_find_similar");
 
   // Pre-extract metadata for all notes including the target.
   type NoteMeta = {
@@ -347,32 +464,125 @@ export async function findSimilar(
 }
 
 // ─── obsidian_semantic_search (v1.8 TF-IDF cosine retrieval) ────────────────
-// Pure-JS lexical-semantic search: tokenize + TF-IDF + L2-normalize each
-// note's body, then rank notes by cosine similarity to the query vector.
-// Closes the Smart-Connections-paywall gap surfaced in the v1.5 audit
-// without adding any runtime deps. Real ML embedding retrieval is the v2.0
-// follow-up; this is the meaningful no-deps first step that handles the
-// related-term case the BM25 / exact-substring path misses.
+// Pure-JS lexical TF-IDF search: tokenize + TF-IDF + L2-normalize each note's
+// body, then rank notes by exact token overlap with the query vector. This is
+// model-free lexical weighting, not synonym, paraphrase, or cross-language
+// retrieval; those require the embeddings path.
 
 interface DocVector {
   relPath: string;
   basename: string;
   mtimeMs: number;
+  /** Opaque full-filesystem generation captured before and after the build. */
+  sourceRevision: string;
+  /** SHA-256 of the exact source bytes used to build this vector. */
+  contentDigest: string;
   /** Sparse term-frequency-IDF vector. Map<term, weight>. L2-normalized. */
   weights: Map<string, number>;
 }
 
-const tfidfCache = new WeakMap<Vault, { docs: DocVector[]; idf: Map<string, number>; entriesRef: FileEntry[] }>();
+interface TfidfIndex {
+  docs: DocVector[];
+  idf: Map<string, number>;
+  entriesRef: FileEntry[];
+  retainedTermEntries: number;
+}
+
+/** Resource dimensions reported by {@link TfidfCapacityError}. */
+export type TfidfCapacityDimension =
+  | "documents"
+  | "visited_entries"
+  | "listing_incomplete"
+  | "document_bytes"
+  | "aggregate_bytes"
+  | "document_tokens"
+  | "aggregate_tokens"
+  | "document_distinct_terms"
+  | "aggregate_distinct_terms"
+  | "aggregate_term_entries"
+  | "cache_scopes"
+  | "in_flight_builds";
+
+/** Explicit resource envelope for one scoped TF-IDF corpus build. */
+export interface TfidfBuildLimits {
+  /** Maximum Markdown documents admitted to one corpus. */
+  maxDocuments: number;
+  /** Maximum directory entries inspected while discovering that corpus. */
+  maxVisitedEntries: number;
+  /** Maximum UTF-8 source bytes accepted from one document. */
+  maxDocumentBytes: number;
+  /** Maximum UTF-8 source bytes read across the corpus. */
+  maxAggregateBytes: number;
+  /** Maximum emitted tokens accepted from one document. */
+  maxTokensPerDocument: number;
+  /** Maximum emitted tokens accepted across the corpus. */
+  maxAggregateTokens: number;
+  /** Maximum unique terms accepted from one document. */
+  maxDistinctTermsPerDocument: number;
+  /** Maximum vocabulary size accepted across the corpus. */
+  maxAggregateDistinctTerms: number;
+  /** Maximum sum of per-document unique-term entries retained in sparse maps. */
+  maxAggregateTermEntries: number;
+}
+
+/** Default fail-closed resource envelope for one TF-IDF corpus generation. */
+export const DEFAULT_TFIDF_BUILD_LIMITS: Readonly<TfidfBuildLimits> = Object.freeze({
+  maxDocuments: 50_000,
+  maxVisitedEntries: 250_000,
+  maxDocumentBytes: 5 * 1024 * 1024,
+  maxAggregateBytes: 256 * 1024 * 1024,
+  maxTokensPerDocument: 250_000,
+  maxAggregateTokens: 10_000_000,
+  maxDistinctTermsPerDocument: 100_000,
+  maxAggregateDistinctTerms: 500_000,
+  maxAggregateTermEntries: 2_000_000
+});
+
+/** Typed, fail-closed refusal when a TF-IDF corpus exceeds its resource envelope. */
+export class TfidfCapacityError extends Error {
+  /** Stable machine-readable refusal code. */
+  readonly code = "TFIDF_CAPACITY_EXCEEDED";
+
+  /**
+   * @param dimension - Resource dimension that exceeded its configured limit.
+   * @param observed - First observed value outside the envelope.
+   * @param limit - Configured inclusive maximum.
+   */
+  constructor(
+    readonly dimension: TfidfCapacityDimension,
+    readonly observed: number,
+    readonly limit: number
+  ) {
+    super(`TF-IDF capacity exceeded for ${dimension}: ${observed} > ${limit}`);
+    this.name = "TfidfCapacityError";
+  }
+}
+
+/** Typed refusal when the corpus changes while one index generation is built. */
+export class TfidfGenerationChangedError extends Error {
+  /** Stable machine-readable refusal code. */
+  readonly code = "TFIDF_GENERATION_CHANGED";
+
+  /** Construct a generation-race refusal. */
+  constructor() {
+    super("TF-IDF corpus changed while the index generation was being built; retry the search");
+    this.name = "TfidfGenerationChangedError";
+  }
+}
+
+const tfidfCache = new WeakMap<Vault, Map<string, TfidfIndex>>();
+/** Maximum completed or concurrent folder/limit namespaces retained per Vault. */
+const MAX_TFIDF_CACHE_SCOPES = 4;
+/** Cross-scope cache totals never retain more than one maximum-size corpus. */
+const MAX_TFIDF_CACHED_DOCUMENTS = DEFAULT_TFIDF_BUILD_LIMITS.maxDocuments;
+const MAX_TFIDF_CACHED_TERM_ENTRIES = DEFAULT_TFIDF_BUILD_LIMITS.maxAggregateTermEntries;
+/** Bound overlapping invalidated builds even when they share one scope key. */
+const MAX_TFIDF_IN_FLIGHT_BUILDS = 4;
+const tfidfInFlightBuilds = new WeakMap<Vault, number>();
 // v3.11.6-rc.15 (audit H-1) — single-flight: a corpus build in flight for a given
 // Vault + corpus snapshot, so concurrent cold callers share ONE build instead of
 // each running the whole read+tokenize scan. Keyed by Vault (WeakMap → GC'd with it).
-const tfidfPending = new WeakMap<
-  Vault,
-  {
-    entriesRef: FileEntry[];
-    promise: Promise<{ docs: DocVector[]; idf: Map<string, number>; entriesRef: FileEntry[] }>;
-  }
->();
+const tfidfPending = new WeakMap<Vault, Map<string, Promise<TfidfIndex>>>();
 
 const STOP_WORDS = new Set([
   "a",
@@ -466,6 +676,11 @@ const CJK_OR_THAI_RANGES = /[぀-ヿ㐀-䶿一-鿿가-힯฀-๿ༀ-࿿ក-៿]/
  * ```
  */
 export function tokenizeForTfidf(text: string): string[] {
+  return Array.from(iterateTfidfTokens(text));
+}
+
+/** Yield normalized TF-IDF tokens without retaining a duplicate token array. */
+function* iterateTfidfTokens(text: string): Generator<string, void, undefined> {
   // v1.11.1: Unicode-aware tokenizer. The previous ASCII-only regex
   // (`/[a-z0-9][a-z0-9_-]*/g`) silently dropped Cyrillic, Greek, CJK,
   // Hebrew, Arabic, and any non-Latin content from the TF-IDF index.
@@ -482,7 +697,6 @@ export function tokenizeForTfidf(text: string): string[] {
   // tokenizing to `cafe` and the query to `café`. This tokenizer serves BOTH the indexed
   // body and the query, so normalizing here closes the asymmetry at a single point.
   const lower = text.normalize("NFC").toLowerCase();
-  const out: string[] = [];
   if (CJK_OR_THAI_RANGES.test(lower) && typeof Intl !== "undefined" && typeof Intl.Segmenter !== "undefined") {
     const segmenter = new Intl.Segmenter(undefined, { granularity: "word" });
     for (const seg of segmenter.segment(lower)) {
@@ -491,34 +705,41 @@ export function tokenizeForTfidf(text: string): string[] {
       if (t.length < 1) continue;
       if (t.length > 40) continue;
       if (STOP_WORDS.has(t)) continue;
-      out.push(t);
+      yield t;
     }
-    return out;
+    return;
   }
   for (const m of lower.matchAll(/[\p{L}\p{N}][\p{L}\p{N}_-]*/gu)) {
     const t = m[0];
     if (t.length < 2) continue;
     if (t.length > 40) continue;
     if (STOP_WORDS.has(t)) continue;
-    out.push(t);
+    yield t;
   }
-  return out;
 }
 
 /**
- * Build (or fetch from per-vault cache) the L2-normalized TF-IDF index over
- * every markdown body in the vault.
+ * Build (or fetch from per-vault cache) the L2-normalized TF-IDF index over a
+ * bounded Markdown corpus. When `folder` is supplied, discovery and IDF are
+ * both scoped to that subtree; a folder search never builds the global corpus.
  *
  * Uses smoothed IDF (`ln(1 + N / (1 + df))`) which keeps every-doc terms
  * non-zero and tames inflation on small vaults. Cache invalidates on
- * `entries` length / order / mtime mismatch — the same {@link Vault} instance
- * reuses the index across consecutive {@link semanticSearch} calls.
+ * Cache identity uses each production listing's opaque full-file generation
+ * receipt rather than mtime alone. Every build also binds the exact source
+ * bytes with SHA-256 and validates that the listing did not change while the
+ * corpus was being read.
  *
  * @internal
  * @param vault - The vault whose corpus to index.
+ * @param folder - Optional vault-relative subtree. IDF is scoped to it.
+ * @param limitOverrides - Optional lower resource envelope, primarily
+ *   useful for bounded embedding and causal tests.
  * @returns `{ docs, idf, entriesRef }` — `docs` are L2-normalized sparse
  *   vectors keyed by relPath; `idf` maps term → smoothed IDF weight;
  *   `entriesRef` is the `FileEntry` snapshot used for cache validation.
+ * @throws {TfidfCapacityError} If discovery or tokenization exceeds a limit.
+ * @throws {TfidfGenerationChangedError} If the corpus changes during build.
  * @example
  * ```ts
  * const { docs, idf } = await buildTfidfIndex(vault);
@@ -526,64 +747,203 @@ export function tokenizeForTfidf(text: string): string[] {
  * ```
  */
 export async function buildTfidfIndex(
-  vault: Vault
-): Promise<{ docs: DocVector[]; idf: Map<string, number>; entriesRef: FileEntry[] }> {
-  const entries = await vault.listMarkdown();
-  const cached = tfidfCache.get(vault);
-  if (cached && sameCorpus(cached.entriesRef, entries)) {
-    return cached;
-  }
+  vault: Vault,
+  folder?: string,
+  limitOverrides: Partial<TfidfBuildLimits> = {}
+): Promise<TfidfIndex> {
+  const limits = resolveTfidfBuildLimits(limitOverrides);
+  const cacheKey = tfidfCacheKey(folder, limits);
+  const pendingAtEntry = tfidfPending.get(vault)?.get(cacheKey);
+  if (pendingAtEntry) return pendingAtEntry;
 
-  // v3.11.6-rc.15 (external rc.14 audit H-1) — SINGLE-FLIGHT the corpus build.
-  // Pre-rc.15 the cache published ONLY the completed result, so N concurrent
-  // callers on a cold/invalidated cache each ran the full read+tokenize scan.
-  // The always-on multi-query fan-out (`obsidian_search` `queries[]`, up to 8
-  // extra phrasings + the main query = 9) starts every sub-query with
-  // `Promise.all`, so a single legal bearer-reachable request could trigger 9
-  // concurrent whole-vault corpus builds (measured ~10-12× reads / ~3.2s /
-  // +224MB RSS at 6.4k notes — a cold-start / event-loop DoS amplifier). Now a
-  // build-in-flight for THIS exact corpus snapshot is shared: concurrent callers
-  // await the one pending promise instead of racing their own scans.
-  const pending = tfidfPending.get(vault);
-  if (pending && sameCorpus(pending.entriesRef, entries)) {
-    return pending.promise;
+  // Publish a scope-level single-flight before the discovery await. This
+  // collapses both directory walks and read/tokenize work for multi-query
+  // fan-out. If the corpus mutates, the builder's terminal generation check
+  // rejects every waiter; the next request starts the new generation.
+  const pendingByScope = tfidfPending.get(vault) ?? new Map<string, Promise<TfidfIndex>>();
+  if (!pendingByScope.has(cacheKey) && pendingByScope.size >= MAX_TFIDF_CACHE_SCOPES) {
+    throw new TfidfCapacityError("cache_scopes", pendingByScope.size + 1, MAX_TFIDF_CACHE_SCOPES);
   }
-
-  // Publish the pending promise BEFORE the first `await` inside the build (the
-  // IIFE runs synchronously up to its first `readNote` await, then this set()
-  // runs — no await between, so a concurrent caller resuming from its own
-  // `listMarkdown` await observes this pending entry).
-  const promise = buildTfidfIndexUncached(vault, entries);
-  tfidfPending.set(vault, { entriesRef: entries, promise });
+  const inFlightBuilds = tfidfInFlightBuilds.get(vault) ?? 0;
+  if (inFlightBuilds >= MAX_TFIDF_IN_FLIGHT_BUILDS) {
+    throw new TfidfCapacityError("in_flight_builds", inFlightBuilds + 1, MAX_TFIDF_IN_FLIGHT_BUILDS);
+  }
+  const promise = buildOrReuseTfidfIndex(vault, folder, limits, cacheKey);
+  tfidfInFlightBuilds.set(vault, inFlightBuilds + 1);
+  pendingByScope.set(cacheKey, promise);
+  tfidfPending.set(vault, pendingByScope);
   try {
     const result = await promise;
-    // v3.11.7-rc.1 (whole-repo audit A12) — publish only if this is still
-    // the newest in-flight snapshot. Two DIFFERENT corpus snapshots are
-    // intentionally allowed to overlap: callers that started against the
-    // old snapshot still receive its result, while a newer caller builds the
-    // invalidated snapshot. Pre-fix, each uncached builder published
-    // unconditionally, so the older/slower build could finish last and replace
-    // the completed cache with stale metadata. The next search detected the
-    // mismatch and rebuilt the whole corpus again (correct results, but a
-    // bearer-reachable full-vault CPU/I/O amplification).
-    const current = tfidfPending.get(vault);
-    if (current?.promise === promise) tfidfCache.set(vault, result);
+    const current = tfidfPending.get(vault)?.get(cacheKey);
+    if (current === promise) {
+      const completedByScope = tfidfCache.get(vault) ?? new Map<string, TfidfIndex>();
+      completedByScope.delete(cacheKey);
+      completedByScope.set(cacheKey, result);
+      trimTfidfCache(completedByScope);
+      tfidfCache.set(vault, completedByScope);
+    }
     return result;
   } finally {
-    // Clear pending only if it's still OURS — a newer invalidating build may
-    // have replaced it while this one was in flight.
-    const cur = tfidfPending.get(vault);
-    if (cur && cur.promise === promise) tfidfPending.delete(vault);
+    const byScope = tfidfPending.get(vault);
+    const cur = byScope?.get(cacheKey);
+    if (byScope && cur === promise) {
+      byScope.delete(cacheKey);
+      if (byScope.size === 0) tfidfPending.delete(vault);
+    }
+    const remainingBuilds = (tfidfInFlightBuilds.get(vault) ?? 1) - 1;
+    if (remainingBuilds <= 0) tfidfInFlightBuilds.delete(vault);
+    else tfidfInFlightBuilds.set(vault, remainingBuilds);
   }
 }
 
-/** Corpus-snapshot equality: same file set at the same mtimes, in order. Shared
- *  by the completed-cache check and the single-flight pending check (rc.15). */
+/** Apply LRU scope, document, and sparse-entry totals to one Vault cache. */
+function trimTfidfCache(cache: Map<string, TfidfIndex>): void {
+  const totals = (): { documents: number; termEntries: number } => {
+    let documents = 0;
+    let termEntries = 0;
+    for (const index of cache.values()) {
+      documents += index.docs.length;
+      termEntries += index.retainedTermEntries;
+    }
+    return { documents, termEntries };
+  };
+  let retained = totals();
+  while (
+    cache.size > MAX_TFIDF_CACHE_SCOPES ||
+    retained.documents > MAX_TFIDF_CACHED_DOCUMENTS ||
+    retained.termEntries > MAX_TFIDF_CACHED_TERM_ENTRIES
+  ) {
+    const oldest = cache.keys().next().value;
+    if (oldest === undefined) break;
+    cache.delete(oldest);
+    retained = totals();
+  }
+}
+
+/** Validate the current listing, reuse a matching cache, or build one exact generation. */
+async function buildOrReuseTfidfIndex(
+  vault: Vault,
+  folder: string | undefined,
+  limits: TfidfBuildLimits,
+  cacheKey: string
+): Promise<TfidfIndex> {
+  const entries = await listTfidfCorpus(vault, folder, limits);
+  const cached = tfidfCache.get(vault)?.get(cacheKey);
+  if (cached && sameCorpus(cached.entriesRef, entries)) return cached;
+  return buildTfidfIndexUncached(vault, entries, folder, limits);
+}
+
+/** Resolve and validate a closed-world positive-integer build envelope. */
+function resolveTfidfBuildLimits(overrides: Partial<TfidfBuildLimits>): TfidfBuildLimits {
+  if (typeof overrides !== "object" || overrides === null || Array.isArray(overrides)) {
+    throw new TypeError("TF-IDF build limits must be an object");
+  }
+  const allowed = new Set<keyof TfidfBuildLimits>([
+    "maxDocuments",
+    "maxVisitedEntries",
+    "maxDocumentBytes",
+    "maxAggregateBytes",
+    "maxTokensPerDocument",
+    "maxAggregateTokens",
+    "maxDistinctTermsPerDocument",
+    "maxAggregateDistinctTerms",
+    "maxAggregateTermEntries"
+  ]);
+  const unknown = Object.keys(overrides).find((key) => !allowed.has(key as keyof TfidfBuildLimits));
+  if (unknown !== undefined) throw new TypeError(`Unknown TF-IDF build limit ${unknown}`);
+  const limits: TfidfBuildLimits = { ...DEFAULT_TFIDF_BUILD_LIMITS, ...overrides };
+  for (const [name, value] of Object.entries(limits)) {
+    if (!Number.isSafeInteger(value) || value < 1) {
+      throw new TypeError(`TF-IDF build limit ${name} must be a positive safe integer`);
+    }
+  }
+  for (const [name, value] of Object.entries(overrides)) {
+    const defaultValue = DEFAULT_TFIDF_BUILD_LIMITS[name as keyof TfidfBuildLimits];
+    if (value !== undefined && value > defaultValue) {
+      throw new TypeError(`TF-IDF build limit ${name} may lower but not exceed the safe default ${defaultValue}`);
+    }
+  }
+  return limits;
+}
+
+/** Scope + resource envelope form one cache namespace. */
+function tfidfCacheKey(folder: string | undefined, limits: TfidfBuildLimits): string {
+  return JSON.stringify([folder ?? null, ...Object.values(limits)]);
+}
+
+/** Discover a bounded corpus and fail closed rather than returning a prefix. */
+async function listTfidfCorpus(
+  vault: Vault,
+  folder: string | undefined,
+  limits: TfidfBuildLimits
+): Promise<FileEntry[]> {
+  // A few internal tests and older programmatic adapters provide the original
+  // minimal Vault surface. Production Vault instances always take the bounded
+  // branch; the compatibility branch still fails closed at maxDocuments.
+  if (typeof vault.listFilesByExtensionsBounded !== "function") {
+    const entries = await vault.listMarkdown(folder);
+    if (entries.length > limits.maxDocuments) {
+      throw new TfidfCapacityError("documents", entries.length, limits.maxDocuments);
+    }
+    return entries;
+  }
+  const bounded = await vault.listFilesByExtensionsBounded(
+    [".md"],
+    limits.maxDocuments,
+    limits.maxVisitedEntries,
+    folder
+  );
+  if (!bounded.complete) {
+    if (bounded.entries.length >= limits.maxDocuments) {
+      throw new TfidfCapacityError("documents", limits.maxDocuments + 1, limits.maxDocuments);
+    }
+    if (bounded.visitedEntries > limits.maxVisitedEntries) {
+      throw new TfidfCapacityError("visited_entries", bounded.visitedEntries, limits.maxVisitedEntries);
+    }
+    throw new TfidfCapacityError("listing_incomplete", bounded.visitedEntries, limits.maxVisitedEntries);
+  }
+  return bounded.entries;
+}
+
+/** Compatibility receipt for synthetic adapters; production entries never use it. */
+function tfidfEntryRevision(entry: FileEntry): string {
+  return entry.sourceRevision ?? `synthetic-v1:${entry.relPath}:${entry.mtimeMs}:${String(entry.sizeBytes)}`;
+}
+
+/** Staging-only read in production, with the historical adapter shape retained in tests. */
+async function readTfidfNote(
+  vault: Vault,
+  entry: FileEntry
+): Promise<{ content: string; parsed: { body: string }; mtimeMs: number }> {
+  const reader =
+    typeof vault.readNoteUncached === "function" ? vault.readNoteUncached.bind(vault) : vault.readNote.bind(vault);
+  const note = await reader(entry.absPath, entry.mtimeMs);
+  const body = note.parsed.body;
+  return {
+    content: typeof note.content === "string" ? note.content : body,
+    parsed: { body },
+    mtimeMs: typeof note.mtimeMs === "number" ? note.mtimeMs : entry.mtimeMs
+  };
+}
+
+/** Corpus-snapshot equality: same ordered file set and source generations. */
 function sameCorpus(ref: FileEntry[], entries: FileEntry[]): boolean {
   return (
     ref.length === entries.length &&
-    ref.every((e, i) => entries[i]?.relPath === e.relPath && entries[i]?.mtimeMs === e.mtimeMs)
+    ref.every((entry, index) => {
+      const current = entries[index];
+      if (!current || current.relPath !== entry.relPath) return false;
+      if (entry.sourceRevision !== undefined || current.sourceRevision !== undefined) {
+        return entry.sourceRevision !== undefined && entry.sourceRevision === current.sourceRevision;
+      }
+      return entry.mtimeMs === current.mtimeMs && entry.sizeBytes === current.sizeBytes;
+    })
   );
+}
+
+/** Exact UTF-8 source digest used to bind a vector to later snippet bytes. */
+function tfidfContentDigest(content: string): string {
+  return createHash("sha256").update(content, "utf8").digest("hex");
 }
 
 /** The actual read+tokenize+weight corpus build (rc.15 — extracted from
@@ -592,19 +952,89 @@ function sameCorpus(ref: FileEntry[], entries: FileEntry[]): boolean {
  *  promise is still the newest build for the vault. */
 async function buildTfidfIndexUncached(
   vault: Vault,
-  entries: FileEntry[]
-): Promise<{ docs: DocVector[]; idf: Map<string, number>; entriesRef: FileEntry[] }> {
-  type RawDoc = { entry: FileEntry; tf: Map<string, number> };
+  entries: FileEntry[],
+  folder: string | undefined,
+  limits: TfidfBuildLimits
+): Promise<TfidfIndex> {
+  type RawDoc = {
+    entry: FileEntry;
+    mtimeMs: number;
+    sourceRevision: string;
+    contentDigest: string;
+    tf: Map<string, number>;
+  };
   const rawDocs: RawDoc[] = [];
   const docFreq = new Map<string, number>();
+  let aggregateBytes = 0;
+  let aggregateTokens = 0;
+  let aggregateTermEntries = 0;
   for (const e of entries) {
-    const { parsed } = await vault.readNote(e.absPath, e.mtimeMs);
-    const tokens = tokenizeForTfidf(parsed.body);
+    if (e.sizeBytes !== undefined) {
+      if (e.sizeBytes > limits.maxDocumentBytes) {
+        throw new TfidfCapacityError("document_bytes", e.sizeBytes, limits.maxDocumentBytes);
+      }
+      if (aggregateBytes + e.sizeBytes > limits.maxAggregateBytes) {
+        throw new TfidfCapacityError("aggregate_bytes", aggregateBytes + e.sizeBytes, limits.maxAggregateBytes);
+      }
+    }
+    const sourceRevision = tfidfEntryRevision(e);
+    const { content, parsed, mtimeMs } = await readTfidfNote(vault, e);
+    const sourceBytes = Buffer.byteLength(content, "utf8");
+    if (sourceBytes > limits.maxDocumentBytes) {
+      throw new TfidfCapacityError("document_bytes", sourceBytes, limits.maxDocumentBytes);
+    }
+    aggregateBytes += sourceBytes;
+    if (aggregateBytes > limits.maxAggregateBytes) {
+      throw new TfidfCapacityError("aggregate_bytes", aggregateBytes, limits.maxAggregateBytes);
+    }
+    if (mtimeMs !== e.mtimeMs) throw new TfidfGenerationChangedError();
     const tf = new Map<string, number>();
-    for (const t of tokens) tf.set(t, (tf.get(t) ?? 0) + 1);
-    rawDocs.push({ entry: e, tf });
-    for (const t of tf.keys()) docFreq.set(t, (docFreq.get(t) ?? 0) + 1);
+    let documentTokens = 0;
+    for (const token of iterateTfidfTokens(parsed.body)) {
+      documentTokens += 1;
+      aggregateTokens += 1;
+      if (documentTokens > limits.maxTokensPerDocument) {
+        throw new TfidfCapacityError("document_tokens", documentTokens, limits.maxTokensPerDocument);
+      }
+      if (aggregateTokens > limits.maxAggregateTokens) {
+        throw new TfidfCapacityError("aggregate_tokens", aggregateTokens, limits.maxAggregateTokens);
+      }
+      const count = tf.get(token);
+      if (count === undefined) {
+        if (tf.size + 1 > limits.maxDistinctTermsPerDocument) {
+          throw new TfidfCapacityError("document_distinct_terms", tf.size + 1, limits.maxDistinctTermsPerDocument);
+        }
+        aggregateTermEntries += 1;
+        if (aggregateTermEntries > limits.maxAggregateTermEntries) {
+          throw new TfidfCapacityError("aggregate_term_entries", aggregateTermEntries, limits.maxAggregateTermEntries);
+        }
+        const priorDocumentFrequency = docFreq.get(token);
+        if (priorDocumentFrequency === undefined) {
+          if (docFreq.size + 1 > limits.maxAggregateDistinctTerms) {
+            throw new TfidfCapacityError(
+              "aggregate_distinct_terms",
+              docFreq.size + 1,
+              limits.maxAggregateDistinctTerms
+            );
+          }
+        }
+        docFreq.set(token, (priorDocumentFrequency ?? 0) + 1);
+        tf.set(token, 1);
+      } else {
+        tf.set(token, count + 1);
+      }
+    }
+    rawDocs.push({
+      entry: e,
+      mtimeMs,
+      sourceRevision,
+      contentDigest: tfidfContentDigest(content),
+      tf
+    });
   }
+
+  const finalEntries = await listTfidfCorpus(vault, folder, limits);
+  if (!sameCorpus(entries, finalEntries)) throw new TfidfGenerationChangedError();
 
   // Smoothed IDF: ln(1 + N / (1 + df)). Smoothing keeps every-doc terms
   // non-zero and tames inflation on small vaults.
@@ -628,15 +1058,18 @@ async function buildTfidfIndexUncached(
     if (norm > 0) {
       for (const [t, w] of weights) weights.set(t, w / norm);
     }
+    r.tf.clear();
     docs.push({
       relPath: r.entry.relPath,
       basename: r.entry.basename,
-      mtimeMs: r.entry.mtimeMs,
+      mtimeMs: r.mtimeMs,
+      sourceRevision: r.sourceRevision,
+      contentDigest: r.contentDigest,
       weights
     });
   }
 
-  return { docs, idf, entriesRef: entries };
+  return { docs, idf, entriesRef: finalEntries, retainedTermEntries: aggregateTermEntries };
 }
 
 /**
@@ -663,20 +1096,20 @@ export interface SemanticHit {
 }
 
 /**
- * Pure-JS lexical-semantic search via TF-IDF cosine similarity.
+ * Pure-JS lexical search via TF-IDF cosine similarity.
  *
- * Builds (or reuses cached) per-vault TF-IDF index, then ranks notes by
- * cosine similarity of the query vector against each body vector. Catches
- * "related-term" recall that the substring path of {@link searchText} misses
- * (e.g. searching `"retrieval"` will surface notes about `"recall"` if the
- * vocabulary co-occurs). Zero native deps — works on every platform with
- * no model download. For full ML retrieval use {@link embeddingsSearch};
- * for graceful-degradation fusion use {@link searchHybrid}.
+ * Builds (or reuses) a bounded, folder-scoped TF-IDF index, then ranks notes
+ * by cosine similarity over exact normalized token overlap. TF-IDF weights
+ * rare shared words; it does not infer synonyms, paraphrases, or related terms
+ * that are absent from the query. Zero native deps — works on every platform
+ * with no model download. For conceptual retrieval use
+ * {@link embeddingsSearch}; for graceful-degradation fusion use
+ * {@link searchHybrid}.
  *
  * @param vault - The vault to search.
  * @param args - `query` is required. `limit` defaults to 10. `min_score`
- *   defaults to 0.05 — anything below is pruned. `folder` restricts to a
- *   subdirectory.
+ *   defaults to 0.05 — anything below is pruned. `folder` scopes both corpus
+ *   discovery and IDF to a subdirectory.
  * @returns An envelope with `query`, `total_docs` (corpus size), `method`
  *   (always `"tfidf-cosine"`), and `matches` sorted by `score` desc.
  * @throws {Error} If `query` is empty / whitespace-only.
@@ -699,13 +1132,23 @@ export async function semanticSearch(
   const limit = args.limit ?? 10;
   const minScore = args.min_score ?? 0.05;
   if (!args.query.trim()) throw new Error("query must not be empty");
+  if (Buffer.byteLength(args.query, "utf8") > 64 * 1024) {
+    throw new Error("query exceeds the 65536-byte TF-IDF input limit");
+  }
 
-  const { docs, idf } = await buildTfidfIndex(vault);
+  const semanticLimits = resolveTfidfBuildLimits({});
+  const { docs, idf, entriesRef } = await buildTfidfIndex(vault, args.folder, semanticLimits);
 
-  // Vectorize query: same tokenization, IDF from the corpus, L2 normalize.
-  const qTokens = tokenizeForTfidf(args.query);
+  // Vectorize query with the same streaming tokenizer. There is no duplicate
+  // flat token array, and exact OOV queries return immediately even when the
+  // caller explicitly sets min_score=0.
   const qTf = new Map<string, number>();
-  for (const t of qTokens) qTf.set(t, (qTf.get(t) ?? 0) + 1);
+  let queryTokens = 0;
+  for (const token of iterateTfidfTokens(args.query)) {
+    queryTokens += 1;
+    if (queryTokens > 4096) throw new Error("query exceeds the 4096-token TF-IDF input limit");
+    qTf.set(token, (qTf.get(token) ?? 0) + 1);
+  }
   const qWeights = new Map<string, number>();
   let qNormSq = 0;
   for (const [t, count] of qTf) {
@@ -718,12 +1161,15 @@ export async function semanticSearch(
   if (qNorm > 0) {
     for (const [t, w] of qWeights) qWeights.set(t, w / qNorm);
   }
+  if (qWeights.size === 0) {
+    const finalEntries = await listTfidfCorpus(vault, args.folder, semanticLimits);
+    if (!sameCorpus(entriesRef, finalEntries)) throw new TfidfGenerationChangedError();
+    return { query: args.query, total_docs: docs.length, method: "tfidf-cosine", matches: [] };
+  }
 
   // Cosine = Σ q[t]·d[t] over shared terms (both vectors are L2-normed).
-  const folderPrefix = args.folder ? `${stripTrailingSlashes(args.folder)}/` : null;
   const scored: Array<{ doc: DocVector; score: number; matchedTerms: string[] }> = [];
   for (const doc of docs) {
-    if (folderPrefix && !doc.relPath.startsWith(folderPrefix) && doc.relPath !== args.folder) continue;
     let s = 0;
     const matched: string[] = [];
     for (const [t, qw] of qWeights) {
@@ -733,45 +1179,85 @@ export async function semanticSearch(
         matched.push(t);
       }
     }
-    if (s < minScore) continue;
+    if (s <= 0 || s < minScore) continue;
     scored.push({ doc, score: s, matchedTerms: matched });
   }
-  scored.sort((a, b) => b.score - a.score);
+  scored.sort((a, b) => b.score - a.score || a.doc.relPath.localeCompare(b.doc.relPath));
 
   const now = Date.now(); // v3.10 — one staleness reference for all hits in this response
-  const matches: SemanticHit[] = [];
-  for (const { doc, score, matchedTerms } of scored.slice(0, limit)) {
+  const staged: Array<{ doc: DocVector; hit: SemanticHit }> = [];
+  let cursor = 0;
+  while (staged.length < limit && cursor < scored.length) {
+    const candidate = scored[cursor];
+    cursor += 1;
+    if (!candidate) continue;
+    const { doc, score, matchedTerms } = candidate;
     matchedTerms.sort((a, b) => (idf.get(b) ?? 0) - (idf.get(a) ?? 0));
-    // v1.8.1 fix: snippet was being built from `content` (full file with
-    // frontmatter), so a matched term that lived in the YAML block could leak
-    // YAML keys/values into the response. Use `parsed.body` instead — TF-IDF
-    // is built from body too, so the indexOf below is guaranteed to land if
-    // the term contributed to the cosine score.
-    const { parsed } = await vault.readNote(vault.resolveInside(doc.relPath), doc.mtimeMs);
-    const body = parsed.body;
-    let snippetText = "";
-    for (const t of matchedTerms) {
-      // rc.21 — original-string offset (not the toLowerCase() copy's): a
-      // length-expanding fold char before the term shifted the naive offset.
-      const idx = foldedIndexOf(body, t);
-      if (idx >= 0) {
-        const { snippet } = sliceSnippet(body, idx, t.length);
-        snippetText = snippet;
-        break;
+    try {
+      const note = await readTfidfNote(vault, {
+        absPath: vault.resolveInside(doc.relPath),
+        relPath: doc.relPath,
+        basename: doc.basename,
+        mtimeMs: doc.mtimeMs,
+        sourceRevision: doc.sourceRevision
+      });
+      if (note.mtimeMs !== doc.mtimeMs || tfidfContentDigest(note.content) !== doc.contentDigest) continue;
+      const body = note.parsed.body;
+      let snippetText = "";
+      for (const term of matchedTerms) {
+        const idx = foldedIndexOf(body, term);
+        if (idx >= 0) {
+          const { snippet } = sliceSnippet(body, idx, term.length);
+          snippetText = snippet;
+          break;
+        }
+      }
+      staged.push({
+        doc,
+        hit: {
+          path: doc.relPath,
+          title: stripMd(doc.basename),
+          score: Math.round(score * 10000) / 10000,
+          snippet: snippetText,
+          matched_terms: matchedTerms.slice(0, 8),
+          mtime: new Date(doc.mtimeMs).toISOString(),
+          ...computeStaleness(doc.mtimeMs, now)
+        }
+      });
+    } catch {
+      // A deleted/replaced/private candidate is not evidence for this response.
+    }
+
+    // Re-admit every staged candidate after the latest await. If a rejected
+    // top hit leaves space, continue into lower-ranked candidates, then repeat
+    // the same terminal check. The final Promise.all is the last await before
+    // returning the public result.
+    if (staged.length >= limit || cursor === scored.length) {
+      const revisions = await Promise.all(
+        staged.map(async ({ doc }) => {
+          if (typeof vault.sourceState !== "function") return doc.sourceRevision;
+          try {
+            const state = await vault.sourceState(doc.relPath);
+            return state.mtimeMs === doc.mtimeMs ? state.sourceRevision : null;
+          } catch {
+            return null;
+          }
+        })
+      );
+      for (let index = staged.length - 1; index >= 0; index -= 1) {
+        if (revisions[index] !== staged[index]?.doc.sourceRevision) staged.splice(index, 1);
       }
     }
-    matches.push({
-      path: doc.relPath,
-      title: stripMd(doc.basename),
-      score: Math.round(score * 10000) / 10000,
-      snippet: snippetText,
-      matched_terms: matchedTerms.slice(0, 8),
-      mtime: new Date(doc.mtimeMs).toISOString(),
-      ...computeStaleness(doc.mtimeMs, now)
-    });
   }
 
-  return { query: args.query, total_docs: docs.length, method: "tfidf-cosine", matches };
+  const finalEntries = await listTfidfCorpus(vault, args.folder, semanticLimits);
+  if (!sameCorpus(entriesRef, finalEntries)) throw new TfidfGenerationChangedError();
+  return {
+    query: args.query,
+    total_docs: docs.length,
+    method: "tfidf-cosine",
+    matches: staged.slice(0, limit).map(({ hit }) => hit)
+  };
 }
 
 // ─── obsidian_embeddings_search (v2.0 alpha — ML embeddings retrieval) ──────
@@ -874,6 +1360,10 @@ export interface HnswSearchContext {
    * `--embedding-model` flag and retry.
    */
   modelAlias: string;
+  /** Physical EmbedDb instance from which this graph was admitted. */
+  dbInstanceUuid: string;
+  /** Durable EmbedDb mutation epoch from which this graph was admitted. */
+  dbMutationEpoch: number;
   /**
    * Mutable watcher health shared by reference. A false HNSW flag routes the
    * request through the authoritative EmbedDb brute-force path after an
@@ -890,6 +1380,24 @@ export interface HnswSearchContext {
  */
 export function selectUsableHnswContext(hnsw?: HnswSearchContext | null): HnswSearchContext | null {
   return hnsw?.health?.hnswUsable === false ? null : (hnsw ?? null);
+}
+
+/**
+ * Confirm that an HNSW graph names the exact currently-open EmbedDb generation.
+ *
+ * @param hnsw - Prepared in-memory graph authority.
+ * @param generation - Cheap transactional identity captured from EmbedDb.
+ * @returns True only when both the physical UUID and mutation epoch match.
+ */
+export function hnswContextMatchesEmbedDbGeneration(
+  hnsw: HnswSearchContext,
+  generation: EmbedDbGenerationIdentity
+): boolean {
+  return hnsw.dbInstanceUuid === generation.dbInstanceUuid && hnsw.dbMutationEpoch === generation.dbMutationEpoch;
+}
+
+function embedSearchGenerationChangedError(): Error {
+  return new Error("Embedding index changed during search; retry the request");
 }
 
 function watcherSemanticRouteIsQuarantined(health?: Readonly<{ semanticUsable: boolean }> | null): boolean {
@@ -1064,6 +1572,8 @@ export function pickEmbedTextForHyde(args: { query: string; hypothetical_answer?
  *   semantic route rejects instead of returning a stale post-failure index.
  * @returns An {@link EmbedSearchResponse} with chunk-level matches and a
  *   `hyde: true` marker iff HyDE actually fired.
+ * @throws {TypeError} If a non-null `embedFile` does not end exactly in
+ *   `.embed.db`; admission runs before vault or index filesystem I/O.
  * @throws {Error} If `query` is empty, the embed db doesn't exist, the
  *   embedder fails to load, or returns no vectors for the query.
  * @example
@@ -1104,6 +1614,7 @@ export async function embeddingsSearch(
   hnsw?: HnswSearchContext | null,
   watcherHealth?: Readonly<{ semanticUsable: boolean }> | null
 ): Promise<EmbedSearchResponse> {
+  if (embedFile !== null) assertEmbedDbFilePath(embedFile);
   await vault.ensureExists();
   if (!args.query.trim()) throw new Error("query must not be empty");
   if (embedFile === null) {
@@ -1200,7 +1711,7 @@ export async function embeddingsSearch(
   });
   await db.open(discovered);
   try {
-    const total = db.totalChunks();
+    let total = db.totalChunks();
     if (total === 0) {
       if (watcherSemanticRouteIsQuarantined(watcherHealth)) {
         throw new Error(
@@ -1224,6 +1735,21 @@ export async function embeddingsSearch(
     const embedder = await loadEmbedder(model.alias);
     const [qVec] = await embedder.embed([embedText]);
     if (!qVec) throw new Error("Embedder returned no vectors for the query");
+    // Capture request authority only after the potentially slow model load.
+    // Every result below must still name this exact physical UUID and mutation
+    // epoch at terminal egress.
+    const searchGeneration = db.captureGenerationIdentity();
+    total = db.totalChunks();
+    if (total === 0) {
+      const finalGeneration = db.captureGenerationIdentity();
+      if (
+        finalGeneration.dbInstanceUuid !== searchGeneration.dbInstanceUuid ||
+        finalGeneration.dbMutationEpoch !== searchGeneration.dbMutationEpoch
+      ) {
+        throw embedSearchGenerationChangedError();
+      }
+      return { query: args.query, method: "embeddings-cosine", model: model.alias, total_chunks: 0, matches: [] };
+    }
     // v2.0.0-beta.2 P0 fix: filter excluded paths from the embedding-index
     // hits BEFORE returning. The persistent .embed.db is built once and may
     // contain entries for paths now excluded by --exclude-glob / --read-paths
@@ -1242,7 +1768,12 @@ export async function embeddingsSearch(
         "Embedding search is quarantined after a watcher sink-commit failure. Restart the server to reconcile the derived indexes."
       );
     }
-    const usableHnsw = selectUsableHnswContext(hnsw);
+    const healthyHnsw = selectUsableHnswContext(hnsw);
+    // Health is necessary but not sufficient: another process can advance the
+    // same EmbedDb after this server prepared its in-memory graph. A mismatched
+    // graph is never queried; authoritative SQLite cosine is the fallback.
+    const usableHnsw =
+      healthyHnsw && hnswContextMatchesEmbedDbGeneration(healthyHnsw, searchGeneration) ? healthyHnsw : null;
     if (usableHnsw) {
       // v3.6.2 HN-4 — verify the search-time embedder model matches the
       // model the HNSW index was built with. Different models → different
@@ -1305,6 +1836,16 @@ export async function embeddingsSearch(
       (hit) => hit,
       (receipts) => db.currentSourceReceiptMask(receipts)
     );
+    // Live-vault validation awaits filesystem work, so a watcher or another
+    // process can advance EmbedDb. Refuse a mixed-generation response rather
+    // than returning ranking bytes and receipts from different snapshots.
+    const finalGeneration = db.captureGenerationIdentity();
+    if (
+      finalGeneration.dbInstanceUuid !== searchGeneration.dbInstanceUuid ||
+      finalGeneration.dbMutationEpoch !== searchGeneration.dbMutationEpoch
+    ) {
+      throw embedSearchGenerationChangedError();
+    }
     const matches: EmbedHit[] = hits.map((h) => {
       const match: EmbedHit = {
         path: h.rel_path,
@@ -1333,7 +1874,7 @@ export async function embeddingsSearch(
       ...(usedHyde ? { hyde: true } : {})
     };
   } finally {
-    db.close();
+    await db.closeAndRelease();
   }
 }
 
@@ -1395,8 +1936,11 @@ export interface SearchHybridHit {
   score: number;
   /** Snippet from whichever signal produced the best chunk hit. */
   snippet: string;
+  /** Zero-based source chunk, omitted when the contributing signal is note-level TF-IDF. */
   chunk_index?: number;
+  /** One-based source line start, omitted when no chunk-level signal supplied it. */
   line_start?: number;
+  /** One-based source line end, omitted when no chunk-level signal supplied it. */
   line_end?: number;
   /**
    * v2.8.0 — content-source kind. Lets agents distinguish markdown notes
@@ -1657,6 +2201,8 @@ async function filterCurrentHybridHits(
  *   accelerated k-NN.
  * @returns A {@link SearchHybridResponse} with sorted `matches`, observability
  *   in `signals_used` / `signal_errors`, and per-hit `per_signal` breakdown.
+ * @throws {TypeError} If a non-null `ctx.embedFile` does not end exactly in
+ *   `.embed.db`; admission runs before vault or index filesystem I/O.
  * @throws {Error} If `query` is empty / whitespace-only.
  * @example
  * ```ts
@@ -2095,6 +2641,7 @@ export async function searchHybrid(
     feedback?: { weight: number; scores: ReadonlyMap<string, number> };
   }
 ): Promise<SearchHybridResponse> {
+  if (ctx.embedFile !== null) assertEmbedDbFilePath(ctx.embedFile);
   await vault.ensureExists();
   if (!args.query.trim()) throw new Error("query must not be empty");
   const limit = args.limit ?? 10;
@@ -2570,33 +3117,44 @@ export async function searchHybrid(
         return snippet.replace(/[«»]/g, "").slice(0, 600);
       });
       const scores = await reranker.score(args.query, passages);
-      rerankerScores = new Map();
+      if (!Array.isArray(scores) || scores.length !== rerankBatch.length) {
+        throw new TypeError(
+          `reranker returned ${Array.isArray(scores) ? scores.length : "a non-array result"} scores for ${rerankBatch.length} passages`
+        );
+      }
+      for (const score of scores) {
+        if (typeof score !== "number" || !Number.isFinite(score)) {
+          throw new TypeError("reranker returned a non-finite score");
+        }
+      }
+      const admittedScores = new Map<string, number>();
       for (let i = 0; i < rerankBatch.length; i++) {
         const f = rerankBatch[i];
         const s = scores[i];
-        if (!f) continue;
+        if (!f || s === undefined) throw new Error("reranker score admission lost batch alignment");
         // v3.7.6 M-12 — pin empty-snippet candidates to -Infinity per
         // the documented contract. Otherwise honor the reranker score.
         if (emptySnippetIds.has(f.id)) {
-          rerankerScores.set(f.id, Number.NEGATIVE_INFINITY);
-        } else if (typeof s === "number") {
-          rerankerScores.set(f.id, s);
+          admittedScores.set(f.id, Number.NEGATIVE_INFINITY);
+        } else {
+          admittedScores.set(f.id, s);
         }
       }
       // Sort the top-N by reranker score; everything below top-N keeps RRF
       // order. We do this by re-ordering fused[0..topN] in place.
       const reordered = [...rerankBatch].sort((a, b) => {
-        const sa = rerankerScores?.get(a.id) ?? -Infinity;
-        const sb = rerankerScores?.get(b.id) ?? -Infinity;
+        const sa = admittedScores.get(a.id) ?? -Infinity;
+        const sb = admittedScores.get(b.id) ?? -Infinity;
         return sb - sa;
       });
       const posBeforeRerank = exRerank ? posOf(fused) : undefined;
       for (let i = 0; i < reordered.length; i++) {
         fused[i] = reordered[i] as (typeof fused)[number];
       }
-      if (exRerank && posBeforeRerank && rerankerScores) {
+      rerankerScores = admittedScores;
+      if (exRerank && posBeforeRerank) {
         const posAfter = posOf(fused);
-        for (const [id, sc] of rerankerScores) {
+        for (const [id, sc] of admittedScores) {
           if (!Number.isFinite(sc)) continue; // empty-snippet -Infinity sentinels omitted
           exRerank.set(id, {
             score: round5(sc),
@@ -2610,6 +3168,8 @@ export async function searchHybrid(
         process.stderr.write(`obsidian_search: reranker loaded; reranked ${rerankedPairs} pairs\n`);
       }
     } catch (err) {
+      rerankerScores = null;
+      rerankedPairs = 0;
       const msg = err instanceof Error ? err.message : String(err);
       // Add to signalErrors so it surfaces in the response. Reranker is not
       // a "signal" per se but the existing dict is the right home.
@@ -2827,14 +3387,17 @@ export async function searchHybrid(
     const baseName = path.basename(pathPart);
     const title = kind === "pdf" ? baseName.replace(/\.pdf$/i, "") : stripMd(baseName);
     const rerankerScore = rerankerScores?.get(f.id);
+    const chunkIndex = chunkFromId ?? bm?.chunk_index ?? emb?.chunk_index;
+    const lineStart = bm?.line_start ?? emb?.line_start;
+    const lineEnd = bm?.line_end ?? emb?.line_end;
     const hit: SearchHybridHit = {
       path: pathPart,
       title,
       score: Math.round(f.score * 100000) / 100000,
       snippet: bestEvidence?.snippet ?? "",
-      chunk_index: chunkFromId ?? bm?.chunk_index ?? emb?.chunk_index,
-      line_start: bm?.line_start ?? emb?.line_start,
-      line_end: bm?.line_end ?? emb?.line_end,
+      ...(chunkIndex !== undefined ? { chunk_index: chunkIndex } : {}),
+      ...(lineStart !== undefined ? { line_start: lineStart } : {}),
+      ...(lineEnd !== undefined ? { line_end: lineEnd } : {}),
       kind,
       per_signal: perSignal,
       ...(typeof rerankerScore === "number" && Number.isFinite(rerankerScore)
@@ -2970,11 +3533,9 @@ export const MAX_FANOUT_QUERIES = 8;
  *  once on the event loop. Combined with the `buildTfidfIndex` single-flight
  *  (which collapses the shared corpus BUILD — the expensive read+tokenize scan,
  *  the H-1 amplifier — to ONE regardless), this bounds the worst-case cold
- *  fan-out cost. (rc.16 precision: the corpus *build* is now vault-size-
- *  independent under fan-out; each sub-query still runs its own
- *  `vault.listMarkdown()` directory walk to compute the corpus snapshot — cheap
- *  threadpool readdir/stat metadata I/O, not the content read that made H-1
- *  HIGH — so total cold cost is dominated by the single build, not the N walks.) */
+ *  fan-out cost. Same-scope calls that overlap also share discovery/cache
+ *  validation; each query still performs its own terminal generation admission
+ *  because its candidate/snippet work can finish at a different time. */
 export const MAX_FANOUT_CONCURRENCY = 4;
 
 /** Run `fn` over `items` with at most `limit` in flight at once, preserving
@@ -3022,12 +3583,19 @@ type SearchHybridCtx = Parameters<typeof searchHybrid>[2];
  * so `granularity: "block"` degrades to note-level in the fused result — one
  * hit per note, not per chunk (`chunk_index` reflects the best sub-hit and may
  * be absent). Use single-query mode when per-chunk hits matter.
+ *
+ * @param vault - Admitted vault used by every sub-query.
+ * @param args - Base hybrid arguments plus bounded query phrasings.
+ * @param ctx - Shared retrieval/persistence context.
+ * @returns One note-level RRF-fused response.
+ * @throws {TypeError} If a non-null `ctx.embedFile` is outside the exact `.embed.db` namespace.
  */
 export async function searchHybridMulti(
   vault: Vault,
   args: SearchHybridArgs & { queries: string[] },
   ctx: SearchHybridCtx
 ): Promise<SearchHybridResponse> {
+  if (ctx.embedFile !== null) assertEmbedDbFilePath(ctx.embedFile);
   const { reciprocalRankFusion, toRanked, RRF_K } = await import("../rrf.js");
   // S-5 — `explain` is a single-query diagnostic: each sub-query's per-stage
   // ranks refer to ITS own fusion, not this outer re-fusion, so a per-hit

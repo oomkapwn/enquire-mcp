@@ -33,6 +33,59 @@ describe("watcher activation guard", () => {
     expect(watcherActivationGuardPath(path.join(dir, "Exact.embed.db"))).not.toBe(guardPath);
   });
 
+  it.each(["\n", "\u2028"])(
+    "rejects a guard ownership token with trailing terminator %j before I/O",
+    async (suffix) => {
+      const malformed: WatcherActivationGuard = { embedDbFile, token: `${"a".repeat(64)}${suffix}` };
+      await expect(releaseWatcherActivationGuard(malformed)).rejects.toThrow(/malformed ownership token/i);
+      await expect(fs.lstat(guardPath)).rejects.toMatchObject({ code: "ENOENT" });
+    }
+  );
+
+  it.each(["preflight", "clear"])(
+    "%s refuses and preserves a recovery child whose .active name has a trailing line terminator",
+    async (route) => {
+      const token = "b".repeat(64);
+      const terminator = process.platform === "win32" ? "\u2028" : "\n";
+      const malformedChild = path.join(guardPath, `${token}.active${terminator}`);
+      const payload = `${JSON.stringify({ version: 1, token })}\n`;
+      await fs.mkdir(guardPath, { mode: 0o700 });
+      await fs.writeFile(malformedChild, payload, { mode: 0o600 });
+
+      const operation =
+        route === "preflight"
+          ? preflightWatcherActivationGuardRecovery(embedDbFile)
+          : clearWatcherActivationGuard(embedDbFile);
+      await expect(operation).rejects.toThrow(/unexpected directory entry/i);
+      await expect(fs.readFile(malformedChild, "utf8")).resolves.toBe(payload);
+      expect((await fs.lstat(guardPath)).isDirectory()).toBe(true);
+    }
+  );
+
+  it.each([
+    ["zero inode", 0n, 0n],
+    ["BigInt precision", 2n ** 53n + 3n, 2n ** 53n + 4n]
+  ] as const)("recovery rejects a %s identity instead of deleting the guard", async (_label, firstIno, secondIno) => {
+    await fs.mkdir(guardPath, { mode: 0o700 });
+    const native = await fs.lstat(guardPath, { bigint: true });
+    const withIno = (ino: bigint): import("node:fs").BigIntStats =>
+      new Proxy(native, {
+        get(target, property, receiver) {
+          return property === "ino" ? ino : Reflect.get(target, property, receiver);
+        }
+      });
+    const identitySpy = vi
+      .spyOn(fs, "lstat")
+      .mockResolvedValueOnce(withIno(firstIno))
+      .mockResolvedValueOnce(withIno(secondIno));
+    try {
+      await expect(preflightWatcherActivationGuardRecovery(embedDbFile)).rejects.toThrow(/identity changed/i);
+    } finally {
+      identitySpy.mockRestore();
+    }
+    expect((await fs.lstat(guardPath)).isDirectory()).toBe(true);
+  });
+
   it("assert-clear resolves for an absent path but any existing object blocks", async () => {
     await expect(assertWatcherActivationGuardClear(embedDbFile)).resolves.toBeUndefined();
 
@@ -67,7 +120,7 @@ describe("watcher activation guard", () => {
     expect(guard.token).toMatch(/^[0-9a-f]{64}$/);
     expect(`${entries.join("")}${raw}`).not.toContain(privatePathSentinel);
     if (process.platform !== "win32") {
-      expect(directoryStat.mode & 0o777).toBe(0o700);
+      expect(directoryStat.mode & 0o077).toBe(0); // 0700 request may be tightened by umask
       expect(childStat.mode & 0o777).toBe(0o600);
     }
   });
@@ -274,21 +327,29 @@ describe("watcher activation guard", () => {
     // clearOnDisk's read-only preflight before any DB/WAL/HNSW artifact is
     // removed. Each shape remains untouched for manual ownership inspection.
     const hnswBase = hnswPersistBase(embedDbFile);
+    const generation = `${hnswBase}.${"a".repeat(48)}.bin`;
     const artifactPaths = [
       embedDbFile,
       `${embedDbFile}-wal`,
       `${embedDbFile}-shm`,
       `${hnswBase}.bin`,
-      `${hnswBase}.meta.json`
+      `${hnswBase}.meta.json`,
+      generation,
+      `${hnswBase}.meta.json.enquire-tmp-${"b".repeat(48)}`
     ];
+    const artifactStage = `${generation}.enquire-stage-${"c".repeat(48)}`;
+    const artifactStageChild = path.join(artifactStage, "artifact");
     const artifactSentinel = "derived-artifact-must-survive-unsafe-guard";
     for (const artifactPath of artifactPaths) {
       await fs.writeFile(artifactPath, artifactSentinel);
     }
+    await fs.mkdir(artifactStage, { mode: 0o700 });
+    await fs.writeFile(artifactStageChild, artifactSentinel, { mode: 0o600 });
     const expectArtifactsPreserved = async (): Promise<void> => {
       for (const artifactPath of artifactPaths) {
         await expect(fs.readFile(artifactPath, "utf8")).resolves.toBe(artifactSentinel);
       }
+      await expect(fs.readFile(artifactStageChild, "utf8")).resolves.toBe(artifactSentinel);
     };
 
     await fs.writeFile(guardPath, "foreign guard object");
@@ -323,12 +384,12 @@ describe("watcher activation guard", () => {
     await expect(db.clearOnDisk()).resolves.toBe(true);
     await expect(assertWatcherActivationGuardClear(embedDbFile)).resolves.toBeUndefined();
 
-    // NEGATIVE control: derived artifacts are removed before the guard. A
-    // deterministic type error at the first artifact must reject and retain
-    // the interlock, so the next startup remains quarantined.
+    // NEGATIVE control: family admission now rejects an unsafe main artifact
+    // before acquiring erasure authority or deleting anything. The interlock
+    // must remain, so the next startup stays quarantined.
     await armWatcherActivationGuard(embedDbFile);
     await fs.mkdir(embedDbFile);
-    await expect(db.clearOnDisk()).rejects.toThrow(/Unable to remove embedding-index artifact/i);
+    await expect(db.clearOnDisk()).rejects.toThrow(/Persistence lease target must be absent or a regular file/i);
     await expect(assertWatcherActivationGuardClear(embedDbFile)).rejects.toThrow(/guard exists/i);
     expect((await fs.lstat(embedDbFile)).isDirectory()).toBe(true);
     expect((await fs.lstat(guardPath)).isDirectory()).toBe(true);

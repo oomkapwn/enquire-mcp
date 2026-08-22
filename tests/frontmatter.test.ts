@@ -1,6 +1,8 @@
 // v3.10.0-rc.53 — standalone guard for src/frontmatter.ts (the gray-matter replacement).
 // The dev-only differential test (vs gray-matter) validated the port before gray-matter
 // was removed; this is the shipped CI guard (no gray-matter dependency).
+import { readFileSync } from "node:fs";
+import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import { parseFrontmatter, stringifyFrontmatter } from "../src/frontmatter.js";
 
@@ -43,6 +45,36 @@ describe("parseFrontmatter (rc.53)", () => {
 
   it("strips a single leading CR/LF after the closing fence (CRLF parity)", () => {
     expect(parseFrontmatter("---\r\nk: v\r\n---\r\nbody").content).toBe("body");
+  });
+
+  it.each(["\n", "\r\n", "\r", "\u2028", "\u2029"])(
+    "recognizes exact standalone delimiters across the canonical %j line separator",
+    (end) => {
+      const parsed = parseFrontmatter(`---${end}  # comment only${end}---${end}body`);
+      expect(parsed).toEqual({ data: {}, content: "body", coerced: false });
+    }
+  );
+
+  it("requires an exact standalone opening delimiter", () => {
+    for (const first of ["---yaml", "--- trailing", "----"]) {
+      const source = `${first}\nk: v\n---\nbody`;
+      expect(parseFrontmatter(source)).toEqual({ data: {}, content: source, coerced: false });
+    }
+  });
+
+  it.each(["---trailing", "----"])("does not accept %j as a closing-delimiter prefix", (prefix) => {
+    const source = `---\nk: v\n${prefix}\n---\nbody`;
+    expect(() => parseFrontmatter(source)).toThrow();
+  });
+
+  it("distinguishes blank/comment-only lines from inline YAML comments in one linear line pass", () => {
+    const blanks = Array.from({ length: 4096 }, (_, i) => (i % 2 === 0 ? "   " : "\t# comment")).join("\r");
+    expect(parseFrontmatter(`---\r${blanks}\r---\rbody`)).toEqual({ data: {}, content: "body", coerced: false });
+    expect(parseFrontmatter("---\nvalue: yes # inline\n---\nbody").data).toEqual({ value: "yes" });
+
+    const source = readFileSync(path.resolve(__dirname, "../src/frontmatter.ts"), "utf8");
+    expect(source).toContain("function hasYamlContent(");
+    expect(source).not.toContain("matterBlock.replace(");
   });
 
   it("throws on malformed YAML (so parseNote's catch falls back to whole-body) — NEGATIVE control", () => {

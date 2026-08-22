@@ -23,6 +23,7 @@
 
 import { readFileSync } from "node:fs";
 import * as path from "node:path";
+import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
 const repoRoot = path.resolve(__dirname, "..");
@@ -56,9 +57,104 @@ function containsAwait(slice: string): boolean {
   return /\bawait\b/.test(slice);
 }
 
+function classMethodSource(source: string, className: string, methodName: string): string {
+  const sourceFile = ts.createSourceFile("critical-section.ts", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const matches: string[] = [];
+  const visit = (node: ts.Node): void => {
+    if (ts.isClassDeclaration(node) && node.name?.text === className) {
+      for (const member of node.members) {
+        if (ts.isMethodDeclaration(member) && member.name.getText(sourceFile) === methodName) {
+          matches.push(member.getText(sourceFile));
+        }
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  if (matches.length !== 1) {
+    throw new Error(`expected exactly one ${className}.${methodName} method, found ${matches.length}`);
+  }
+  return matches[0] ?? "";
+}
+
+function drainsAcceptedFilesBeforeHnswFlush(source: string): boolean {
+  const close = classMethodSource(source, "VaultWatcher", "close");
+  const drain = "await Promise.allSettled([...this.fileQueues.values()]);";
+  const flush = "await this.flushHnswToDisk();";
+  const drainAt = close.indexOf(drain);
+  const flushAt = close.indexOf(flush);
+  return drainAt >= 0 && flushAt > drainAt;
+}
+
+function conditionalEmbedMutationOwnsImmediateWriteLock(source: string): boolean {
+  const method = classMethodSource(source, "EmbedDb", "mutateIfGeneration");
+  const observedAt = method.indexOf("const observedGeneration = captureEmbedDbGenerationIdentity(db);");
+  const guardAt = method.indexOf("if (!sameEmbedDbGenerationIdentity(expected, observedGeneration))");
+  const mutationAt = method.indexOf("const value = mutate();");
+  const committedAt = method.indexOf("committedGeneration: captureEmbedDbGenerationIdentity(db)");
+  const immediateAt = method.indexOf("return transaction.immediate();");
+  return (
+    observedAt >= 0 &&
+    guardAt > observedAt &&
+    mutationAt > guardAt &&
+    committedAt > mutationAt &&
+    immediateAt > committedAt
+  );
+}
+
+function watcherPublishesGenerationAfterGraphDiff(source: string, methodName: string): boolean {
+  const method = classMethodSource(source, "VaultWatcher", methodName);
+  const publishToken = "this.publishCommittedHnswGeneration(committedGeneration)";
+  const conditionalAt = method.indexOf("IfGeneration(");
+  const quarantineAt = method.indexOf("this.quarantineHnswGeneration(", conditionalAt);
+  const fallbackAt = method.indexOf(
+    methodName === "upsertEmbedAndSyncHnsw"
+      ? "mutation = embedDb.upsertNoteWithCanonicalVectors("
+      : "deletedIds = embedDb.deleteNote(",
+    quarantineAt
+  );
+  const graphDiffAt = method.indexOf("hnswResult = this.syncHnswForFile(", fallbackAt);
+  const publishAt = method.indexOf(publishToken, graphDiffAt);
+  return (
+    method.split(publishToken).length - 1 === 1 &&
+    conditionalAt >= 0 &&
+    quarantineAt > conditionalAt &&
+    fallbackAt > quarantineAt &&
+    graphDiffAt > fallbackAt &&
+    publishAt > graphDiffAt
+  );
+}
+
+function serverSharesLiveHnswAuthority(source: string): boolean {
+  const sourceFile = ts.createSourceFile("server.ts", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const matches: ts.CallExpression[] = [];
+  const visit = (node: ts.Node): void => {
+    if (ts.isCallExpression(node) && node.expression.getText(sourceFile) === "watcher.attachHnsw") matches.push(node);
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  return (
+    matches.length === 1 &&
+    matches[0]?.arguments.length === 4 &&
+    matches[0]?.arguments[3]?.getText(sourceFile) === "hnswContext"
+  );
+}
+
+function watcherRevalidatesSharedAuthorityAtAttachment(source: string): boolean {
+  const method = classMethodSource(source, "VaultWatcher", "attachHnsw");
+  const captureAt = method.indexOf("const currentGeneration = this.embedDb.captureGenerationIdentity();");
+  const compareAt = method.indexOf("!sameEmbedDbGenerationIdentity(sharedGenerationAuthority, currentGeneration)");
+  const rejectAt = method.indexOf("shared HNSW authority does not match the current EmbedDb generation", compareAt);
+  const publishAt = method.indexOf("this.hnsw = hnsw;", rejectAt);
+  return captureAt >= 0 && compareAt > captureAt && rejectAt > compareAt && publishAt > rejectAt;
+}
+
 describe("HNSW shared-state critical section is synchronous (rc.9, T-MED-1)", () => {
   const hnswSrc = stripLineComments(readFileSync(path.join(repoRoot, "src/hnsw.ts"), "utf8"));
-  const watcherSrc = stripLineComments(readFileSync(path.join(repoRoot, "src/watcher.ts"), "utf8"));
+  const embedRaw = readFileSync(path.join(repoRoot, "src/embed-db.ts"), "utf8");
+  const serverRaw = readFileSync(path.join(repoRoot, "src/server.ts"), "utf8");
+  const watcherRaw = readFileSync(path.join(repoRoot, "src/watcher.ts"), "utf8");
+  const watcherSrc = stripLineComments(watcherRaw);
 
   it("HnswIndex.applyDiff has NO await between markDelete and addPoint (POSITIVE — the class gate)", () => {
     // markDelete loop → resize → addPoint loop → return. Any await here would let
@@ -87,6 +183,59 @@ describe("HNSW shared-state critical section is synchronous (rc.9, T-MED-1)", ()
       expect(containsAwait(commit), `${name} must remain synchronous`).toBe(false);
       expect(watcherSrc).not.toMatch(new RegExp(`private\\s+async\\s+${name}\\b`));
     }
+  });
+
+  it.each(["live watcher close"])("%s drains accepted file queues before HNSW publication", () => {
+    expect(drainsAcceptedFilesBeforeHnswFlush(watcherRaw)).toBe(true);
+  });
+
+  it.each(["flush-before-drain mutant"])("close-order detector rejects a %s", () => {
+    const mutant = [
+      "class VaultWatcher {",
+      "  async close(): Promise<void> {",
+      "    await this.flushHnswToDisk();",
+      "    await Promise.allSettled([...this.fileQueues.values()]);",
+      "  }",
+      "}"
+    ].join("\n");
+    expect(drainsAcceptedFilesBeforeHnswFlush(mutant)).toBe(false);
+  });
+
+  it("binds live DB mutation, graph diff, and shared search authority in that exact order", () => {
+    expect(conditionalEmbedMutationOwnsImmediateWriteLock(embedRaw)).toBe(true);
+    expect(watcherPublishesGenerationAfterGraphDiff(watcherRaw, "upsertEmbedAndSyncHnsw")).toBe(true);
+    expect(watcherPublishesGenerationAfterGraphDiff(watcherRaw, "deleteEmbedAndSyncHnsw")).toBe(true);
+    expect(watcherRevalidatesSharedAuthorityAtAttachment(watcherRaw)).toBe(true);
+    expect(serverSharesLiveHnswAuthority(serverRaw)).toBe(true);
+  });
+
+  it("live-generation detectors reject deferred locking, early blessing, and detached server wiring", () => {
+    expect(
+      conditionalEmbedMutationOwnsImmediateWriteLock(
+        embedRaw.replace("return transaction.immediate();", "return transaction();")
+      )
+    ).toBe(false);
+
+    const earlyBlessing = watcherRaw.replace(
+      "hnswResult = this.syncHnswForFile(\n        relPath,",
+      "this.publishCommittedHnswGeneration(committedGeneration);\n      hnswResult = this.syncHnswForFile(\n        relPath,"
+    );
+    expect(earlyBlessing).not.toBe(watcherRaw);
+    expect(watcherPublishesGenerationAfterGraphDiff(earlyBlessing, "upsertEmbedAndSyncHnsw")).toBe(false);
+
+    const uncheckedAttachment = watcherRaw.replace(
+      "!sameEmbedDbGenerationIdentity(sharedGenerationAuthority, currentGeneration)",
+      "false"
+    );
+    expect(uncheckedAttachment).not.toBe(watcherRaw);
+    expect(watcherRevalidatesSharedAuthorityAtAttachment(uncheckedAttachment)).toBe(false);
+
+    const detachedServer = serverRaw.replace(
+      "opts.hnswPersist !== false ? persistFile : undefined,\n                    hnswContext",
+      "opts.hnswPersist !== false ? persistFile : undefined"
+    );
+    expect(detachedServer).not.toBe(serverRaw);
+    expect(serverSharesLiveHnswAuthority(detachedServer)).toBe(false);
   });
 
   it("detector fires on an await inside the critical section so the gate is not vacuous (NEGATIVE control)", () => {

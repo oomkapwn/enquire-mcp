@@ -13,8 +13,8 @@ export interface InitializeToolAvailability {
   writeTools: boolean;
   /** The feedback sidecar/tool is enabled. */
   feedbackTool: boolean;
-  /** Optional exact-name allowlist; an empty set means no allowlist. */
-  enabledTools: ReadonlySet<string>;
+  /** Exact-name allowlist; `null` means unset and an empty set exposes no tools. */
+  enabledTools: ReadonlySet<string> | null;
   /** Optional exact-name denylist. */
   disabledTools: ReadonlySet<string>;
 }
@@ -39,7 +39,7 @@ export interface InitializeToolProfile {
  *   diagnosticSearchTools: false,
  *   writeTools: false,
  *   feedbackTool: false,
- *   enabledTools: new Set(),
+ *   enabledTools: null,
  *   disabledTools: new Set()
  * });
  * ```
@@ -55,14 +55,14 @@ export function resolveInitializeToolProfile(availability: InitializeToolAvailab
       (entry.kind === "write" && availability.writeTools) ||
       (entry.kind === "feedback" && availability.feedbackTool);
     if (!featureEnabled) continue;
-    if (availability.enabledTools.size > 0 && !availability.enabledTools.has(entry.name)) continue;
+    if (availability.enabledTools !== null && !availability.enabledTools.has(entry.name)) continue;
     if (availability.disabledTools.has(entry.name)) continue;
     availableTools.add(entry.name);
   }
 
   return {
     availableTools,
-    toolFiltersActive: availability.enabledTools.size > 0 || availability.disabledTools.size > 0
+    toolFiltersActive: availability.enabledTools !== null || availability.disabledTools.size > 0
   };
 }
 

@@ -18,27 +18,39 @@ const row = (n: number) => ({
 
 describe("zipHnswAddPoints — -1 sentinel-label corruption guard (v3.9.0-rc.11)", () => {
   it("zips matched rows + ids into add-points with the correct ids (POSITIVE)", () => {
-    const points = zipHnswAddPoints([row(1), row(2)], [10, 20]);
+    const canonical = [new Float32Array([0.1, 0.2, 0.3, 0.4]), new Float32Array([0.4, 0.3, 0.2, 0.1])];
+    const points = zipHnswAddPoints([row(1), row(2)], [10, 20], canonical);
     expect(points.map((p) => p.id)).toEqual([10, 20]);
     expect(points[0]?.chunkIndex).toBe(1);
     expect(points[1]?.textPreview).toBe("row 2");
-    expect(points[0]?.vector).toBeInstanceOf(Float32Array);
+    expect(points[0]?.vector).toBe(canonical[0]);
   });
 
   it("handles the empty case", () => {
-    expect(zipHnswAddPoints([], [])).toEqual([]);
+    expect(zipHnswAddPoints([], [], [])).toEqual([]);
   });
 
   it("THROWS on too-few ids instead of inserting a -1 sentinel (NEGATIVE control)", () => {
-    expect(() => zipHnswAddPoints([row(1), row(2)], [10])).toThrow(/sentinel label|refusing/i);
+    expect(() => zipHnswAddPoints([row(1), row(2)], [10], [row(1).vector, row(2).vector])).toThrow(
+      /unbound live update|refusing/i
+    );
   });
 
   it("THROWS on too-many ids (NEGATIVE control)", () => {
-    expect(() => zipHnswAddPoints([row(1)], [10, 20])).toThrow(/sentinel label|refusing/i);
+    expect(() => zipHnswAddPoints([row(1)], [10, 20], [row(1).vector])).toThrow(/unbound live update|refusing/i);
+  });
+
+  it("THROWS when the DB-canonical vector manifest is incomplete", () => {
+    expect(() => zipHnswAddPoints([row(1)], [10], [])).toThrow(/unbound live update|refusing/i);
   });
 
   it("never emits the -1 corrupt sentinel for any matched input", () => {
-    const points = zipHnswAddPoints([row(1), row(2), row(3)], [5, 6, 7]);
+    const rows = [row(1), row(2), row(3)];
+    const points = zipHnswAddPoints(
+      rows,
+      [5, 6, 7],
+      rows.map((entry) => entry.vector)
+    );
     expect(points.every((p) => p.id !== -1)).toBe(true);
     expect(points.map((p) => p.id)).toEqual([5, 6, 7]);
   });

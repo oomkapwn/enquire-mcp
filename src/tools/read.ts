@@ -5,7 +5,7 @@ import { computeStaleness, DEFAULT_STALE_DAYS } from "../staleness.js";
 import { noteHeadings } from "../structure.js";
 import type { FileEntry, Vault } from "../vault.js";
 import { countLineBreaks, splitLines, stripTrailingNewlines } from "../wildcard-match.js";
-import { capScanEntries } from "./limits.js";
+import { listExactScanEntries, MAX_SCAN_NOTES } from "./limits.js";
 import { findBestMatch, normalizeTag, stripMd } from "./meta.js";
 import { sliceSnippet } from "./search.js";
 import { extractFrontmatterTagsLower, resolveTarget } from "./write.js";
@@ -433,6 +433,43 @@ export interface BacklinkHit {
   link_kind: "wikilink" | "embed" | "mixed";
 }
 
+type LinkCandidate = { link: Wikilink; kind: "wikilink" | "embed" };
+
+function orderedLinkCandidates(
+  parsed: Readonly<{ wikilinks: readonly Wikilink[]; embeds: readonly Embed[] }>,
+  includeEmbeds: boolean
+): LinkCandidate[] {
+  const candidates: LinkCandidate[] = [
+    ...parsed.wikilinks.map((link) => ({ link, kind: "wikilink" as const })),
+    ...(includeEmbeds ? parsed.embeds.map((link) => ({ link, kind: "embed" as const })) : [])
+  ];
+  candidates.sort(
+    (left, right) =>
+      (left.link.sourceStart ?? Number.MAX_SAFE_INTEGER) - (right.link.sourceStart ?? Number.MAX_SAFE_INTEGER)
+  );
+  return candidates;
+}
+
+function admittedLinkEvidence(content: string, candidate: LinkCandidate): { start: number; length: number } {
+  const { link, kind } = candidate;
+  const expected = `${kind === "embed" ? "![[" : "[["}${link.raw}]]`;
+  const start = link.sourceStart;
+  const end = link.sourceEnd;
+  if (
+    typeof start !== "number" ||
+    typeof end !== "number" ||
+    !Number.isSafeInteger(start) ||
+    !Number.isSafeInteger(end) ||
+    start < 0 ||
+    end <= start ||
+    end > content.length ||
+    content.slice(start, end) !== expected
+  ) {
+    throw new Error("Parsed wikilink evidence no longer matches its source generation");
+  }
+  return { start, length: end - start };
+}
+
 /**
  * Find every note that links to the target — the "who references this?"
  * query.
@@ -473,10 +510,7 @@ export async function getBacklinks(
   for (const e of all) {
     if (e.absPath === targetAbs) continue;
     const { content, parsed } = await vault.readNote(e.absPath, e.mtimeMs);
-    const linkBag: Array<{ link: Wikilink; kind: "wikilink" | "embed" }> = [
-      ...parsed.wikilinks.map((l) => ({ link: l, kind: "wikilink" as const })),
-      ...(includeEmbeds ? parsed.embeds.map((l) => ({ link: l, kind: "embed" as const })) : [])
-    ];
+    const linkBag = orderedLinkCandidates(parsed, includeEmbeds);
     if (!linkBag.length) continue;
 
     let count = 0;
@@ -488,9 +522,8 @@ export async function getBacklinks(
       count += 1;
       kindFlags[kind] = true;
       if (snippets.length < 2) {
-        const literal = `${(kind === "embed" ? "![[" : "[[") + link.raw}]]`;
-        const idx = content.indexOf(literal);
-        const { snippet } = sliceSnippet(content, idx, literal.length);
+        const evidence = admittedLinkEvidence(content, { link, kind });
+        const { snippet } = sliceSnippet(content, evidence.start, evidence.length);
         if (snippet) snippets.push(snippet);
       }
     }
@@ -604,18 +637,14 @@ export async function getUnresolvedWikilinks(
   for (const e of entries) {
     if (out.length >= limit) break;
     const { content, parsed } = await vault.readNote(e.absPath, e.mtimeMs);
-    const candidates: Array<{ link: Wikilink; kind: "wikilink" | "embed" }> = [
-      ...parsed.wikilinks.map((l) => ({ link: l, kind: "wikilink" as const })),
-      ...(includeEmbeds ? parsed.embeds.map((l) => ({ link: l, kind: "embed" as const })) : [])
-    ];
+    const candidates = orderedLinkCandidates(parsed, includeEmbeds);
     for (const { link, kind } of candidates) {
       if (out.length >= limit) break;
       if (!link.target) continue;
       const match = findBestMatch(all, link.target, e.relPath);
       if (match) continue;
-      const literal = `${(kind === "embed" ? "![[" : "[[") + link.raw}]]`;
-      const idx = content.indexOf(literal);
-      const { snippet, line } = sliceSnippet(content, idx, literal.length);
+      const evidence = admittedLinkEvidence(content, { link, kind });
+      const { snippet, line } = sliceSnippet(content, evidence.start, evidence.length);
       out.push({
         from_path: e.relPath,
         target: link.target,
@@ -690,10 +719,7 @@ export async function getOutboundLinks(
   const entry = await resolveTarget(vault, args);
   const { parsed } = await vault.readNote(entry.absPath, entry.mtimeMs);
   const all = await vault.listMarkdown();
-  const candidates: Array<{ link: Wikilink; kind: "wikilink" | "embed" }> = [
-    ...parsed.wikilinks.map((l) => ({ link: l, kind: "wikilink" as const })),
-    ...(includeEmbeds ? parsed.embeds.map((l) => ({ link: l, kind: "embed" as const })) : [])
-  ];
+  const candidates = orderedLinkCandidates(parsed, includeEmbeds);
   const links: OutboundLink[] = [];
   for (const { link, kind } of candidates) {
     const match = findBestMatch(all, link.target, entry.relPath);
@@ -726,25 +752,58 @@ export async function getOutboundLinks(
 export interface TagSummary {
   /** Normalized tag (lowercased, no leading `#`). */
   tag: string;
-  /** Total occurrences across the vault (frontmatter + inline). Sort key. */
+  /** Number of notes containing the tag. Sort key. */
   count: number;
-  /** Occurrences in YAML `tags:` arrays. */
+  /** Notes where the tag occurs in YAML `tags:`. */
   frontmatter_count: number;
-  /** Occurrences as inline `#tag` in note body. */
+  /** Notes credited to inline `#tag` because YAML did not already contain it. */
   inline_count: number;
+}
+
+const MAX_TAG_DISTINCT = 100_000;
+const MAX_TAG_KEY_UTF8_BYTES = 8 * 1024 * 1024;
+
+interface ListTagLimits {
+  maxNotes: number;
+  maxVisitedEntries: number;
+  maxDistinctTags: number;
+  maxTagKeyUtf8Bytes: number;
+}
+
+function listTagLimits(overrides: Partial<ListTagLimits> | undefined): ListTagLimits {
+  const production: ListTagLimits = {
+    maxNotes: MAX_SCAN_NOTES,
+    maxVisitedEntries: MAX_SCAN_NOTES * 4,
+    maxDistinctTags: MAX_TAG_DISTINCT,
+    maxTagKeyUtf8Bytes: MAX_TAG_KEY_UTF8_BYTES
+  };
+  const out = { ...production };
+  if (!overrides) return out;
+  for (const key of Object.keys(production) as Array<keyof ListTagLimits>) {
+    const value = overrides[key];
+    if (value === undefined) continue;
+    if (!Number.isSafeInteger(value) || value < 1 || value > production[key]) {
+      throw new TypeError(`${key} must be a positive safe integer no greater than the production limit`);
+    }
+    out[key] = value;
+  }
+  return out;
 }
 
 /**
  * Build a tag-frequency dashboard for the vault.
  *
- * Aggregates every tag from both frontmatter (`tags: [foo, bar]`) and
- * inline (`#foo` in body) across all notes. Sorted by count descending,
- * tied by alphabetical. Cheap — single pass with the parser cache.
+ * Aggregates per-note tag presence from frontmatter (`tags: [foo, bar]`) and
+ * inline (`#foo` in body). A note contributes at most once to a tag; when both
+ * sources contain it the note is credited to frontmatter. Sorted by document
+ * frequency descending, tied alphabetically.
  *
  * @param vault - The vault.
  * @param args - All optional. `folder` restricts the scan. `min_count`
  *   filters tags below a threshold (default 1, i.e. include everything).
  *   `limit` defaults to 200.
+ * @param limitOverrides - Test-only stricter resource limits. Values cannot
+ *   raise production ceilings.
  * @returns Sorted {@link TagSummary} array.
  * @throws {VaultPathError} If `folder` resolves outside the vault.
  * @example
@@ -755,19 +814,49 @@ export interface TagSummary {
  */
 export async function listTags(
   vault: Vault,
-  args: { folder?: string; min_count?: number; limit?: number }
+  args: { folder?: string; min_count?: number; limit?: number },
+  limitOverrides?: Partial<ListTagLimits>
 ): Promise<TagSummary[]> {
-  await vault.ensureExists();
   const limit = args.limit ?? 200;
   const minCount = args.min_count ?? 1;
-  const entries = await vault.listMarkdown(args.folder);
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 2_000) {
+    throw new TypeError("listTags limit must be a positive safe integer no greater than 2000");
+  }
+  if (!Number.isSafeInteger(minCount) || minCount < 1) {
+    throw new TypeError("listTags min_count must be a positive safe integer");
+  }
+  const limits = listTagLimits(limitOverrides);
+  await vault.ensureExists();
+  const listing = await vault.listFilesByExtensionsBounded(
+    [".md"],
+    limits.maxNotes,
+    limits.maxVisitedEntries,
+    args.folder
+  );
+  if (!listing.complete) {
+    throw new RangeError(
+      `listTags inventory is incomplete within ${limits.maxNotes} notes / ${limits.maxVisitedEntries} visited entries`
+    );
+  }
   const counts = new Map<string, { count: number; fm: number; inline: number }>();
-  for (const e of entries) {
-    const { parsed } = await vault.readNote(e.absPath, e.mtimeMs);
+  let tagKeyUtf8Bytes = 0;
+  for (const e of listing.entries) {
+    const { parsed } = await vault.readNoteUncached(e.absPath, e.mtimeMs);
     const fmSet = new Set(extractFrontmatterTagsLower(parsed.frontmatter));
     for (const t of parsed.tags) {
       const key = foldTag(t); // v3.11.0-rc.9 (L-TAG-1) — NFC+case fold so accented tag forms count as one
-      const slot = counts.get(key) ?? { count: 0, fm: 0, inline: 0 };
+      let slot = counts.get(key);
+      if (!slot) {
+        if (counts.size >= limits.maxDistinctTags) {
+          throw new RangeError(`listTags exceeds ${limits.maxDistinctTags} distinct tags`);
+        }
+        const keyBytes = Buffer.byteLength(key, "utf8");
+        if (keyBytes > limits.maxTagKeyUtf8Bytes - tagKeyUtf8Bytes) {
+          throw new RangeError(`listTags tag keys exceed ${limits.maxTagKeyUtf8Bytes} aggregate UTF-8 bytes`);
+        }
+        tagKeyUtf8Bytes += keyBytes;
+        slot = { count: 0, fm: 0, inline: 0 };
+      }
       slot.count += 1;
       if (fmSet.has(key)) slot.fm += 1;
       else slot.inline += 1;
@@ -1079,13 +1168,26 @@ export async function chatThreadRead(vault: Vault, args: { note_path: string }):
 //
 // _get is read-only; _set + _delete are write-gated.
 
+interface FullFrontmatterResult {
+  path: string;
+  title: string;
+  frontmatter: Record<string, unknown>;
+}
+
+interface KeyedFrontmatterResult {
+  path: string;
+  title: string;
+  key: string;
+  value: unknown;
+}
+
 /**
  * Read a note's frontmatter — full map, or a single key's value.
  *
  * The read-only counterpart to `frontmatterSet` (write side). Use this
  * before bulk-editing frontmatter so the agent can reason about current
- * state before issuing a write. When `key` is set, the response includes
- * the resolved `value` (which may be `undefined` if the key is absent).
+ * state before issuing a write. When `key` is set, the response contains only
+ * that key/value projection; it does not duplicate the complete map.
  *
  * @remarks Trust boundary — this is an in-process API that trusts its
  * `key` argument's length. The MCP boundary (`obsidian_frontmatter_get` in
@@ -1097,8 +1199,7 @@ export async function chatThreadRead(vault: Vault, args: { note_path: string }):
  * @param vault - The vault to read from.
  * @param args - One of `path` or `title` is required. `key` narrows the
  *   response to a single value.
- * @returns `{ path, frontmatter, value? }` — `value` is only included when
- *   `key` is set.
+ * @returns Full-map or keyed response. A missing keyed value is explicit `null`.
  * @throws {Error} If the target can't be resolved.
  * @example
  * ```ts
@@ -1113,23 +1214,40 @@ export async function chatThreadRead(vault: Vault, args: { note_path: string }):
  * console.log(just.value); // → "draft"
  * ```
  */
+export function frontmatterGet(
+  vault: Vault,
+  args: { path?: string; title?: string; key: string }
+): Promise<KeyedFrontmatterResult>;
+export function frontmatterGet(
+  vault: Vault,
+  args: { path?: string; title?: string; key?: undefined }
+): Promise<FullFrontmatterResult>;
+export function frontmatterGet(
+  vault: Vault,
+  args: { path?: string; title?: string; key?: string }
+): Promise<FullFrontmatterResult | KeyedFrontmatterResult>;
 export async function frontmatterGet(
   vault: Vault,
   args: { path?: string; title?: string; key?: string }
-): Promise<{ path: string; frontmatter: Record<string, unknown>; value?: unknown }> {
+): Promise<FullFrontmatterResult | KeyedFrontmatterResult> {
+  if (args.key !== undefined && args.key.length === 0) {
+    throw new Error("frontmatter_get: `key` must be non-empty when supplied");
+  }
   await vault.ensureExists();
   const target = await resolveTarget(vault, args);
   const note = await vault.readNote(target.absPath, target.mtimeMs);
-  if (args.key) {
+  if (args.key !== undefined) {
+    const found = lookupFoldedKey(note.parsed.frontmatter, args.key).value;
     return {
       path: target.relPath,
-      frontmatter: note.parsed.frontmatter,
+      title: stripMd(target.basename),
+      key: args.key,
       // v3.11.0-rc.10 (H1) — case/NFC-insensitive key resolution (Obsidian property
       // names are case-insensitive); was a raw exact-string `frontmatter[args.key]`.
-      value: lookupFoldedKey(note.parsed.frontmatter, args.key).value
+      value: found ?? null
     };
   }
-  return { path: target.relPath, frontmatter: note.parsed.frontmatter };
+  return { path: target.relPath, title: stripMd(target.basename), frontmatter: note.parsed.frontmatter };
 }
 
 /**
@@ -1145,8 +1263,8 @@ export interface FrontmatterSearchArgs {
   key: string;
   /** Strict equality predicate (JSON.stringify comparison). */
   equals?: unknown;
-  /** Existence predicate — when `true`, matches notes where `key` is present at all. */
-  exists?: boolean;
+  /** Existence predicate — the only admitted spelling is `true`. */
+  exists?: true;
   /** Array-membership predicate. Matches when `frontmatter[key]` is an array containing this value. */
   contains?: unknown;
   /** Restrict scan to a subdirectory (vault-relative). */
@@ -1173,8 +1291,8 @@ export interface FrontmatterSearchArgs {
  * @param vault - The vault to scan.
  * @param args - {@link FrontmatterSearchArgs}. `key` is required and
  *   exactly one of `equals` / `exists` / `contains` must be set.
- * @returns `{ key, total_matches, matches }` — `total_matches` equals
- *   `matches.length` (counts the truncated result, not the full count).
+ * @returns Exact admitted-corpus `total_matches`, bounded returned rows, and an
+ *   explicit truncation receipt.
  * @throws {Error} If `key` is empty or the predicate count is not exactly 1.
  * @throws {VaultPathError} If `folder` resolves outside the vault.
  * @example
@@ -1199,10 +1317,14 @@ export async function frontmatterSearch(
 ): Promise<{
   key: string;
   total_matches: number;
+  returned_count: number;
+  truncated: boolean;
   matches: Array<{ path: string; value: unknown; mtime: string }>;
 }> {
-  await vault.ensureExists();
   if (!args.key) throw new Error("frontmatter_search: `key` is required");
+  if (args.exists !== undefined && args.exists !== true) {
+    throw new Error("frontmatter_search: `exists` must be exactly true when supplied");
+  }
   const predicates = [args.equals !== undefined, args.exists !== undefined, args.contains !== undefined].filter(
     Boolean
   );
@@ -1210,35 +1332,49 @@ export async function frontmatterSearch(
     throw new Error("frontmatter_search: exactly one of `equals` / `exists` / `contains` must be set");
   }
   const limit = args.limit ?? 100;
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1000) {
+    throw new Error("frontmatter_search: `limit` must be a positive safe integer no greater than 1000");
+  }
+  await vault.ensureExists();
   // v3.11.0-rc.21 — hoist the predicate's JSON.stringify OUT of the per-note loop
   // (it is loop-invariant). Pre-rc.21 this re-stringified the (schema-capped) value
   // once per note across the whole vault — an O(notes × valueLen) amplifier.
   const equalsJson = args.equals !== undefined ? JSON.stringify(args.equals) : undefined;
   const containsJson = args.contains !== undefined ? JSON.stringify(args.contains) : undefined;
-  const entries = await vault.listMarkdown(args.folder);
+  const listing = await vault.listFilesByExtensionsBounded([".md"], MAX_SCAN_NOTES, MAX_SCAN_NOTES * 4, args.folder);
+  if (!listing.complete) {
+    throw new Error(
+      `frontmatter_search: vault inventory is incomplete within ${MAX_SCAN_NOTES} notes / ${MAX_SCAN_NOTES * 4} visited entries`
+    );
+  }
   const matches: Array<{ path: string; value: unknown; mtime: string }> = [];
-  for (const e of entries) {
-    if (matches.length >= limit) break;
-    try {
-      const note = await vault.readNote(e.absPath, e.mtimeMs);
-      // v3.11.0-rc.10 (H1) — case/NFC-insensitive key resolution; was exact-string.
-      const value = lookupFoldedKey(note.parsed.frontmatter, args.key).value;
-      let hit = false;
-      if (args.exists === true) hit = value !== undefined;
-      else if (equalsJson !== undefined) hit = JSON.stringify(value) === equalsJson;
-      else if (containsJson !== undefined) {
-        if (Array.isArray(value)) {
-          hit = value.some((v) => JSON.stringify(v) === containsJson);
-        }
+  let totalMatches = 0;
+  for (const e of listing.entries) {
+    const note = await vault.readNote(e.absPath, e.mtimeMs);
+    // v3.11.0-rc.10 (H1) — case/NFC-insensitive key resolution; was exact-string.
+    const value = lookupFoldedKey(note.parsed.frontmatter, args.key).value;
+    let hit = false;
+    if (args.exists === true) hit = value !== undefined;
+    else if (equalsJson !== undefined) hit = JSON.stringify(value) === equalsJson;
+    else if (containsJson !== undefined) {
+      if (Array.isArray(value)) {
+        hit = value.some((v) => JSON.stringify(v) === containsJson);
       }
-      if (hit) {
+    }
+    if (hit) {
+      totalMatches += 1;
+      if (matches.length < limit) {
         matches.push({ path: e.relPath, value, mtime: new Date(e.mtimeMs).toISOString() });
       }
-    } catch {
-      // skip unparseable notes
     }
   }
-  return { key: args.key, total_matches: matches.length, matches };
+  return {
+    key: args.key,
+    total_matches: totalMatches,
+    returned_count: matches.length,
+    truncated: totalMatches > matches.length,
+    matches
+  };
 }
 
 // ─── obsidian_get_note_neighbors (v0.13 graph-aware context) ─────────────────
@@ -1304,12 +1440,10 @@ export async function getNoteNeighbors(
   await vault.ensureExists();
   const cap = args.max_per_bucket ?? 20;
   const target = await resolveTarget(vault, args);
-  // rc.36 F-5 (R-5/AS#5 sibling) — cap the whole-vault scan: getNoteNeighbors
-  // does TWO full-vault readNote passes (inbound backlinks + tag-siblings) and
-  // builds an inbound-count map. Defense-in-depth against a pathological vault
-  // over serve-http; output is a bounded top-K per bucket, so a partial scan on
-  // an absurdly large vault only trims the neighbor tail.
-  const entries = capScanEntries(await vault.listMarkdown(), "obsidian_get_note_neighbors");
+  // The two full-vault passes below build an inbound-count map and tag buckets.
+  // Discover inside the shared hard envelope and refuse an incomplete prefix;
+  // otherwise a path-sort prefix would silently change graph authority.
+  const entries = await listExactScanEntries(vault, undefined, "obsidian_get_note_neighbors");
   const { parsed: targetParsed } = await vault.readNote(target.absPath, target.mtimeMs);
   const targetTagsLower = new Set(targetParsed.tags.map((t) => foldTag(t)));
 

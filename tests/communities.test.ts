@@ -10,7 +10,18 @@ import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { buildWikilinkGraph, computeModularity, detectCommunities, MAX_GRAPH_NODES } from "../src/communities.js";
+import {
+  buildWikilinkGraph,
+  type CommunityResult,
+  computeModularity,
+  detectCommunities,
+  formatCommunityResponse,
+  MAX_COMMUNITY_MEMBER_UTF8_BYTES_PER_COMMUNITY,
+  MAX_COMMUNITY_MEMBERS_PER_COMMUNITY,
+  MAX_COMMUNITY_RESPONSE_MEMBER_UTF8_BYTES,
+  MAX_COMMUNITY_RESPONSE_MEMBERS
+} from "../src/communities.js";
+import { parseNote } from "../src/parser.js";
 import { Vault } from "../src/vault.js";
 
 let dir: string;
@@ -32,6 +43,20 @@ async function vaultWith(notes: Record<string, string>): Promise<Vault> {
   const v = new Vault(dir);
   await v.ensureExists();
   return v;
+}
+
+function fakeGraphVault(
+  entries: Array<{ relPath: string; absPath: string; basename: string; mtimeMs: number }>,
+  bodies: Record<string, string>,
+  complete = true
+): Vault {
+  return {
+    listFilesByExtensionsBounded: async () => ({ entries, visitedEntries: entries.length, complete }),
+    readNoteUncached: async (absPath: string) => {
+      const content = bodies[absPath] ?? "";
+      return { content, parsed: parseNote(content), mtimeMs: 0 };
+    }
+  } as unknown as Vault;
 }
 
 describe("buildWikilinkGraph", () => {
@@ -324,44 +349,168 @@ describe("detectCommunities — convergence + Louvain branches (v3.6.2)", () => 
     expect(cU1).toBe(r.membership.get("U3.md"));
   });
 
-  // v3.9.0-rc.35 (external-audit AS#5 / R-B) — graph build is node-capped so a
-  // pathological/huge vault can't drive unbounded I/O+memory through the
-  // always-registered obsidian_get_communities tool (mirrors find_path R-5).
-  describe("MAX_GRAPH_NODES cap (AS#5)", () => {
-    it("caps the graph at MAX_GRAPH_NODES nodes when the vault exceeds it", async () => {
-      // Stub a vault that reports far more .md files than the cap, without
-      // touching disk (we only need listFilesByExtension + readFile shapes).
-      const N = MAX_GRAPH_NODES + 25;
-      const fakeEntries = Array.from({ length: N }, (_, i) => ({
-        relPath: `n${i}.md`,
-        absPath: `/v/n${i}.md`,
-        basename: `n${i}.md`,
-        mtimeMs: 0
-      }));
-      const stub = {
-        ensureExists: async () => {},
-        listFilesByExtension: async () => fakeEntries,
-        // No wikilinks → trivial bodies; we only assert the node count is bounded.
-        readFile: async () => ""
-      } as unknown as Vault;
-      const graph = await buildWikilinkGraph(stub);
-      expect(graph.nodes.length).toBe(MAX_GRAPH_NODES);
-      expect(graph.nodes.length).toBeLessThan(N);
+  describe("graph resource admission", () => {
+    const twoEntries = [
+      { relPath: "b.md", absPath: "/v/b.md", basename: "b.md", mtimeMs: 0 },
+      { relPath: "a.md", absPath: "/v/a.md", basename: "a.md", mtimeMs: 0 }
+    ];
+
+    it("accepts the exact node boundary and returns deterministic path order", async () => {
+      const graph = await buildWikilinkGraph(fakeGraphVault(twoEntries, {}), { maxNodes: 2 });
+      expect(graph.nodes).toEqual(["a.md", "b.md"]);
     });
 
-    it("(negative control) does NOT truncate a vault below the cap", async () => {
-      const fakeEntries = [
-        { relPath: "a.md", absPath: "/v/a.md", basename: "a.md", mtimeMs: 0 },
-        { relPath: "b.md", absPath: "/v/b.md", basename: "b.md", mtimeMs: 0 }
-      ];
+    it("rejects a cap+1 incomplete walker receipt before reading any note", async () => {
+      let reads = 0;
       const stub = {
-        ensureExists: async () => {},
-        listFilesByExtension: async () => fakeEntries,
-        readFile: async () => ""
+        listFilesByExtensionsBounded: async () => ({ entries: twoEntries, visitedEntries: 3, complete: false }),
+        readNoteUncached: async () => {
+          reads += 1;
+          throw new Error("must not read");
+        }
       } as unknown as Vault;
-      const graph = await buildWikilinkGraph(stub);
-      expect(graph.nodes.length).toBe(2);
+      await expect(buildWikilinkGraph(stub, { maxNodes: 2 })).rejects.toThrow(/complete inventory/);
+      expect(reads).toBe(0);
     });
+
+    it("accepts the aggregate node-path UTF-8 boundary and rejects boundary+1", async () => {
+      await expect(buildWikilinkGraph(fakeGraphVault(twoEntries, {}), { maxNodeUtf8Bytes: 8 })).resolves.toMatchObject({
+        nodes: ["a.md", "b.md"]
+      });
+      await expect(buildWikilinkGraph(fakeGraphVault(twoEntries, {}), { maxNodeUtf8Bytes: 7 })).rejects.toThrow(
+        /node paths exceed/
+      );
+    });
+
+    it("accepts the aggregate source UTF-8 boundary and rejects boundary+1", async () => {
+      const v = await vaultWith({ "A.md": "1234" });
+      await expect(buildWikilinkGraph(v, { maxSourceUtf8Bytes: 4 })).resolves.toMatchObject({ nodes: ["A.md"] });
+      await expect(buildWikilinkGraph(v, { maxSourceUtf8Bytes: 3 })).rejects.toThrow(/sources exceed 3/);
+    });
+
+    it("rejects a dense graph at the distinct-edge cap without a large fixture", async () => {
+      const v = await vaultWith({
+        "A.md": "[[B]] [[C]] [[D]]",
+        "B.md": "",
+        "C.md": "",
+        "D.md": ""
+      });
+      await expect(buildWikilinkGraph(v, { maxEdges: 2 })).rejects.toThrow(/2 distinct undirected edges/);
+      await expect(buildWikilinkGraph(v, { maxEdges: 3 })).resolves.toMatchObject({ totalWeight2m: 6 });
+    });
+
+    it("enforces aggregate wikilink count and target UTF-8 boundaries", async () => {
+      const v = await vaultWith({ "A.md": "[[B]] [[B]]", "B.md": "" });
+      await expect(buildWikilinkGraph(v, { maxLinkOccurrences: 2, maxLinkTargetUtf8Bytes: 2 })).resolves.toMatchObject({
+        totalWeight2m: 4
+      });
+      await expect(buildWikilinkGraph(v, { maxLinkOccurrences: 1 })).rejects.toThrow(/1 wikilink occurrences/);
+      await expect(buildWikilinkGraph(v, { maxLinkTargetUtf8Bytes: 1 })).rejects.toThrow(/targets exceed 1/);
+    });
+
+    it("uses deterministic path order to resolve duplicate basenames", async () => {
+      const entries = [
+        { relPath: "Z/Dup.md", absPath: "/v/Z/Dup.md", basename: "Dup.md", mtimeMs: 0 },
+        { relPath: "Source.md", absPath: "/v/Source.md", basename: "Source.md", mtimeMs: 0 },
+        { relPath: "A/Dup.md", absPath: "/v/A/Dup.md", basename: "Dup.md", mtimeMs: 0 }
+      ];
+      const graph = await buildWikilinkGraph(fakeGraphVault(entries, { "/v/Source.md": "[[Dup]]" }));
+      expect(graph.adjacency.get("Source.md")?.has("A/Dup.md")).toBe(true);
+      expect(graph.adjacency.get("Source.md")?.has("Z/Dup.md")).toBe(false);
+    });
+  });
+});
+
+describe("formatCommunityResponse — bounded single-encoding membership", () => {
+  function resultWith(groups: string[][]): CommunityResult {
+    const membership = new Map<string, number>();
+    const communities = groups.map((members, id) => {
+      for (const member of members) membership.set(member, id);
+      return {
+        id,
+        size: members.length,
+        members,
+        representative: members[0] ?? ""
+      };
+    });
+    return {
+      community_count: communities.length,
+      modularity: 0.25,
+      iterations: 2,
+      converged: true,
+      communities,
+      membership
+    };
+  }
+
+  it("preserves an ordinary small partition exactly without a duplicate membership map", () => {
+    const response = formatCommunityResponse(resultWith([["A.md", "B.md"], ["C.md"]]));
+    expect(response.communities.map((community) => community.members)).toEqual([["A.md", "B.md"], ["C.md"]]);
+    expect(response).toMatchObject({
+      community_count: 2,
+      eligible_community_count: 2,
+      returned_community_count: 2,
+      node_count: 3,
+      eligible_member_count: 3,
+      returned_member_count: 3,
+      communities_truncated: false,
+      members_truncated: false,
+      truncated: false,
+      membership_map_omitted: true
+    });
+    expect("membership" in response).toBe(false);
+  });
+
+  it("reports filter, limit, total, returned, and truncation counts without conflation", () => {
+    const response = formatCommunityResponse(resultWith([["A", "B", "C"], ["D", "E"], ["F"]]), {
+      minSize: 2,
+      limit: 1
+    });
+    expect(response).toMatchObject({
+      community_count: 3,
+      eligible_community_count: 2,
+      returned_community_count: 1,
+      filtered_community_count: 1,
+      node_count: 6,
+      eligible_member_count: 5,
+      returned_member_count: 3,
+      communities_truncated: true,
+      members_truncated: true,
+      truncated: true
+    });
+  });
+
+  it("bounds a giant one-community member list by count and JSON UTF-8 bytes", () => {
+    const longSuffix = "x".repeat(1_024);
+    const members = Array.from(
+      { length: MAX_COMMUNITY_MEMBERS_PER_COMMUNITY + 100 },
+      (_, index) => `${index}-${longSuffix}`
+    );
+    const response = formatCommunityResponse(resultWith([members]));
+    const community = response.communities[0];
+    expect(community?.returned_member_count).toBeLessThanOrEqual(MAX_COMMUNITY_MEMBERS_PER_COMMUNITY);
+    expect(community?.returned_membership_path_utf8_bytes).toBeLessThanOrEqual(
+      MAX_COMMUNITY_MEMBER_UTF8_BYTES_PER_COMMUNITY
+    );
+    expect(community?.members_truncated).toBe(true);
+    expect(response.returned_member_count).toBe(community?.returned_member_count);
+    expect(response.returned_membership_path_utf8_bytes).toBe(community?.returned_membership_path_utf8_bytes);
+    expect(response.truncated).toBe(true);
+    expect(Buffer.byteLength(JSON.stringify(response), "utf8")).toBeLessThan(
+      MAX_COMMUNITY_MEMBER_UTF8_BYTES_PER_COMMUNITY + 64 * 1024
+    );
+  });
+
+  it("enforces the global member count/UTF-8 envelope across communities", () => {
+    const groups = Array.from({ length: 6 }, (_, group) =>
+      Array.from({ length: MAX_COMMUNITY_MEMBERS_PER_COMMUNITY }, (_, index) => `g${group}-m${index}.md`)
+    );
+    const response = formatCommunityResponse(resultWith(groups));
+    expect(response.eligible_member_count).toBe(6 * MAX_COMMUNITY_MEMBERS_PER_COMMUNITY);
+    expect(response.returned_member_count).toBe(MAX_COMMUNITY_RESPONSE_MEMBERS);
+    expect(response.returned_membership_path_utf8_bytes).toBeLessThanOrEqual(MAX_COMMUNITY_RESPONSE_MEMBER_UTF8_BYTES);
+    expect(response.members_truncated).toBe(true);
+    expect(response.truncated).toBe(true);
   });
 });
 

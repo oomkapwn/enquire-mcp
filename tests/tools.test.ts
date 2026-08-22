@@ -2,6 +2,7 @@ import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { textResult } from "../src/mcp-result.js";
 import {
   findSimilar,
   getBacklinks,
@@ -154,6 +155,17 @@ describe("resolveWikilink", () => {
 });
 
 describe("searchText", () => {
+  it("refuses an incomplete bounded vault inventory instead of returning a prefix", async () => {
+    const v = new Vault(root);
+    vi.spyOn(v, "listFilesByExtensionsBounded").mockResolvedValue({
+      entries: [],
+      visitedEntries: 200_001,
+      complete: false
+    });
+
+    await expect(searchText(v, { query: "alpha" })).rejects.toThrow(/exact results require a complete vault inventory/);
+  });
+
   it("finds single-token matches with snippets", async () => {
     const v = new Vault(root);
     const result = await searchText(v, { query: "search-target-phrase" });
@@ -162,6 +174,17 @@ describe("searchText", () => {
     expect(result.matches[0].snippet).toContain("search-target-phrase");
     expect(result.mode).toBe("all");
     expect(result.scanned_notes).toBeGreaterThan(0);
+  });
+
+  it("counts overlapping token occurrences through the one-pass matcher", async () => {
+    const sroot = await fs.mkdtemp(path.join(os.tmpdir(), "obsidian-mcp-overlap-search-"));
+    try {
+      await fs.writeFile(path.join(sroot, "Overlap.md"), "aaaa");
+      const hit = await searchText(new Vault(sroot), { query: "aa", mode: "phrase" });
+      expect(hit.matches[0]?.score).toBe(3);
+    } finally {
+      await fs.rm(sroot, { recursive: true, force: true });
+    }
   });
 
   it("is case-insensitive", async () => {
@@ -591,9 +614,10 @@ describe("validateNoteProposal — anti-slop write linter (v0.12)", () => {
 
   it("flags broken wikilinks with did-you-mean suggestions", async () => {
     const v = new Vault(root);
+    const noHintTarget = "NoPossibleCloseMatchZyxwvu998877";
     const result = await validateNoteProposal(v, {
       path: "Inbox/x.md",
-      content: "Linking to [[Alph]] (typo for Alpha) and [[NonExistent]].\n"
+      content: `Linking to [[Alph]] (typo for Alpha) and [[${noHintTarget}]].\n`
     });
     expect(result.warnings.some((w) => w.kind === "broken-wikilink")).toBe(true);
     const broken = result.wikilinks.filter((w) => w.status === "broken");
@@ -601,27 +625,55 @@ describe("validateNoteProposal — anti-slop write linter (v0.12)", () => {
     const alphTypo = broken.find((w) => w.target === "Alph");
     expect(alphTypo?.suggestions.length ?? 0).toBeGreaterThan(0);
     expect(alphTypo?.suggestions[0]?.toLowerCase()).toContain("alpha");
+    const noHintWarning = result.warnings.find((warning) => warning.message.includes(noHintTarget));
+    expect(noHintWarning).toBeDefined();
+    expect(Object.hasOwn(noHintWarning ?? {}, "suggestion")).toBe(false);
+    expect(() => textResult(result)).not.toThrow();
   });
 
-  it("does NOT re-walk the vault per broken wikilink — listMarkdown count is constant (rc.67 DoS)", async () => {
-    // Pre-rc.67: suggestSimilar did a fresh vault.listMarkdown() per BROKEN link → O(broken×vault)
-    // filesystem-walk amplifier on serve-http. Now validateNoteProposal passes its single listing
-    // into suggestSimilar + memoizes per target, so the listMarkdown count is INDEPENDENT of how
-    // many broken links the (attacker-supplied) body contains.
-    const countFor = async (n: number): Promise<number> => {
+  it("folds suggestion candidates once and shares one budget across distinct broken targets", async () => {
+    const countFor = async (
+      n: number
+    ): Promise<{ basenameReads: number; inventoryCalls: number; suggestionBudgetWarning: boolean }> => {
       const v = new Vault(root);
-      const spy = vi.spyOn(v, "listMarkdown");
+      let basenameReads = 0;
+      const entries: FileEntry[] = Array.from({ length: 1_000 }, (_, index) => {
+        const entry = {
+          absPath: path.join(root, `Synthetic-${index}.md`),
+          relPath: `Synthetic-${index}.md`,
+          mtimeMs: 0,
+          sizeBytes: 0,
+          sourceRevision: `synthetic:${index}`
+        } as FileEntry;
+        Object.defineProperty(entry, "basename", {
+          enumerable: true,
+          get: () => {
+            basenameReads += 1;
+            return `Synthetic-${index}.md`;
+          }
+        });
+        return entry;
+      });
+      const inventory = vi
+        .spyOn(v, "listFilesByExtensionsBounded")
+        .mockResolvedValueOnce({ entries, visitedEntries: entries.length, complete: true })
+        .mockResolvedValueOnce({ entries: [], visitedEntries: 0, complete: true });
       const links = Array.from({ length: n }, (_, i) => `[[NoSuchNote${i}]]`).join(" ");
-      await validateNoteProposal(v, { path: "Inbox/many.md", content: `body ${links}\n` });
-      const calls = spy.mock.calls.length;
-      spy.mockRestore();
-      return calls;
+      const result = await validateNoteProposal(v, { path: "Inbox/many.md", content: `body ${links}\n` });
+      const inventoryCalls = inventory.mock.calls.length;
+      inventory.mockRestore();
+      return {
+        basenameReads,
+        inventoryCalls,
+        suggestionBudgetWarning: result.warnings.some((warning) => warning.kind === "suggestion-budget")
+      };
     };
     const few = await countFor(3);
     const many = await countFor(60);
-    // Constant overhead (the validateNoteProposal listing + listTags' own) — must NOT grow with
-    // broken-link count. Pre-rc.67 `many` would exceed `few` by ~57 (one re-walk per extra link).
-    expect(many).toBe(few);
+    expect(many.inventoryCalls).toBe(few.inventoryCalls);
+    expect(many.basenameReads).toBe(few.basenameReads);
+    expect(few.suggestionBudgetWarning).toBe(false);
+    expect(many.suggestionBudgetWarning).toBe(true);
   });
 
   it("findBestMatch resolves PATH-QUALIFIED targets in O(1), not an O(N) endsWith scan (rc.72 DoS)", () => {

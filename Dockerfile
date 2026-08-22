@@ -29,7 +29,9 @@
 #   npm install -g @oomkapwn/enquire-mcp && enquire-mcp setup --vault /abs/vault
 
 # ---- build stage: compile TypeScript -> dist (no locally compiled native app deps) ----
-FROM node:22-slim AS build
+# Official library/node multi-arch OCI index for the readable `node:22-slim`
+# tag, verified 2026-08-21 through Docker Hub Registry v2 + the Hub Tags API.
+FROM node:22-slim@sha256:d649c27dae7ba0137b3cef5dd75baa422c08dc3d9e3fc0c23dfb172dc3cc6436 AS build
 WORKDIR /app
 # Install ALL deps (incl. optional) but skip lifecycle scripts. The build uses
 # a prebuilt platform-native TypeScript 7 compiler; `--ignore-scripts` avoids
@@ -38,11 +40,16 @@ WORKDIR /app
 # packages so neither the compiler nor those optional packages enter the image.
 COPY package.json package-lock.json ./
 RUN npm ci --ignore-scripts
-COPY . .
+# Closed-world build input. The matching `.dockerignore` admits only these
+# paths into the client context, and the Dockerfile names every source path
+# explicitly so a future secret/config file cannot enter an image layer merely
+# because somebody weakens that context policy.
+COPY tsconfig.json ./
+COPY src ./src
 RUN npm run build && npm prune --omit=dev --omit=optional
 
 # ---- runtime stage: slim image with built dist + prod deps only ----
-FROM node:22-slim AS runtime
+FROM node:22-slim@sha256:d649c27dae7ba0137b3cef5dd75baa422c08dc3d9e3fc0c23dfb172dc3cc6436 AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
 COPY --from=build /app/package.json ./package.json

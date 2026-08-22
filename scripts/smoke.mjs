@@ -550,22 +550,43 @@ async function smokeHttp(vaultPath, binPath) {
   );
   let httpStderr = "";
   let port = 0;
-  const portKnown = new Promise((resolve) => {
+  const startup = new Promise((resolve, reject) => {
+    let settled = false;
+    let timeout;
+    const finish = (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      if (error) reject(error);
+      else resolve();
+    };
     httpProc.stderr.on("data", (d) => {
       const text = d.toString();
       httpStderr += text;
       const m = /bound=http:\/\/[^:]+:(\d+)/.exec(text);
       if (m && !port) {
         port = Number.parseInt(m[1], 10);
-        resolve();
+        finish();
       }
     });
+    httpProc.once("error", (error) => finish(error));
+    // `close`, unlike `exit`, runs after stderr is drained. An early child
+    // failure must therefore surface immediately with its complete diagnostic
+    // instead of being mislabeled as an 8-second startup timeout.
+    httpProc.once("close", (code, signal) => {
+      if (!port) {
+        finish(
+          new Error(
+            `serve-http exited before ready (code=${code === null ? "null" : code}, signal=${signal ?? "none"})`
+          )
+        );
+      }
+    });
+    timeout = setTimeout(() => finish(new Error("serve-http startup timeout")), 8000);
   });
-  // Bound the wait so we don't hang the smoke if startup fails.
-  await Promise.race([
-    portKnown,
-    new Promise((_, rej) => setTimeout(() => rej(new Error("serve-http startup timeout")), 8000))
-  ]).catch((err) => {
+  // Bound the wait, but distinguish a live hung child from a child that already
+  // exited. The latter is a startup failure with actionable stderr, not a timeout.
+  await startup.catch((err) => {
     localFailures.push(err.message);
     console.log(`FAIL  serve-http startup — ${err.message}\n${httpStderr}`);
   });

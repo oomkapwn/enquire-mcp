@@ -264,11 +264,22 @@ describe("runEval (v2.12.0)", () => {
   });
 
   afterAll(async () => {
-    idx?.close();
+    await idx?.closeAndRelease();
     await fs.rm(root, { recursive: true, force: true });
     for (const suffix of ["", "-wal", "-shm"]) {
       await fs.rm(`${dbFile}${suffix}`, { force: true });
     }
+  });
+
+  it.each(["empty cohort"])("rejects an invalid embedding namespace before validating the %s", async () => {
+    await expect(
+      runEval({
+        vault: new Vault(root),
+        queries: [],
+        ftsIndex: idx,
+        embedFile: path.join(root, "unadmitted-index")
+      })
+    ).rejects.toThrowError(new TypeError("Embedding index file must end exactly in '.embed.db'"));
   });
 
   it("rejects a direct empty cohort before retrieval while accepting one query", async () => {

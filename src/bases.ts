@@ -31,9 +31,9 @@ import * as path from "node:path";
 import { load } from "js-yaml";
 import { z } from "zod";
 import { parseFrontmatter } from "./frontmatter.js";
-import { foldName, foldTag, lookupFoldedAny, lookupFoldedKey, nfc } from "./name-fold.js";
+import { foldName, foldTag, lookupFoldedAny, lookupFoldedKey, nfc, nfcLower } from "./name-fold.js";
 import { extractWikilinks, stripCodeAndInline } from "./parser.js";
-import { capScanEntries } from "./tools/limits.js";
+import { MAX_SCAN_NOTES } from "./tools/limits.js";
 import type { Vault } from "./vault.js";
 import { splitLines } from "./wildcard-match.js";
 
@@ -93,7 +93,12 @@ export interface BaseDocument {
 export interface BaseQueryHit {
   path: string;
   title: string;
-  /** Frontmatter keys+values used in matching, for transparency. */
+  /**
+   * Bounded diagnostics for the legacy `tags`/`status`/`type` keys and any
+   * frontmatter keys referenced by the active filter. Ordinary small legacy
+   * containers retain their public shape; complex or oversized values become
+   * short type/size markers rather than being copied into every hit.
+   */
   matched_on: Record<string, unknown>;
 }
 
@@ -127,6 +132,165 @@ export interface BaseQueryResult {
 // was dropped (it hard-bound js-yaml@3's removed `safeLoad`, which pinned the vulnerable
 // js-yaml@3 in the tree — GHSA-h67p-54hq-rp68). Note frontmatter parses via the shared
 // `parseFrontmatter`; `.base` YAML parses via `load` below.
+
+const MAX_BASE_JSON_DEPTH = 64;
+const MAX_BASE_JSON_NODES = 50_000;
+const MAX_BASE_JSON_BYTES = 5 * 1024 * 1024;
+const MAX_BASE_FILES = 10_000;
+const MAX_BASE_LIST_VISITED_ENTRIES = 100_000;
+const MAX_BASE_QUERY_VISITED_ENTRIES = 200_000;
+const MAX_BASE_RESULT_LIMIT = 500;
+const MAX_LISTED_VIEW_NAMES = 100;
+const MAX_LISTED_VIEW_NAME_BYTES = 256;
+const MAX_BASE_FILTER_NODES = 256;
+const MAX_BASE_PREDICATE_BYTES = 4 * 1024;
+const MAX_MATCHED_KEYS = 64;
+const MAX_MATCHED_KEY_BYTES = 256;
+const MAX_MATCHED_STRING_BYTES = 256;
+const MAX_MATCHED_VALUE_DEPTH = 4;
+const MAX_MATCHED_VALUE_NODES = 64;
+const MAX_MATCHED_VALUE_BYTES = 1024;
+const MAX_MATCHED_CONTAINER_ENTRIES = 32;
+const LEGACY_MATCHED_KEYS = ["tags", "status", "type"] as const;
+const LEGACY_MATCHED_FOLDED_KEYS = new Set<string>(LEGACY_MATCHED_KEYS.map((key) => nfcLower(key)));
+
+interface AdmissionFrame {
+  value: unknown;
+  depth: number;
+}
+
+function jsonScalarBytes(value: string | number | boolean | null): number {
+  const encoded = JSON.stringify(value);
+  if (encoded === undefined) throw new TypeError("Bases data contains a non-JSON scalar");
+  return Buffer.byteLength(encoded, "utf8");
+}
+
+/**
+ * Iteratively admit one bounded, acyclic plain-JSON value graph.
+ *
+ * YAML aliases preserve object identity, including cycles. Rejecting every
+ * repeated container identity before recursive Zod/filter/output code sees it
+ * prevents both cycle overflows and alias-amplified output. The byte ledger is
+ * the exact compact-JSON size for admitted shapes (keys, punctuation, and each
+ * scalar occurrence), without calling recursive `JSON.stringify` on the graph.
+ *
+ * @param value - Parsed YAML value to validate in place.
+ * @param label - Stable diagnostic prefix identifying the source surface.
+ * @returns Nothing; throws when the graph is outside the admission envelope.
+ */
+export function assertBoundedBaseJson(value: unknown, label = "Bases data"): void {
+  const stack: AdmissionFrame[] = [{ value, depth: 0 }];
+  const discovered = new WeakSet<object>();
+  if (typeof value === "object" && value !== null) discovered.add(value);
+  let scheduledNodes = 1;
+  let serializedBytes = 0;
+
+  const addBytes = (bytes: number): void => {
+    if (!Number.isSafeInteger(bytes) || bytes < 0 || serializedBytes > MAX_BASE_JSON_BYTES - bytes) {
+      throw new Error(`${label} exceeds the ${MAX_BASE_JSON_BYTES}-byte JSON budget`);
+    }
+    serializedBytes += bytes;
+  };
+  const schedule = (child: unknown, depth: number): void => {
+    scheduledNodes += 1;
+    if (scheduledNodes > MAX_BASE_JSON_NODES) {
+      throw new Error(`${label} exceeds the ${MAX_BASE_JSON_NODES}-node budget`);
+    }
+    if (typeof child === "object" && child !== null) {
+      if (discovered.has(child)) throw new Error(`${label} contains a YAML alias or cycle`);
+      discovered.add(child);
+    }
+    stack.push({ value: child, depth });
+  };
+
+  while (stack.length > 0) {
+    const frame = stack.pop();
+    if (frame === undefined) break;
+    if (frame.depth > MAX_BASE_JSON_DEPTH) {
+      throw new Error(`${label} exceeds the maximum depth of ${MAX_BASE_JSON_DEPTH}`);
+    }
+    const current = frame.value;
+    if (current === null || typeof current === "string" || typeof current === "boolean") {
+      addBytes(jsonScalarBytes(current));
+      continue;
+    }
+    if (typeof current === "number") {
+      if (!Number.isFinite(current)) throw new Error(`${label} contains a non-finite number`);
+      addBytes(jsonScalarBytes(current));
+      continue;
+    }
+    if (typeof current !== "object") throw new Error(`${label} contains a non-JSON value`);
+
+    let prototype: object | null;
+    let ownKeys: (string | symbol)[];
+    try {
+      prototype = Object.getPrototypeOf(current);
+      ownKeys = Reflect.ownKeys(current);
+    } catch {
+      throw new Error(`${label} contains an exotic object`);
+    }
+
+    if (Array.isArray(current)) {
+      if (prototype !== Array.prototype || current.length > MAX_BASE_JSON_NODES) {
+        throw new Error(`${label} contains an exotic or oversized array`);
+      }
+      if (ownKeys.length !== current.length + 1 || !ownKeys.includes("length")) {
+        throw new Error(`${label} contains a sparse or decorated array`);
+      }
+      addBytes(2 + Math.max(0, current.length - 1));
+      for (let index = current.length - 1; index >= 0; index--) {
+        const descriptor = Object.getOwnPropertyDescriptor(current, String(index));
+        if (descriptor === undefined || !("value" in descriptor) || !descriptor.enumerable) {
+          throw new Error(`${label} contains a sparse or accessor-backed array`);
+        }
+        schedule(descriptor.value, frame.depth + 1);
+      }
+      continue;
+    }
+
+    if (prototype !== Object.prototype && prototype !== null) {
+      throw new Error(`${label} contains a non-plain object`);
+    }
+    if (ownKeys.some((key) => typeof key === "symbol")) {
+      throw new Error(`${label} contains a symbol-keyed property`);
+    }
+    const keys = ownKeys as string[];
+    addBytes(2 + Math.max(0, keys.length - 1));
+    for (let index = keys.length - 1; index >= 0; index--) {
+      const key = keys[index];
+      if (key === undefined) continue;
+      const descriptor = Object.getOwnPropertyDescriptor(current, key);
+      if (descriptor === undefined || !("value" in descriptor) || !descriptor.enumerable) {
+        throw new Error(`${label} contains a non-enumerable or accessor-backed property`);
+      }
+      addBytes(jsonScalarBytes(key) + 1);
+      schedule(descriptor.value, frame.depth + 1);
+    }
+  }
+}
+
+function positiveBaseLimit(value: number | undefined, fallback: number, label: string): number {
+  const admitted = value ?? fallback;
+  if (!Number.isSafeInteger(admitted) || admitted < 1 || admitted > MAX_BASE_RESULT_LIMIT) {
+    throw new TypeError(`${label} must be a positive safe integer no greater than ${MAX_BASE_RESULT_LIMIT}`);
+  }
+  return admitted;
+}
+
+function boundedViewNames(views: NonNullable<ParsedBase["views"]>): string[] {
+  const names: string[] = [];
+  const retained = Math.min(views.length, MAX_LISTED_VIEW_NAMES);
+  for (let index = 0; index < retained; index++) {
+    const name = views[index]?.name ?? `<unnamed view ${index}>`;
+    names.push(
+      name.length <= MAX_LISTED_VIEW_NAME_BYTES && Buffer.byteLength(name, "utf8") <= MAX_LISTED_VIEW_NAME_BYTES
+        ? name
+        : `<oversized view ${index} name omitted>`
+    );
+  }
+  if (views.length > retained) names.push(`<${views.length - retained} additional views omitted>`);
+  return names;
+}
 
 /** Schema-validate the parsed YAML. Throws on shapes we don't support. */
 const filterShape: z.ZodType<BaseFilter> = z.lazy(() =>
@@ -164,7 +328,12 @@ export async function parseBase(body: string): Promise<ParsedBase> {
   // semantics). v3.11.0-rc.6: js-yaml@5 THROWS ("expected a document") on an empty/whitespace-only
   // body where v4 returned `undefined`, so guard an empty `.base` to `{}` (empty base = no fields)
   // before loading — preserves the v4 `load(body) ?? {}` contract.
+  if (typeof body !== "string") throw new TypeError("Base body must be a string");
+  if (Buffer.byteLength(body, "utf8") > MAX_BASE_JSON_BYTES) {
+    throw new Error(`Base YAML exceeds the ${MAX_BASE_JSON_BYTES}-byte input budget`);
+  }
   const raw = body.trim() === "" ? {} : ((load(body) as Record<string, unknown> | null) ?? {});
+  assertBoundedBaseJson(raw, "Base YAML");
   const parsed = baseShape.parse(raw);
   return parsed as ParsedBase;
 }
@@ -172,9 +341,20 @@ export async function parseBase(body: string): Promise<ParsedBase> {
 // ─── obsidian_list_bases ───────────────────────────────────────────────────
 
 export async function listBases(vault: Vault, args: { folder?: string; limit?: number }): Promise<BaseSummary[]> {
+  const limit = positiveBaseLimit(args.limit, 100, "listBases limit");
   await vault.ensureExists();
-  const limit = args.limit ?? 100;
-  const all = await vault.listFilesByExtension(".base", args.folder);
+  const listing = await vault.listFilesByExtensionsBounded(
+    [".base"],
+    MAX_BASE_FILES,
+    MAX_BASE_LIST_VISITED_ENTRIES,
+    args.folder
+  );
+  if (!listing.complete) {
+    throw new Error(
+      `obsidian_list_bases requires a complete inventory; bounded walk stopped after ${listing.visitedEntries} entries`
+    );
+  }
+  const all = listing.entries;
   // v3.10.0-rc.76 (full-audit MEDIUM) — sort by mtime DESC BEFORE truncating to `limit`; see
   // media.ts listCanvases. Walk order != mtime order, so truncate-then-sort returned a not-newest
   // subset on vaults with > limit .base files, breaking the documented "newest first" contract.
@@ -190,7 +370,7 @@ export async function listBases(vault: Vault, args: { folder?: string; limit?: n
       size = buf.byteLength;
       const parsed = await parseBase(buf.toString("utf8"));
       viewCount = parsed.views?.length ?? 0;
-      viewNames = parsed.views?.map((v, i) => v.name ?? `<unnamed view ${i}>`) ?? [];
+      viewNames = boundedViewNames(parsed.views ?? []);
     } catch {
       // Malformed base — fall through with 0 counts. Don't poison the listing.
     }
@@ -268,6 +448,93 @@ export interface QueryBaseArgs {
   folder?: string;
 }
 
+const TAGGED_WITH_PATTERN = /^taggedWith\(\s*file\.file\s*,\s*(["'])([^"']+)\1\s*\)$/;
+const LINKS_TO_PATTERN = /^linksTo\(\s*file\.file\s*,\s*(["'])([^"']+)\1\s*\)$/;
+const TAG_EQUALITY_PATTERN = /^tag\s*(==|!=)\s*(["'])([^"']+)\2$/;
+const PATH_OPERATION_PATTERN = /^(?:file\.)?path\s+(startsWith|contains)\s+(["'])([^"']+)\2$/;
+const FILE_NAME_EQUALITY_PATTERN = /^file\.name\s*(==|!=)\s*(["'])([^"']+)\2$/;
+const FRONTMATTER_CONTAINS_PATTERN = /^([A-Za-z_][\w.-]*)\s+contains\s+(["'])([^"']+)\2$/;
+const FRONTMATTER_EQUALITY_PATTERN = /^([A-Za-z_][\w.-]*)\s*(==|!=)\s*(.+)$/;
+
+function referencedFrontmatterKey(raw: string): string | null {
+  const expr = raw.trim();
+  if (
+    expr === "" ||
+    expr === "true" ||
+    expr === "false" ||
+    TAGGED_WITH_PATTERN.test(expr) ||
+    LINKS_TO_PATTERN.test(expr) ||
+    TAG_EQUALITY_PATTERN.test(expr) ||
+    PATH_OPERATION_PATTERN.test(expr) ||
+    FILE_NAME_EQUALITY_PATTERN.test(expr)
+  ) {
+    return null;
+  }
+  return FRONTMATTER_CONTAINS_PATTERN.exec(expr)?.[1] ?? FRONTMATTER_EQUALITY_PATTERN.exec(expr)?.[1] ?? null;
+}
+
+function compileReferencedFrontmatterKeys(filter: BaseFilter | undefined): string[] {
+  if (filter === undefined) return [];
+  const stack: BaseFilter[] = [filter];
+  const byFoldedKey = new Map<string, string>();
+  let filterNodes = 0;
+  while (stack.length > 0) {
+    const current = stack.pop();
+    if (current === undefined) break;
+    filterNodes += 1;
+    if (filterNodes > MAX_BASE_FILTER_NODES) {
+      throw new Error(`Base filter exceeds the ${MAX_BASE_FILTER_NODES}-node evaluation budget`);
+    }
+    if (typeof current === "string") {
+      if (Buffer.byteLength(current, "utf8") > MAX_BASE_PREDICATE_BYTES) {
+        throw new Error(`Base predicate exceeds ${MAX_BASE_PREDICATE_BYTES} UTF-8 bytes`);
+      }
+      const key = referencedFrontmatterKey(current);
+      if (key === null) continue;
+      if (Buffer.byteLength(key, "utf8") > MAX_MATCHED_KEY_BYTES) {
+        throw new Error(`Base filter key exceeds ${MAX_MATCHED_KEY_BYTES} UTF-8 bytes`);
+      }
+      const folded = nfcLower(key);
+      if (!byFoldedKey.has(folded)) {
+        if (byFoldedKey.size >= MAX_MATCHED_KEYS) {
+          throw new Error(`Base filter references more than ${MAX_MATCHED_KEYS} frontmatter keys`);
+        }
+        byFoldedKey.set(folded, key);
+      }
+      continue;
+    }
+    if ("not" in current) {
+      stack.push(current.not);
+      continue;
+    }
+    const children = "and" in current ? current.and : current.or;
+    for (let index = children.length - 1; index >= 0; index--) {
+      const child = children[index];
+      if (child !== undefined) stack.push(child);
+    }
+  }
+  return [...byFoldedKey.values()];
+}
+
+function compareHitPath(left: string, right: string): number {
+  const localized = left.localeCompare(right);
+  if (localized !== 0) return localized;
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+function insertBoundedHit(hits: BaseQueryHit[], hit: BaseQueryHit, limit: number): void {
+  let low = 0;
+  let high = hits.length;
+  while (low < high) {
+    const middle = low + Math.floor((high - low) / 2);
+    const candidate = hits[middle];
+    if (candidate !== undefined && compareHitPath(candidate.path, hit.path) <= 0) low = middle + 1;
+    else high = middle;
+  }
+  hits.splice(low, 0, hit);
+  if (hits.length > limit) hits.pop();
+}
+
 /**
  * Run a base's filter against the vault's markdown notes. Returns a list
  * of matching notes plus any predicates we couldn't evaluate.
@@ -280,8 +547,8 @@ export interface QueryBaseArgs {
  * subset we support.
  */
 export async function queryBase(vault: Vault, args: QueryBaseArgs): Promise<BaseQueryResult> {
+  const limit = positiveBaseLimit(args.limit, 50, "queryBase limit");
   await vault.ensureExists();
-  const limit = args.limit ?? 50;
   const baseDoc = await readBase(vault, { path: args.path });
 
   // Resolve effective filter — global AND view-specific (Obsidian semantics).
@@ -296,32 +563,36 @@ export async function queryBase(vault: Vault, args: QueryBaseArgs): Promise<Base
       effectiveFilter = baseDoc.filters !== undefined ? { and: [baseDoc.filters, view.filters] } : view.filters;
     }
   }
+  const referencedKeys = compileReferencedFrontmatterKeys(effectiveFilter);
 
   // Walk the vault. We use the markdown listing for now; PDFs/canvas are
   // not exposed to base queries (Obsidian itself only queries .md notes).
   //
-  // v3.6.2 HN-1 — walk ALL notes without early break, so `total_matched`
-  // reflects the full count. The `limit` is applied AFTER the walk by
-  // slicing. Memory cost is bounded by the vault's matching subset (worst
-  // case the whole markdown listing × constant per-hit overhead) which is
-  // acceptable: an Obsidian vault that doesn't fit in memory for a single
-  // walk would already break dozens of other code paths in this server.
+  // Walk the complete admitted snapshot so `total_matched` remains exact.
+  // An incomplete bounded receipt is an error: silently returning a prefix
+  // while calling its count `total_matched` would be an integrity failure.
   const matches: BaseQueryHit[] = [];
+  let totalMatched = 0;
   const unevaluated = new Set<string>();
-  // v3.10.0-rc.24 (audit L) — DoS cap. `obsidian_query_base` is always-registered
-  // and bearer-reachable on serve-http, and reads every matched note's full body;
-  // an unbounded whole-vault content scan is a DoS amplifier. `capScanEntries`
-  // bounds it at MAX_SCAN_NOTES (partial + logged on overflow) — the same
-  // defense-in-depth its O(N) sibling `runDql` got in rc.18 (M4). (`limit` is
-  // applied AFTER the walk to keep `total_matched` honest, so it can't bound the
-  // scan itself.)
-  const notes = capScanEntries(await vault.listFilesByExtension(".md", args.folder), "obsidian_query_base");
+  const listing = await vault.listFilesByExtensionsBounded(
+    [".md"],
+    MAX_SCAN_NOTES,
+    MAX_BASE_QUERY_VISITED_ENTRIES,
+    args.folder
+  );
+  if (!listing.complete) {
+    throw new Error(
+      `obsidian_query_base cannot report an exact total; bounded walk stopped after ${listing.visitedEntries} entries`
+    );
+  }
+  const notes = listing.entries;
   for (const e of notes) {
     let fm: Record<string, unknown> = {};
     let body = "";
     try {
       const raw = await vault.readFile(e.absPath);
       const parsed = parseFrontmatter(raw);
+      assertBoundedBaseJson(parsed.data, `Frontmatter in ${e.relPath}`);
       fm = (parsed.data as Record<string, unknown>) ?? {};
       body = parsed.content ?? "";
     } catch {
@@ -363,19 +634,24 @@ export async function queryBase(vault: Vault, args: QueryBaseArgs): Promise<Base
     };
     const matched = effectiveFilter === undefined ? true : evalFilter(effectiveFilter, ctx);
     if (matched) {
-      matches.push({
-        path: e.relPath,
-        title: e.basename.replace(/\.md$/i, ""),
-        matched_on: pickMatchedFm(fm, ["tags", "status", "type"])
-      });
+      totalMatched += 1;
+      const last = matches.at(-1);
+      if (matches.length < limit || (last !== undefined && compareHitPath(e.relPath, last.path) < 0)) {
+        insertBoundedHit(
+          matches,
+          {
+            path: e.relPath,
+            title: e.basename.replace(/\.md$/i, ""),
+            matched_on: matchedFrontmatterDiagnostics(fm, referencedKeys)
+          },
+          limit
+        );
+      }
     }
   }
-  matches.sort((a, b) => a.path.localeCompare(b.path));
   // v3.6.2 HN-1 — `total_matched` is the full count (post-walk); `matches`
   // is the truncated slice. `truncated` is the bit-flag callers should
   // check before assuming `matches.length === total_matched`.
-  const totalMatched = matches.length;
-  const sliced = matches.slice(0, limit);
   return {
     // v3.7.12 H2 — return canonical vault-relative path (the form
     // `readBase` normalized to) so callers can round-trip the result
@@ -383,8 +659,8 @@ export async function queryBase(vault: Vault, args: QueryBaseArgs): Promise<Base
     base_path: baseDoc.path,
     view: effectiveViewName,
     total_matched: totalMatched,
-    truncated: totalMatched > sliced.length,
-    matches: sliced,
+    truncated: totalMatched > matches.length,
+    matches,
     unevaluated_predicates: [...unevaluated]
   };
 }
@@ -521,7 +797,7 @@ function evalPredicate(raw: string, ctx: EvalContext): boolean {
   if (expr === "false") return false;
 
   // taggedWith(file.file, "x")
-  const taggedWith = /^taggedWith\(\s*file\.file\s*,\s*(["'])([^"']+)\1\s*\)$/.exec(expr);
+  const taggedWith = TAGGED_WITH_PATTERN.exec(expr);
   if (taggedWith) {
     const tag = foldTag(taggedWith[2] ?? ""); // v3.11.0-rc.9 (L-TAG-1) — NFC + case fold + strip
     return ctx.tags.includes(tag);
@@ -530,7 +806,7 @@ function evalPredicate(raw: string, ctx: EvalContext): boolean {
   // v3.5.0 — linksTo(file.file, "Target") — outbound wikilink check.
   // Resolution mirrors Obsidian: basename match (case-insensitive),
   // strips .md extension and section/block refs from the target.
-  const linksTo = /^linksTo\(\s*file\.file\s*,\s*(["'])([^"']+)\1\s*\)$/.exec(expr);
+  const linksTo = LINKS_TO_PATTERN.exec(expr);
   if (linksTo) {
     const target = (linksTo[2] ?? "").trim();
     if (!target) return false;
@@ -540,7 +816,7 @@ function evalPredicate(raw: string, ctx: EvalContext): boolean {
   }
 
   // tag == "x" / tag != "x"
-  const tagEq = /^tag\s*(==|!=)\s*(["'])([^"']+)\2$/.exec(expr);
+  const tagEq = TAG_EQUALITY_PATTERN.exec(expr);
   if (tagEq) {
     const op = tagEq[1];
     const tag = foldTag(tagEq[3] ?? ""); // v3.11.0-rc.9 (L-TAG-1) — NFC + case fold + strip
@@ -551,7 +827,7 @@ function evalPredicate(raw: string, ctx: EvalContext): boolean {
   // path startsWith "X" / path contains "X"
   // v3.5.0 — also accept `file.path startsWith` / `file.path contains` as
   // aliases (Obsidian's canonical syntax uses the `file.` prefix).
-  const pathOp = /^(?:file\.)?path\s+(startsWith|contains)\s+(["'])([^"']+)\2$/.exec(expr);
+  const pathOp = PATH_OPERATION_PATTERN.exec(expr);
   if (pathOp) {
     const op = pathOp[1];
     // v3.10.0-rc.73 — NFC-normalize the literal too (ctx.path is already NFC), so an NFD-typed
@@ -562,7 +838,7 @@ function evalPredicate(raw: string, ctx: EvalContext): boolean {
 
   // v3.5.0 — file.name == "X" / file.name != "X". Basename equality
   // (case-insensitive, .md stripped).
-  const fileNameEq = /^file\.name\s*(==|!=)\s*(["'])([^"']+)\2$/.exec(expr);
+  const fileNameEq = FILE_NAME_EQUALITY_PATTERN.exec(expr);
   if (fileNameEq) {
     const op = fileNameEq[1];
     const want = foldName((fileNameEq[3] ?? "").replace(/\.md$/i, ""));
@@ -572,7 +848,7 @@ function evalPredicate(raw: string, ctx: EvalContext): boolean {
   }
 
   // <key> contains "<substr>"  — e.g. `status contains "doing"`
-  const fmContains = /^([A-Za-z_][\w.-]*)\s+contains\s+(["'])([^"']+)\2$/.exec(expr);
+  const fmContains = FRONTMATTER_CONTAINS_PATTERN.exec(expr);
   if (fmContains) {
     const key = fmContains[1] ?? "";
     const needle = fmContains[3] ?? "";
@@ -590,7 +866,7 @@ function evalPredicate(raw: string, ctx: EvalContext): boolean {
 
   // <key> == <value> / <key> != <value>  — value can be quoted string,
   // number, or boolean literal.
-  const fmEq = /^([A-Za-z_][\w.-]*)\s*(==|!=)\s*(.+)$/.exec(expr);
+  const fmEq = FRONTMATTER_EQUALITY_PATTERN.exec(expr);
   if (fmEq) {
     const key = fmEq[1] ?? "";
     const op = fmEq[2];
@@ -676,12 +952,152 @@ function collectTags(fm: Record<string, unknown>, body: string): string[] {
   return [...out];
 }
 
-/** Pick a few well-known frontmatter keys for the `matched_on` summary
- *  (helps callers see WHY a note matched). */
-function pickMatchedFm(fm: Record<string, unknown>, keys: string[]): Record<string, unknown> {
+type BaseMatchScalar = string | number | boolean | null;
+
+interface MatchedProjectionState {
+  seen: WeakSet<object>;
+  nodes: number;
+  bytes: number;
+}
+
+const MATCHED_PROJECTION_OMITTED = Symbol("matched projection omitted");
+
+function addMatchedProjectionBytes(state: MatchedProjectionState, bytes: number): void {
+  if (!Number.isSafeInteger(bytes) || bytes < 0 || state.bytes > MAX_MATCHED_VALUE_BYTES - bytes) {
+    throw MATCHED_PROJECTION_OMITTED;
+  }
+  state.bytes += bytes;
+}
+
+/** Clone a small JSON-like value without retaining aliases to frontmatter. */
+function projectMatchedValue(value: unknown, depth: number, state: MatchedProjectionState): unknown {
+  if (depth > MAX_MATCHED_VALUE_DEPTH) throw MATCHED_PROJECTION_OMITTED;
+  state.nodes += 1;
+  if (state.nodes > MAX_MATCHED_VALUE_NODES) throw MATCHED_PROJECTION_OMITTED;
+
+  if (value === null || typeof value === "boolean") {
+    addMatchedProjectionBytes(state, jsonScalarBytes(value));
+    return value;
+  }
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) throw MATCHED_PROJECTION_OMITTED;
+    addMatchedProjectionBytes(state, jsonScalarBytes(value));
+    return value;
+  }
+  if (typeof value === "string") {
+    if (Buffer.byteLength(value, "utf8") > MAX_MATCHED_STRING_BYTES) throw MATCHED_PROJECTION_OMITTED;
+    addMatchedProjectionBytes(state, jsonScalarBytes(value));
+    return value;
+  }
+  if (typeof value !== "object") throw MATCHED_PROJECTION_OMITTED;
+  if (state.seen.has(value)) throw MATCHED_PROJECTION_OMITTED;
+  state.seen.add(value);
+
+  const prototype = Object.getPrototypeOf(value);
+  const ownKeys = Reflect.ownKeys(value);
+  if (Array.isArray(value)) {
+    if (
+      prototype !== Array.prototype ||
+      value.length > MAX_MATCHED_CONTAINER_ENTRIES ||
+      ownKeys.length !== value.length + 1 ||
+      !ownKeys.includes("length")
+    ) {
+      throw MATCHED_PROJECTION_OMITTED;
+    }
+    addMatchedProjectionBytes(state, 2 + Math.max(0, value.length - 1));
+    const clone: unknown[] = [];
+    for (let index = 0; index < value.length; index++) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+      if (descriptor === undefined || !("value" in descriptor) || !descriptor.enumerable) {
+        throw MATCHED_PROJECTION_OMITTED;
+      }
+      clone.push(projectMatchedValue(descriptor.value, depth + 1, state));
+    }
+    return clone;
+  }
+
+  if (prototype !== Object.prototype && prototype !== null) throw MATCHED_PROJECTION_OMITTED;
+  if (ownKeys.length > MAX_MATCHED_CONTAINER_ENTRIES || ownKeys.some((key) => typeof key === "symbol")) {
+    throw MATCHED_PROJECTION_OMITTED;
+  }
+  const keys = ownKeys as string[];
+  addMatchedProjectionBytes(state, 2 + Math.max(0, keys.length - 1));
+  const clone: Record<string, unknown> = {};
+  for (const key of keys) {
+    if (Buffer.byteLength(key, "utf8") > MAX_MATCHED_KEY_BYTES) throw MATCHED_PROJECTION_OMITTED;
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (descriptor === undefined || !("value" in descriptor) || !descriptor.enumerable) {
+      throw MATCHED_PROJECTION_OMITTED;
+    }
+    addMatchedProjectionBytes(state, jsonScalarBytes(key) + 1);
+    Object.defineProperty(clone, key, {
+      value: projectMatchedValue(descriptor.value, depth + 1, state),
+      enumerable: true,
+      configurable: true,
+      writable: true
+    });
+  }
+  return clone;
+}
+
+function matchedValueDiagnostic(value: unknown): BaseMatchScalar {
+  if (value === null || typeof value === "boolean") return value;
+  if (typeof value === "number") return Number.isFinite(value) ? value : "<non-finite number omitted>";
+  if (typeof value === "string") {
+    if (value.length > MAX_MATCHED_STRING_BYTES) return "<string omitted>";
+    const bytes = Buffer.byteLength(value, "utf8");
+    return bytes <= MAX_MATCHED_STRING_BYTES ? value : "<string omitted>";
+  }
+  if (Array.isArray(value)) return `<array omitted: ${value.length} items>`;
+  if (typeof value === "object") return "<object omitted>";
+  return `<${typeof value} omitted>`;
+}
+
+function boundedLegacyMatchedValue(value: unknown): unknown {
+  if (value === null || typeof value !== "object") return matchedValueDiagnostic(value);
+  try {
+    return projectMatchedValue(value, 0, {
+      seen: new WeakSet<object>(),
+      nodes: 0,
+      bytes: 0
+    });
+  } catch {
+    return matchedValueDiagnostic(value);
+  }
+}
+
+/**
+ * Project the stable legacy diagnostics plus keys referenced by the filter.
+ *
+ * Lookup follows the same case/NFC-folded semantics as evaluation. Legacy keys
+ * retain small JSON-like values through a detached, tightly bounded clone.
+ * Additional filter keys remain scalar-only diagnostics, so referencing a
+ * container cannot turn the response into a repeated frontmatter dump. This
+ * is an inventory, not a claim that every key caused an OR branch to match.
+ */
+function matchedFrontmatterDiagnostics(
+  frontmatter: Record<string, unknown>,
+  referencedKeys: readonly string[]
+): Record<string, unknown> {
+  const diagnosticKeys = new Map<string, string>();
+  for (const key of LEGACY_MATCHED_KEYS) diagnosticKeys.set(nfcLower(key), key);
+  for (const key of referencedKeys) {
+    const folded = nfcLower(key);
+    if (!diagnosticKeys.has(folded)) diagnosticKeys.set(folded, key);
+  }
+
   const out: Record<string, unknown> = {};
-  for (const k of keys) {
-    if (fm[k] !== undefined) out[k] = fm[k];
+  for (const [foldedKey, key] of diagnosticKeys) {
+    const hit = lookupFoldedKey(frontmatter, key);
+    if (!hit.present) continue;
+    Object.defineProperty(out, key, {
+      value: LEGACY_MATCHED_FOLDED_KEYS.has(foldedKey)
+        ? boundedLegacyMatchedValue(hit.value)
+        : matchedValueDiagnostic(hit.value),
+      enumerable: true,
+      configurable: true,
+      writable: true
+    });
   }
   return out;
 }

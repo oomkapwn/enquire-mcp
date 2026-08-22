@@ -7,7 +7,7 @@ Notes for AI coding agents (Cursor, Claude Code, Codex, Aider, Devin, etc.) work
 ## TL;DR
 
 - Production code: `src/*.ts` (TypeScript strict + `noUncheckedIndexedAccess`)
-- Tests: `tests/*.test.ts` (Vitest, 1807+ tests)
+- Tests: `tests/*.test.ts` (Vitest, 2212+ tests)
 - Build: `npm run build` (tsc → `dist/`)
 - Test: `npm test` (full unit + compiled-dist suite; duration is hardware-dependent)
 - Lint: `npm run lint` (biome — must exit 0)
@@ -16,7 +16,7 @@ Notes for AI coding agents (Cursor, Claude Code, Codex, Aider, Devin, etc.) work
 - OIA: `npm run check:oia` (state-driven drift scan — 12 checks)
 - Version sync: `node scripts/check-version-consistency.mjs`
 
-`release.yml` directly enumerates the 12 release-required CI checks listed below, all of which run on every PR. Branch protection currently enforces 7; `docs`, `oia`, `protocol-conformance`, `package-consumer`, and `mcpb-basic` are still required by `release.yml` before publication. The protected `test (22)` context runs exactly Node 22.13.0, the literal `engines.node` floor; its explicit matrix label must not change. The pinned `test-windows` hostile-filesystem and startup-interlock job is an additional named check-run enforced transitively as a blocking prerequisite of `smoke`, so a Windows failure must make `smoke` fail rather than skip. The `package-consumer` context aggregates blocking Linux, Windows, and macOS packed-install lanes; `mcpb-basic` consumes one exact Linux-built bundle on those same three systems. Local checks above must pass before pushing.
+`release.yml` directly enumerates the 13 release-required CI checks listed below, all of which run on every PR. Branch protection now enforces all 13 directly enumerated contexts (live snapshot verified 2026-08-21). The protected `test (22)` context runs exactly Node 22.13.0, the literal `engines.node` floor; its explicit matrix label must not change. The pinned `test-windows` hostile-filesystem and startup-interlock job is an additional named check-run enforced transitively as a blocking prerequisite of `smoke`, so a Windows failure must make `smoke` fail rather than skip. The `package-consumer` context aggregates blocking Linux, Windows, and macOS packed-install lanes; `mcpb-basic` consumes one exact Linux-built bundle on those same three systems. Local checks above must pass before pushing.
 
 ## Architecture (5-minute orientation)
 
@@ -105,7 +105,7 @@ Every flag that BOTH `serve` and `serve-http` accept **must** pull its help text
 
 - Title under 70 chars.
 - Body: ## Summary (bullets) + ## Test plan (markdown checklist).
-- Wait for all 12 release-required CI checks to pass green before merging.
+- Wait for all 13 release-required CI checks to pass green before merging.
 - Create an **annotated tag** on the squash-merge SHA on main (not the pre-merge branch HEAD): `git tag -a vX.Y.Z <squash-merge-SHA> -m vX.Y.Z`. The release preflight rejects lightweight tags.
 
 ## Commands cheat sheet
@@ -147,7 +147,7 @@ node scripts/check-changelog-coverage.mjs
 node scripts/smoke.mjs
 ```
 
-## CI checks (12 direct release gates + transitive Windows; 7 branch-protected)
+## CI checks (13 direct release gates + transitive Windows; all 13 branch-protected)
 
 Directly release-required (all run on PRs; `release.yml` blocks publication unless every listed gate passed on the tagged SHA):
 1. `lint` — biome check
@@ -157,11 +157,12 @@ Directly release-required (all run on PRs; `release.yml` blocks publication unle
 5. `audit` — source + published-consumer dependency audit (prod moderate+, dev high+)
 6. `coverage` — global + per-file branch floors
 7. `version-consistency` — 8-surface version sync
-8. `docs` — TypeDoc generation; release-required but not currently branch-protected
-9. `oia` — state-driven drift scan; release-required but not currently branch-protected
+8. `docs` — TypeDoc generation
+9. `oia` — state-driven drift scan
 10. `protocol-conformance` — Linux + Windows aggregate for official client v2 across modern/legacy stdio and stateless/stateful HTTP
 11. `package-consumer` — aggregate packed-install/type/runtime/privacy gate across Linux, Windows, and macOS
 12. `mcpb-basic` — one Linux-built Basic bundle, logical inventory/SBOM/notices, and official-client verification across Linux, Windows, and macOS
+13. `docker` — image build plus bounded CLI and `tools/list` introspection smoke
 
 Additional unprotected checks:
 - `test-macos` is the only `continue-on-error` advisory job.
@@ -169,10 +170,9 @@ Additional unprotected checks:
 - `protocol-conformance (linux|windows)` are fail-capable matrix legs aggregated by the directly release-required `protocol-conformance` context.
 - `package-consumer (linux|windows|macos)` are fail-capable matrix legs aggregated by the directly release-required `package-consumer` context.
 - `mcpb-basic-package` and `mcpb-basic (linux|windows|macos)` are fail-capable producer/consumer jobs aggregated by the directly release-required `mcpb-basic` context.
-- `docker` (image build + `tools/list` smoke) is fail-capable and can make the CI workflow red, but is not branch-protected.
 - GitHub's default CodeQL setup runs two separate unprotected analyses: `Analyze (actions)` and `Analyze (javascript-typescript)`.
 
-Live branch-protection snapshot (verified 2026-07-23): exactly the first 7 contexts above, `enforce_admins:false`, and 0 required approving reviews.
+Live branch-protection snapshot (verified 2026-08-21): all 13 contexts above, `enforce_admins:false`, and 0 required approving reviews.
 
 ## Do NOT
 

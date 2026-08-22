@@ -132,7 +132,7 @@ async function main() {
         `embeddings unavailable (${(e?.message ?? e).toString().slice(0, 80)}) — measuring FTS-only pack\n`
       );
     }
-    const ctx = { ftsIndex, embedFile: embedReady ? embedFile : "" };
+    const ctx = { ftsIndex, embedFile: embedReady ? embedFile : null };
 
     const rows = [];
     for (const query of QUESTIONS) {

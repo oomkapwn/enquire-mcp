@@ -1,14 +1,15 @@
 import { randomBytes } from "node:crypto";
 import { promises as fs, constants as fsConstants } from "node:fs";
 import * as path from "node:path";
+import { assertEmbedDbFilePath } from "./persistence-path.js";
 
 const ACTIVATION_GUARD_VERSION = 1;
 const ACTIVATION_GUARD_SUFFIX = ".watcher-activation.guard";
 const ACTIVE_CHILD_SUFFIX = ".active";
 const MAX_GUARD_BYTES = 1024;
 const TOKEN_BYTES = 32;
-const TOKEN_PATTERN = /^[0-9a-f]{64}$/;
-const ACTIVE_CHILD_PATTERN = /^([0-9a-f]{64})\.active$/;
+const TOKEN_PATTERN = /^[0-9a-f]{64}(?![\s\S])/;
+const ACTIVE_CHILD_PATTERN = /^([0-9a-f]{64})\.active(?![\s\S])/;
 
 interface ActivationGuardPayload {
   version: typeof ACTIVATION_GUARD_VERSION;
@@ -38,11 +39,14 @@ export interface WatcherActivationGuard {
  *
  * @param embedDbFile - Exact path used to open the embedding database.
  * @returns A deterministic sidecar path unique to that exact database path.
+ * @throws {TypeError} If the path does not end exactly in `.embed.db`; the
+ *   namespace check occurs before guard filesystem I/O.
  * @example
  * watcherActivationGuardPath("/tmp/vault.embed.db");
  * // "/tmp/vault.embed.db.watcher-activation.guard"
  */
 export function watcherActivationGuardPath(embedDbFile: string): string {
+  assertEmbedDbFilePath(embedDbFile);
   return `${embedDbFile}${ACTIVATION_GUARD_SUFFIX}`;
 }
 
@@ -55,7 +59,8 @@ export function watcherActivationGuardPath(embedDbFile: string): string {
  *
  * @param embedDbFile - Exact embedding-database path to check.
  * @returns A promise that resolves only when the derived guard path is absent.
- * @throws When any object exists at the guard path or the path cannot be checked.
+ * @throws {TypeError} If `embedDbFile` is outside the exact `.embed.db` namespace.
+ * @throws {Error} When any object exists at the guard path or the path cannot be checked.
  * @example
  * await assertWatcherActivationGuardClear("/tmp/vault.embed.db");
  */
@@ -84,7 +89,8 @@ export async function assertWatcherActivationGuardClear(embedDbFile: string): Pr
  *
  * @param embedDbFile - Exact embedding-database path from which to derive the guard.
  * @returns The in-memory ownership proof required for release.
- * @throws When any object already occupies the guard path or persistence fails.
+ * @throws {TypeError} If `embedDbFile` is outside the exact `.embed.db` namespace.
+ * @throws {Error} When any object already occupies the guard path or persistence fails.
  * @example
  * const guard = await armWatcherActivationGuard("/tmp/vault.embed.db");
  */
@@ -96,7 +102,6 @@ export async function armWatcherActivationGuard(embedDbFile: string): Promise<Wa
 
   try {
     await fs.mkdir(guardPath, { mode: 0o700 });
-    await fs.chmod(guardPath, 0o700);
     await syncDirectory(path.dirname(guardPath));
   } catch (err) {
     if (errnoCode(err) === "EEXIST") {
@@ -155,7 +160,7 @@ export async function releaseWatcherActivationGuard(guard: WatcherActivationGuar
   await assertExactGuardEntry(guardPath, childName);
 
   const first = await openGuardChild(childPath);
-  let firstStat: import("node:fs").Stats;
+  let firstStat: import("node:fs").BigIntStats;
   try {
     firstStat = await validateGuardChild(first, guard.token);
   } finally {
@@ -211,7 +216,8 @@ export async function releaseWatcherActivationGuard(guard: WatcherActivationGuar
  *
  * @param embedDbFile - Exact embedding-database path owning the guard.
  * @returns `true` when a recoverable guard exists, otherwise `false`.
- * @throws When the guard exists but is unsafe, foreign, inaccessible, or changes during inspection.
+ * @throws {TypeError} If `embedDbFile` is outside the exact `.embed.db` namespace.
+ * @throws {Error} When the guard exists but is unsafe, foreign, inaccessible, or changes during inspection.
  * @example
  * await preflightWatcherActivationGuardRecovery("/tmp/vault.embed.db");
  */
@@ -228,6 +234,8 @@ export async function preflightWatcherActivationGuardRecovery(embedDbFile: strin
  *
  * @param embedDbFile - Exact embedding-database path owning the guard.
  * @returns `true` when a guard directory was removed, otherwise `false`.
+ * @throws {TypeError} If `embedDbFile` is outside the exact `.embed.db` namespace.
+ * @throws {Error} When the guard shape is unsafe or removal cannot complete.
  * @example
  * await clearWatcherActivationGuard("/tmp/vault.embed.db");
  */
@@ -255,9 +263,9 @@ export async function clearWatcherActivationGuard(embedDbFile: string): Promise<
 
 async function inspectRecoverableActivationGuard(embedDbFile: string): Promise<RecoverableActivationGuard | null> {
   const guardPath = watcherActivationGuardPath(embedDbFile);
-  let guardStat: import("node:fs").Stats;
+  let guardStat: import("node:fs").BigIntStats;
   try {
-    guardStat = await fs.lstat(guardPath);
+    guardStat = await fs.lstat(guardPath, { bigint: true });
   } catch (err) {
     if (errnoCode(err) === "ENOENT") return null;
     throw new Error("Unable to inspect watcher activation guard during recovery", { cause: err });
@@ -283,21 +291,21 @@ async function inspectRecoverableActivationGuard(embedDbFile: string): Promise<R
       throw new Error("Refusing to clear watcher activation guard: unexpected directory entry");
     }
     const childPath = path.join(guardPath, entry.name);
-    let childStat: import("node:fs").Stats;
+    let childStat: import("node:fs").BigIntStats;
     try {
-      childStat = await fs.lstat(childPath);
+      childStat = await fs.lstat(childPath, { bigint: true });
     } catch (err) {
       throw new Error("Unable to inspect watcher activation guard child during recovery", { cause: err });
     }
-    if (childStat.isSymbolicLink() || !childStat.isFile() || childStat.size > MAX_GUARD_BYTES) {
+    if (childStat.isSymbolicLink() || !childStat.isFile() || childStat.size > BigInt(MAX_GUARD_BYTES)) {
       throw new Error("Refusing to clear watcher activation guard: unsafe active child");
     }
     childName = entry.name;
   }
 
-  let guardAfter: import("node:fs").Stats;
+  let guardAfter: import("node:fs").BigIntStats;
   try {
-    guardAfter = await fs.lstat(guardPath);
+    guardAfter = await fs.lstat(guardPath, { bigint: true });
   } catch (err) {
     throw new Error("Unable to revalidate watcher activation guard during recovery", { cause: err });
   }
@@ -345,9 +353,9 @@ async function openGuardChild(childPath: string): Promise<import("node:fs/promis
 async function validateGuardChild(
   handle: import("node:fs/promises").FileHandle,
   expectedToken: string
-): Promise<import("node:fs").Stats> {
-  const descriptor = await handle.stat();
-  if (!descriptor.isFile() || descriptor.size > MAX_GUARD_BYTES) {
+): Promise<import("node:fs").BigIntStats> {
+  const descriptor = await handle.stat({ bigint: true });
+  if (!descriptor.isFile() || descriptor.size > BigInt(MAX_GUARD_BYTES)) {
     throw new Error("Refusing to release watcher activation guard: malformed guard payload");
   }
   const buffer = Buffer.alloc(MAX_GUARD_BYTES + 1);
@@ -387,9 +395,9 @@ function parseGuardPayload(raw: string): ActivationGuardPayload {
   return { version: ACTIVATION_GUARD_VERSION, token: record.token };
 }
 
-async function lstatGuard(guardPath: string): Promise<import("node:fs").Stats> {
+async function lstatGuard(guardPath: string): Promise<import("node:fs").BigIntStats> {
   try {
-    return await fs.lstat(guardPath);
+    return await fs.lstat(guardPath, { bigint: true });
   } catch (err) {
     throw new Error("Refusing to release watcher activation guard: guard is missing or inaccessible", { cause: err });
   }
@@ -435,8 +443,8 @@ async function syncParentAfterGuardRemoval(guardPath: string): Promise<void> {
   }
 }
 
-function sameFileIdentity(left: import("node:fs").Stats, right: import("node:fs").Stats): boolean {
-  return left.dev === right.dev && left.ino === right.ino;
+function sameFileIdentity(left: import("node:fs").BigIntStats, right: import("node:fs").BigIntStats): boolean {
+  return left.ino !== 0n && left.dev === right.dev && left.ino === right.ino;
 }
 
 function errnoCode(err: unknown): string | undefined {

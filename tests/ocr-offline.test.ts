@@ -137,9 +137,10 @@ describe("resolveOcrPageRange (v3.9.0-rc.10)", () => {
   it("defaults to the whole document when no range given (POSITIVE)", () => {
     expect(resolveOcrPageRange(undefined, 10)).toEqual([1, 10]);
   });
-  it("clamps an in-bounds range to [1, pageCount]", () => {
+  it("accepts an in-bounds range and clamps only the upper document bound", () => {
     expect(resolveOcrPageRange([2, 5], 10)).toEqual([2, 5]);
-    expect(resolveOcrPageRange([0, 99], 10)).toEqual([1, 10]);
+    expect(resolveOcrPageRange([1, 99], 10)).toEqual([1, 10]);
+    expect(() => resolveOcrPageRange([0, 99], 10)).toThrow(/invalid page range/i);
   });
   it("THROWS on an inverted range instead of silently returning empty (NEGATIVE control)", () => {
     expect(() => resolveOcrPageRange([5, 2], 10)).toThrow(/invalid page range/i);

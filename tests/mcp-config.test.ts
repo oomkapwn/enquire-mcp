@@ -99,6 +99,18 @@ describe("mcp-config — tier flags + serve args", () => {
     expect(buildServeArgs(base)).not.toContain("--exclude-glob");
     expect(buildServeArgs(base)).not.toContain("--read-paths");
   });
+  it("rejects privacy inputs that cannot be represented fail-closed", () => {
+    expect(() => buildPrivacyArgs({ readPaths: [] })).toThrow(
+      new TypeError("Privacy config readPaths must not be an empty allowlist")
+    );
+    expect(() => buildPrivacyArgs({ readPaths: "Public/**" } as never)).toThrow(
+      new TypeError("Privacy config readPaths must be an array of strings")
+    );
+    expect(() => buildPrivacyArgs({ excludeGlobs: ["Private/**", " "] })).toThrow(
+      new TypeError("Privacy config excludeGlobs must not contain an empty pattern")
+    );
+    expect(buildPrivacyArgs({ excludeGlobs: [] })).toEqual([]);
+  });
   it("npxCommandArgs wraps the serve args after the pinned package spec", () => {
     const fallback = { ...base, invocation: undefined };
     const { command, args } = npxCommandArgs(fallback);

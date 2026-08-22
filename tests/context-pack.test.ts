@@ -40,6 +40,20 @@ afterEach(async () => {
 const noIndex = (tmpDir: string) => ({ ftsIndex: null as null, embedFile: path.join(tmpDir, "nonexistent.embed.db") });
 
 describe("contextPack (v3.8.0-rc.8 T-1)", () => {
+  it.each(["empty query"])("rejects an invalid embedding namespace before vault I/O on %s", async () => {
+    let ensureCalls = 0;
+    const vault = {
+      root,
+      ensureExists: async () => {
+        ensureCalls += 1;
+      }
+    } as unknown as Vault;
+    await expect(
+      contextPack(vault, { query: "" }, { ftsIndex: null, embedFile: path.join(root, "unadmitted-index") })
+    ).rejects.toThrowError(new TypeError("Embedding index file must end exactly in '.embed.db'"));
+    expect(ensureCalls).toBe(0);
+  });
+
   it("returns a bundle without the cap marker when content fits within budget", async () => {
     const v = new Vault(root);
     await v.ensureExists();

@@ -2,7 +2,16 @@ import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { compileLike, DqlParseError, MAX_DQL_QUERY_LEN, MAX_LIKE_PATTERN_LEN, parseDql, runDql } from "../src/dql.js";
+import {
+  compileLike,
+  DqlParseError,
+  MAX_DQL_QUERY_LEN,
+  MAX_DQL_ROW_LIMIT,
+  MAX_LIKE_PATTERN_LEN,
+  parseDql,
+  runDql
+} from "../src/dql.js";
+import { textResult } from "../src/mcp-result.js";
 import { dataviewQuery, listTags } from "../src/tools/index.js";
 import { Vault } from "../src/vault.js";
 
@@ -202,6 +211,10 @@ describe("runDql", () => {
     expect(rows[0].status).toBe("active");
     expect(rows[0].priority).toBe(1);
     expect(rows[1].status).toBe("done");
+
+    const missingRows = await runDql(v, parseDql('TABLE status, absent FROM "projects" SORT priority ASC'));
+    expect(missingRows.every((row) => !Object.hasOwn(row, "absent"))).toBe(true);
+    expect(() => textResult({ rows: missingRows })).not.toThrow();
   });
 
   it("respects SORT DESC + LIMIT", async () => {
@@ -302,6 +315,41 @@ describe("listTags", () => {
     const tags = await listTags(v, { min_count: 2 });
     expect(tags.every((t) => t.count >= 2)).toBe(true);
   });
+
+  it("admits the exact distinct-tag/key-byte boundary and rejects one less", async () => {
+    const v = new Vault(root);
+    const exact = await listTags(v, {}, { maxDistinctTags: 3, maxTagKeyUtf8Bytes: 18 });
+    expect(exact.map((tag) => tag.tag).sort()).toEqual(["archive", "idea", "project"]);
+    await expect(listTags(v, {}, { maxDistinctTags: 2, maxTagKeyUtf8Bytes: 18 })).rejects.toThrow(/2 distinct tags/);
+    await expect(listTags(v, {}, { maxDistinctTags: 3, maxTagKeyUtf8Bytes: 17 })).rejects.toThrow(
+      /17 aggregate UTF-8 bytes/
+    );
+  });
+
+  it("refuses an incomplete bounded inventory before reading any note", async () => {
+    let reads = 0;
+    const fake = {
+      ensureExists: async () => undefined,
+      listFilesByExtensionsBounded: async () => ({ entries: [], visitedEntries: 4, complete: false }),
+      readNoteUncached: async () => {
+        reads += 1;
+        throw new Error("unreachable");
+      }
+    } as unknown as Vault;
+    await expect(listTags(fake, {})).rejects.toThrow(/inventory is incomplete/);
+    expect(reads).toBe(0);
+  });
+
+  it("rejects direct numeric drift before touching the vault", async () => {
+    let touched = false;
+    const fake = {
+      ensureExists: async () => {
+        touched = true;
+      }
+    } as unknown as Vault;
+    await expect(listTags(fake, { limit: Number.NaN })).rejects.toThrow(/positive safe integer/);
+    expect(touched).toBe(false);
+  });
 });
 
 describe("runDql — row cap", () => {
@@ -369,14 +417,113 @@ describe("DQL — `!=` on missing fields treats absent as not-equal (audit v0.8 
 
 describe("DQL — LIMIT must be a positive integer (audit v0.7.6 P4)", () => {
   it("rejects non-integer LIMIT", () => {
-    expect(() => parseDql("LIST LIMIT 1.5")).toThrow(/positive integer/);
+    expect(() => parseDql("LIST LIMIT 1.5")).toThrow(/canonical positive decimal/);
   });
-  it("rejects scientific notation that's not integral", () => {
-    expect(() => parseDql("LIST LIMIT 1.5e2")).not.toThrow(); // 150 is integral
-    expect(() => parseDql("LIST LIMIT 1.55e1")).toThrow(/positive integer/); // 15.5
+  it.each(["1e2", "1.5e2", "+1", "01", "0x10", "1001", "9007199254740993"])(
+    "rejects non-canonical or over-cap spelling %s",
+    (spelling) => {
+      expect(() => parseDql(`LIST LIMIT ${spelling}`)).toThrow(/canonical positive decimal|maximum/);
+    }
+  );
+  it("accepts the hard boundary", () => {
+    expect(parseDql(`LIST LIMIT ${MAX_DQL_ROW_LIMIT}`).limit).toBe(MAX_DQL_ROW_LIMIT);
   });
   it("still accepts plain positive integers", () => {
     expect(parseDql("LIST LIMIT 50").limit).toBe(50);
+  });
+});
+
+describe("DQL bounded execution", () => {
+  function fakeVault(frontmatters: Array<Record<string, unknown>>): Vault {
+    const entries = frontmatters.map((_, index) => ({
+      absPath: `/fake/${index}.md`,
+      relPath: `${index}.md`,
+      basename: `${index}.md`,
+      mtimeMs: index + 1
+    }));
+    return {
+      async listFilesByExtensionsBounded() {
+        return { entries, visitedEntries: entries.length, complete: true };
+      },
+      async readNoteUncached(absPath: string) {
+        const index = Number(path.basename(absPath, ".md"));
+        const frontmatter = frontmatters[index] as Record<string, unknown>;
+        return {
+          content: `body-${index}`,
+          mtimeMs: index + 1,
+          parsed: { frontmatter, body: `body-${index}`, bodyStartLine: 1, wikilinks: [], embeds: [], tags: [] }
+        };
+      },
+      async readNote() {
+        throw new Error("DQL must not populate the shared Vault cache");
+      }
+    } as unknown as Vault;
+  }
+
+  it("fails closed before reads when the bounded directory receipt is incomplete", async () => {
+    let reads = 0;
+    const vault = {
+      async listFilesByExtensionsBounded() {
+        return { entries: [], visitedEntries: 200_001, complete: false };
+      },
+      async readNoteUncached() {
+        reads += 1;
+        throw new Error("unreachable");
+      }
+    } as unknown as Vault;
+
+    await expect(runDql(vault, parseDql("LIST LIMIT 1"))).rejects.toThrow(/inventory is incomplete/);
+    expect(reads).toBe(0);
+  });
+
+  it("keeps an exact sorted top-K", async () => {
+    const rows = await runDql(
+      fakeVault([
+        { priority: 1, value: "kept" },
+        { priority: 2, value: "worse" },
+        { priority: 0, value: "best" }
+      ]),
+      parseDql("TABLE value SORT priority ASC LIMIT 2")
+    );
+
+    expect(rows.map((row) => row.value)).toEqual(["best", "kept"]);
+  });
+
+  it("does not project a worse cyclic candidate after top-K is full", async () => {
+    const cycle: Record<string, unknown> = {};
+    cycle.self = cycle;
+    const rows = await runDql(
+      fakeVault([
+        { priority: 1, value: "kept" },
+        { priority: 2, value: cycle }
+      ]),
+      parseDql("TABLE value SORT priority ASC LIMIT 1")
+    );
+
+    expect(rows.map((row) => row.value)).toEqual(["kept"]);
+  });
+
+  it("rejects a cyclic YAML alias when that value would enter the retained response", async () => {
+    const cycle: Record<string, unknown> = {};
+    cycle.self = cycle;
+    await expect(
+      runDql(fakeVault([{ priority: 1, value: cycle }]), parseDql("TABLE value SORT priority ASC LIMIT 1"))
+    ).rejects.toThrow(/alias cycle/);
+  });
+
+  it("validates programmatic limits before touching the vault", async () => {
+    const vault = new Proxy(
+      {},
+      {
+        get() {
+          throw new Error("vault I/O must not start");
+        }
+      }
+    ) as Vault;
+    await expect(runDql(vault, { ...parseDql("LIST"), limit: Number.NaN })).rejects.toThrow(/row limit/);
+    await expect(runDql(vault, parseDql("LIST"), { defaultLimit: Number.POSITIVE_INFINITY })).rejects.toThrow(
+      /defaultLimit/
+    );
   });
 });
 

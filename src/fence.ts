@@ -10,12 +10,10 @@
 // Same class, so the fix is a shared primitive + an inventory invariant, not three edits.
 
 /**
- * Is `line` a BLOCK code-fence delimiter (open or close) that should toggle an
- * `inFence` state machine? A line whose leading `` ``` `` / `~~~` run is CLOSED by
- * another run of the SAME fence char ON THE SAME LINE is a self-contained INLINE span
- * (e.g. `` ```code``` text ``) — NOT a block fence — so it must NOT toggle. This mirrors
- * how the parser's `stripCodeAndInline` consumes an inline span as one unit, keeping every
- * line walker in agreement with the parser.
+ * Is `line` a valid BLOCK code-fence opener when the parser is currently
+ * outside a fence? Backtick info strings may not contain another backtick, so
+ * a line-leading self-contained span such as `` ```code``` text `` is not an
+ * opener. Closing admission is stateful and handled by {@link advanceFence}.
  *
  * Leading whitespace is allowed (CommonMark permits up to 3 spaces of indent). Returns
  * `false` for a plain line, an inline code span (`` `x` ``), or a bare non-fence line.
@@ -31,22 +29,52 @@ export function opensBlockFence(line: string): boolean {
   return blockFenceDelimiter(line) !== null;
 }
 
-/** The fence character (`` ` `` or `~`) if `line` is a BLOCK code-fence delimiter, else null.
- *  A leading run closed by another same-char run on the SAME line is an inline span → null. */
+/** Fence marker character. */
 export type FenceChar = "`" | "~";
-export function blockFenceDelimiter(line: string): FenceChar | null {
-  const m = /^\s*(`{3,}|~{3,})/.exec(line);
-  if (!m?.[1]) return null;
-  const ch: FenceChar = m[1][0] === "~" ? "~" : "`";
-  const rest = line.slice(m.index + m[0].length);
-  // A later run of the SAME fence char on this line closes it inline → an inline span.
-  return rest.includes(ch.repeat(3)) ? null : ch;
+
+/** Exact opening marker required to recognize its matching close. */
+export interface FenceState {
+  char: FenceChar;
+  runLength: number;
+}
+
+function leadingFenceRun(line: string): { char: FenceChar; runLength: number; rest: string } | null {
+  let offset = 0;
+  while (offset < line.length && offset < 3 && line.charCodeAt(offset) === 32) offset += 1;
+  // CommonMark permits at most three literal spaces here. A tab or fourth
+  // leading space is indented code/text, not a fenced-code delimiter.
+  const first = line[offset];
+  if (first !== "`" && first !== "~") return null;
+  let end = offset;
+  while (line[end] === first) end += 1;
+  const runLength = end - offset;
+  if (runLength < 3) return null;
+  return { char: first, runLength, rest: line.slice(end) };
+}
+
+/** Parse a valid fenced-code opener. Backtick info strings cannot contain a backtick. */
+export function blockFenceDelimiter(line: string): FenceState | null {
+  const run = leadingFenceRun(line);
+  if (!run) return null;
+  if (run.char === "`" && run.rest.includes("`")) return null;
+  return { char: run.char, runLength: run.runLength };
+}
+
+function closesFence(line: string, marker: FenceState): boolean {
+  const run = leadingFenceRun(line);
+  if (!run || run.char !== marker.char || run.runLength < marker.runLength) return false;
+  for (let i = 0; i < run.rest.length; i += 1) {
+    const code = run.rest.charCodeAt(i);
+    if (code !== 32 && code !== 9) return false;
+  }
+  return true;
 }
 
 /**
- * Advance a CHAR-AWARE fence state machine by one line. Returns the new open-fence
- * marker (the char that opened the current block, or null when outside) and whether
- * this line is a block-fence DELIMITER (an open, or a CLOSE whose char matches the open).
+ * Advance a char-and-run-length-aware fence state machine by one line. Returns
+ * the exact open marker (or null when outside) and whether this line is a valid
+ * opener/closer. A close must use the same character, a run at least as long as
+ * the opener, and no trailing text beyond spaces/tabs.
  *
  * v3.11.5-rc.5 (meta-audit) — the correct pattern to replace the char-BLIND `inFence =
  * !inFence` toggle: a `` ``` `` line inside a `~~~` block (or vice versa) is LITERAL code,
@@ -57,10 +85,13 @@ export function blockFenceDelimiter(line: string): FenceChar | null {
  * open-questions. Callers: `const s = advanceFence(line, marker); marker = s.marker; if
  * (s.delimiter) {…continue…} if (marker !== null) {…in-fence…}`.
  */
-export function advanceFence(line: string, marker: FenceChar | null): { marker: FenceChar | null; delimiter: boolean } {
-  const d = blockFenceDelimiter(line);
-  if (!d) return { marker, delimiter: false };
-  if (marker === null) return { marker: d, delimiter: true }; // opens a block
-  if (d === marker) return { marker: null, delimiter: true }; // closes it (matching char)
-  return { marker, delimiter: false }; // different-char fence inside a block = literal content
+export function advanceFence(
+  line: string,
+  marker: FenceState | null
+): { marker: FenceState | null; delimiter: boolean } {
+  if (marker !== null) {
+    return closesFence(line, marker) ? { marker: null, delimiter: true } : { marker, delimiter: false };
+  }
+  const opener = blockFenceDelimiter(line);
+  return opener ? { marker: opener, delimiter: true } : { marker: null, delimiter: false };
 }

@@ -18,11 +18,32 @@
 // The default dense path is brute-force cosine. HNSW provides an approximate
 // nearest-neighbor path when corpus-scale measurements justify the index.
 
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
+import { clearHnswPersistedArtifactsWithEraser, preflightHnswPersistedArtifacts } from "./hnsw.js";
 import { optionalDepDetail } from "./optional-dep.js";
+import {
+  acquirePersistenceFamilyLease,
+  acquirePersistenceFamilyLeaseInScopes,
+  type PersistenceFamilyLeaseHandle,
+  type PersistenceFamilyScopes
+} from "./persistence-coordination.js";
+import {
+  PersistenceLeaseDebtCapacityError,
+  PersistenceLeaseError,
+  PersistenceLeaseIntegrityError,
+  PersistenceLeaseOwnershipError,
+  revalidatePersistenceLeaseScope
+} from "./persistence-lease.js";
+import { assertEmbedDbFilePath, embedDbFileStem } from "./persistence-path.js";
 import { EMBED_DB_SCHEMA_VERSION } from "./schema-contract.js";
+import {
+  embedDbPathInSemanticScopes,
+  SEMANTIC_PERSISTENCE_FAMILY_KEY,
+  withSemanticPersistenceEraser
+} from "./semantic-persistence.js";
+import { preflightSqliteArtifactFamily } from "./sensitive-artifact.js";
 import { clearWatcherActivationGuard, preflightWatcherActivationGuardRecovery } from "./watcher-activation-guard.js";
 import { stripTrailingSlashes } from "./wildcard-match.js";
 
@@ -44,6 +65,8 @@ function errnoCode(err: unknown): string | undefined {
 // triggers full rebuild via the bootstrap-schema check).
 // v4 (v3.12.0-rc.19) pins q8 inference weights. Even though the stored BLOB
 // layout is unchanged, every vector must be rebuilt in the new model space.
+// v5 gives every physical EmbedDb generation a cryptographic instance UUID and
+// installs exact table-level mutation triggers that advance one durable epoch.
 
 /** Content-source kind. Mirrors ChunkKind in src/fts5.ts. */
 export type EmbedChunkKind = "md" | "pdf";
@@ -60,11 +83,13 @@ export type EmbedQuantization = "f32" | "int8";
  * @example
  * ```ts
  * const meta: EmbedDbOwnedMeta = {
- *   schema_version: "4",
+ *   schema_version: "5",
  *   vault_root: "/vault",
  *   model_alias: "multilingual",
  *   dim: "384",
- *   quantization: "f32"
+ *   quantization: "f32",
+ *   instance_uuid: "0123456789abcdef0123456789abcdef",
+ *   mutation_epoch: "1"
  * };
  * ```
  */
@@ -79,6 +104,10 @@ export interface EmbedDbOwnedMeta {
   readonly dim: string;
   /** Stored vector encoding; absent only for historical schema versions 1 and 2. */
   readonly quantization?: EmbedQuantization;
+  /** Durable database-generation UUID; present only for the current schema. */
+  readonly instance_uuid?: string;
+  /** Canonical positive safe-integer durable mutation epoch; current schema only. */
+  readonly mutation_epoch?: string;
 }
 
 /**
@@ -171,6 +200,174 @@ export interface EmbedVectorAudit {
   invalid_vectors: number;
 }
 
+/** Metadata for one embedding row admitted into an HNSW generation. */
+export interface HnswPersistenceRow {
+  /** Vault-relative source path. */
+  readonly rel_path: string;
+  /** Zero-based chunk index within the source. */
+  readonly chunk_index: number;
+  /** One-based inclusive source line range start. */
+  readonly line_start: number;
+  /** One-based inclusive source line range end. */
+  readonly line_end: number;
+  /** Bounded persisted preview associated with the vector. */
+  readonly text_preview: string;
+  /** Source kind admitted by the embedding schema. */
+  readonly kind: EmbedChunkKind;
+}
+
+/** Exact SQLite-generation authority used to admit a persisted HNSW graph. */
+export interface HnswPersistenceReceipt {
+  /** Receipt schema version. */
+  readonly version: 3;
+  /** Human-readable composite containing both cryptographic manifests. */
+  readonly signature: string;
+  /** Cryptographic identity of the physical EmbedDb generation. */
+  readonly dbInstanceUuid: string;
+  /** Monotonic durable mutation epoch captured with every other receipt field. */
+  readonly dbMutationEpoch: number;
+  /** Trusted embedding dimension. */
+  readonly dim: number;
+  /** Number of fully admitted, non-quarantined embedding rows. */
+  readonly activeRows: number;
+  /** Largest admitted native label, or zero for an empty snapshot. */
+  readonly maxLabel: number;
+  /** SHA-256 over the ordered live-label manifest. */
+  readonly liveLabelSha256: string;
+  /** SHA-256 over configuration, source receipts, row metadata, and raw vector bytes. */
+  readonly dbPayloadSha256: string;
+}
+
+/** Cheap transactional identity of one physical EmbedDb generation. */
+export interface EmbedDbGenerationIdentity {
+  /** Cryptographic identity rotated whenever the physical database is rebuilt. */
+  readonly dbInstanceUuid: string;
+  /** Monotonic durable epoch advanced by every admitted semantic mutation. */
+  readonly dbMutationEpoch: number;
+}
+
+/**
+ * Result of a mutation admitted against one exact EmbedDb generation.
+ *
+ * A drift result proves that the callback performed no DML. Callers may then
+ * quarantine any derived in-memory graph before applying an authoritative
+ * database-only mutation.
+ */
+export type EmbedConditionalMutationResult<T> =
+  | {
+      /** The expected generation still owned the write lock and committed. */
+      readonly kind: "committed";
+      /** Mutation-specific result captured by the same transaction. */
+      readonly value: T;
+      /** Exact UUID/epoch after every trigger fired and before commit. */
+      readonly committedGeneration: EmbedDbGenerationIdentity;
+    }
+  | {
+      /** Another writer advanced or replaced the physical database first. */
+      readonly kind: "generation-drift";
+      /** Current authority observed under the write lock; never graph authority. */
+      readonly observedGeneration: EmbedDbGenerationIdentity;
+    };
+
+/** One transactionally consistent HNSW receipt and trusted label map. */
+export interface HnswReceiptSnapshot {
+  /** Exact generation receipt. */
+  readonly receipt: HnswPersistenceReceipt;
+  /** Current database-owned metadata keyed by native label. */
+  readonly rowsByLabel: Map<number, HnswPersistenceRow>;
+}
+
+/**
+ * One transactionally consistent persisted-graph load authority.
+ *
+ * @example
+ * ```ts
+ * const snapshot = db.captureHnswLoadSnapshot();
+ * snapshot.vectorsByLabel.get(42);
+ * ```
+ */
+export interface HnswLoadSnapshot extends HnswReceiptSnapshot {
+  /** DB-canonical decoded vectors keyed by the same native labels. */
+  readonly vectorsByLabel: Map<number, Float32Array>;
+}
+
+/** One transactionally consistent HNSW build input. */
+export interface HnswBuildSnapshot extends HnswReceiptSnapshot {
+  /** Admitted vectors and their database labels from the same SQLite snapshot. */
+  readonly vectors: Array<{
+    readonly label: number;
+    readonly vector: Float32Array;
+    readonly rel_path: string;
+    readonly chunk_index: number;
+    readonly line_start: number;
+    readonly line_end: number;
+    readonly text_preview: string;
+    readonly kind: EmbedChunkKind;
+  }>;
+}
+
+/**
+ * A durable embedding generation failed its internal source, row, or vector
+ * integrity contract. Callers must not downgrade this error to partial
+ * semantic results.
+ */
+export class EmbedSnapshotIntegrityError extends Error {
+  /** Create one fail-closed embedding-generation integrity error. */
+  constructor(message: string) {
+    super(message);
+    this.name = "EmbedSnapshotIntegrityError";
+  }
+}
+
+/**
+ * A complete embedding generation cannot be materialized within the bounded
+ * semantic/HNSW snapshot resource envelope.
+ */
+export class EmbedSnapshotCapacityError extends RangeError {
+  /** Create one fail-closed snapshot-capacity error. */
+  constructor(message: string) {
+    super(message);
+    this.name = "EmbedSnapshotCapacityError";
+  }
+}
+
+/** Result of one atomic source replacement in the embedding store. */
+export interface EmbedUpsertResult {
+  /** Native labels retired by the replacement. */
+  oldIds: number[];
+  /** Fresh AUTOINCREMENT labels, in input-row order. */
+  newIds: number[];
+  /**
+   * DB-canonical vectors in the same order as {@link newIds}. For int8
+   * storage these are decoded from the exact quantized BLOB, so a live HNSW
+   * update and a restart rebuild consume identical numeric input.
+   */
+  newVectors: Float32Array[];
+}
+
+/** Compare every authority field of two HNSW persistence receipts. */
+export function sameHnswPersistenceReceipt(left: HnswPersistenceReceipt, right: HnswPersistenceReceipt): boolean {
+  return (
+    left.version === right.version &&
+    left.signature === right.signature &&
+    left.dbInstanceUuid === right.dbInstanceUuid &&
+    left.dbMutationEpoch === right.dbMutationEpoch &&
+    left.dim === right.dim &&
+    left.activeRows === right.activeRows &&
+    left.maxLabel === right.maxLabel &&
+    left.liveLabelSha256 === right.liveLabelSha256 &&
+    left.dbPayloadSha256 === right.dbPayloadSha256
+  );
+}
+
+/** Compare the complete cheap identity of two physical EmbedDb generations. */
+export function sameEmbedDbGenerationIdentity(
+  left: EmbedDbGenerationIdentity,
+  right: EmbedDbGenerationIdentity
+): boolean {
+  return left.dbInstanceUuid === right.dbInstanceUuid && left.dbMutationEpoch === right.dbMutationEpoch;
+}
+
 interface SourceStateRow {
   rel_path: string;
   mtime_ms: number;
@@ -236,7 +433,72 @@ interface Stmt {
 }
 
 const MAX_SOURCE_REVISION = Number.MAX_SAFE_INTEGER;
+const MAX_EMBED_MUTATION_EPOCH = Number.MAX_SAFE_INTEGER;
+const EMBED_INSTANCE_UUID_PATTERN = /^[0-9a-f]{32}$/;
 const MAX_SOURCE_RECEIPT_BATCH = 512;
+const MAX_HNSW_NATIVE_LABEL = 0xffff_ffff;
+const HNSW_RECEIPT_VERSION = 3 as const;
+const HNSW_VECTOR_NORM_SQUARED_MIN = 0.81;
+const HNSW_VECTOR_NORM_SQUARED_MAX = 1.21;
+const MAX_HNSW_SNAPSHOT_ROWS = 250_000;
+const MAX_HNSW_SNAPSHOT_TEXT_BYTES = 64 * 1024 * 1024;
+const MAX_HNSW_SNAPSHOT_PATH_BYTES = 4096;
+const MAX_HNSW_SNAPSHOT_PREVIEW_BYTES = 64 * 1024;
+const MAX_HNSW_COMBINED_WORKING_SET_BYTES = 1024 * 1024 * 1024;
+const HNSW_COMBINED_FIXED_HEADROOM_BYTES = 64 * 1024 * 1024;
+const HNSW_SNAPSHOT_DEFAULT_M = 16;
+const HNSW_SNAPSHOT_NATIVE_PER_ELEMENT_HEADROOM_BYTES = 256;
+const HNSW_SNAPSHOT_METADATA_PER_ROW_BYTES = 512;
+const HNSW_SNAPSHOT_MIN_NATIVE_CAPACITY = 1024;
+const MAX_EMBED_SEARCH_K = 10_000;
+
+function isCanonicalMutationEpoch(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  const epoch = Number(value);
+  return Number.isSafeInteger(epoch) && epoch >= 1 && epoch <= MAX_EMBED_MUTATION_EPOCH && String(epoch) === value;
+}
+
+function assertEmbedDbGenerationIdentity(value: EmbedDbGenerationIdentity): void {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    typeof value.dbInstanceUuid !== "string" ||
+    !EMBED_INSTANCE_UUID_PATTERN.test(value.dbInstanceUuid) ||
+    !Number.isSafeInteger(value.dbMutationEpoch) ||
+    value.dbMutationEpoch < 1 ||
+    value.dbMutationEpoch > MAX_EMBED_MUTATION_EPOCH
+  ) {
+    throw new TypeError("Expected embedding generation must contain a lowercase 128-bit UUID and safe epoch");
+  }
+}
+
+function captureEmbedDbGenerationIdentity(db: Db): EmbedDbGenerationIdentity {
+  const rows = db
+    .prepare("SELECT key, value FROM meta WHERE key IN ('instance_uuid', 'mutation_epoch') ORDER BY key LIMIT 3")
+    .all<{ key: unknown; value: unknown }>();
+  const meta = new Map<string, string>();
+  for (const row of rows) {
+    if (typeof row.key !== "string" || typeof row.value !== "string" || meta.has(row.key)) {
+      throw new EmbedSnapshotIntegrityError("Embedding generation identity is malformed");
+    }
+    meta.set(row.key, row.value);
+  }
+  const dbInstanceUuid = meta.get("instance_uuid");
+  const mutationEpoch = meta.get("mutation_epoch");
+  if (
+    rows.length !== 2 ||
+    dbInstanceUuid === undefined ||
+    !EMBED_INSTANCE_UUID_PATTERN.test(dbInstanceUuid) ||
+    !isCanonicalMutationEpoch(mutationEpoch)
+  ) {
+    throw new EmbedSnapshotIntegrityError("Embedding generation identity is malformed");
+  }
+  return {
+    dbInstanceUuid,
+    dbMutationEpoch: Number(mutationEpoch)
+  };
+}
+
 const SOURCE_REVISION_TRIGGER_DEFINITIONS = [
   {
     name: "embed_source_state_revision_insert",
@@ -316,6 +578,33 @@ const SOURCE_REVISION_TRIGGER_DEFINITIONS = [
   }
 ] as const;
 const SOURCE_REVISION_TRIGGER_NAMES = SOURCE_REVISION_TRIGGER_DEFINITIONS.map(({ name }) => name);
+
+const MUTATION_EPOCH_TABLES = ["embeddings", "source_state", "source_quarantine", "source_revision"] as const;
+const MUTATION_EPOCH_OPERATIONS = ["INSERT", "UPDATE", "DELETE"] as const;
+const MUTATION_EPOCH_TRIGGER_DEFINITIONS = MUTATION_EPOCH_TABLES.flatMap((table) =>
+  MUTATION_EPOCH_OPERATIONS.map((operation) => {
+    const name = `embed_mutation_epoch_${table}_${operation.toLowerCase()}`;
+    return {
+      name,
+      sql: `CREATE TRIGGER ${name}
+        BEFORE ${operation} ON ${table}
+        BEGIN
+          SELECT CASE WHEN NOT EXISTS (
+            SELECT 1
+            FROM meta
+            WHERE key = 'mutation_epoch'
+              AND typeof(value) = 'text'
+              AND value = CAST(CAST(value AS INTEGER) AS TEXT)
+              AND CAST(value AS INTEGER) BETWEEN 1 AND ${MAX_EMBED_MUTATION_EPOCH - 1}
+          ) THEN RAISE(ABORT, 'embedding mutation epoch is invalid or exhausted') END;
+          UPDATE meta
+          SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT)
+          WHERE key = 'mutation_epoch';
+        END`
+    } as const;
+  })
+);
+const MUTATION_EPOCH_TRIGGER_NAMES = MUTATION_EPOCH_TRIGGER_DEFINITIONS.map(({ name }) => name);
 
 const CURRENT_SOURCE_RECEIPT_SQL = `SELECT 1 AS current
   FROM source_state s
@@ -447,9 +736,19 @@ const EMBED_ADMISSION_OBJECT_TYPES = new Map<string, string>([
   ["source_quarantine", "table"],
   ["source_revision", "table"],
   ["embeddings_rel_path", "index"],
-  ...SOURCE_REVISION_TRIGGER_NAMES.map((name) => [name, "trigger"] as const)
+  ...SOURCE_REVISION_TRIGGER_NAMES.map((name) => [name, "trigger"] as const),
+  ...MUTATION_EPOCH_TRIGGER_NAMES.map((name) => [name, "trigger"] as const)
 ]);
-const EMBED_META_KEYS = new Set(["schema_version", "vault_root", "model_alias", "dim", "quantization"]);
+const HISTORICAL_EMBED_DB_SCHEMA_VERSIONS = new Set([1, 2, 3, 4]);
+const EMBED_META_KEYS = new Set([
+  "schema_version",
+  "vault_root",
+  "model_alias",
+  "dim",
+  "quantization",
+  "instance_uuid",
+  "mutation_epoch"
+]);
 
 type EmbedAdmission =
   | { kind: "empty"; signature: "empty" }
@@ -465,7 +764,8 @@ interface EmbedAdmissionColumn {
 
 // Persisted class signatures: v1 is the original markdown-only schema; v2
 // adds `kind`; v3 keeps v2 columns and adds exact quantization metadata; v4
-// keeps the core shape and adds the repairable quarantine/revision ledger.
+// keeps the core shape and adds the repairable quarantine/revision ledger; v5
+// requires the complete ledger plus instance/epoch mutation authority.
 const EMBED_V1_COLUMNS: readonly EmbedAdmissionColumn[] = [
   { name: "id", type: "INTEGER", notnull: 0, pk: 1 },
   { name: "rel_path", type: "TEXT", notnull: 1, pk: 0 },
@@ -634,6 +934,8 @@ function inspectEmbedAdmission(db: Db, expectedVaultRoot: string): EmbedAdmissio
     const storedModelAlias = meta.model_alias;
     const storedDim = meta.dim;
     const storedQuantization = meta.quantization;
+    const storedInstanceUuid = meta.instance_uuid;
+    const storedMutationEpoch = meta.mutation_epoch;
     const schemaVersion = Number(storedSchemaVersion);
     const dim = Number(storedDim);
     if (
@@ -652,6 +954,28 @@ function inspectEmbedAdmission(db: Db, expectedVaultRoot: string): EmbedAdmissio
       (storedQuantization !== undefined && storedQuantization !== "f32" && storedQuantization !== "int8") ||
       (schemaVersion >= 3 && storedQuantization === undefined) ||
       (schemaVersion < 3 && storedQuantization !== undefined)
+    ) {
+      return { kind: "refused", reason: "malformed" };
+    }
+    if (schemaVersion > EMBED_DB_SCHEMA_VERSION) return { kind: "refused", reason: "future" };
+    const currentSchema = schemaVersion === EMBED_DB_SCHEMA_VERSION;
+    if (!currentSchema && !HISTORICAL_EMBED_DB_SCHEMA_VERSIONS.has(schemaVersion)) {
+      return { kind: "refused", reason: "malformed" };
+    }
+    const expectedMetaKeys =
+      schemaVersion < 3
+        ? ["schema_version", "vault_root", "model_alias", "dim"]
+        : currentSchema
+          ? ["schema_version", "vault_root", "model_alias", "dim", "quantization", "instance_uuid", "mutation_epoch"]
+          : ["schema_version", "vault_root", "model_alias", "dim", "quantization"];
+    if (
+      rows.length !== expectedMetaKeys.length ||
+      expectedMetaKeys.some((key) => !Object.hasOwn(meta, key)) ||
+      (!currentSchema && (storedInstanceUuid !== undefined || storedMutationEpoch !== undefined)) ||
+      (currentSchema &&
+        (typeof storedInstanceUuid !== "string" ||
+          !EMBED_INSTANCE_UUID_PATTERN.test(storedInstanceUuid) ||
+          !isCanonicalMutationEpoch(storedMutationEpoch)))
     ) {
       return { kind: "refused", reason: "malformed" };
     }
@@ -681,6 +1005,42 @@ function inspectEmbedAdmission(db: Db, expectedVaultRoot: string): EmbedAdmissio
           normalizeCreateTableSql(objectSql.get("source_revision") ?? "") !==
             normalizeCreateTableSql(SOURCE_REVISION_TABLE_SQL)))
     ) {
+      return { kind: "refused", reason: "malformed" };
+    }
+    const triggerSql = new Map(
+      objects.filter((object) => object.type === "trigger").map((object) => [object.name, object.sql ?? ""])
+    );
+    const hasExactTriggerDefinitions = (definitions: ReadonlyArray<Readonly<{ name: string; sql: string }>>): boolean =>
+      definitions.every(({ name, sql }) => {
+        const storedSql = triggerSql.get(name);
+        return storedSql !== undefined && normalizeSql(storedSql) === normalizeSql(sql);
+      });
+    if (
+      SOURCE_REVISION_TRIGGER_DEFINITIONS.some(({ name }) => objectTypes.has(name)) &&
+      !hasExactTriggerDefinitions(SOURCE_REVISION_TRIGGER_DEFINITIONS)
+    ) {
+      return { kind: "refused", reason: "malformed" };
+    }
+    if (currentSchema) {
+      const requiredCurrentObjects = [
+        "meta",
+        "embeddings",
+        "source_state",
+        "source_quarantine",
+        "source_revision",
+        "embeddings_rel_path",
+        ...SOURCE_REVISION_TRIGGER_NAMES,
+        ...MUTATION_EPOCH_TRIGGER_NAMES
+      ];
+      if (
+        objects.length !== requiredCurrentObjects.length ||
+        requiredCurrentObjects.some((name) => !objectTypes.has(name)) ||
+        !hasExactTriggerDefinitions(SOURCE_REVISION_TRIGGER_DEFINITIONS) ||
+        !hasExactTriggerDefinitions(MUTATION_EPOCH_TRIGGER_DEFINITIONS)
+      ) {
+        return { kind: "refused", reason: "malformed" };
+      }
+    } else if (MUTATION_EPOCH_TRIGGER_NAMES.some((name) => objectTypes.has(name))) {
       return { kind: "refused", reason: "malformed" };
     }
     const relPathIndex = db
@@ -723,14 +1083,15 @@ function inspectEmbedAdmission(db: Db, expectedVaultRoot: string): EmbedAdmissio
     ) {
       return { kind: "refused", reason: "malformed" };
     }
-    if (schemaVersion > EMBED_DB_SCHEMA_VERSION) return { kind: "refused", reason: "future" };
     if (storedRoot !== expectedVaultRoot) return { kind: "refused", reason: "foreign" };
     const ownedMeta: EmbedDbOwnedMeta = {
       schema_version: storedSchemaVersion,
       vault_root: storedRoot,
       model_alias: storedModelAlias,
       dim: storedDim,
-      ...(storedQuantization === undefined ? {} : { quantization: storedQuantization })
+      ...(storedQuantization === undefined ? {} : { quantization: storedQuantization }),
+      ...(storedInstanceUuid === undefined ? {} : { instance_uuid: storedInstanceUuid }),
+      ...(storedMutationEpoch === undefined ? {} : { mutation_epoch: storedMutationEpoch })
     };
     return {
       kind: "owned",
@@ -836,7 +1197,7 @@ function vectorNormSquared(vector: Float32Array): number {
 }
 
 export interface EmbedDbOptions {
-  /** Absolute path to the .embed.db file. */
+  /** Absolute path whose basename ends exactly in `.embed.db`. */
   file: string;
   /** Vault root for cross-vault contamination guard. */
   vaultRoot: string;
@@ -935,12 +1296,20 @@ export function decodeInt8Vector(buf: Buffer, dim: number): Float32Array {
  * await db.open();
  * db.upsertNote(relPath, mtimeMs, chunks);
  * const hits = db.search(queryVec, 10);
- * db.close();
+ * await db.closeAndRelease();
  * ```
  */
 export class EmbedDb {
   private db: Db | null = null;
-  private readonly file: string;
+  private file: string;
+  private persistenceScopes: PersistenceFamilyScopes | null = null;
+  private persistenceLifetime: PersistenceFamilyLeaseHandle | null = null;
+  private persistenceReleasePromise: Promise<void> | null = null;
+  private openAttempt: Promise<void> | null = null;
+  private closeAttempt: Promise<void> | null = null;
+  private closeAttemptFailed = false;
+  private closeRequestToken: object = {};
+  private closeRequested = false;
   private readonly vaultRoot: string;
   private readonly modelAlias: string;
   private readonly dim: number;
@@ -953,13 +1322,15 @@ export class EmbedDb {
    * Create a lazy embedding-index handle after validating all runtime options.
    *
    * @param opts - Database path plus exact vault/model/vector authority tuple.
-   * @throws {TypeError} If a string or quantization option is invalid.
+   * @throws {TypeError} If a string or quantization option is invalid, including
+   *   a file without the exact `.embed.db` suffix.
    * @throws {RangeError} If `dim` is not a positive safe integer.
    */
   constructor(opts: EmbedDbOptions) {
     if (typeof opts.file !== "string" || opts.file.length === 0) {
       throw new TypeError("Embedding index file must be a non-empty string");
     }
+    assertEmbedDbFilePath(opts.file);
     if (typeof opts.vaultRoot !== "string" || opts.vaultRoot.length === 0) {
       throw new TypeError("Embedding index vault root must be a non-empty string");
     }
@@ -981,13 +1352,62 @@ export class EmbedDb {
     this.encodedBytes = this.quantization === "int8" ? this.dim + 8 : this.dim * 4;
   }
 
+  private async acquireSharedPersistenceRole(): Promise<PersistenceFamilyLeaseHandle> {
+    const lease = this.persistenceScopes
+      ? await acquirePersistenceFamilyLeaseInScopes(this.persistenceScopes, { role: "shared" })
+      : await acquirePersistenceFamilyLease({
+          targetPath: this.file,
+          familyKey: SEMANTIC_PERSISTENCE_FAMILY_KEY,
+          role: "shared"
+        });
+    this.persistenceScopes ??= lease.scopes;
+    this.file = embedDbPathInSemanticScopes(this.persistenceScopes);
+    return lease;
+  }
+
+  private releasePersistenceLifetime(): Promise<void> {
+    const lifetime = this.persistenceLifetime;
+    if (!lifetime) return Promise.resolve();
+    if (this.persistenceReleasePromise) return this.persistenceReleasePromise;
+    const attempt = lifetime.release();
+    const tracked = attempt.then(
+      () => {
+        if (this.persistenceLifetime === lifetime) this.persistenceLifetime = null;
+        if (this.persistenceReleasePromise === tracked) this.persistenceReleasePromise = null;
+      },
+      (error: unknown) => {
+        if (this.persistenceReleasePromise === tracked) this.persistenceReleasePromise = null;
+        throw error;
+      }
+    );
+    this.persistenceReleasePromise = tracked;
+    return tracked;
+  }
+
+  private closeDbHandle(): void {
+    const db = this.db;
+    this.db = null;
+    db?.close();
+  }
+
+  private async revalidatePersistenceScopes(): Promise<void> {
+    const scopes = this.persistenceScopes;
+    if (!scopes) throw new Error("EmbedDb persistence scopes are unavailable");
+    await revalidatePersistenceLeaseScope(scopes.namespace);
+    await revalidatePersistenceLeaseScope(scopes.family);
+    this.file = embedDbPathInSemanticScopes(scopes);
+  }
+
   /**
    * Open the SQLite database, verify ownership on the live handle, bootstrap
    * only an admitted schema, then enable WAL and best-effort tighten file permissions.
    * Refusal preserves logical schema and cell/BLOB values. SQLite itself may
    * still take locks, recover/checkpoint an existing journal, or touch physical
    * container/sidecar bytes while opening and closing; this API does not claim
-   * byte-identical DB/WAL/SHM or directory state. Idempotent after success.
+   * byte-identical DB/WAL/SHM or directory state. Before dependency loading and
+   * again immediately before native open, the main, WAL, SHM, and rollback-
+   * journal leaves must be wholly absent or every present leaf must be a singly
+   * linked regular file; orphan sidecars refuse. Idempotent after success.
    *
    * @param expectedDiscovery - Optional readonly preflight result to bind this
    *   mutating open to. No argument preserves the low-level intentional-rebuild
@@ -997,38 +1417,73 @@ export class EmbedDb {
    *   prove same-vault EmbedDb ownership under a supported non-future schema.
    */
   async open(expectedDiscovery?: EmbedDbConfigDiscovery): Promise<void> {
-    if (this.db) return;
-    // Snapshot before the first await so retained/mutable caller objects cannot
-    // change authority while lstat/native loading is in flight.
+    if (this.db && !this.closeRequested) return;
+    if (this.openAttempt && !this.closeRequested && !this.closeAttempt) return this.openAttempt;
+    // A new attempt is now known to be necessary. Snapshot caller-owned
+    // authority before the possible close await so retained objects cannot
+    // mutate while prior resources drain. Idempotent/join fast paths above do
+    // not inspect irrelevant caller input or invoke hostile getters.
     const expected = cloneEmbedDbOpenDiscovery(expectedDiscovery);
-    let fileExisted = true;
-    try {
-      const artifact = await fs.lstat(this.file);
-      if (!artifact.isFile()) throw new Error("not a regular file");
-    } catch (err) {
-      if (errnoCode(err) === "ENOENT") fileExisted = false;
-      else throw new Error("Embedding index could not be inspected");
-    }
-    const Ctor = await loadBetterSqlite();
-    if (!fileExisted) {
-      // Directory preparation is needed only for a new, schema-empty index.
-      // Existing paths reach same-handle admission without any chmod/mkdir.
-      const parentDir = path.dirname(this.file);
-      const parentExisted = await fs
-        .stat(parentDir)
-        .then(() => true)
-        .catch(() => false);
-      await fs.mkdir(parentDir, { recursive: true, mode: 0o700 });
-      if (!parentExisted) {
-        await fs.chmod(parentDir, 0o700).catch(() => {});
+    if (this.closeRequested || this.closeAttempt) {
+      const observedCloseRequest = this.closeRequestToken;
+      await this.finishCloseAndRelease();
+      if (this.closeRequestToken !== observedCloseRequest) {
+        throw new Error("Embedding index reopen was superseded by a later close request");
       }
+      this.closeAttempt = null;
+      this.closeAttemptFailed = false;
+      this.closeRequested = false;
     }
+    if (this.openAttempt) return this.openAttempt;
+    const attempt = this.openOnce(expected);
+    this.openAttempt = attempt;
     try {
-      this.db = new Ctor(this.file) as Db;
-    } catch {
-      throw new Error("Embedding index could not be opened");
+      await attempt;
+    } finally {
+      if (this.openAttempt === attempt) this.openAttempt = null;
     }
+  }
+
+  private async openOnce(expected: EmbedDbConfigDiscovery | null): Promise<void> {
+    // A previous synchronous close may still be releasing (or retrying) its
+    // exact shared marker. Never overlap it with a second lifetime.
+    await this.releasePersistenceLifetime();
+    let lifetime: PersistenceFamilyLeaseHandle;
     try {
+      lifetime = await this.acquireSharedPersistenceRole();
+    } catch (error) {
+      if (error instanceof PersistenceLeaseIntegrityError) {
+        throw new Error("Embedding index artifact family could not be admitted");
+      }
+      throw error;
+    }
+    this.persistenceLifetime = lifetime;
+    try {
+      if (this.closeRequested) {
+        throw new Error("Embedding index close was requested while open was in progress");
+      }
+      let fileExisted: boolean;
+      try {
+        fileExisted = await preflightSqliteArtifactFamily(this.file);
+      } catch {
+        throw new Error("Embedding index artifact family could not be admitted");
+      }
+      const Ctor = await loadBetterSqlite();
+      if (this.closeRequested) {
+        throw new Error("Embedding index close was requested while open was in progress");
+      }
+      if (!fileExisted) {
+        // The coordinated acquisition already created and pinned a missing
+        // parent privately. Retain this check for compatibility with a custom
+        // existing parent while never operating through its lexical alias.
+        await fs.mkdir(path.dirname(this.file), { recursive: true, mode: 0o700 });
+      }
+      try {
+        fileExisted = await preflightSqliteArtifactFamily(this.file);
+        this.db = new Ctor(this.file) as Db;
+      } catch {
+        throw new Error("Embedding index could not be opened");
+      }
       const admission = inspectEmbedAdmission(this.db, this.vaultRoot);
       assertEmbedAdmission(admission);
       assertExpectedEmbedDiscovery(expected, fileExisted, admission);
@@ -1037,26 +1492,34 @@ export class EmbedDb {
       // commit. No refused file receives an Enquire-issued journal/sync mode.
       this.db.pragma("journal_mode = WAL");
       this.db.pragma("synchronous = NORMAL");
-    } catch (e) {
-      // Detach before native close: a close-time exception must neither
-      // replace the original path-free refusal nor leave a stale non-null
-      // handle that turns the next open() into an idempotent no-op.
-      const failedDb = this.db;
-      this.db = null;
-      try {
-        failedDb?.close();
-      } catch {
-        // Preserve the original admission/bootstrap/pragma error.
+      await Promise.all(
+        [this.file, `${this.file}-wal`, `${this.file}-shm`].map((p) => fs.chmod(p, 0o600).catch(() => {}))
+      );
+      if (this.closeRequested) {
+        throw new Error("Embedding index close was requested while open was in progress");
       }
-      throw e;
+    } catch (error) {
+      const rollbackErrors: unknown[] = [error];
+      try {
+        this.closeDbHandle();
+      } catch {
+        // Preserve the original path-free admission/open error. Native close
+        // may report after the handle has already become unusable.
+      }
+      try {
+        await this.releasePersistenceLifetime();
+      } catch (releaseError) {
+        rollbackErrors.push(releaseError);
+      }
+      if (rollbackErrors.length > 1) {
+        throw new AggregateError(rollbackErrors, "Embedding index open failed and coordinated rollback was incomplete");
+      }
+      throw error;
     }
-    await Promise.all(
-      [this.file, `${this.file}-wal`, `${this.file}-shm`].map((p) => fs.chmod(p, 0o600).catch(() => {}))
-    );
   }
 
   /**
-   * Remove the embed db + WAL/SHM sidecars, HNSW persistence sidecars, and the
+   * Remove the embed db + WAL/SHM/rollback-journal sidecars, HNSW persistence sidecars, and the
    * process-restart watcher interlock (`<embed-db>.watcher-activation.guard`).
    * The guard contains no vault content, but `clear-embeddings` is the explicit
    * recovery operation after a failed startup and therefore owns its removal.
@@ -1064,51 +1527,191 @@ export class EmbedDb {
    *
    * v3.9.0-rc.34 (deep-audit P-2) — the HNSW sidecars were previously NOT
    * removed by `clear-embeddings`, so a `--use-hnsw` user's vault content
-   * persisted on disk after "clearing" — and the `.hnsw.meta.json` carries
-   * `text_preview` (raw chunk text), so this was a right-to-erasure / data-
-   * cleanup gap, not just stale-index hygiene. Now the single file-deletion
-   * authority for an embed-db also erases its HNSW companions.
+   * persisted on disk after "clearing" — and the historical format-2
+   * `.hnsw.meta.json` carried `text_preview` (raw chunk text), so this was a
+   * right-to-erasure / data-cleanup gap, not just stale-index hygiene. Current
+   * compact pointers omit previews, but native vector generations remain
+   * sensitive and the same erasure authority still owns the whole family.
    */
   async clearOnDisk(): Promise<boolean> {
-    this.close();
-    let removed = false;
-    // Validate any stranded interlock BEFORE deleting the first artifact.
-    // Foreign files/symlinks/special objects and unexpected directory entries
-    // therefore fail closed without turning recovery into an unnecessary
-    // partial erase. The guard is validated again and removed last below.
-    await preflightWatcherActivationGuardRecovery(this.file);
-    // v3.10.0-rc.20 (audit M7) — derive the HNSW persist base via the SHARED
-    // `hnswPersistBase` helper (same one server.ts's writer uses), so the eraser
-    // and the writer can never drift. The index writes `<base>.bin` + the
-    // metadata writes `<base>.meta.json` (sidecars carry raw text_preview).
-    const hnswBase = hnswPersistBase(this.file);
-    const targets = [this.file, `${this.file}-wal`, `${this.file}-shm`, `${hnswBase}.bin`, `${hnswBase}.meta.json`];
-    for (const p of targets) {
-      try {
-        await fs.unlink(p);
-        removed = true;
-      } catch (err) {
-        if (errnoCode(err) !== "ENOENT") {
-          // Recovery must never report success while a permission/type/race
-          // error leaves a derived-data sidecar behind.
-          throw new Error(`Unable to remove embedding-index artifact: ${path.basename(p)}`, { cause: err });
+    // An instance must never deadlock against its own shared lifetime. Await
+    // the exact retryable release before requesting the exclusive family role.
+    await this.closeAndRelease();
+    return withSemanticPersistenceEraser(this.file, this.persistenceScopes ?? undefined, async (eraserCapability) => {
+      this.persistenceScopes ??= eraserCapability.scopes;
+      this.file = embedDbPathInSemanticScopes(this.persistenceScopes);
+      let removed = false;
+      await this.revalidatePersistenceScopes();
+      // Validate any stranded interlock BEFORE deleting the first artifact.
+      // Foreign files/symlinks/special objects and unexpected directory entries
+      // therefore fail closed without turning recovery into an unnecessary
+      // partial erase. The guard is validated again and removed last below.
+      await preflightWatcherActivationGuardRecovery(this.file);
+      // v3.10.0-rc.20 (audit M7) — derive the HNSW persist base via the SHARED
+      // `hnswPersistBase` helper (same one server.ts's writer uses), then delegate
+      // the complete legacy/generation/temp family to the HNSW eraser.
+      const hnswBase = hnswPersistBase(this.file);
+      await preflightHnswPersistedArtifacts(hnswBase);
+      const targets = [this.file, `${this.file}-wal`, `${this.file}-shm`, `${this.file}-journal`];
+      for (const target of targets) {
+        let entry: import("node:fs").Stats;
+        try {
+          entry = await fs.lstat(target);
+        } catch (err) {
+          if (errnoCode(err) === "ENOENT") continue;
+          throw new Error("Unable to inspect embedding-index artifacts before clearing", { cause: err });
+        }
+        if (!entry.isFile() && !entry.isSymbolicLink()) {
+          throw new Error("Refusing to clear an unsafe embedding-index artifact");
         }
       }
-    }
-    // Remove the guard LAST. If any derived artifact could not be removed, the
-    // still-present guard keeps the next serve fail-closed. The helper accepts
-    // only its narrow directory shape and never recursively deletes content.
-    removed = (await clearWatcherActivationGuard(this.file)) || removed;
-    return removed;
+      await this.revalidatePersistenceScopes();
+      for (const p of targets) {
+        try {
+          await fs.unlink(p);
+          removed = true;
+        } catch (err) {
+          if (errnoCode(err) !== "ENOENT") {
+            // Recovery must never report success while a permission/type/race
+            // error leaves a derived-data sidecar behind.
+            throw new Error(`Unable to remove embedding-index artifact: ${path.basename(p)}`, { cause: err });
+          }
+        }
+      }
+      await this.revalidatePersistenceScopes();
+      removed = (await clearHnswPersistedArtifactsWithEraser(hnswBase, eraserCapability)) || removed;
+      // Remove the guard LAST. If any derived artifact could not be removed, the
+      // still-present guard keeps the next serve fail-closed. The helper accepts
+      // only its narrow directory shape and never recursively deletes content.
+      removed = (await clearWatcherActivationGuard(this.file)) || removed;
+      await this.revalidatePersistenceScopes();
+      return removed;
+    });
   }
 
-  /** Close the underlying SQLite handle. Idempotent — calling close
-   *  twice is safe. Call before process exit to flush WAL. */
-  close(): void {
-    if (this.db) {
-      this.db.close();
-      this.db = null;
+  /**
+   * Return the exact pinned semantic-family scopes while this database is open.
+   * HNSW publishers must use these scopes instead of re-resolving a pathname.
+   *
+   * @returns Pinned namespace and primary EmbedDb family scopes.
+   * @throws {Error} If this EmbedDb does not hold an open shared lifetime.
+   */
+  getPersistenceFamilyScopes(): PersistenceFamilyScopes {
+    this.requireDb();
+    if (!this.persistenceScopes || !this.persistenceLifetime) {
+      throw new Error("EmbedDb persistence lifetime is unavailable");
     }
+    return this.persistenceScopes;
+  }
+
+  /**
+   * Acquire an additional shared semantic-family lifetime in the already
+   * pinned scopes. A prepared in-memory HNSW context owns this after its
+   * short-lived SQLite snapshot handle closes.
+   *
+   * @returns Caller-owned shared family lifetime.
+   * @throws {Error} If the EmbedDb is not open or its pinned scopes changed.
+   */
+  async acquireSharedPersistenceLifetime(): Promise<PersistenceFamilyLeaseHandle> {
+    const scopes = this.getPersistenceFamilyScopes();
+    return acquirePersistenceFamilyLeaseInScopes(scopes, { role: "shared" });
+  }
+
+  /**
+   * Close the SQLite handle synchronously and begin releasing its shared
+   * persistence lifetime. Release failures are retained for an awaited retry
+   * through {@link closeAndRelease}; no rejection escapes unobserved.
+   */
+  close(): void {
+    this.requestClose();
+    let closeError: unknown;
+    try {
+      this.closeDbHandle();
+    } catch (error) {
+      closeError = error;
+    }
+    const attempt = this.beginCloseAttempt();
+    void attempt.catch(() => {});
+    if (closeError !== undefined) throw closeError;
+  }
+
+  /**
+   * Close SQLite and await exact shared-lifetime release. A failed release
+   * remains retryable: a later invocation reuses the same core handle rather
+   * than silently acquiring or forgetting a second marker.
+   *
+   * @returns After both the native handle and shared lease are released.
+   */
+  async closeAndRelease(): Promise<void> {
+    this.requestClose();
+    await this.finishCloseAndRelease();
+  }
+
+  private requestClose(): void {
+    this.closeRequested = true;
+    this.closeRequestToken = {};
+  }
+
+  private async finishCloseAndRelease(): Promise<void> {
+    const errors: unknown[] = [];
+    try {
+      this.closeDbHandle();
+    } catch (error) {
+      errors.push(error);
+    }
+    if (this.closeAttempt && this.closeAttemptFailed) {
+      this.closeAttempt = null;
+      this.closeAttemptFailed = false;
+    }
+    try {
+      await this.beginCloseAttempt();
+    } catch (error) {
+      errors.push(error);
+    }
+    if (errors.length === 1) throw errors[0];
+    if (errors.length > 1) {
+      throw new AggregateError(errors, "Embedding index close and persistence release both failed");
+    }
+  }
+
+  private beginCloseAttempt(): Promise<void> {
+    if (this.closeAttempt) return this.closeAttempt;
+    const opening = this.openAttempt;
+    const close = async (): Promise<void> => {
+      if (opening) {
+        try {
+          await opening;
+        } catch {
+          // openOnce owns its primary failure and rollback. Continue so an
+          // incomplete lifetime release remains retryable through this close.
+        }
+      }
+      const errors: unknown[] = [];
+      try {
+        this.closeDbHandle();
+      } catch (error) {
+        errors.push(error);
+      }
+      try {
+        await this.releasePersistenceLifetime();
+      } catch (error) {
+        errors.push(error);
+      }
+      if (errors.length === 1) throw errors[0];
+      if (errors.length > 1) {
+        throw new AggregateError(errors, "Embedding index close and persistence release both failed");
+      }
+    };
+    const attempt = close();
+    this.closeAttempt = attempt;
+    this.closeAttemptFailed = false;
+    void attempt.then(
+      () => undefined,
+      () => {
+        if (this.closeAttempt === attempt) this.closeAttemptFailed = true;
+      }
+    );
+    return attempt;
   }
 
   private bootstrapSchema(initialKind: "empty" | "owned", initialSignature: string): void {
@@ -1122,12 +1725,6 @@ export class EmbedDb {
       if (admission.kind !== initialKind || admission.signature !== initialSignature) {
         throw new Error("Embedding index ownership changed during admission");
       }
-      // Canonicalize every whitelisted trigger before any backfill can fire.
-      // A same-name hostile trigger may target source_revision itself, so
-      // dropping only after INSERT ... SELECT would be too late.
-      for (const name of SOURCE_REVISION_TRIGGER_NAMES) {
-        db.exec(`DROP TRIGGER IF EXISTS ${name}`);
-      }
       const meta = admission.kind === "owned" ? admission.meta : undefined;
       const uninitialized = admission.kind === "empty";
       const versionMatch = uninitialized || meta?.schema_version === String(EMBED_DB_SCHEMA_VERSION);
@@ -1136,6 +1733,12 @@ export class EmbedDb {
       // Pre-v3 indexes have no quantization key and are necessarily f32.
       const existingQuant = meta?.quantization ?? "f32";
       const quantMatch = uninitialized || existingQuant === this.quantization;
+      const requiresBootstrap = uninitialized || !versionMatch || !modelMatch || !dimMatch || !quantMatch;
+
+      // Exact current schema + configuration is already a complete durable
+      // generation. Reopening it must not rewrite metadata, rotate identity,
+      // or advance the mutation epoch merely for observation.
+      if (!requiresBootstrap) return;
 
       if (!versionMatch || !modelMatch || !dimMatch || !quantMatch) {
         const reason: string[] = [];
@@ -1144,6 +1747,15 @@ export class EmbedDb {
         if (!dimMatch) reason.push("vector dimension changed");
         if (!quantMatch) reason.push("quantization changed");
         process.stderr.write(`enquire: rebuilding embed index (${reason.join("; ")})\n`);
+      }
+
+      // Remove every admitted mutation surface before dropping tables. Current
+      // definitions are exact; historical recognized names are still removed
+      // before any rebuild DML can fire.
+      for (const name of [...SOURCE_REVISION_TRIGGER_NAMES, ...MUTATION_EPOCH_TRIGGER_NAMES]) {
+        db.exec(`DROP TRIGGER IF EXISTS ${name}`);
+      }
+      if (!uninitialized) {
         db.exec(`
           DROP TABLE IF EXISTS embeddings;
           DROP TABLE IF EXISTS source_state;
@@ -1171,20 +1783,28 @@ export class EmbedDb {
 
       `);
 
-      // Recreate only after schema/backfill is complete. The whole install
-      // remains inside the bootstrap transaction, so readers observe either
-      // the previous complete contract or the new one.
-      for (const definition of SOURCE_REVISION_TRIGGER_DEFINITIONS) {
-        db.exec(definition.sql);
-      }
-
+      // Identity metadata exists before the epoch triggers are installed. A
+      // new physical database or any destructive rebuild always receives a
+      // fresh cryptographic UUID and starts at epoch 1.
       this.writeMeta({
         schema_version: String(EMBED_DB_SCHEMA_VERSION),
         vault_root: this.vaultRoot,
         model_alias: this.modelAlias,
         dim: String(this.dim),
-        quantization: this.quantization
+        quantization: this.quantization,
+        instance_uuid: randomBytes(16).toString("hex"),
+        mutation_epoch: "1"
       });
+
+      // Recreate only after schema/backfill/metadata are complete. The whole
+      // install remains inside the bootstrap transaction, so readers observe
+      // either the previous complete contract or the new one.
+      for (const definition of SOURCE_REVISION_TRIGGER_DEFINITIONS) {
+        db.exec(definition.sql);
+      }
+      for (const definition of MUTATION_EPOCH_TRIGGER_DEFINITIONS) {
+        db.exec(definition.sql);
+      }
     });
     txn.immediate();
   }
@@ -1206,21 +1826,40 @@ export class EmbedDb {
     return this.db;
   }
 
+  /** Run DML only while one exact generation owns SQLite's write lock. */
+  private mutateIfGeneration<T>(
+    expected: EmbedDbGenerationIdentity,
+    mutate: () => T
+  ): EmbedConditionalMutationResult<T> {
+    assertEmbedDbGenerationIdentity(expected);
+    const db = this.requireDb();
+    const transaction = db.transaction((): EmbedConditionalMutationResult<T> => {
+      const observedGeneration = captureEmbedDbGenerationIdentity(db);
+      if (!sameEmbedDbGenerationIdentity(expected, observedGeneration)) {
+        return { kind: "generation-drift", observedGeneration };
+      }
+      const value = mutate();
+      return {
+        kind: "committed",
+        value,
+        committedGeneration: captureEmbedDbGenerationIdentity(db)
+      };
+    });
+    // The expected-generation check must run only after SQLite has excluded
+    // every competing writer. A deferred transaction would leave a gap
+    // between observation and the first DML statement.
+    return transaction.immediate();
+  }
+
   /**
    * Replace all embeddings for a single note. Caller computes vectors.
    * v2.8.0: optional `kind` parameter ("md" | "pdf"); defaults to "md" so
    * existing callers (markdown indexing path) need no changes.
-   */
-  /**
-   * @returns v3.9.0-rc.2 — `{ oldIds, newIds }`. `oldIds` is the set of
-   *   `embeddings.id` values that were deleted (the file's previous
-   *   chunks, before this upsert); `newIds` is the set of fresh ids
-   *   assigned by AUTOINCREMENT, in the same order as the input `chunks`
-   *   array. Callers maintaining a parallel in-memory index (HNSW) use
-   *   these to `markDelete(oldIds)` + `addPoint(vectors, newIds)` so the
-   *   index stays in sync with the embed-db without rebuilding. Pre-3.9.0
-   *   the method returned `void`; existing callers that ignore the
-   *   return value continue working unchanged.
+   *
+   * @returns The legacy semver-bound `{ oldIds, newIds }` result. Internal
+   *   HNSW maintainers that also need DB-canonical decoded vectors use
+   *   {@link upsertNoteWithCanonicalVectors}; keeping that additive sibling
+   *   avoids changing the public method's exact return shape.
    */
   upsertNote(
     relPath: string,
@@ -1234,61 +1873,140 @@ export class EmbedDb {
     }>,
     kind: EmbedChunkKind = "md"
   ): { oldIds: number[]; newIds: number[] } {
+    const { oldIds, newIds } = this.upsertNoteWithCanonicalVectors(relPath, mtimeMs, chunks, kind);
+    return { oldIds, newIds };
+  }
+
+  /**
+   * Replace one source generation and return the exact decoded vectors stored
+   * by the same SQLite transaction.
+   *
+   * @returns `{ oldIds, newIds, newVectors }`, where `newVectors` are decoded
+   *   from the committed BLOBs in `newIds` order. Watcher HNSW updates must use
+   *   this sibling so int8 live search and restart rebuilds consume identical
+   *   numeric input.
+   */
+  upsertNoteWithCanonicalVectors(
+    relPath: string,
+    mtimeMs: number,
+    chunks: ReadonlyArray<{
+      chunkIndex: number;
+      lineStart: number;
+      lineEnd: number;
+      textPreview: string;
+      vector: Float32Array;
+    }>,
+    kind: EmbedChunkKind = "md"
+  ): EmbedUpsertResult {
+    const db = this.requireDb();
+    const transaction = db.transaction(() => this.upsertNoteInCurrentTransaction(relPath, mtimeMs, chunks, kind));
+    return transaction();
+  }
+
+  /**
+   * Replace one source only if an in-memory HNSW graph still names the exact
+   * current database generation.
+   *
+   * The comparison and every mutation run under one `BEGIN IMMEDIATE`
+   * transaction. A drift result performs no DML, allowing the watcher to
+   * quarantine its stale graph before retrying through the authoritative
+   * database-only path.
+   *
+   * @param expected - UUID/epoch currently owned by the in-memory graph.
+   * @param relPath - Exact vault-relative source path.
+   * @param mtimeMs - Revalidated source modification time.
+   * @param chunks - Fully prepared, normalized embedding chunks.
+   * @param kind - Markdown or PDF source kind.
+   * @returns Either the committed row diff plus its new generation, or a
+   *   no-write drift receipt.
+   */
+  upsertNoteWithCanonicalVectorsIfGeneration(
+    expected: EmbedDbGenerationIdentity,
+    relPath: string,
+    mtimeMs: number,
+    chunks: ReadonlyArray<{
+      chunkIndex: number;
+      lineStart: number;
+      lineEnd: number;
+      textPreview: string;
+      vector: Float32Array;
+    }>,
+    kind: EmbedChunkKind = "md"
+  ): EmbedConditionalMutationResult<EmbedUpsertResult> {
+    return this.mutateIfGeneration(expected, () => this.upsertNoteInCurrentTransaction(relPath, mtimeMs, chunks, kind));
+  }
+
+  /** Perform a source replacement inside the caller-owned transaction. */
+  private upsertNoteInCurrentTransaction(
+    relPath: string,
+    mtimeMs: number,
+    chunks: ReadonlyArray<{
+      chunkIndex: number;
+      lineStart: number;
+      lineEnd: number;
+      textPreview: string;
+      vector: Float32Array;
+    }>,
+    kind: EmbedChunkKind
+  ): EmbedUpsertResult {
     const db = this.requireDb();
     const dim = this.dim;
-    const out = { oldIds: [] as number[], newIds: [] as number[] };
-    const tx = db.transaction((...args: unknown[]) => {
-      const rows = args[0] as typeof chunks;
-      // v3.9.0-rc.2 — capture the old ids BEFORE the DELETE so the
-      // watcher can markDelete them in HNSW. Sorted ascending so callers
-      // get stable ordering for snapshot diffing.
-      const oldRows = db
-        .prepare("SELECT id FROM embeddings WHERE rel_path = ? ORDER BY id")
-        .all<{ id: number }>(relPath);
-      out.oldIds = oldRows.map((r) => r.id);
-      db.prepare("DELETE FROM embeddings WHERE rel_path = ?").run(relPath);
-      const insert = db.prepare(
-        `INSERT INTO embeddings (rel_path, chunk_index, line_start, line_end, text_preview, vector, kind)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`
-      );
-      for (const c of rows) {
-        if (c.vector.length !== dim) {
-          throw new Error(
-            `vector dim mismatch for ${relPath} chunk ${c.chunkIndex}: got ${c.vector.length}, expected ${dim}`
-          );
-        }
-        const normSquared = vectorNormSquared(c.vector);
-        if (
-          !Number.isFinite(normSquared) ||
-          normSquared <= Number.EPSILON ||
-          normSquared < 0.998 ||
-          normSquared > 1.002
-        ) {
-          throw new Error(
-            `invalid vector for ${relPath} chunk ${c.chunkIndex}: components must be finite and L2-normalized`
-          );
-        }
-        // v2.17.0 — encode per the configured quantization mode.
-        // f32: zero-copy slice over the source buffer (matches v2.16- behavior).
-        // int8: per-vector quantize + 8-byte (vMin, scale) tuple.
-        const blob =
-          this.quantization === "int8"
-            ? encodeInt8Vector(c.vector)
-            : Buffer.from(c.vector.buffer, c.vector.byteOffset, c.vector.byteLength);
-        const result = insert.run(relPath, c.chunkIndex, c.lineStart, c.lineEnd, c.textPreview, blob, kind);
-        // v3.9.0-rc.2 — capture the AUTOINCREMENT id assigned to this row.
-        // better-sqlite3 returns `lastInsertRowid` as bigint or number; cast
-        // to number since embedding ids are within Number.MAX_SAFE_INTEGER
-        // for all realistic vault sizes (~10^15 chunks).
-        out.newIds.push(Number(result.lastInsertRowid));
+    const out: EmbedUpsertResult = { oldIds: [], newIds: [], newVectors: [] };
+    // v3.9.0-rc.2 — capture the old ids BEFORE the DELETE so the
+    // watcher can markDelete them in HNSW. Sorted ascending so callers
+    // get stable ordering for snapshot diffing.
+    const oldRows = db.prepare("SELECT id FROM embeddings WHERE rel_path = ? ORDER BY id").all<{ id: number }>(relPath);
+    out.oldIds = oldRows.map((r) => r.id);
+    db.prepare("DELETE FROM embeddings WHERE rel_path = ?").run(relPath);
+    const insert = db.prepare(
+      `INSERT INTO embeddings (rel_path, chunk_index, line_start, line_end, text_preview, vector, kind)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    );
+    for (const c of chunks) {
+      if (c.vector.length !== dim) {
+        throw new Error(
+          `vector dim mismatch for ${relPath} chunk ${c.chunkIndex}: got ${c.vector.length}, expected ${dim}`
+        );
       }
-      db.prepare(
-        `INSERT OR REPLACE INTO source_state (rel_path, mtime_ms, n_chunks, kind, indexed_at)
-         VALUES (?, ?, ?, ?, datetime('now'))`
-      ).run(relPath, mtimeMs, rows.length, kind);
-      db.prepare("DELETE FROM source_quarantine WHERE rel_path = ?").run(relPath);
-    });
-    tx(chunks);
+      const normSquared = vectorNormSquared(c.vector);
+      if (
+        !Number.isFinite(normSquared) ||
+        normSquared <= Number.EPSILON ||
+        normSquared < 0.998 ||
+        normSquared > 1.002
+      ) {
+        throw new Error(
+          `invalid vector for ${relPath} chunk ${c.chunkIndex}: components must be finite and L2-normalized`
+        );
+      }
+      // v2.17.0 — encode per the configured quantization mode.
+      // f32: zero-copy slice over the source buffer (matches v2.16- behavior).
+      // int8: per-vector quantize + 8-byte (vMin, scale) tuple.
+      const blob =
+        this.quantization === "int8"
+          ? encodeInt8Vector(c.vector)
+          : Buffer.from(c.vector.buffer, c.vector.byteOffset, c.vector.byteLength);
+      const result = insert.run(relPath, c.chunkIndex, c.lineStart, c.lineEnd, c.textPreview, blob, kind);
+      // v3.9.0-rc.2 — capture the AUTOINCREMENT id assigned to this row.
+      // better-sqlite3 returns `lastInsertRowid` as bigint or number; cast
+      // to number since embedding ids are within Number.MAX_SAFE_INTEGER
+      // for all realistic vault sizes (~10^15 chunks).
+      out.newIds.push(Number(result.lastInsertRowid));
+      if (this.quantization === "int8") {
+        out.newVectors.push(decodeInt8Vector(blob, dim));
+      } else {
+        const persistedVector = new Float32Array(dim);
+        for (let index = 0; index < dim; index += 1) {
+          persistedVector[index] = blob.readFloatLE(index * 4);
+        }
+        out.newVectors.push(persistedVector);
+      }
+    }
+    db.prepare(
+      `INSERT OR REPLACE INTO source_state (rel_path, mtime_ms, n_chunks, kind, indexed_at)
+       VALUES (?, ?, ?, ?, datetime('now'))`
+    ).run(relPath, mtimeMs, chunks.length, kind);
+    db.prepare("DELETE FROM source_quarantine WHERE rel_path = ?").run(relPath);
     return out;
   }
 
@@ -1311,16 +2029,36 @@ export class EmbedDb {
    */
   deleteNote(relPath: string): number[] {
     const db = this.requireDb();
+    const transaction = db.transaction(() => this.deleteNoteInCurrentTransaction(relPath));
+    return transaction();
+  }
+
+  /**
+   * Delete one source only while a derived HNSW graph still owns the expected
+   * physical generation.
+   *
+   * @param expected - UUID/epoch currently owned by the in-memory graph.
+   * @param relPath - Exact vault-relative source path.
+   * @returns A committed deleted-label list and post-trigger generation, or a
+   *   drift receipt proving no delete ran.
+   */
+  deleteNoteIfGeneration(
+    expected: EmbedDbGenerationIdentity,
+    relPath: string
+  ): EmbedConditionalMutationResult<number[]> {
+    return this.mutateIfGeneration(expected, () => this.deleteNoteInCurrentTransaction(relPath));
+  }
+
+  /** Delete one source inside the caller-owned transaction. */
+  private deleteNoteInCurrentTransaction(relPath: string): number[] {
+    const db = this.requireDb();
     const deletedIds: number[] = [];
-    const txn = db.transaction(() => {
-      // v3.9.0-rc.2 — capture deleted ids BEFORE the DELETE for HNSW sync.
-      const rows = db.prepare("SELECT id FROM embeddings WHERE rel_path = ? ORDER BY id").all<{ id: number }>(relPath);
-      for (const r of rows) deletedIds.push(r.id);
-      db.prepare("DELETE FROM embeddings WHERE rel_path = ?").run(relPath);
-      db.prepare("DELETE FROM source_state WHERE rel_path = ?").run(relPath);
-      db.prepare("DELETE FROM source_quarantine WHERE rel_path = ?").run(relPath);
-    });
-    txn();
+    // v3.9.0-rc.2 — capture deleted ids BEFORE the DELETE for HNSW sync.
+    const rows = db.prepare("SELECT id FROM embeddings WHERE rel_path = ? ORDER BY id").all<{ id: number }>(relPath);
+    for (const r of rows) deletedIds.push(r.id);
+    db.prepare("DELETE FROM embeddings WHERE rel_path = ?").run(relPath);
+    db.prepare("DELETE FROM source_state WHERE rel_path = ?").run(relPath);
+    db.prepare("DELETE FROM source_quarantine WHERE rel_path = ?").run(relPath);
     return deletedIds;
   }
 
@@ -1329,13 +2067,30 @@ export class EmbedDb {
    * re-embed. v2.8.0: optional `kind` filter — when set, only rows of that
    * kind are returned. Lets the markdown-sync and PDF-sync paths run
    * independently without one's "missing files" being deleted by the other.
+   *
+   * @param kind Optional source kind.
+   * @param limit Optional positive safe row cap applied by SQLite before JS
+   *   materialization. Callers that need an overflow receipt should request
+   *   their policy limit plus one.
+   * @returns Source-state rows in deterministic path order.
    */
-  getSourceStates(kind?: EmbedChunkKind): SourceStateRow[] {
+  getSourceStates(kind?: EmbedChunkKind, limit?: number): SourceStateRow[] {
     const db = this.requireDb();
-    if (kind !== undefined) {
-      return db.prepare("SELECT rel_path, mtime_ms FROM source_state WHERE kind = ?").all<SourceStateRow>(kind);
+    if (limit !== undefined && (!Number.isSafeInteger(limit) || limit < 1)) {
+      throw new TypeError("source-state limit must be a positive safe integer");
     }
-    return db.prepare("SELECT rel_path, mtime_ms FROM source_state").all<SourceStateRow>();
+    if (kind !== undefined) {
+      return limit === undefined
+        ? db
+            .prepare("SELECT rel_path, mtime_ms FROM source_state WHERE kind = ? ORDER BY rel_path")
+            .all<SourceStateRow>(kind)
+        : db
+            .prepare("SELECT rel_path, mtime_ms FROM source_state WHERE kind = ? ORDER BY rel_path LIMIT ?")
+            .all<SourceStateRow>(kind, limit);
+    }
+    return limit === undefined
+      ? db.prepare("SELECT rel_path, mtime_ms FROM source_state ORDER BY rel_path").all<SourceStateRow>()
+      : db.prepare("SELECT rel_path, mtime_ms FROM source_state ORDER BY rel_path LIMIT ?").all<SourceStateRow>(limit);
   }
 
   /**
@@ -1361,20 +2116,33 @@ export class EmbedDb {
    * Return quarantined source paths in deterministic order.
    *
    * @param kind Optional content-kind filter.
+   * @param limit Optional positive safe SQLite row cap. Callers that need an
+   *   overflow receipt should request their policy limit plus one.
    * @returns Vault-relative paths that must be retried and withheld.
    * @example
    * ```ts
    * const markdownPaths = db.getQuarantinedPaths("md");
    * ```
    */
-  getQuarantinedPaths(kind?: EmbedChunkKind): string[] {
+  getQuarantinedPaths(kind?: EmbedChunkKind, limit?: number): string[] {
     const db = this.requireDb();
+    if (limit !== undefined && (!Number.isSafeInteger(limit) || limit < 1)) {
+      throw new TypeError("quarantine-path limit must be a positive safe integer");
+    }
     const rows =
       kind === undefined
-        ? db.prepare("SELECT DISTINCT rel_path FROM source_quarantine ORDER BY rel_path").all<{ rel_path: string }>()
-        : db
-            .prepare("SELECT rel_path FROM source_quarantine WHERE kind = ? ORDER BY rel_path")
-            .all<{ rel_path: string }>(kind);
+        ? limit === undefined
+          ? db.prepare("SELECT DISTINCT rel_path FROM source_quarantine ORDER BY rel_path").all<{ rel_path: string }>()
+          : db
+              .prepare("SELECT DISTINCT rel_path FROM source_quarantine ORDER BY rel_path LIMIT ?")
+              .all<{ rel_path: string }>(limit)
+        : limit === undefined
+          ? db
+              .prepare("SELECT rel_path FROM source_quarantine WHERE kind = ? ORDER BY rel_path")
+              .all<{ rel_path: string }>(kind)
+          : db
+              .prepare("SELECT rel_path FROM source_quarantine WHERE kind = ? ORDER BY rel_path LIMIT ?")
+              .all<{ rel_path: string }>(kind, limit);
     return rows.map((row) => row.rel_path);
   }
 
@@ -1777,6 +2545,9 @@ export class EmbedDb {
     opts: { folder?: string; minScore?: number }
   ): EmbedReceiptSearchHit[] {
     const db = this.requireDb();
+    if (!Number.isSafeInteger(k) || k < 1 || k > MAX_EMBED_SEARCH_K) {
+      throw new RangeError(`embedding search k must be a safe integer in [1, ${MAX_EMBED_SEARCH_K}]`);
+    }
     if (queryVec.length !== this.dim) {
       throw new Error(`query vector dim mismatch: got ${queryVec.length}, expected ${this.dim}`);
     }
@@ -1789,6 +2560,9 @@ export class EmbedDb {
     ) {
       throw new Error("query vector must contain finite components and be L2-normalized");
     }
+    if (opts.minScore !== undefined && (!Number.isFinite(opts.minScore) || opts.minScore < -1 || opts.minScore > 1)) {
+      throw new RangeError("embedding search minScore must be finite and in [-1, 1]");
+    }
     const minScore = opts.minScore ?? -Infinity;
     // CodeQL js/polynomial-redos flags `\/+$` here as polynomial. False
     // positive: the `$` anchor forces match from end-of-string, and `\/+`
@@ -1796,17 +2570,23 @@ export class EmbedDb {
     // run of slashes) is O(n), not O(n²).
     const folderPrefix = opts.folder ? `${stripTrailingSlashes(opts.folder)}/` : null;
 
-    // v2.0.0-beta.1 P2 fix: prefix-equality via substr — avoids LIKE pattern
-    // semantics so folder names containing `%` / `_` (rare but possible in
-    // Obsidian) don't expand into wider matches. Matches the pattern used by
-    // FtsIndex.search() in fts5.ts.
-    const rows = db
-      .prepare(
-        folderPrefix
-          ? // rc.43 M1 — length(?) counts CHARACTERS (like substr), not JS UTF-16 code
-            // units; otherwise an astral-char folder name (emoji) matched ZERO rows.
-            // Mirrors FtsIndex.search() in fts5.ts.
-            `SELECT e.rel_path, e.chunk_index, e.line_start, e.line_end, e.text_preview, e.vector, e.kind,
+    const search = db.transaction((): EmbedReceiptSearchHit[] => {
+      // Integrity admission and ranking share one SQLite snapshot. A declared
+      // source with a missing chunk therefore cannot be validated in one
+      // generation and queried from a later partial generation.
+      this.captureHnswReceiptSnapshot();
+
+      // v2.0.0-beta.1 P2 fix: prefix-equality via substr — avoids LIKE pattern
+      // semantics so folder names containing `%` / `_` don't expand into
+      // wider matches. Stream rows and retain only the best k candidates;
+      // item-count limits must bound memory, not merely the final slice.
+      const rows = db
+        .prepare(
+          folderPrefix
+            ? // rc.43 M1 — length(?) counts CHARACTERS (like substr), not JS UTF-16 code
+              // units; otherwise an astral-char folder name (emoji) matched ZERO rows.
+              // Mirrors FtsIndex.search() in fts5.ts.
+              `SELECT e.rel_path, e.chunk_index, e.line_start, e.line_end, e.text_preview, e.vector, e.kind,
                     s.mtime_ms AS indexed_mtime_ms, r.revision AS indexed_revision
              FROM embeddings e
              JOIN source_state s ON s.rel_path = e.rel_path AND s.kind = e.kind
@@ -1816,7 +2596,7 @@ export class EmbedDb {
                AND typeof(r.revision) = 'integer'
                AND r.revision BETWEEN 1 AND 9007199254740991
                AND substr(e.rel_path, 1, length(?)) = ?`
-          : `SELECT e.rel_path, e.chunk_index, e.line_start, e.line_end, e.text_preview, e.vector, e.kind,
+            : `SELECT e.rel_path, e.chunk_index, e.line_start, e.line_end, e.text_preview, e.vector, e.kind,
                     s.mtime_ms AS indexed_mtime_ms, r.revision AS indexed_revision
              FROM embeddings e
              JOIN source_state s ON s.rel_path = e.rel_path AND s.kind = e.kind
@@ -1825,56 +2605,125 @@ export class EmbedDb {
              WHERE q.rel_path IS NULL AND e.kind IN ('md', 'pdf')
                AND typeof(r.revision) = 'integer'
                AND r.revision BETWEEN 1 AND 9007199254740991`
-      )
-      .all<{
-        rel_path: string;
-        chunk_index: number;
-        line_start: number;
-        line_end: number;
-        text_preview: string;
-        vector: Buffer;
-        kind: string | null;
-        indexed_mtime_ms: number;
-        indexed_revision: number;
-      }>(...(folderPrefix ? [folderPrefix, folderPrefix] : [])); // rc.43 M1 — bind prefix twice (length(?) + substr=?)
+        )
+        .iterate<{
+          rel_path: unknown;
+          chunk_index: unknown;
+          line_start: unknown;
+          line_end: unknown;
+          text_preview: unknown;
+          vector: unknown;
+          kind: unknown;
+          indexed_mtime_ms: unknown;
+          indexed_revision: unknown;
+        }>(...(folderPrefix ? [folderPrefix, folderPrefix] : [])); // rc.43 M1 — bind prefix twice (length(?) + substr=?)
 
-    const expectedBytes = this.encodedBytes;
-    const heap: EmbedReceiptSearchHit[] = [];
-    for (const r of rows) {
-      // v2.0.0-beta.1 P2 fix: assert byteLength before wrapping. A truncated
-      // / corrupt BLOB (e.g. from an aborted upsert mid-transaction) would
-      // produce a Float32Array that reads past the source buffer's end and
-      // emits garbage scores. Skip + warn rather than poison results.
-      if (r.vector.byteLength !== expectedBytes) {
-        process.stderr.write(
-          `enquire: skipping ${r.rel_path}#${r.chunk_index} — vector has ${r.vector.byteLength}B, expected ${expectedBytes}B (dim=${this.dim}, mode=${this.quantization}). Run \`enquire-mcp clear-embeddings\` and rebuild.\n`
-        );
-        continue;
+      type RankedHit = { hit: EmbedReceiptSearchHit; ordinal: number };
+      const heap: RankedHit[] = [];
+      const compareWorstFirst = (left: RankedHit, right: RankedHit): number =>
+        left.hit.score !== right.hit.score ? left.hit.score - right.hit.score : right.ordinal - left.ordinal;
+      const siftUp = (start: number): void => {
+        let index = start;
+        while (index > 0) {
+          const parent = Math.floor((index - 1) / 2);
+          const child = heap[index];
+          const parentValue = heap[parent];
+          if (!child || !parentValue || compareWorstFirst(child, parentValue) >= 0) break;
+          heap[index] = parentValue;
+          heap[parent] = child;
+          index = parent;
+        }
+      };
+      const siftDown = (): void => {
+        let index = 0;
+        while (true) {
+          const left = index * 2 + 1;
+          const right = left + 1;
+          let worst = index;
+          const leftValue = heap[left];
+          const currentWorst = heap[worst];
+          if (leftValue && currentWorst && compareWorstFirst(leftValue, currentWorst) < 0) worst = left;
+          const rightValue = heap[right];
+          const nextWorst = heap[worst];
+          if (rightValue && nextWorst && compareWorstFirst(rightValue, nextWorst) < 0) worst = right;
+          if (worst === index) return;
+          const current = heap[index];
+          const replacement = heap[worst];
+          if (!current || !replacement) return;
+          heap[index] = replacement;
+          heap[worst] = current;
+          index = worst;
+        }
+      };
+
+      let ordinal = 0;
+      for (const row of rows) {
+        if (
+          typeof row.rel_path !== "string" ||
+          row.rel_path.length === 0 ||
+          Buffer.byteLength(row.rel_path, "utf8") > MAX_HNSW_SNAPSHOT_PATH_BYTES ||
+          !Number.isSafeInteger(row.chunk_index) ||
+          (row.chunk_index as number) < 0 ||
+          !Number.isSafeInteger(row.line_start) ||
+          (row.line_start as number) < 1 ||
+          !Number.isSafeInteger(row.line_end) ||
+          (row.line_end as number) < (row.line_start as number) ||
+          typeof row.text_preview !== "string" ||
+          Buffer.byteLength(row.text_preview, "utf8") > MAX_HNSW_SNAPSHOT_PREVIEW_BYTES ||
+          !Buffer.isBuffer(row.vector) ||
+          row.vector.byteLength !== this.encodedBytes ||
+          (row.kind !== "md" && row.kind !== "pdf") ||
+          typeof row.indexed_mtime_ms !== "number" ||
+          !Number.isFinite(row.indexed_mtime_ms) ||
+          !Number.isSafeInteger(row.indexed_revision) ||
+          (row.indexed_revision as number) < 1 ||
+          (row.indexed_revision as number) > MAX_SOURCE_REVISION
+        ) {
+          throw new EmbedSnapshotIntegrityError("Embedding search row is outside the admitted durable generation");
+        }
+        const vec =
+          this.quantization === "int8"
+            ? decodeInt8Vector(row.vector, this.dim)
+            : new Float32Array(row.vector.buffer, row.vector.byteOffset, this.dim);
+        let score = 0;
+        for (let i = 0; i < this.dim; i++) {
+          score += (queryVec[i] ?? 0) * (vec[i] ?? 0);
+        }
+        if (!Number.isFinite(score)) {
+          throw new EmbedSnapshotIntegrityError("Embedding search produced a non-finite persisted score");
+        }
+        if (score < minScore) {
+          ordinal += 1;
+          continue;
+        }
+        const ranked: RankedHit = {
+          ordinal,
+          hit: {
+            rel_path: row.rel_path,
+            chunk_index: row.chunk_index as number,
+            line_start: row.line_start as number,
+            line_end: row.line_end as number,
+            text_preview: row.text_preview,
+            score,
+            kind: row.kind,
+            indexed_mtime_ms: row.indexed_mtime_ms,
+            indexed_revision: row.indexed_revision as number
+          }
+        };
+        ordinal += 1;
+        if (heap.length < k) {
+          heap.push(ranked);
+          siftUp(heap.length - 1);
+        } else if (heap[0] && compareWorstFirst(ranked, heap[0]) > 0) {
+          heap[0] = ranked;
+          siftDown();
+        }
       }
-      // v2.17.0 — decode per the configured quantization mode.
-      const vec =
-        this.quantization === "int8"
-          ? decodeInt8Vector(r.vector, this.dim)
-          : new Float32Array(r.vector.buffer, r.vector.byteOffset, this.dim);
-      let score = 0;
-      for (let i = 0; i < this.dim; i++) {
-        score += (queryVec[i] ?? 0) * (vec[i] ?? 0);
-      }
-      if (score < minScore) continue;
-      heap.push({
-        rel_path: r.rel_path,
-        chunk_index: r.chunk_index,
-        line_start: r.line_start,
-        line_end: r.line_end,
-        text_preview: r.text_preview,
-        score,
-        kind: (r.kind === "pdf" ? "pdf" : "md") as EmbedChunkKind,
-        indexed_mtime_ms: r.indexed_mtime_ms,
-        indexed_revision: r.indexed_revision
-      });
-    }
-    heap.sort((a, b) => b.score - a.score);
-    return heap.slice(0, k);
+      return heap
+        .sort((left, right) => right.hit.score - left.hit.score || left.ordinal - right.ordinal)
+        .map(({ hit }) => hit);
+    });
+    return search();
   }
 
   /** Total embedded chunks — used by stats / UI. */
@@ -1885,66 +2734,78 @@ export class EmbedDb {
   }
 
   /**
-   * v2.16.0 — compute a tractable signature of the current, non-quarantined
-   * embedding index for HNSW staleness detection. The stable prefix binds
-   * dimension, receipt-backed row count, maximum id, model, quantization, and
-   * embedding-schema version. A deterministic quarantine digest is appended
-   * only while markers exist, preserving the legacy empty-quarantine string.
+   * Capture the cheap physical-generation identity from one SQLite snapshot.
    *
-   * Why this composite (vs full content hash)?
-   *   • Full hash would require reading every BLOB on every serve start —
-   *     wastes the I/O savings the persisted HNSW is supposed to give us.
-   *   • Current rowcount + max-id catches every common change pattern: insert
-   *     (max-id moves up), delete (rowcount drops), update (max-id moves
-   *     up because we DELETE+INSERT). Edge case: updating in-place
-   *     without changing max-id (rare in our codebase — upsertNote always
-   *     deletes+reinserts so max-id always advances).
-   *   • dim + model alias guard against a model swap that re-embeds with
-   *     a different vector space.
-   *   • Embedding schema guards inference-contract migrations (for example,
-   *     fp32 → q8 model weights) even when rowcount, ids and dimensions match.
-   *   • The optional quarantine digest invalidates a sidecar immediately when
-   *     retained rows become ineligible, without changing the HNSW file format.
-   *   • Source revisions are re-hydrated from the database at public egress;
-   *     their numeric value is deliberately not part of this graph signature.
+   * Unlike a full HNSW receipt this reads only the immutable instance UUID and
+   * mutation epoch, so request-time callers can verify graph authority before
+   * and after awaited filesystem validation without hashing every vector.
+   *
+   * @returns Exact database instance UUID and durable mutation epoch.
+   * @throws {EmbedSnapshotIntegrityError} If either identity cell is malformed.
+   * @example
+   * ```ts
+   * const before = db.captureGenerationIdentity();
+   * // ... perform bounded read work ...
+   * const after = db.captureGenerationIdentity();
+   * ```
+   */
+  captureGenerationIdentity(): EmbedDbGenerationIdentity {
+    const db = this.requireDb();
+    const capture = db.transaction(() => captureEmbedDbGenerationIdentity(db));
+    return capture();
+  }
+
+  /**
+   * Capture one transactionally consistent, fully admitted HNSW receipt.
+   *
+   * Every configuration cell, quarantine marker, source receipt, row field,
+   * and raw vector BLOB is read inside one synchronous better-sqlite3
+   * transaction. A malformed non-quarantined row refuses the complete HNSW
+   * snapshot instead of silently creating a partial-recall graph.
+   *
+   * @returns Exact database-generation receipt plus current label metadata.
+   */
+  captureHnswReceiptSnapshot(): HnswReceiptSnapshot {
+    return this.captureHnswSnapshot("receipt");
+  }
+
+  /**
+   * Capture the complete trusted authority needed to load a native HNSW graph.
+   * Row metadata and DB-canonical decoded vectors come from the same synchronous
+   * SQLite snapshot as the persistence receipt.
+   *
+   * @returns Exact receipt plus detached row and vector maps keyed by label.
+   * @example
+   * ```ts
+   * const snapshot = db.captureHnswLoadSnapshot();
+   * ```
+   */
+  captureHnswLoadSnapshot(): HnswLoadSnapshot {
+    return this.captureHnswSnapshot("load");
+  }
+
+  /**
+   * Capture HNSW build vectors and their receipt from one SQLite snapshot.
+   *
+   * @returns Exact receipt, label metadata, and detached decoded vectors.
+   */
+  captureHnswBuildSnapshot(): HnswBuildSnapshot {
+    return this.captureHnswSnapshot("build");
+  }
+
+  /** Return the receipt portion of {@link captureHnswReceiptSnapshot}. */
+  computeHnswPersistenceReceipt(): HnswPersistenceReceipt {
+    return this.captureHnswReceiptSnapshot().receipt;
+  }
+
+  /**
+   * Compute the legacy string-only HNSW staleness signature.
+   *
+   * @returns Signature from the same receipt-backed snapshot used by
+   *   {@link computeHnswPersistenceReceipt}.
    */
   computeSignature(): string {
-    const db = this.requireDb();
-    const row = db
-      .prepare(
-        `SELECT COUNT(*) AS n, MAX(e.id) AS maxId
-         FROM embeddings e
-         JOIN source_state s ON s.rel_path = e.rel_path AND s.kind = e.kind
-         JOIN source_revision r ON r.rel_path = e.rel_path AND r.kind = e.kind
-         LEFT JOIN source_quarantine q ON q.rel_path = e.rel_path AND q.kind = e.kind
-         WHERE q.rel_path IS NULL AND e.kind IN ('md', 'pdf')
-           AND typeof(r.revision) = 'integer'
-           AND r.revision BETWEEN 1 AND 9007199254740991`
-      )
-      .get<{ n: number; maxId: number | null }>();
-    const rows = row?.n ?? 0;
-    const maxId = row?.maxId ?? 0;
-    // v3.7.6 M-10 (external audit) — include `quantization` in the
-    // signature. Pre-fix: signature was only `dim;rows;maxId;model` — if a
-    // user re-built with `--quantize-embeddings int8` (vs the previous
-    // `f32` build) while rowcount/maxId/dim/model stayed the same, the
-    // persisted HNSW sidecar was considered "fresh" but its float32
-    // vectors no longer matched the int8 bytes in the new embed-db rows.
-    // Including `quantization` in the signature forces a rebuild on
-    // encoding switch.
-    const quarantined = db
-      .prepare("SELECT rel_path, kind FROM source_quarantine ORDER BY kind, rel_path")
-      .all<{ rel_path: string; kind: string }>();
-    const baseSignature =
-      `dim=${this.dim};rows=${rows};maxId=${maxId};model=${this.modelAlias};quant=${this.quantization};` +
-      `embedSchema=${EMBED_DB_SCHEMA_VERSION}`;
-    if (quarantined.length === 0) return baseSignature;
-    const quarantineHash = createHash("sha256");
-    for (const source of quarantined) {
-      updateManifestValue(quarantineHash, source.kind);
-      updateManifestValue(quarantineHash, source.rel_path);
-    }
-    return `${baseSignature};quarantine=${quarantineHash.digest("hex")}`;
+    return this.computeHnswPersistenceReceipt().signature;
   }
 
   /**
@@ -1971,64 +2832,494 @@ export class EmbedDb {
     text_preview: string;
     kind: EmbedChunkKind;
   }> {
+    return this.captureHnswBuildSnapshot().vectors;
+  }
+
+  private captureHnswSnapshot(mode: "receipt"): HnswReceiptSnapshot;
+  private captureHnswSnapshot(mode: "load"): HnswLoadSnapshot;
+  private captureHnswSnapshot(mode: "build"): HnswBuildSnapshot;
+  private captureHnswSnapshot(
+    mode: "receipt" | "load" | "build"
+  ): HnswReceiptSnapshot | HnswLoadSnapshot | HnswBuildSnapshot {
     const db = this.requireDb();
-    const rows = db
-      .prepare(
-        `SELECT e.id, e.rel_path, e.chunk_index, e.line_start, e.line_end, e.text_preview, e.vector, e.kind
-         FROM embeddings e
-         JOIN source_state s ON s.rel_path = e.rel_path AND s.kind = e.kind
-         JOIN source_revision r ON r.rel_path = e.rel_path AND r.kind = e.kind
-         LEFT JOIN source_quarantine q ON q.rel_path = e.rel_path AND q.kind = e.kind
-         WHERE q.rel_path IS NULL AND e.kind IN ('md', 'pdf')
-           AND typeof(r.revision) = 'integer'
-           AND r.revision BETWEEN 1 AND 9007199254740991`
-      )
-      .all<{
-        id: number;
-        rel_path: string;
-        chunk_index: number;
-        line_start: number;
-        line_end: number;
-        text_preview: string;
-        vector: Buffer;
-        kind: string | null;
-      }>();
-    const expectedBytes = this.encodedBytes;
-    const out: ReturnType<EmbedDb["getAllVectors"]> = [];
-    for (const r of rows) {
-      // Match the corruption guard from search() — skip rows with
-      // mis-sized vectors so a partial DB doesn't poison the HNSW build.
-      if (r.vector.byteLength !== expectedBytes) {
-        process.stderr.write(
-          `enquire: skipping ${r.rel_path}#${r.chunk_index} during getAllVectors — vector has ${r.vector.byteLength}B, expected ${expectedBytes}B (dim=${this.dim}, mode=${this.quantization}). Run \`enquire-mcp clear-embeddings\` and rebuild.\n`
-        );
-        continue;
+    const capture = db.transaction((): HnswReceiptSnapshot | HnswLoadSnapshot | HnswBuildSnapshot => {
+      const metaRows = db
+        .prepare("SELECT key, value FROM meta ORDER BY key LIMIT 8")
+        .all<{ key: unknown; value: unknown }>();
+      const meta = new Map<string, string>();
+      for (const row of metaRows) {
+        if (typeof row.key !== "string" || typeof row.value !== "string" || meta.has(row.key)) {
+          throw new EmbedSnapshotIntegrityError(
+            "Embedding index configuration is malformed during HNSW snapshot capture"
+          );
+        }
+        meta.set(row.key, row.value);
       }
-      // v2.17.0 — decode + always copy. HNSW takes ownership of the
-      // Float32Array slice for the lifetime of the index; sharing the
-      // SQLite row buffer would risk use-after-free if the row is GC'd
-      // or the cursor advances. For int8, decode produces a fresh
-      // Float32Array already. For f32, copy from the SQLite buffer.
-      const vec =
-        this.quantization === "int8"
-          ? decodeInt8Vector(r.vector, this.dim)
-          : (() => {
-              const v = new Float32Array(this.dim);
-              v.set(new Float32Array(r.vector.buffer, r.vector.byteOffset, this.dim));
-              return v;
-            })();
-      out.push({
-        label: r.id,
-        vector: vec,
-        rel_path: r.rel_path,
-        chunk_index: r.chunk_index,
-        line_start: r.line_start,
-        line_end: r.line_end,
-        text_preview: r.text_preview,
-        kind: (r.kind === "pdf" ? "pdf" : "md") as EmbedChunkKind
-      });
-    }
-    return out;
+      if (
+        metaRows.length !== 7 ||
+        meta.get("schema_version") !== String(EMBED_DB_SCHEMA_VERSION) ||
+        meta.get("vault_root") !== this.vaultRoot ||
+        meta.get("model_alias") !== this.modelAlias ||
+        meta.get("dim") !== String(this.dim) ||
+        meta.get("quantization") !== this.quantization ||
+        !EMBED_INSTANCE_UUID_PATTERN.test(meta.get("instance_uuid") ?? "") ||
+        !isCanonicalMutationEpoch(meta.get("mutation_epoch"))
+      ) {
+        throw new EmbedSnapshotIntegrityError("Embedding index configuration changed before HNSW snapshot capture");
+      }
+      const dbInstanceUuid = meta.get("instance_uuid") as string;
+      const dbMutationEpoch = Number(meta.get("mutation_epoch"));
+
+      // Bound authority-table cardinality and UTF-8 path material before any
+      // iterator exposes caller-controlled cells to JS or the receipt hashes.
+      // Quarantined sources are deliberately included: exclusion from the
+      // graph must not let a malformed quarantine/state manifest bypass the
+      // snapshot resource envelope.
+      const authorityEnvelope = db
+        .prepare(
+          `SELECT
+             (SELECT COUNT(*) FROM source_quarantine) AS quarantine_count,
+             (SELECT COALESCE(SUM(length(CAST(rel_path AS BLOB))), 0)
+                FROM source_quarantine) AS quarantine_path_bytes,
+             (SELECT COALESCE(MAX(length(CAST(rel_path AS BLOB))), 0)
+                FROM source_quarantine) AS quarantine_max_path_bytes,
+             (SELECT COALESCE(SUM(CASE
+                WHEN typeof(rel_path) <> 'text'
+                  OR length(CAST(rel_path AS BLOB)) NOT BETWEEN 1 AND ${MAX_HNSW_SNAPSHOT_PATH_BYTES}
+                  OR typeof(kind) <> 'text' OR kind NOT IN ('md', 'pdf')
+                THEN 1 ELSE 0 END), 0)
+                FROM source_quarantine) AS quarantine_invalid_count,
+             (SELECT COUNT(*) FROM source_state) AS state_count,
+             (SELECT COALESCE(SUM(length(CAST(rel_path AS BLOB))), 0)
+                FROM source_state) AS state_path_bytes,
+             (SELECT COALESCE(MAX(length(CAST(rel_path AS BLOB))), 0)
+                FROM source_state) AS state_max_path_bytes,
+             (SELECT COALESCE(SUM(CASE
+                WHEN typeof(rel_path) <> 'text'
+                  OR length(CAST(rel_path AS BLOB)) NOT BETWEEN 1 AND ${MAX_HNSW_SNAPSHOT_PATH_BYTES}
+                  OR typeof(kind) <> 'text' OR kind NOT IN ('md', 'pdf')
+                  OR typeof(mtime_ms) NOT IN ('integer', 'real')
+                  OR mtime_ms NOT BETWEEN -${MAX_SOURCE_REVISION} AND ${MAX_SOURCE_REVISION}
+                  OR typeof(n_chunks) <> 'integer'
+                  OR n_chunks NOT BETWEEN 1 AND ${MAX_HNSW_SNAPSHOT_ROWS}
+                THEN 1 ELSE 0 END), 0)
+                FROM source_state) AS state_invalid_count,
+             (SELECT COUNT(*) FROM source_revision) AS revision_count,
+             (SELECT COALESCE(SUM(length(CAST(rel_path AS BLOB))), 0)
+                FROM source_revision) AS revision_path_bytes,
+             (SELECT COALESCE(MAX(length(CAST(rel_path AS BLOB))), 0)
+                FROM source_revision) AS revision_max_path_bytes,
+             (SELECT COALESCE(SUM(CASE
+                WHEN typeof(rel_path) <> 'text'
+                  OR length(CAST(rel_path AS BLOB)) NOT BETWEEN 1 AND ${MAX_HNSW_SNAPSHOT_PATH_BYTES}
+                  OR typeof(kind) <> 'text' OR kind NOT IN ('md', 'pdf')
+                  OR typeof(revision) <> 'integer'
+                  OR revision NOT BETWEEN 1 AND ${MAX_SOURCE_REVISION}
+                THEN 1 ELSE 0 END), 0)
+                FROM source_revision) AS revision_invalid_count`
+        )
+        .get<{
+          quarantine_count: unknown;
+          quarantine_path_bytes: unknown;
+          quarantine_max_path_bytes: unknown;
+          quarantine_invalid_count: unknown;
+          state_count: unknown;
+          state_path_bytes: unknown;
+          state_max_path_bytes: unknown;
+          state_invalid_count: unknown;
+          revision_count: unknown;
+          revision_path_bytes: unknown;
+          revision_max_path_bytes: unknown;
+          revision_invalid_count: unknown;
+        }>();
+      const authorityCounts = [
+        authorityEnvelope?.quarantine_count,
+        authorityEnvelope?.state_count,
+        authorityEnvelope?.revision_count
+      ];
+      const authorityPathBytes = [
+        authorityEnvelope?.quarantine_path_bytes,
+        authorityEnvelope?.state_path_bytes,
+        authorityEnvelope?.revision_path_bytes
+      ];
+      const authorityMaxPathBytes = [
+        authorityEnvelope?.quarantine_max_path_bytes,
+        authorityEnvelope?.state_max_path_bytes,
+        authorityEnvelope?.revision_max_path_bytes
+      ];
+      const authorityInvalidCounts = [
+        authorityEnvelope?.quarantine_invalid_count,
+        authorityEnvelope?.state_invalid_count,
+        authorityEnvelope?.revision_invalid_count
+      ];
+      if (
+        !authorityEnvelope ||
+        authorityCounts.some((value) => !Number.isSafeInteger(value) || (value as number) < 0) ||
+        authorityPathBytes.some((value) => !Number.isSafeInteger(value) || (value as number) < 0) ||
+        authorityMaxPathBytes.some((value) => !Number.isSafeInteger(value) || (value as number) < 0) ||
+        authorityInvalidCounts.some((value) => value !== 0)
+      ) {
+        throw new EmbedSnapshotIntegrityError("Embedding authority manifests are malformed during HNSW capture");
+      }
+      if (
+        authorityCounts.some((value) => (value as number) > MAX_HNSW_SNAPSHOT_ROWS) ||
+        authorityPathBytes.some((value) => (value as number) > MAX_HNSW_SNAPSHOT_TEXT_BYTES) ||
+        authorityMaxPathBytes.some((value) => (value as number) > MAX_HNSW_SNAPSHOT_PATH_BYTES)
+      ) {
+        throw new EmbedSnapshotCapacityError(
+          "Embedding authority manifests exceed the bounded HNSW snapshot admission envelope"
+        );
+      }
+
+      const liveLabelHash = createHash("sha256");
+      liveLabelHash.update("enquire-hnsw-live-labels-v2;");
+      const payloadHash = createHash("sha256");
+      payloadHash.update("enquire-hnsw-db-payload-v2;");
+      updateManifestValue(payloadHash, EMBED_DB_SCHEMA_VERSION);
+      updateManifestValue(payloadHash, this.modelAlias);
+      updateManifestValue(payloadHash, this.dim);
+      updateManifestValue(payloadHash, this.quantization);
+
+      const quarantineHash = createHash("sha256");
+      quarantineHash.update("enquire-hnsw-quarantine-v2;");
+      let quarantineCount = 0;
+      for (const row of db
+        .prepare("SELECT rel_path, kind FROM source_quarantine ORDER BY kind, rel_path")
+        .iterate<{ rel_path: unknown; kind: unknown }>()) {
+        if (
+          typeof row.rel_path !== "string" ||
+          row.rel_path.length === 0 ||
+          (row.kind !== "md" && row.kind !== "pdf")
+        ) {
+          throw new EmbedSnapshotIntegrityError(
+            "Embedding quarantine manifest is malformed during HNSW snapshot capture"
+          );
+        }
+        quarantineCount += 1;
+        updateManifestValue(quarantineHash, row.kind);
+        updateManifestValue(quarantineHash, row.rel_path);
+        payloadHash.update("quarantine;");
+        updateManifestValue(payloadHash, row.kind);
+        updateManifestValue(payloadHash, row.rel_path);
+      }
+
+      // A row-by-row validator alone cannot prove that the declared source
+      // generation is complete: deleting one otherwise-valid chunk would
+      // leave every surviving row admissible. Validate the live (that is,
+      // non-quarantined) source-state envelope inside this same SQLite
+      // snapshot before deriving a graph receipt. This binds HNSW admission to
+      // the exact declared cardinality and contiguous 0..n-1 chunk range,
+      // including sources whose physical embedding set vanished entirely.
+      for (const state of db
+        .prepare(
+          `SELECT s.rel_path, s.kind, s.mtime_ms, s.n_chunks,
+                  r.rel_path AS revision_rel_path, r.kind AS revision_kind,
+                  r.revision,
+                  COUNT(e.id) AS actual_count,
+                  MIN(e.chunk_index) AS min_chunk_index,
+                  MAX(e.chunk_index) AS max_chunk_index
+           FROM source_state AS s
+           LEFT JOIN source_quarantine AS q
+             ON q.rel_path = s.rel_path AND q.kind = s.kind
+           LEFT JOIN source_revision AS r
+             ON r.rel_path = s.rel_path AND r.kind = s.kind
+           LEFT JOIN embeddings AS e
+             ON e.rel_path = s.rel_path AND e.kind = s.kind
+           WHERE q.rel_path IS NULL
+           GROUP BY s.rel_path, s.kind, s.mtime_ms, s.n_chunks,
+                    r.rel_path, r.kind, r.revision
+           ORDER BY s.kind, s.rel_path`
+        )
+        .iterate<{
+          rel_path: unknown;
+          kind: unknown;
+          mtime_ms: unknown;
+          n_chunks: unknown;
+          revision_rel_path: unknown;
+          revision_kind: unknown;
+          revision: unknown;
+          actual_count: unknown;
+          min_chunk_index: unknown;
+          max_chunk_index: unknown;
+        }>()) {
+        if (
+          typeof state.rel_path !== "string" ||
+          state.rel_path.length === 0 ||
+          (state.kind !== "md" && state.kind !== "pdf") ||
+          typeof state.mtime_ms !== "number" ||
+          !Number.isFinite(state.mtime_ms) ||
+          !Number.isSafeInteger(state.n_chunks) ||
+          (state.n_chunks as number) < 1 ||
+          state.revision_rel_path !== state.rel_path ||
+          state.revision_kind !== state.kind ||
+          !Number.isSafeInteger(state.revision) ||
+          (state.revision as number) < 1 ||
+          (state.revision as number) > MAX_SOURCE_REVISION ||
+          !Number.isSafeInteger(state.actual_count) ||
+          state.actual_count !== state.n_chunks ||
+          state.min_chunk_index !== 0 ||
+          state.max_chunk_index !== (state.n_chunks as number) - 1
+        ) {
+          throw new EmbedSnapshotIntegrityError("Embedding source state is incomplete during HNSW snapshot capture");
+        }
+        payloadHash.update("source-state;");
+        updateManifestValue(payloadHash, state.kind);
+        updateManifestValue(payloadHash, state.rel_path);
+        updateManifestValue(payloadHash, state.mtime_ms);
+        updateManifestValue(payloadHash, state.n_chunks as number);
+        updateManifestValue(payloadHash, state.revision as number);
+      }
+
+      const aggregate = db
+        .prepare(
+          `SELECT COUNT(*) AS row_count,
+                  COALESCE(SUM(
+                    length(CAST(e.rel_path AS BLOB)) + length(CAST(e.text_preview AS BLOB))
+                  ), 0) AS text_bytes,
+                  COALESCE(MAX(length(CAST(e.rel_path AS BLOB))), 0) AS max_path_bytes,
+                  COALESCE(MAX(length(CAST(e.text_preview AS BLOB))), 0) AS max_preview_bytes,
+                  COALESCE(SUM(length(e.vector)), 0) AS vector_bytes,
+                  COALESCE(SUM(
+                    CASE WHEN typeof(e.vector) <> 'blob' OR length(e.vector) <> ? THEN 1 ELSE 0 END
+                  ), 0) AS invalid_vector_count,
+                  COALESCE(SUM(CASE
+                    WHEN typeof(e.id) <> 'integer' OR e.id NOT BETWEEN 0 AND ${MAX_HNSW_NATIVE_LABEL}
+                      OR typeof(e.rel_path) <> 'text'
+                      OR length(CAST(e.rel_path AS BLOB)) NOT BETWEEN 1 AND ${MAX_HNSW_SNAPSHOT_PATH_BYTES}
+                      OR typeof(e.chunk_index) <> 'integer' OR e.chunk_index < 0
+                      OR typeof(e.line_start) <> 'integer' OR e.line_start < 1
+                      OR typeof(e.line_end) <> 'integer' OR e.line_end < e.line_start
+                      OR typeof(e.text_preview) <> 'text'
+                      OR length(CAST(e.text_preview AS BLOB)) > ${MAX_HNSW_SNAPSHOT_PREVIEW_BYTES}
+                      OR typeof(e.kind) <> 'text' OR e.kind NOT IN ('md', 'pdf')
+                    THEN 1 ELSE 0 END), 0) AS invalid_scalar_count
+           FROM embeddings AS e
+           LEFT JOIN source_quarantine AS q
+             ON q.rel_path = e.rel_path AND q.kind = e.kind
+           WHERE q.rel_path IS NULL`
+        )
+        .get<{
+          row_count: unknown;
+          text_bytes: unknown;
+          max_path_bytes: unknown;
+          max_preview_bytes: unknown;
+          vector_bytes: unknown;
+          invalid_vector_count: unknown;
+          invalid_scalar_count: unknown;
+        }>(this.encodedBytes);
+      if (
+        !aggregate ||
+        !Number.isSafeInteger(aggregate.row_count) ||
+        (aggregate.row_count as number) < 0 ||
+        !Number.isSafeInteger(aggregate.text_bytes) ||
+        (aggregate.text_bytes as number) < 0 ||
+        !Number.isSafeInteger(aggregate.max_path_bytes) ||
+        (aggregate.max_path_bytes as number) < 0 ||
+        !Number.isSafeInteger(aggregate.max_preview_bytes) ||
+        (aggregate.max_preview_bytes as number) < 0 ||
+        !Number.isSafeInteger(aggregate.vector_bytes) ||
+        (aggregate.vector_bytes as number) < 0 ||
+        aggregate.invalid_vector_count !== 0 ||
+        aggregate.invalid_scalar_count !== 0 ||
+        aggregate.vector_bytes !== (aggregate.row_count as number) * this.encodedBytes
+      ) {
+        throw new EmbedSnapshotIntegrityError("Embedding rows are malformed during HNSW snapshot admission");
+      }
+
+      const rowCount = aggregate.row_count as number;
+      if (
+        rowCount > MAX_HNSW_SNAPSHOT_ROWS ||
+        (aggregate.text_bytes as number) > MAX_HNSW_SNAPSHOT_TEXT_BYTES ||
+        (aggregate.max_path_bytes as number) > MAX_HNSW_SNAPSHOT_PATH_BYTES ||
+        (aggregate.max_preview_bytes as number) > MAX_HNSW_SNAPSHOT_PREVIEW_BYTES
+      ) {
+        throw new EmbedSnapshotCapacityError(
+          "Embedding rows exceed the bounded combined HNSW working-set admission envelope"
+        );
+      }
+      const nativeCapacity = Math.max(HNSW_SNAPSHOT_MIN_NATIVE_CAPACITY, rowCount * 2);
+      const nativeBytesPerElement =
+        this.dim * 4 + HNSW_SNAPSHOT_DEFAULT_M * 2 * 4 + 4 + 8 + HNSW_SNAPSHOT_NATIVE_PER_ELEMENT_HEADROOM_BYTES;
+      const authorityManifestPathBytes = authorityPathBytes.reduce<number>(
+        (total, value) => total + (value as number),
+        0
+      );
+      // One fail-closed envelope covers resources that coexist during an HNSW
+      // boot: the worst admitted native capacity, all decoded Float32 vectors,
+      // all encoded SQLite BLOB bytes, detached JS row/map metadata, bounded
+      // text/path material, and fixed native/runtime headroom. Keeping each
+      // component below an independent cap is insufficient because their sum
+      // is the actual process working set.
+      const combinedWorkingSetBytes =
+        BigInt(HNSW_COMBINED_FIXED_HEADROOM_BYTES) +
+        BigInt(nativeCapacity) * BigInt(nativeBytesPerElement) +
+        // The caller-owned load snapshot and loadHnswFromDisk's detached
+        // authority copy coexist across native preflight/readIndex.
+        BigInt(rowCount) * BigInt(this.dim * 4) * 2n +
+        BigInt(aggregate.vector_bytes as number) +
+        // Build/load authority plus post-operation receipt recheck can keep
+        // three detached metadata projections live at one boot boundary.
+        BigInt(rowCount) * BigInt(HNSW_SNAPSHOT_METADATA_PER_ROW_BYTES) * 3n +
+        // SQLite reports UTF-8 bytes; charge the three live row-text
+        // projections, while authority paths retain the UTF-16 expansion
+        // allowance used by their single manifest projection.
+        BigInt(aggregate.text_bytes as number) * 3n +
+        BigInt(authorityManifestPathBytes) * 2n;
+      if (combinedWorkingSetBytes > BigInt(MAX_HNSW_COMBINED_WORKING_SET_BYTES)) {
+        throw new EmbedSnapshotCapacityError(
+          "Embedding rows exceed the bounded combined HNSW working-set admission envelope"
+        );
+      }
+
+      const rowsByLabel = new Map<number, HnswPersistenceRow>();
+      const vectorsByLabel = new Map<number, Float32Array>();
+      const vectors: HnswBuildSnapshot["vectors"] = [];
+      let maxLabel = 0;
+      const rows = db
+        .prepare(
+          `SELECT e.id AS label, e.rel_path, e.chunk_index, e.line_start, e.line_end,
+                  e.text_preview, e.vector, e.kind,
+                  s.rel_path AS state_rel_path, s.kind AS state_kind,
+                  s.mtime_ms AS indexed_mtime_ms,
+                  r.rel_path AS revision_rel_path, r.kind AS revision_kind,
+                  r.revision AS indexed_revision,
+                  q.rel_path AS quarantine_rel_path
+           FROM embeddings e
+           LEFT JOIN source_state s ON s.rel_path = e.rel_path AND s.kind = e.kind
+           LEFT JOIN source_revision r ON r.rel_path = e.rel_path AND r.kind = e.kind
+           LEFT JOIN source_quarantine q ON q.rel_path = e.rel_path AND q.kind = e.kind
+           WHERE q.rel_path IS NULL
+           ORDER BY e.id`
+        )
+        .iterate<{
+          label: unknown;
+          rel_path: unknown;
+          chunk_index: unknown;
+          line_start: unknown;
+          line_end: unknown;
+          text_preview: unknown;
+          vector: unknown;
+          kind: unknown;
+          state_rel_path: unknown;
+          state_kind: unknown;
+          indexed_mtime_ms: unknown;
+          revision_rel_path: unknown;
+          revision_kind: unknown;
+          indexed_revision: unknown;
+          quarantine_rel_path: unknown;
+        }>();
+      for (const row of rows) {
+        if (
+          !Number.isSafeInteger(row.label) ||
+          (row.label as number) < 0 ||
+          (row.label as number) > MAX_HNSW_NATIVE_LABEL ||
+          rowsByLabel.has(row.label as number) ||
+          typeof row.rel_path !== "string" ||
+          row.rel_path.length === 0 ||
+          (row.kind !== "md" && row.kind !== "pdf") ||
+          row.state_rel_path !== row.rel_path ||
+          row.state_kind !== row.kind ||
+          row.revision_rel_path !== row.rel_path ||
+          row.revision_kind !== row.kind ||
+          typeof row.indexed_mtime_ms !== "number" ||
+          !Number.isFinite(row.indexed_mtime_ms) ||
+          !Number.isSafeInteger(row.indexed_revision) ||
+          (row.indexed_revision as number) < 1 ||
+          (row.indexed_revision as number) > MAX_SOURCE_REVISION ||
+          !Number.isSafeInteger(row.chunk_index) ||
+          (row.chunk_index as number) < 0 ||
+          !Number.isSafeInteger(row.line_start) ||
+          (row.line_start as number) < 1 ||
+          !Number.isSafeInteger(row.line_end) ||
+          (row.line_end as number) < (row.line_start as number) ||
+          typeof row.text_preview !== "string" ||
+          !Buffer.isBuffer(row.vector) ||
+          row.vector.byteLength !== this.encodedBytes
+        ) {
+          throw new EmbedSnapshotIntegrityError("Embedding row is not admissible for a complete HNSW snapshot");
+        }
+
+        let vector: Float32Array;
+        try {
+          if (this.quantization === "int8") {
+            const vMin = row.vector.readFloatLE(this.dim);
+            const scale = row.vector.readFloatLE(this.dim + 4);
+            if (!Number.isFinite(vMin) || !Number.isFinite(scale) || scale <= 0) {
+              throw new Error("invalid quantization trailer");
+            }
+            vector = decodeInt8Vector(row.vector, this.dim);
+          } else {
+            vector = new Float32Array(this.dim);
+            for (let index = 0; index < this.dim; index += 1) {
+              vector[index] = row.vector.readFloatLE(index * 4);
+            }
+          }
+        } catch {
+          throw new EmbedSnapshotIntegrityError("Embedding vector cannot be decoded for HNSW snapshot capture");
+        }
+        const normSquared = vectorNormSquared(vector);
+        if (
+          !Number.isFinite(normSquared) ||
+          normSquared < HNSW_VECTOR_NORM_SQUARED_MIN ||
+          normSquared > HNSW_VECTOR_NORM_SQUARED_MAX
+        ) {
+          throw new EmbedSnapshotIntegrityError(
+            "Embedding vector is not finite, non-zero, and normalized for HNSW snapshot capture"
+          );
+        }
+
+        const label = row.label as number;
+        const kind = row.kind as EmbedChunkKind;
+        const metadata: HnswPersistenceRow = {
+          rel_path: row.rel_path,
+          chunk_index: row.chunk_index as number,
+          line_start: row.line_start as number,
+          line_end: row.line_end as number,
+          text_preview: row.text_preview,
+          kind
+        };
+        rowsByLabel.set(label, metadata);
+        maxLabel = label;
+        updateManifestValue(liveLabelHash, label);
+        payloadHash.update("embedding;");
+        updateManifestValue(payloadHash, label);
+        updateManifestValue(payloadHash, metadata.rel_path);
+        updateManifestValue(payloadHash, metadata.kind);
+        updateManifestValue(payloadHash, metadata.chunk_index);
+        updateManifestValue(payloadHash, metadata.line_start);
+        updateManifestValue(payloadHash, metadata.line_end);
+        updateManifestValue(payloadHash, metadata.text_preview);
+        updateManifestValue(payloadHash, row.indexed_mtime_ms);
+        updateManifestValue(payloadHash, row.indexed_revision as number);
+        updateManifestValue(payloadHash, row.vector);
+        if (mode === "load") vectorsByLabel.set(label, vector);
+        if (mode === "build") vectors.push({ label, vector, ...metadata });
+      }
+
+      const liveLabelSha256 = liveLabelHash.digest("hex");
+      const dbPayloadSha256 = payloadHash.digest("hex");
+      const quarantineSuffix = quarantineCount > 0 ? `;quarantine=${quarantineHash.digest("hex")}` : "";
+      const receipt: HnswPersistenceReceipt = {
+        version: HNSW_RECEIPT_VERSION,
+        signature:
+          `instance=${dbInstanceUuid};epoch=${dbMutationEpoch};dim=${this.dim};rows=${rowsByLabel.size};` +
+          `maxId=${maxLabel};model=${this.modelAlias};` +
+          `quant=${this.quantization};embedSchema=${EMBED_DB_SCHEMA_VERSION};labels=${liveLabelSha256};` +
+          `payload=${dbPayloadSha256}${quarantineSuffix}`,
+        dbInstanceUuid,
+        dbMutationEpoch,
+        dim: this.dim,
+        activeRows: rowsByLabel.size,
+        maxLabel,
+        liveLabelSha256,
+        dbPayloadSha256
+      };
+      const snapshot: HnswReceiptSnapshot = { receipt, rowsByLabel };
+      if (mode === "load") return { ...snapshot, vectorsByLabel };
+      if (mode === "build") return { ...snapshot, vectors };
+      return snapshot;
+    });
+    return capture();
   }
 }
 
@@ -2041,23 +3332,32 @@ export function defaultEmbedDbFile(vaultHashPrefix: string): string {
 
 /**
  * v3.10.0-rc.20 (audit M7) — derive the HNSW persistence base for an embed-db
- * file. `<dir>/<x>.embed.db` → `<dir>/<x>.hnsw`; the index writes `<base>.bin`
- * and the metadata writes `<base>.meta.json` (see `src/hnsw.ts`).
+ * file. `<dir>/<x>.embed.db` → `<dir>/<x>.hnsw`; the index writes immutable
+ * `<base>.<nonce>.bin` generations and a stable `<base>.meta.json` pointer.
  *
  * SINGLE SOURCE OF TRUTH for the base so the WRITER (server.ts `persistFile`,
  * passed to `saveTo`/`loadHnswFromDisk`) and the ERASER ({@link EmbedDb.clearOnDisk})
  * can NEVER drift. If they computed the base independently and one changed (the
  * strip regex or the `.hnsw` suffix), `clear-embeddings` would leave the HNSW
- * sidecars on disk — and `.hnsw.meta.json` carries raw `text_preview`, so that's
- * a right-to-erasure (GDPR) gap (the rc.34 P-2 class). The erasure-completeness
- * invariant asserts both call sites route through this helper.
+ * sidecars on disk — historical format-2 metadata carried raw `text_preview`
+ * and current native generations still contain reversible vector material,
+ * so that remains a right-to-erasure gap (the rc.34 P-2 class). The
+ * erasure-completeness invariant asserts both call sites route through this helper.
+ *
+ * @param embedDbFile - Configured embedding-database path.
+ * @returns Same-directory HNSW persistence base for that exact path.
+ * @throws {TypeError} If the configured path does not end exactly in `.embed.db`.
+ * @example
+ * hnswPersistBase("/tmp/aaaaaaaaaaaa.embed.db"); // "/tmp/aaaaaaaaaaaa.hnsw"
  */
 export function hnswPersistBase(embedDbFile: string): string {
-  return `${embedDbFile.replace(/\.embed\.db$/, "")}.hnsw`;
+  return `${embedDbFileStem(embedDbFile)}.hnsw`;
 }
 
 /**
- * Non-mutating authority check over an existing embedding database.
+ * Database-content-non-mutating authority check over an existing embedding
+ * database. Opening and closing do publish then remove private persistence
+ * coordination markers; the configured SQLite family remains read-only.
  * Implementations are safe to keep open across awaited vault reads: each
  * validation call starts a fresh read transaction, while every receipt in one
  * batch shares that transaction's SQLite snapshot.
@@ -2105,7 +3405,10 @@ export interface EmbedReceiptReader {
    */
   currentSourceReceiptMask(receipts: readonly EmbedSourceReceipt[]): boolean[];
   /**
-   * Close the read-only SQLite handle. Idempotent.
+   * Close the read-only SQLite handle and begin releasing its exact shared
+   * semantic-family lifetime. Idempotent. Release rejection is observed
+   * internally and retained by the persistence debt registry; callers that
+   * need teardown completion or an explicit retry use {@link closeAndRelease}.
    *
    * @returns Nothing.
    * @example
@@ -2114,16 +3417,34 @@ export interface EmbedReceiptReader {
    * ```
    */
   close(): void;
+  /**
+   * Close SQLite and await exact shared-lifetime release. A failed release
+   * remains retryable through a later invocation against the same ownership
+   * handle.
+   *
+   * @returns After both the native handle and shared lease are released.
+   * @example
+   * ```ts
+   * await reader.closeAndRelease();
+   * ```
+   */
+  closeAndRelease(): Promise<void>;
 }
 
 /**
  * Open an existing embedding database strictly read-only for final receipt
- * validation. This function never bootstraps, rebuilds, migrates, or writes:
- * missing files and legacy/incompatible authority schemas are rejected.
+ * validation. This function never bootstraps, rebuilds, migrates, or writes the
+ * configured SQLite family: missing files and legacy/incompatible authority
+ * schemas are rejected. It does hold private shared coordination markers for
+ * the reader lifetime. The main/WAL/SHM/rollback-journal family is checked
+ * before dependency loading and again immediately before native open; every
+ * present leaf must be a singly linked regular file and the main must exist.
  *
  * @param file Absolute path to an existing `.embed.db` file.
  * @param expectedVaultRoot Exact vault root the database must declare.
  * @returns A synchronous receipt validator backed by a read-only SQLite handle.
+ * @throws {TypeError} If `file` is outside the exact `.embed.db` namespace;
+ *   this is checked before dependency loading or filesystem I/O.
  * @throws {Error} If the file is absent, belongs to another vault, or lacks the current revision ledger contract.
  * @example
  * ```ts
@@ -2136,18 +3457,22 @@ export interface EmbedReceiptReader {
  * ```
  */
 export async function openEmbedReceiptReader(file: string, expectedVaultRoot: string): Promise<EmbedReceiptReader> {
-  const Ctor = await loadBetterSqlite();
+  assertEmbedDbFilePath(file);
   let db: Db | null = null;
+  let lifetime: PersistenceFamilyLeaseHandle | null = null;
   try {
+    if (!(await preflightSqliteArtifactFamily(file))) throw new Error("missing embedding receipt database");
+    lifetime = await acquirePersistenceFamilyLease({
+      targetPath: file,
+      familyKey: SEMANTIC_PERSISTENCE_FAMILY_KEY,
+      role: "shared"
+    });
+    file = embedDbPathInSemanticScopes(lifetime.scopes);
+    const Ctor = await loadBetterSqlite();
+    if (!(await preflightSqliteArtifactFamily(file))) throw new Error("missing embedding receipt database");
     db = new Ctor(file, { readonly: true, fileMustExist: true }) as Db;
-    const metaRows = db
-      .prepare("SELECT key, value FROM meta WHERE key IN ('schema_version', 'vault_root')")
-      .all<{ key: string; value: string }>();
-    const meta = new Map(metaRows.map((row) => [row.key, row.value]));
-    if (
-      meta.get("vault_root") !== expectedVaultRoot ||
-      meta.get("schema_version") !== String(EMBED_DB_SCHEMA_VERSION)
-    ) {
+    const admission = inspectEmbedAdmission(db, expectedVaultRoot);
+    if (admission.kind !== "owned" || admission.meta.schema_version !== String(EMBED_DB_SCHEMA_VERSION)) {
       throw new Error("incompatible embedding metadata");
     }
 
@@ -2196,7 +3521,58 @@ export async function openEmbedReceiptReader(file: string, expectedVaultRoot: st
     // starting a transaction or writing to the target database.
     db.prepare(CURRENT_SOURCE_RECEIPT_SQL);
     let activeDb: Db | null = db;
+    const activeLifetime = lifetime;
+    let lifetimeReleased = false;
+    let releaseAttempt: Promise<void> | null = null;
     db = null;
+    lifetime = null;
+
+    const releaseLifetime = (): Promise<void> => {
+      if (lifetimeReleased) return Promise.resolve();
+      if (releaseAttempt) return releaseAttempt;
+      const attempt = activeLifetime.release();
+      const tracked = attempt.then(
+        () => {
+          lifetimeReleased = true;
+          if (releaseAttempt === tracked) releaseAttempt = null;
+        },
+        (error: unknown) => {
+          if (releaseAttempt === tracked) releaseAttempt = null;
+          throw error;
+        }
+      );
+      releaseAttempt = tracked;
+      // `close()` is intentionally synchronous for terminal egress paths.
+      // Observe a failed background release while the lease layer retains its
+      // exact retryable ownership debt for `closeAndRelease()` or shutdown.
+      void tracked.catch(() => {});
+      return tracked;
+    };
+
+    const closeDb = (): void => {
+      const closingDb = activeDb;
+      activeDb = null;
+      closingDb?.close();
+    };
+
+    const closeAndRelease = async (): Promise<void> => {
+      const errors: unknown[] = [];
+      try {
+        closeDb();
+      } catch (error) {
+        errors.push(error);
+      }
+      try {
+        await releaseLifetime();
+      } catch (error) {
+        errors.push(error);
+      }
+      if (errors.length === 1) throw errors[0];
+      if (errors.length > 1) {
+        throw new AggregateError(errors, "Embedding receipt reader close and persistence release both failed");
+      }
+    };
+
     return {
       isCurrentSourceReceipt(relPath, kind, indexedMtimeMs, indexedRevision) {
         return activeDb ? currentSourceReceipt(activeDb, relPath, kind, indexedMtimeMs, indexedRevision) : false;
@@ -2205,17 +3581,50 @@ export async function openEmbedReceiptReader(file: string, expectedVaultRoot: st
         return activeDb ? currentSourceReceiptMaskFromDb(activeDb, receipts) : receipts.map(() => false);
       },
       close() {
-        const closingDb = activeDb;
-        activeDb = null;
-        closingDb?.close();
-      }
+        let closeError: unknown;
+        try {
+          closeDb();
+        } catch (error) {
+          closeError = error;
+        }
+        void releaseLifetime();
+        if (closeError !== undefined) throw closeError;
+      },
+      closeAndRelease
     };
-  } catch {
+  } catch (openError) {
+    // Ownership and debt-capacity are specialized IntegrityErrors, but they
+    // carry current-process cleanup authority or a latched capacity refusal
+    // that must remain visible to the caller. Only an ordinary untrusted-
+    // namespace IntegrityError is laundered into the path-free compatibility
+    // diagnostic used by this read-only admission boundary.
+    const passthroughOpenError =
+      openError instanceof PersistenceLeaseOwnershipError ||
+      openError instanceof PersistenceLeaseDebtCapacityError ||
+      (openError instanceof PersistenceLeaseError && !(openError instanceof PersistenceLeaseIntegrityError))
+        ? openError
+        : null;
+    const rollbackErrors: unknown[] = [];
     try {
       db?.close();
-    } catch {
-      // Preserve the stable, path-free compatibility error below.
+    } catch (error) {
+      rollbackErrors.push(error);
     }
+    try {
+      await lifetime?.release();
+    } catch (error) {
+      rollbackErrors.push(error);
+    }
+    if (rollbackErrors.length > 0) {
+      const stableOpenError =
+        passthroughOpenError ??
+        new Error("Embedding receipt reader requires an existing compatible index for the expected vault");
+      throw new AggregateError(
+        [stableOpenError, ...rollbackErrors],
+        "Embedding receipt reader open failed and coordinated rollback was incomplete"
+      );
+    }
+    if (passthroughOpenError) throw passthroughOpenError;
     throw new Error("Embedding receipt reader requires an existing compatible index for the expected vault");
   }
 }
@@ -2260,13 +3669,17 @@ function cloneEmbedDbOpenDiscovery(expected: EmbedDbConfigDiscovery | undefined)
     const modelAlias = meta?.model_alias;
     const dim = meta?.dim;
     const quantization = meta?.quantization;
+    const instanceUuid = meta?.instance_uuid;
+    const mutationEpoch = meta?.mutation_epoch;
     if (
       kind === "owned" &&
       typeof schemaVersion === "string" &&
       typeof vaultRoot === "string" &&
       typeof modelAlias === "string" &&
       typeof dim === "string" &&
-      (quantization === undefined || quantization === "f32" || quantization === "int8")
+      (quantization === undefined || quantization === "f32" || quantization === "int8") &&
+      (instanceUuid === undefined || typeof instanceUuid === "string") &&
+      (mutationEpoch === undefined || typeof mutationEpoch === "string")
     ) {
       return Object.freeze({
         kind: "owned",
@@ -2275,7 +3688,9 @@ function cloneEmbedDbOpenDiscovery(expected: EmbedDbConfigDiscovery | undefined)
           vault_root: vaultRoot,
           model_alias: modelAlias,
           dim,
-          ...(quantization === undefined ? {} : { quantization })
+          ...(quantization === undefined ? {} : { quantization }),
+          ...(instanceUuid === undefined ? {} : { instance_uuid: instanceUuid }),
+          ...(mutationEpoch === undefined ? {} : { mutation_epoch: mutationEpoch })
         })
       });
     }
@@ -2301,7 +3716,9 @@ function assertExpectedEmbedDiscovery(
       expected.meta.vault_root === admission.meta.vault_root &&
       expected.meta.model_alias === admission.meta.model_alias &&
       expected.meta.dim === admission.meta.dim &&
-      expected.meta.quantization === admission.meta.quantization);
+      expected.meta.quantization === admission.meta.quantization &&
+      expected.meta.instance_uuid === admission.meta.instance_uuid &&
+      expected.meta.mutation_epoch === admission.meta.mutation_epoch);
   if (!matches) throw new Error(EMBED_DISCOVERY_CHANGED_ERROR);
 }
 
@@ -2312,7 +3729,10 @@ function assertExpectedEmbedDiscovery(
  * class/schema/root admission used by `EmbedDb.open()`. Open, read, dependency,
  * and close failures collapse to `refused`; this function does not throw
  * expected discovery errors. SQLite/VFS lock, recovery, and WAL/SHM
- * bookkeeping remain outside this logical guarantee.
+ * bookkeeping remain outside this logical guarantee. The complete main/WAL/
+ * SHM/rollback-journal family is checked before dependency loading and again
+ * immediately before native open; unsafe, hardlinked, or orphaned leaves
+ * collapse to `refused` under the stable-parent boundary.
  *
  * This is a bounded pre-open configuration snapshot. Pass it to
  * {@link EmbedDb.open} to bind the mutating open to that observed state; open
@@ -2322,6 +3742,8 @@ function assertExpectedEmbedDiscovery(
  * @param file - Absolute path to the candidate embedding database.
  * @param expectedVaultRoot - Exact vault root allowed to own a populated file.
  * @returns A discriminated, path-free discovery result. Only `owned` carries metadata.
+ * @throws {TypeError} If `file` does not end exactly in `.embed.db`; expected
+ *   discovery failures are fail-soft only after this pure namespace admission.
  * @example
  * ```ts
  * const discovery = await discoverEmbedDbConfig(embedFile, canonicalVaultRoot);
@@ -2339,12 +3761,14 @@ function assertExpectedEmbedDiscovery(
  * ```
  */
 export async function discoverEmbedDbConfig(file: string, expectedVaultRoot: string): Promise<EmbedDbConfigDiscovery> {
+  assertEmbedDbFilePath(file);
+  let fileExisted: boolean;
   try {
-    const artifact = await fs.lstat(file);
-    if (!artifact.isFile()) return { kind: "refused" };
-  } catch (error) {
-    return errnoCode(error) === "ENOENT" ? { kind: "missing" } : { kind: "refused" };
+    fileExisted = await preflightSqliteArtifactFamily(file);
+  } catch {
+    return { kind: "refused" };
   }
+  if (!fileExisted) return { kind: "missing" };
 
   let Ctor: BetterSqliteConstructor;
   try {
@@ -2356,6 +3780,7 @@ export async function discoverEmbedDbConfig(file: string, expectedVaultRoot: str
   let db: Db | null = null;
   let discovery: EmbedDbConfigDiscovery = { kind: "refused" };
   try {
+    if (!(await preflightSqliteArtifactFamily(file))) return { kind: "missing" };
     db = new Ctor(file, { readonly: true, fileMustExist: true }) as Db;
     const admission = inspectEmbedAdmission(db, expectedVaultRoot);
     if (admission.kind === "empty") {
@@ -2389,6 +3814,7 @@ export async function discoverEmbedDbConfig(file: string, expectedVaultRoot: str
  * @param file - Absolute path to the embedding database associated with recovery.
  * @param expectedVaultRoot - Exact vault root allowed to own a present database.
  * @returns A promise that resolves for a missing or exact-owned supported database.
+ * @throws {TypeError} If `file` does not end exactly in `.embed.db`.
  * @throws {Error} If a present database cannot prove recovery ownership.
  * @example
  * ```ts
@@ -2419,13 +3845,18 @@ type PeekEmbedDbMetaResult = {
  * Without an expected root it may expose only bounded known raw keys; with an
  * expected root it returns metadata only after the complete readonly
  * class/schema/root admission. Missing dependencies, unreadable/corrupt files,
- * malformed rows and query failures collapse to `null`. A close failure never
- * escapes; this legacy diagnostic may still return metadata already read.
+ * malformed rows and query failures collapse to `null` after exact namespace
+ * admission. An invalid suffix throws before I/O. A close failure never escapes;
+ * this legacy diagnostic may still return metadata already read. The complete
+ * main/WAL/SHM/rollback-journal family receives the same two-stage singly
+ * linked regular-file preflight as production discovery; an unsafe or orphaned
+ * leaf returns `null` before native open.
  *
  * @param file - Absolute path to a `.embed.db` file.
  * @param expectedVaultRoot - Optional exact root plus full-class filter for
  *   configuration discovery. Omit only for bounded raw diagnostics.
  * @returns Bounded metadata when readable and root-compatible, otherwise `null`.
+ * @throws {TypeError} If `file` does not end exactly in `.embed.db`.
  * @example
  * ```ts
  * const meta = await peekEmbedDbMeta(embedFile, canonicalVaultRoot);
@@ -2433,8 +3864,12 @@ type PeekEmbedDbMetaResult = {
  * ```
  */
 export async function peekEmbedDbMeta(file: string, expectedVaultRoot?: string): Promise<PeekEmbedDbMetaResult> {
-  const fsMod = await import("node:fs");
-  if (!fsMod.existsSync(file)) return null;
+  assertEmbedDbFilePath(file);
+  try {
+    if (!(await preflightSqliteArtifactFamily(file))) return null;
+  } catch {
+    return null;
+  }
   // Lazy-import better-sqlite3 (optionalDependency).
   let Database: typeof import("better-sqlite3");
   try {
@@ -2453,6 +3888,7 @@ export async function peekEmbedDbMeta(file: string, expectedVaultRoot?: string):
   };
   let db: PeekDb | null = null;
   try {
+    if (!(await preflightSqliteArtifactFamily(file))) return null;
     db = new Database(file, { readonly: true, fileMustExist: true }) as unknown as PeekDb;
     if (expectedVaultRoot !== undefined) {
       const admission = inspectEmbedAdmission(db as unknown as Db, expectedVaultRoot);
@@ -2640,6 +4076,7 @@ export function lruMapSet<K, V>(map: Map<K, V>, key: K, value: V, max: number): 
  * @param file - Absolute path to the candidate embedding database.
  * @param expectedVaultRoot - Exact vault root allowed to own a populated file.
  * @returns The same four-state result as {@link discoverEmbedDbConfig}.
+ * @throws {TypeError} If `file` does not end exactly in `.embed.db`.
  * @example
  * ```ts
  * const discovery = await discoverEmbedDbConfigCached(embedFile, vault.root);
@@ -2651,6 +4088,7 @@ export async function discoverEmbedDbConfigCached(
   file: string,
   expectedVaultRoot: string
 ): Promise<EmbedDbConfigDiscovery> {
+  assertEmbedDbFilePath(file);
   const cacheKey = embedConfigDiscoveryCacheKey(file, expectedVaultRoot);
   const before = await readEmbedConfigDiscoveryFingerprint(file);
   if (before === null) {
@@ -2722,12 +4160,14 @@ export async function discoverEmbedDbConfigCached(
  * @param expectedVaultRoot - Optional exact root plus full-class filter; omit
  *   for raw bounded diagnostics.
  * @returns Cached bounded metadata when class/root-compatible, null otherwise.
+ * @throws {TypeError} If `file` does not end exactly in `.embed.db`.
  * @example
  * ```ts
  * const meta = await peekEmbedDbMetaCached(embedFile, canonicalVaultRoot);
  * ```
  */
 export async function peekEmbedDbMetaCached(file: string, expectedVaultRoot?: string): Promise<PeekEmbedDbMetaResult> {
+  assertEmbedDbFilePath(file);
   const fsMod = await import("node:fs/promises");
   const cacheKey = peekCacheKey(file, expectedVaultRoot);
   let mtimeMs: number;

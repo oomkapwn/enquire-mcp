@@ -48,7 +48,7 @@ Tu bóveda de Obsidian se convierte en **memoria a largo plazo persistente y con
 > 3. **Cero llamadas de red salientes iniciadas por enquire durante `serve`.** El modelo de embeddings q8 se ejecuta **en tu máquina** e indexa el markdown que **tú** escribiste: por eso es una descarga local explícita y única (~118 MB), no una clave de API en la nube. El contenido solo se devuelve al cliente MCP que conectas; el tratamiento que haga ese cliente o túnel de los datos es su propio límite de confianza ([garantizado](./SECURITY.md), no aspiracional).
 > 4. **Recuperación consciente de la frescura.** Cada resultado informa de la antigüedad de la nota; el reordenamiento por recencia opcional permite que un agente prefiera el conocimiento reciente y marque los hechos obsoletos para reverificación: la frontera consciente del olvido, construida sobre el `mtime` que tus archivos ya tienen.
 
-**46 herramientas · 19 prompts MCP · 1807+ pruebas unitarias · 50+ idiomas · v3.11.x estable · ligado a semver · MIT · procedencia de compilación en npm (SLSA L2).**
+**46 herramientas · 19 prompts MCP · 2212+ pruebas unitarias · 50+ idiomas · v3.11.x estable · ligado a semver · MIT · procedencia de compilación en npm (SLSA L2).**
 
 ---
 
@@ -67,7 +67,7 @@ Tu bóveda de Obsidian se convierte en **memoria a largo plazo persistente y con
 | **Toda la superficie de conocimiento de Obsidian** | ✅ Markdown, wikilinks, frontmatter, Canvas, Bases, PDF y OCR |
 | **Recuperación agéntica para preguntas difíciles** | ✅ HyDE, descomposición en subpreguntas, paquetes de contexto, GraphRAG-light y 19 prompts MCP |
 | **Escala sin ceder el control** | ✅ Actualizaciones HNSW en vivo, persistencia, relleno adaptativo y cuantización int8 |
-| **Confianza para producción** | ✅ Solo lectura por defecto, filtros de privacidad, HTTP autenticado, contratos semver, 1807 pruebas, 12 gates de publicación y procedencia SLSA L2 |
+| **Confianza para producción** | ✅ Solo lectura por defecto, filtros de privacidad, HTTP autenticado, contratos semver, 2212 pruebas, 13 gates de publicación y procedencia SLSA L2 |
 
 **Una bóveda. Todos los agentes. La pila completa. Sin dependencia de la nube.**
 
@@ -97,7 +97,7 @@ Conéctalo a cualquier cliente MCP:
 
 ### ¿Un paquete de escritorio revisable? MCPB Basic
 
-El [GitHub Release `v4.0.0-rc.3`](https://github.com/oomkapwn/enquire-mcp/releases/tag/v4.0.0-rc.3) ofrece `enquire-mcp-basic-4.0.0-rc.3.mcpb` junto con su checksum, inventario, SBOM, avisos y procedencia. El paquete incluye el JavaScript del servidor y dependencias normales; el host MCPB compatible debe proporcionar Node.js 22.13 o posterior.
+El [GitHub Release `v4.0.0-rc.4`](https://github.com/oomkapwn/enquire-mcp/releases/tag/v4.0.0-rc.4) ofrece `enquire-mcp-basic-4.0.0-rc.4.mcpb` junto con su checksum, inventario, SBOM, avisos y procedencia. El paquete incluye el JavaScript del servidor y dependencias normales; el host MCPB compatible debe proporcionar Node.js 22.13 o posterior.
 
 Basic queda limitado a **13 herramientas de solo lectura** y **0 prompts**: sin escritura, índices persistentes, modelos, PDF/OCR ni watcher. Aún falta la validación del mantenedor en la GUI real, firma, aprobación del directorio y catálogo. enquire no inicia llamadas salientes al servir, pero el texto solicitado pasa al cliente MCP conectado y queda sujeto a sus términos de privacidad.
 
@@ -106,7 +106,7 @@ Basic queda limitado a **13 herramientas de solo lectura** y **0 prompts**: sin 
 **¿Quieres toda la potencia híbrida?** Completa la preparación híbrida y luego inicia el servidor:
 
 ```bash
-npm install -g @oomkapwn/enquire-mcp@4.0.0-rc.3      # exact prerelease package
+npm install -g @oomkapwn/enquire-mcp@4.0.0-rc.4      # exact prerelease package
 enquire-mcp --version
 # recommended: preview first, then explicitly apply the same package-coherent plan
 enquire-mcp first-run --tier hybrid --client claude-desktop --vault <path>
@@ -278,8 +278,8 @@ Además 3 recursos MCP (`obsidian://vault/info`, `obsidian://note/{path}`, `obsi
 | **Transporte HTTP** | Autenticación bearer (SHA-256 de tiempo constante + `timingSafeEqual`), límite de tasa por token, CORS estricto |
 | **Frontmatter** | `js-yaml@5` `load` (esquema núcleo YAML 1.2, seguro por defecto) — sin ejecución de código |
 | **Archivos de caché + índice** | Cuando funcionan los modos POSIX, Enquire vuelve a aplicar `0600` a los archivos sensibles con el mejor esfuerzo; un directorio padre creado por Enquire empieza con `0700`, mientras que uno existente/personalizado sigue administrado por el operador |
-| **1807 pruebas unitarias · 12 comprobaciones de CI requeridas para release · 7 protegidas actualmente** | Estado de publicación verificado; el detalle operativo está fijado debajo. |
-| **CI** | `release.yml` enumera directamente **12 gates de release**, todos ejecutados en cada PR: `lint`, `test (22)`, `test (24)`, `smoke`, `audit`, `coverage`, `version-consistency`, `docs`, `oia`, `protocol-conformance`, `package-consumer` y `mcpb-basic`. El job Windows hostile-filesystem fijado `test-windows` es un check-run adicional con nombre, exigido de forma transitiva como prerrequisito bloqueante de `smoke`. La protección de rama exige actualmente solo **7**; `docs`, `oia`, `protocol-conformance`, `package-consumer` y `mcpb-basic` son necesarias para publicar, pero no están protegidas (snapshot verificado en vivo el 2026-07-23). `test-macos` es el único job indicativo con `continue-on-error`. `docker` puede hacer fallar el workflow de CI, pero no está protegido; CodeQL ejecuta dos análisis separados no protegidos mediante el [default setup de GitHub](https://docs.github.com/code-security/code-scanning/automatically-scanning-your-code-for-vulnerabilities-and-errors/configuring-default-setup-for-code-scanning). Antes de npm publish, `release.yml` reverifica los 12 gates que enumera directamente en el SHA etiquetado. |
+| **2212 pruebas unitarias · 13 comprobaciones de CI requeridas para release · las 13 protegidas actualmente** | Estado de publicación verificado; el detalle operativo está fijado debajo. |
+| **CI** | `release.yml` enumera directamente **13 gates de release**, todos ejecutados en cada PR: `lint`, `test (22)`, `test (24)`, `smoke`, `audit`, `coverage`, `version-consistency`, `docs`, `oia`, `protocol-conformance`, `package-consumer`, `mcpb-basic` y `docker`. El job Windows hostile-filesystem fijado `test-windows` es un check-run adicional con nombre, exigido de forma transitiva como prerrequisito bloqueante de `smoke`. La protección de rama exige ahora los **13** (snapshot verificado en vivo el 2026-08-21). `test-macos` es el único job indicativo con `continue-on-error`. El gate `docker` construye la imagen y ejecuta probes acotados de CLI e introspección MCP; CodeQL ejecuta dos análisis separados no protegidos mediante el [default setup de GitHub](https://docs.github.com/code-security/code-scanning/automatically-scanning-your-code-for-vulnerabilities-and-errors/configuring-default-setup-for-code-scanning). Antes de npm publish, `release.yml` reverifica los 13 gates que enumera directamente en el SHA etiquetado. |
 | **Cobertura** | Líneas ≥86 % · sentencias ≥82 % · funciones ≥75 % · ramas ≥74 % (con guarda) |
 | **Publicación de versiones** | npm + GitHub release por cada tag · semver · **procedencia de compilación firmada** (npm + Sigstore, SLSA Build L2; generador L3 en la hoja de ruta) |
 | **Estabilidad** | v3.0+ ligada a semver — cada flag de CLI, nombre de herramienta, recurso MCP, prompt y símbolo exportado es un contrato |

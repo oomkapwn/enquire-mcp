@@ -78,7 +78,10 @@ describe("rollback-safe batch write cancellation", () => {
     await fs.utimes(destinationAbs, fixedCacheTime, fixedCacheTime);
     expect((await fs.stat(destinationAbs)).mtimeMs).toBe(cachedDestinationStat.mtimeMs);
     expect(await fs.readFile(destinationAbs, "utf8")).toBe(replacementDestination);
-    expect((await vault.readNote(destinationAbs, cachedDestinationStat.mtimeMs)).content).toBe(cachedDestination);
+    // A restored mtime is no longer cache authority by itself: the private
+    // source receipt must detect the same-size replacement before rename_note
+    // snapshots the rollback bytes.
+    expect((await vault.readNote(destinationAbs, cachedDestinationStat.mtimeMs)).content).toBe(replacementDestination);
     originals.set("Dest.md", replacementDestination);
     const abort = new AbortController();
     const writeNote = vault.writeNote.bind(vault);

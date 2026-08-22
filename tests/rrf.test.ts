@@ -119,14 +119,75 @@ describe("reciprocalRankFusion (v2.0 beta)", () => {
     expect(fused[0]?.score).toBeCloseTo(1 / (k + 1), 6);
   });
 
-  it("rejects non-positive k", () => {
-    expect(() => reciprocalRankFusion({}, { k: 0 })).toThrow(/k must be positive/);
-    expect(() => reciprocalRankFusion({}, { k: -1 })).toThrow(/k must be positive/);
+  it("deduplicates each signal by best rank independent of duplicate order", () => {
+    const worse = { id: "same.md", rank: 5, score: 50 };
+    const best = { id: "same.md", rank: 1, score: 1 };
+
+    const worseFirst = reciprocalRankFusion({ bm25: [worse, best] });
+    const bestFirst = reciprocalRankFusion({ bm25: [best, worse] });
+
+    expect(worseFirst).toEqual(bestFirst);
+    expect(worseFirst[0]?.score).toBeCloseTo(1 / 61, 6);
+    expect(worseFirst[0]?.per_signal.bm25).toMatchObject({ rank: 1, score: 1 });
   });
 
-  it("rejects 0-based or negative ranks (RRF expects 1-based)", () => {
-    expect(() => reciprocalRankFusion({ bm25: [{ id: "a.md", rank: 0, score: 1 }] })).toThrow(/1-based ranks/);
-    expect(() => reciprocalRankFusion({ bm25: [{ id: "a.md", rank: -3, score: 1 }] })).toThrow(/1-based ranks/);
+  it("uses the higher finite score as a deterministic tie-break for equal-rank duplicates", () => {
+    const lowerScore = { id: "same.md", rank: 2, score: 1 };
+    const higherScore = { id: "same.md", rank: 2, score: 9 };
+
+    const forward = reciprocalRankFusion({ bm25: [lowerScore, higherScore] });
+    const reverse = reciprocalRankFusion({ bm25: [higherScore, lowerScore] });
+
+    expect(forward).toEqual(reverse);
+    expect(forward[0]?.per_signal.bm25?.score).toBe(9);
+  });
+
+  it.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, 1.5, 2 ** 53])(
+    "rejects k outside the positive-safe-integer domain: %s",
+    (k) => {
+      expect(() => reciprocalRankFusion({}, { k })).toThrow(/k must be a positive safe integer/);
+    }
+  );
+
+  it.each([0, -3, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, 1.5, 2 ** 53])(
+    "rejects rank outside the positive-safe-integer domain: %s",
+    (rank) => {
+      expect(() => reciprocalRankFusion({ bm25: [{ id: "a.md", rank, score: 1 }] })).toThrow(
+        /rank must be a positive safe integer/
+      );
+    }
+  );
+
+  it.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, 1.5, 2 ** 53])(
+    "rejects topK outside the positive-safe-integer domain: %s",
+    (topK) => {
+      expect(() => reciprocalRankFusion({}, { topK })).toThrow(/topK must be a positive safe integer/);
+    }
+  );
+
+  it.each([Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY])(
+    "rejects non-finite original scores: %s",
+    (score) => {
+      expect(() => reciprocalRankFusion({ bm25: [{ id: "a.md", rank: 1, score }] })).toThrow(/score must be finite/);
+    }
+  );
+
+  it("validates later duplicates instead of hiding malformed records behind deduplication", () => {
+    expect(() =>
+      reciprocalRankFusion({
+        bm25: [
+          { id: "a.md", rank: 1, score: 1 },
+          { id: "a.md", rank: 2, score: Number.NaN }
+        ]
+      })
+    ).toThrow(/score must be finite/);
+  });
+
+  it("rejects empty and oversized IDs while admitting the documented byte boundary", () => {
+    const atLimit = "é".repeat(2048);
+    expect(reciprocalRankFusion({ bm25: [{ id: atLimit, rank: 1, score: Number.MAX_VALUE }] })[0]?.id).toBe(atLimit);
+    expect(() => reciprocalRankFusion({ bm25: [{ id: "", rank: 1, score: 1 }] })).toThrow(/1\.\.4096/);
+    expect(() => reciprocalRankFusion({ bm25: [{ id: `${atLimit}a`, rank: 1, score: 1 }] })).toThrow(/1\.\.4096/);
   });
 
   it("undefined / missing signals are silently ignored (graceful degradation)", () => {
@@ -163,5 +224,10 @@ describe("toRanked", () => {
       { id: "a.md", rank: 1, score: 5.0 },
       { id: "b.md", rank: 2, score: 3.0 }
     ]);
+  });
+
+  it("rejects invalid extracted IDs and scores", () => {
+    expect(() => toRanked([1], { idOf: () => "", scoreOf: () => 1 })).toThrow(/1\.\.4096/);
+    expect(() => toRanked([1], { idOf: () => "a.md", scoreOf: () => Number.NaN })).toThrow(/score must be finite/);
   });
 });

@@ -9,7 +9,7 @@
 import type { EmbedDb, EmbedKindAudit, EmbedSyncReport } from "./embed-db.js";
 import { embedSingleNote, embedSinglePdf } from "./embed-pipeline.js";
 import type { loadEmbedder } from "./embeddings.js";
-import type { Vault } from "./vault.js";
+import { type FileEntry, MAX_INDEX_SYNC_FILES, MAX_INDEX_SYNC_VISITED_ENTRIES, type Vault } from "./vault.js";
 
 /** Failure posture for a bulk embedding synchronization. */
 export type EmbedSyncMode = "fail-soft" | "strict";
@@ -70,6 +70,24 @@ export class EmbedSyncIncompleteError extends Error {
     this.name = "EmbedSyncIncompleteError";
     this.report = report;
   }
+}
+
+async function completeIndexInventory(
+  vault: Vault,
+  extension: ".md" | ".pdf",
+  label: "Markdown" | "PDF"
+): Promise<FileEntry[]> {
+  const listing = await vault.listFilesByExtensionsBounded(
+    [extension],
+    MAX_INDEX_SYNC_FILES,
+    MAX_INDEX_SYNC_VISITED_ENTRIES
+  );
+  if (!listing.complete) {
+    throw new EmbedSyncIncompleteError(
+      `Embed ${label} source inventory is incomplete within ${MAX_INDEX_SYNC_FILES} files / ${MAX_INDEX_SYNC_VISITED_ENTRIES} visited entries; refusing to infer deletions`
+    );
+  }
+  return listing.entries;
 }
 
 /** Raw per-file counters consumed by {@link finalizeEmbedSyncEvidence}. */
@@ -227,7 +245,7 @@ export async function syncEmbedDb(
 ): Promise<EmbedSyncEvidence> {
   const contextChars = opts.lateChunkContext ?? 0;
   const mode = opts.mode ?? "fail-soft";
-  const entries = await vault.listMarkdown();
+  const entries = await completeIndexInventory(vault, ".md", "Markdown");
   const known = new Map<string, number>();
   // Scope to kind="md" so markdown sync cannot delete PDF rows.
   for (const state of db.getSourceStates("md")) known.set(state.rel_path, state.mtime_ms);
@@ -353,7 +371,7 @@ export async function syncPdfEmbedDb(
 ): Promise<EmbedSyncEvidence> {
   const contextChars = opts.lateChunkContext ?? 0;
   const mode = opts.mode ?? "fail-soft";
-  const entries = await vault.listFilesByExtension(".pdf");
+  const entries = await completeIndexInventory(vault, ".pdf", "PDF");
   const known = new Map<string, number>();
   for (const state of db.getSourceStates("pdf")) known.set(state.rel_path, state.mtime_ms);
   const quarantined = new Set(db.getQuarantinedPaths("pdf"));

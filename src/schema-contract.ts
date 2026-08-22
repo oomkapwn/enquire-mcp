@@ -7,4 +7,4 @@
 export const FTS_SCHEMA_VERSION = 6;
 
 /** Current on-disk embedding database schema version. */
-export const EMBED_DB_SCHEMA_VERSION = 4;
+export const EMBED_DB_SCHEMA_VERSION = 5;

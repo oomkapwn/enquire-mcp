@@ -1,5 +1,5 @@
+import { types as utilTypes } from "node:util";
 import { foldTag, lookupFoldedKey, nfcLower } from "./name-fold.js";
-import { capScanEntries } from "./tools/limits.js";
 import type { FileEntry, Vault } from "./vault.js";
 import { compileLikeTokens, matchWildcardTokens } from "./wildcard-match.js";
 
@@ -82,6 +82,17 @@ const KEYWORDS = ["FROM", "WHERE", "SORT", "LIMIT"];
  * linearized (no whole-tail `slice`/`toUpperCase` per position).
  */
 export const MAX_DQL_QUERY_LEN = 4096;
+/** Hard upper bound for explicit and programmatic DQL result row limits. */
+export const MAX_DQL_ROW_LIMIT = 1000;
+const MAX_DQL_COLUMNS = 64;
+const MAX_DQL_SCAN_FILES = 50_000;
+const MAX_DQL_VISITED_ENTRIES = 200_000;
+const MAX_DQL_SCAN_UTF8_BYTES = 64 * 1024 * 1024;
+const MAX_DQL_RESPONSE_UTF8_BYTES = 8 * 1024 * 1024;
+const MAX_DQL_RESPONSE_NODES = 100_000;
+const MAX_DQL_ROW_UTF8_BYTES = 256 * 1024;
+const MAX_DQL_ROW_NODES = 10_000;
+const MAX_DQL_VALUE_DEPTH = 32;
 
 export function parseDql(input: string): DataviewQuery {
   // v3.10.0-rc.57 (DQL-PARSE-QUADRATIC-DOS) — fail-closed length cap at the shared
@@ -110,6 +121,10 @@ export function parseDql(input: string): DataviewQuery {
           .map((c) => c.trim())
           .filter(Boolean)
       : [];
+
+  if (columns.length > MAX_DQL_COLUMNS) {
+    throw new DqlParseError(`TABLE has too many columns (${columns.length} > ${MAX_DQL_COLUMNS})`);
+  }
 
   if (kind === "LIST" && columnsRaw.trim()) {
     throw new DqlParseError(`LIST does not take columns: got "${columnsRaw}"`);
@@ -280,7 +295,11 @@ function parseValue(raw: string): string | number | boolean | null {
   if (raw === "true") return true;
   if (raw === "false") return false;
   if (raw === "null") return null;
-  if (/^-?\d+(?:\.\d+)?$/.test(raw)) return Number(raw);
+  if (/^-?\d+(?:\.\d+)?$/.test(raw)) {
+    const parsed = Number(raw);
+    if (!Number.isFinite(parsed)) throw new DqlParseError(`Numeric literal is outside the finite range: ${raw}`);
+    return parsed;
+  }
   return raw.normalize("NFC");
 }
 
@@ -291,17 +310,215 @@ function parseSort(raw: string): { field: string; dir: "ASC" | "DESC" } {
 }
 
 function parseLimit(raw: string): number {
-  const n = Number(raw.trim());
-  if (!Number.isInteger(n) || n <= 0) throw new DqlParseError(`Invalid LIMIT: ${raw} (positive integer required)`);
+  const spelling = raw.trim();
+  if (!/^[1-9][0-9]*$/u.test(spelling)) {
+    throw new DqlParseError(`Invalid LIMIT: ${raw} (canonical positive decimal required)`);
+  }
+  const n = Number(spelling);
+  if (!Number.isSafeInteger(n) || n > MAX_DQL_ROW_LIMIT) {
+    throw new DqlParseError(`Invalid LIMIT: ${raw} (maximum ${MAX_DQL_ROW_LIMIT})`);
+  }
   return n;
 }
 
-interface Row {
-  entry: FileEntry;
-  frontmatter: Record<string, unknown>;
-  tags: string[];
-  mtimeMs: number;
+interface RetainedRow {
   values: Record<string, unknown>;
+  sortValue: string | number | boolean | null;
+  ordinal: number;
+  utf8Bytes: number;
+  nodes: number;
+}
+
+function jsonStringUtf8Bytes(value: string, maximum: number): number {
+  let bytes = 2;
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    let additional: number;
+    if (code === 0x22 || code === 0x5c || [0x08, 0x09, 0x0a, 0x0c, 0x0d].includes(code)) {
+      additional = 2;
+    } else if (code <= 0x1f) {
+      additional = 6;
+    } else if (code <= 0x7f) {
+      additional = 1;
+    } else if (code <= 0x7ff) {
+      additional = 2;
+    } else if (code >= 0xd800 && code <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (next >= 0xdc00 && next <= 0xdfff) {
+        additional = 4;
+        index += 1;
+      } else {
+        additional = 6;
+      }
+    } else if (code >= 0xdc00 && code <= 0xdfff) {
+      additional = 6;
+    } else {
+      additional = 3;
+    }
+    if (additional > maximum - bytes) throw new RangeError("DQL projection exceeds its UTF-8 byte budget");
+    bytes += additional;
+  }
+  return bytes;
+}
+
+function cloneDqlProjection(
+  root: unknown,
+  limits: Readonly<{ maxUtf8Bytes: number; maxNodes: number; maxDepth: number }>
+): { value: Record<string, unknown>; utf8Bytes: number; nodes: number } {
+  let utf8Bytes = 0;
+  let nodes = 0;
+  const active = new WeakSet<object>();
+  const addBytes = (additional: number): void => {
+    if (!Number.isSafeInteger(additional) || additional < 0 || additional > limits.maxUtf8Bytes - utf8Bytes) {
+      throw new RangeError("DQL projection exceeds its UTF-8 byte budget");
+    }
+    utf8Bytes += additional;
+  };
+  const visit = (value: unknown, depth: number): unknown => {
+    if (depth > limits.maxDepth) throw new RangeError(`DQL projection exceeds depth ${limits.maxDepth}`);
+    if (nodes >= limits.maxNodes) throw new RangeError(`DQL projection exceeds ${limits.maxNodes} nodes`);
+    nodes += 1;
+    if (value === null) {
+      addBytes(4);
+      return null;
+    }
+    if (typeof value === "string") {
+      addBytes(jsonStringUtf8Bytes(value, limits.maxUtf8Bytes - utf8Bytes));
+      return value;
+    }
+    if (typeof value === "boolean") {
+      addBytes(value ? 4 : 5);
+      return value;
+    }
+    if (typeof value === "number") {
+      if (!Number.isFinite(value)) throw new TypeError("DQL projection contains a non-finite number");
+      addBytes(String(value).length);
+      return value;
+    }
+    if (typeof value !== "object") throw new TypeError(`DQL projection contains unsupported ${typeof value}`);
+    if (utilTypes.isProxy(value)) throw new TypeError("DQL projection contains a Proxy");
+    if (active.has(value)) throw new TypeError("DQL projection contains a YAML alias cycle");
+    if (Object.getOwnPropertySymbols(value).length > 0 || Object.hasOwn(value, "toJSON")) {
+      throw new TypeError("DQL projection contains custom JSON behavior");
+    }
+    active.add(value);
+    try {
+      if (Array.isArray(value)) {
+        if (Object.getPrototypeOf(value) !== Array.prototype)
+          throw new TypeError("DQL projection contains an exotic array");
+        if (value.length > limits.maxNodes - nodes) {
+          throw new RangeError(`DQL projection exceeds ${limits.maxNodes} nodes`);
+        }
+        const clone: unknown[] = [];
+        addBytes(1);
+        for (let index = 0; index < value.length; index += 1) {
+          const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+          if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) {
+            throw new TypeError("DQL projection contains a sparse or accessor-backed array");
+          }
+          if (index > 0) addBytes(1);
+          clone.push(visit(descriptor.value, depth + 1));
+        }
+        for (const key of Object.keys(value)) {
+          const index = Number(key);
+          if (!Number.isSafeInteger(index) || index < 0 || index >= value.length || String(index) !== key) {
+            throw new TypeError("DQL projection contains a custom array property");
+          }
+        }
+        addBytes(1);
+        return clone;
+      }
+
+      const prototype = Object.getPrototypeOf(value);
+      if (prototype !== Object.prototype && prototype !== null) {
+        throw new TypeError("DQL projection contains an exotic object");
+      }
+      const clone = Object.create(null) as Record<string, unknown>;
+      addBytes(1);
+      let index = 0;
+      for (const key of Object.keys(value)) {
+        const descriptor = Object.getOwnPropertyDescriptor(value, key);
+        if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) {
+          throw new TypeError("DQL projection contains an accessor-backed object");
+        }
+        if (index > 0) addBytes(1);
+        addBytes(jsonStringUtf8Bytes(key, limits.maxUtf8Bytes - utf8Bytes));
+        addBytes(1);
+        clone[key] = visit(descriptor.value, depth + 1);
+        index += 1;
+      }
+      addBytes(1);
+      return clone;
+    } finally {
+      active.delete(value);
+    }
+  };
+  const value = visit(root, 1);
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new TypeError("DQL row projection must be an object");
+  }
+  return { value: value as Record<string, unknown>, utf8Bytes, nodes };
+}
+
+function admitDqlSortValue(value: unknown): string | number | boolean | null {
+  if (value === null || typeof value === "string" || typeof value === "boolean") return value;
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  throw new TypeError("DQL SORT fields must resolve to a finite scalar or null");
+}
+
+function compareRetainedRows(
+  left: Pick<RetainedRow, "sortValue" | "ordinal">,
+  right: Pick<RetainedRow, "sortValue" | "ordinal">,
+  direction: "ASC" | "DESC"
+): number {
+  const byValue = compare(left.sortValue, right.sortValue) * (direction === "ASC" ? 1 : -1);
+  return byValue !== 0 ? byValue : left.ordinal - right.ordinal;
+}
+
+function pushWorstFirstHeap(heap: RetainedRow[], row: RetainedRow, direction: "ASC" | "DESC"): void {
+  heap.push(row);
+  let index = heap.length - 1;
+  while (index > 0) {
+    const parent = Math.floor((index - 1) / 2);
+    const parentRow = heap[parent];
+    const childRow = heap[index];
+    if (!parentRow || !childRow || compareRetainedRows(childRow, parentRow, direction) <= 0) break;
+    heap[parent] = childRow;
+    heap[index] = parentRow;
+    index = parent;
+  }
+}
+
+function replaceWorstHeapRoot(heap: RetainedRow[], row: RetainedRow, direction: "ASC" | "DESC"): RetainedRow {
+  const removed = heap[0];
+  if (!removed) throw new Error("DQL top-K heap is unexpectedly empty");
+  heap[0] = row;
+  let index = 0;
+  for (;;) {
+    const left = index * 2 + 1;
+    const right = left + 1;
+    let worst = index;
+    if (
+      heap[left] &&
+      heap[worst] &&
+      compareRetainedRows(heap[left] as RetainedRow, heap[worst] as RetainedRow, direction) > 0
+    ) {
+      worst = left;
+    }
+    if (
+      heap[right] &&
+      heap[worst] &&
+      compareRetainedRows(heap[right] as RetainedRow, heap[worst] as RetainedRow, direction) > 0
+    ) {
+      worst = right;
+    }
+    if (worst === index) break;
+    const current = heap[index] as RetainedRow;
+    heap[index] = heap[worst] as RetainedRow;
+    heap[worst] = current;
+    index = worst;
+  }
+  return removed;
 }
 
 /**
@@ -336,50 +553,117 @@ export async function runDql(
   opts: { defaultLimit?: number } = {}
 ): Promise<Array<Record<string, unknown>>> {
   const defaultLimit = opts.defaultLimit ?? DEFAULT_DQL_ROW_LIMIT;
+  if (!Number.isSafeInteger(defaultLimit) || defaultLimit < 1 || defaultLimit > MAX_DQL_ROW_LIMIT) {
+    throw new TypeError(`defaultLimit must be a positive safe integer no greater than ${MAX_DQL_ROW_LIMIT}`);
+  }
+  const cap = query.limit ?? defaultLimit;
+  if (!Number.isSafeInteger(cap) || cap < 1 || cap > MAX_DQL_ROW_LIMIT) {
+    throw new TypeError(`DQL row limit must be a positive safe integer no greater than ${MAX_DQL_ROW_LIMIT}`);
+  }
+  if (query.kind !== "LIST" && query.kind !== "TABLE") throw new TypeError("DQL kind must be LIST or TABLE");
+  if (!Array.isArray(query.columns) || query.columns.length > MAX_DQL_COLUMNS) {
+    throw new TypeError(`DQL columns must be an array with at most ${MAX_DQL_COLUMNS} entries`);
+  }
+  if (query.sort && query.sort.dir !== "ASC" && query.sort.dir !== "DESC") {
+    throw new TypeError("DQL sort direction must be ASC or DESC");
+  }
   const folder = query.source.type === "folder" ? query.source.path : undefined;
-  // v3.10.0-rc.18 (audit M4) — bound the whole-vault readNote scan. This tool is
-  // always-registered and bearer-reachable on serve-http, so an unbounded scan is
-  // a DoS amplifier. DQL is a LINEAR query (LIMIT/SORT applied AFTER the scan), so
-  // this is a defense-in-depth cap: on a vault larger than MAX_SCAN_NOTES the
-  // result is partial (logged once), never a hang. Real vaults are far under it.
-  const entries = capScanEntries(await vault.listMarkdown(folder), "obsidian_dataview_query");
+  const listing = await vault.listFilesByExtensionsBounded(
+    [".md"],
+    MAX_DQL_SCAN_FILES,
+    MAX_DQL_VISITED_ENTRIES,
+    folder
+  );
+  if (!listing.complete) {
+    throw new RangeError(
+      `DQL source inventory is incomplete within ${MAX_DQL_SCAN_FILES} files / ${MAX_DQL_VISITED_ENTRIES} visited entries`
+    );
+  }
+  const entries = listing.entries;
   // v3.11.0-rc.9 (audit re-verify) — NFC-fold the `FROM #tag` source filter too.
   // rc.8 NFC-fixed the WHERE-value comparators (looseEq/contains) but left this
   // dedicated source path on plain .toLowerCase(), so `FROM #café` silently missed
   // an NFD-stored tag while `WHERE file.tags contains "café"` matched it.
   const wantTag = query.source.type === "tag" ? foldTag(query.source.tag) : null;
 
-  const rows: Row[] = [];
+  const rows: RetainedRow[] = [];
+  let retainedUtf8Bytes = 0;
+  let retainedNodes = 0;
+  let scannedUtf8Bytes = 0;
+  let ordinal = 0;
   for (const entry of entries) {
-    const { parsed, mtimeMs } = await vault.readNote(entry.absPath, entry.mtimeMs);
+    const { content, parsed, mtimeMs } = await vault.readNoteUncached(entry.absPath, entry.mtimeMs);
+    const contentBytes = Buffer.byteLength(content, "utf8");
+    if (contentBytes > MAX_DQL_SCAN_UTF8_BYTES - scannedUtf8Bytes) {
+      throw new RangeError(`DQL source content exceeds ${MAX_DQL_SCAN_UTF8_BYTES} aggregate UTF-8 bytes`);
+    }
+    scannedUtf8Bytes += contentBytes;
     if (wantTag && !parsed.tags.some((t) => foldTag(t) === wantTag)) continue;
 
     const fieldVal = (field: string) => resolveField(field, entry, parsed.frontmatter, parsed.tags, mtimeMs);
     if (!evalWhere(query.where, fieldVal)) continue;
 
-    const out: Record<string, unknown> = {
+    const sortValue = query.sort ? admitDqlSortValue(fieldVal(query.sort.field)) : null;
+    const candidateOrdinal = ordinal;
+    ordinal += 1;
+    const worst = query.sort && rows.length >= cap ? rows[0] : undefined;
+    if (
+      query.sort &&
+      worst &&
+      compareRetainedRows({ sortValue, ordinal: candidateOrdinal }, worst, query.sort.dir) >= 0
+    ) {
+      continue;
+    }
+
+    const out = Object.assign(Object.create(null) as Record<string, unknown>, {
       // rc.69 — project the NFC-canonical name/path (consistent with the WHERE comparison above).
       "file.path": entry.relPath.normalize("NFC"),
       "file.name": stripMd(entry.basename).normalize("NFC"),
       "file.mtime": new Date(mtimeMs).toISOString()
-    };
-    if (query.kind === "TABLE") {
-      for (const col of query.columns) out[col] = fieldVal(col);
-    }
-    rows.push({ entry, frontmatter: parsed.frontmatter, tags: parsed.tags, mtimeMs, values: out });
-  }
-
-  if (query.sort) {
-    const { field, dir } = query.sort;
-    rows.sort((a, b) => {
-      const av = resolveField(field, a.entry, a.frontmatter, a.tags, a.mtimeMs);
-      const bv = resolveField(field, b.entry, b.frontmatter, b.tags, b.mtimeMs);
-      return compare(av, bv) * (dir === "ASC" ? 1 : -1);
     });
+    if (query.kind === "TABLE") {
+      for (const col of query.columns) {
+        const value = fieldVal(col);
+        if (value !== undefined) out[col] = value;
+      }
+    }
+    const reusableBytes = worst?.utf8Bytes ?? 0;
+    const reusableNodes = worst?.nodes ?? 0;
+    const availableBytes = MAX_DQL_RESPONSE_UTF8_BYTES - (retainedUtf8Bytes - reusableBytes);
+    const availableNodes = MAX_DQL_RESPONSE_NODES - (retainedNodes - reusableNodes);
+    const projected = cloneDqlProjection(out, {
+      maxUtf8Bytes: Math.min(MAX_DQL_ROW_UTF8_BYTES, availableBytes),
+      maxNodes: Math.min(MAX_DQL_ROW_NODES, availableNodes),
+      maxDepth: MAX_DQL_VALUE_DEPTH
+    });
+    const row: RetainedRow = {
+      values: projected.value,
+      sortValue,
+      ordinal: candidateOrdinal,
+      utf8Bytes: projected.utf8Bytes,
+      nodes: projected.nodes
+    };
+
+    if (query.sort) {
+      if (rows.length < cap) {
+        pushWorstFirstHeap(rows, row, query.sort.dir);
+        retainedUtf8Bytes += row.utf8Bytes;
+        retainedNodes += row.nodes;
+      } else {
+        const removed = replaceWorstHeapRoot(rows, row, query.sort.dir);
+        retainedUtf8Bytes += row.utf8Bytes - removed.utf8Bytes;
+        retainedNodes += row.nodes - removed.nodes;
+      }
+    } else {
+      rows.push(row);
+      retainedUtf8Bytes += row.utf8Bytes;
+      retainedNodes += row.nodes;
+      if (rows.length >= cap) break;
+    }
   }
 
-  const cap = query.limit ?? defaultLimit;
-  return rows.slice(0, cap).map((r) => r.values);
+  if (query.sort) rows.sort((left, right) => compareRetainedRows(left, right, query.sort?.dir ?? "ASC"));
+  return rows.map((row) => row.values);
 }
 
 function evalWhere(where: WhereGroups, fieldVal: (field: string) => unknown): boolean {

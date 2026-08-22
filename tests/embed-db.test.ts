@@ -7,7 +7,7 @@
 import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   assertEmbedDbRecoveryOwnership,
   clearPeekCache,
@@ -15,12 +15,23 @@ import {
   discoverEmbedDbConfig,
   discoverEmbedDbConfigCached,
   EmbedDb,
+  EmbedSnapshotCapacityError,
+  EmbedSnapshotIntegrityError,
   encodeInt8Vector,
+  hnswPersistBase,
   openEmbedReceiptReader,
   peekEmbedDbMeta,
   peekEmbedDbMetaCached
 } from "../src/embed-db.js";
+import { acquirePersistenceFamilyLease, inspectPersistenceNamespaceLeases } from "../src/persistence-coordination.js";
+import {
+  drainProcessPersistenceLeaseDebts,
+  inspectPersistenceLeases,
+  PersistenceLeaseOwnershipError
+} from "../src/persistence-lease.js";
 import { EMBED_DB_SCHEMA_VERSION } from "../src/schema-contract.js";
+import { SEMANTIC_PERSISTENCE_FAMILY_KEY } from "../src/semantic-persistence.js";
+import { watcherActivationGuardPath } from "../src/watcher-activation-guard.js";
 
 let dir: string;
 
@@ -43,6 +54,15 @@ function vec(values: number[]): Float32Array {
 function l2(v: number[]): Float32Array {
   const n = Math.sqrt(v.reduce((s, x) => s + x * x, 0));
   return new Float32Array(v.map((x) => x / (n || 1)));
+}
+
+function thrownBy(operation: () => unknown): unknown {
+  try {
+    operation();
+  } catch (error) {
+    return error;
+  }
+  throw new Error("expected operation to throw");
 }
 
 async function exactEmbedLogicalSnapshot(file: string): Promise<unknown> {
@@ -84,7 +104,7 @@ async function expectPathFreeEmbedOwnershipRefusal(file: string, vaultRoot: stri
   } catch (caught) {
     error = caught;
   } finally {
-    refused.close();
+    await refused.closeAndRelease();
   }
   expect(error).toBeInstanceOf(Error);
   const message = error instanceof Error ? error.message : String(error);
@@ -116,7 +136,7 @@ async function seedExactEmbedFile(file: string, relPath: string): Promise<void> 
       { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: relPath, vector: l2([1, 0, 0, 0]) }
     ]);
   } finally {
-    seed.close();
+    await seed.closeAndRelease();
   }
 }
 
@@ -130,6 +150,109 @@ const DROP_EMBED_REVISION_TRIGGERS_SQL = `
 `;
 
 describe("EmbedDb", () => {
+  const synchronousAdmissionRoutes: ReadonlyArray<readonly [string, (file: string) => unknown]> = [
+    ["EmbedDb constructor", (file) => new EmbedDb({ file, vaultRoot: "/v", modelAlias: "m", dim: 4 })],
+    ["HNSW base derivation", (file) => hnswPersistBase(file)],
+    ["watcher guard derivation", (file) => watcherActivationGuardPath(file)]
+  ];
+  const asynchronousAdmissionRoutes: ReadonlyArray<readonly [string, (file: string) => Promise<unknown>]> = [
+    ["openEmbedReceiptReader", (file) => openEmbedReceiptReader(file, "/v")],
+    ["discoverEmbedDbConfig", (file) => discoverEmbedDbConfig(file, "/v")],
+    ["peekEmbedDbMeta", (file) => peekEmbedDbMeta(file, "/v")],
+    ["discoverEmbedDbConfigCached", (file) => discoverEmbedDbConfigCached(file, "/v")],
+    ["peekEmbedDbMetaCached", (file) => peekEmbedDbMetaCached(file, "/v")]
+  ];
+
+  it.each(synchronousAdmissionRoutes)(
+    "rejects an unadmitted embedding namespace in %s before derived-artifact mutation",
+    async (label, invoke) => {
+      const invalidParent = path.join(dir, `uncreated-${label.replaceAll(" ", "-")}`);
+      const file = path.join(invalidParent, "index");
+      expect(() => invoke(file)).toThrowError(new TypeError("Embedding index file must end exactly in '.embed.db'"));
+      await expect(fs.lstat(invalidParent)).rejects.toMatchObject({ code: "ENOENT" });
+    }
+  );
+
+  it.each(asynchronousAdmissionRoutes)(
+    "rejects an unadmitted embedding namespace in %s instead of laundering it as fail-soft",
+    async (label, invoke) => {
+      const invalidParent = path.join(dir, `uncreated-${label}`);
+      const file = path.join(invalidParent, "index");
+      await expect(invoke(file)).rejects.toThrowError(
+        new TypeError("Embedding index file must end exactly in '.embed.db'")
+      );
+      await expect(fs.lstat(invalidParent)).rejects.toMatchObject({ code: "ENOENT" });
+    }
+  );
+
+  it.for([
+    {
+      route: "mutating open",
+      verify: async (file: string) => {
+        const db = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "m", dim: 4 });
+        try {
+          await expect(db.open()).rejects.toThrow("Embedding index artifact family could not be admitted");
+        } finally {
+          await db.closeAndRelease();
+        }
+      }
+    },
+    {
+      route: "configuration discovery",
+      verify: async (file: string) => {
+        await expect(discoverEmbedDbConfig(file, "/v")).resolves.toEqual({ kind: "refused" });
+      }
+    },
+    {
+      route: "diagnostic peek",
+      verify: async (file: string) => {
+        await expect(peekEmbedDbMeta(file, "/v")).resolves.toBeNull();
+      }
+    },
+    {
+      route: "receipt reader",
+      verify: async (file: string) => {
+        await expect(openEmbedReceiptReader(file, "/v")).rejects.toThrow(
+          "Embedding receipt reader requires an existing compatible index for the expected vault"
+        );
+      }
+    }
+  ])(
+    "$route refuses a symlink SQLite sidecar without changing either sentinel",
+    async ({ route, verify }, { skip }) => {
+      const file = path.join(dir, `unsafe-open-${route.replaceAll(" ", "-")}.embed.db`);
+      const unsafeJournal = `${file}-journal`;
+      const external = `${file}.external`;
+      const mainSentinel = Buffer.from(`EMBED_MAIN_SENTINEL_${route}`);
+      const externalSentinel = Buffer.from(`EMBED_EXTERNAL_SENTINEL_${route}`);
+      await fs.writeFile(file, mainSentinel);
+      await fs.writeFile(external, externalSentinel);
+      try {
+        await fs.symlink(external, unsafeJournal, "file");
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code === "EPERM" || code === "EACCES" || code === "ENOSYS") {
+          skip(`filesystem cannot create the Embed sidecar symlink control (${code})`);
+          return;
+        }
+        throw error;
+      }
+
+      await verify(file);
+
+      expect(await fs.readFile(file)).toEqual(mainSentinel);
+      expect(await fs.readFile(external)).toEqual(externalSentinel);
+      expect((await fs.lstat(unsafeJournal)).isSymbolicLink()).toBe(true);
+    }
+  );
+
+  it.each(["index.EMBED.DB", "index.embed.db\n", "index.embed.db\u2028"])(
+    "rejects non-exact embedding suffix spelling %j",
+    (basename) => {
+      expect(() => hnswPersistBase(path.join(dir, basename))).toThrow(TypeError);
+    }
+  );
+
   it("opens, closes, and reopens cleanly with the same meta", async () => {
     const file = path.join(dir, "test.embed.db");
     const db1 = new EmbedDb({ file, vaultRoot: "/v1", modelAlias: "multilingual", dim: 4 });
@@ -138,7 +261,7 @@ describe("EmbedDb", () => {
       { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "hello", vector: l2([1, 0, 0, 0]) }
     ]);
     expect(db1.totalChunks()).toBe(1);
-    db1.close();
+    await db1.closeAndRelease();
 
     const rawMeta = await peekEmbedDbMeta(file);
     expect(rawMeta).toEqual(expect.objectContaining({ vault_root: "/v1", model_alias: "multilingual", dim: "4" }));
@@ -187,7 +310,7 @@ describe("EmbedDb", () => {
     const db2 = new EmbedDb({ file, vaultRoot: "/v1", modelAlias: "multilingual", dim: 4 });
     await db2.open();
     expect(db2.totalChunks()).toBe(1);
-    db2.close();
+    await db2.closeAndRelease();
 
     const Database = (await import("better-sqlite3")).default;
 
@@ -349,7 +472,7 @@ describe("EmbedDb", () => {
         () => null,
         (caught: unknown) => caught
       );
-      candidate.close();
+      await candidate.closeAndRelease();
       expect(error).toBeInstanceOf(Error);
       const message = error instanceof Error ? error.message : "";
       expect(message).toBe("Embedding index configuration changed before open");
@@ -396,7 +519,7 @@ describe("EmbedDb", () => {
       dim: 4
     });
     await missingInitializer.open(matchingMissingDiscovery);
-    missingInitializer.close();
+    await missingInitializer.closeAndRelease();
     expect((await discoverEmbedDbConfig(matchingMissing, "/v1")).kind).toBe("owned");
 
     const matchingEmpty = path.join(dir, "matching-empty.embed.db");
@@ -409,7 +532,7 @@ describe("EmbedDb", () => {
       dim: 4
     });
     await emptyInitializer.open(matchingEmptyDiscovery);
-    emptyInitializer.close();
+    await emptyInitializer.closeAndRelease();
     expect((await discoverEmbedDbConfig(matchingEmpty, "/v1")).kind).toBe("owned");
 
     // Paired NEGATIVE control: merely being a valid SQLite container is not
@@ -463,11 +586,11 @@ describe("EmbedDb", () => {
       } catch (error) {
         symlinkError = error;
       } finally {
-        symlinkDb.close();
+        await symlinkDb.closeAndRelease();
       }
       expect(symlinkError).toBeInstanceOf(Error);
       const symlinkMessage = symlinkError instanceof Error ? symlinkError.message : String(symlinkError);
-      expect(symlinkMessage).toBe("Embedding index could not be inspected");
+      expect(symlinkMessage).toBe("Embedding index artifact family could not be admitted");
       expect(symlinkMessage).not.toContain(danglingLink);
       expect(symlinkMessage).not.toContain(danglingTarget);
       await expect(fs.stat(danglingTarget)).rejects.toMatchObject({ code: "ENOENT" });
@@ -540,7 +663,11 @@ describe("EmbedDb", () => {
     expect(closeRefusalMessage).not.toContain("/foreign");
     expect(legacyMetaAfterCloseError?.vault_root).toBe("/v");
     expect(discoveryAfterCloseError).toEqual({ kind: "refused" });
-    expect(injectedCloseErrors).toBeGreaterThanOrEqual(4);
+    // One rejected mutating open plus the bounded readonly ownership readers
+    // must all observe native-close failure without exposing its path. The
+    // coordinated open now closes its native handle exactly once (the old
+    // nested rollback performed a redundant second close attempt).
+    expect(injectedCloseErrors).toBeGreaterThanOrEqual(3);
 
     let retryError: unknown;
     try {
@@ -548,7 +675,7 @@ describe("EmbedDb", () => {
     } catch (error) {
       retryError = error;
     } finally {
-      closeRefused.close();
+      await closeRefused.closeAndRelease();
     }
     expect(retryError).toBeInstanceOf(Error);
     const retryMessage = retryError instanceof Error ? retryError.message : String(retryError);
@@ -755,7 +882,7 @@ describe("EmbedDb", () => {
     ledgerSeed.upsertNote("ledger.md", 1, [
       { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "ledger", vector: l2([1, 0, 0, 0]) }
     ]);
-    ledgerSeed.close();
+    await ledgerSeed.closeAndRelease();
     const ledger = new Database(ledgerFile);
     ledger.exec(`
       DROP TRIGGER embed_source_state_revision_insert;
@@ -928,7 +1055,7 @@ describe("EmbedDb", () => {
       dim: 4
     });
     await sqlitePrefixSeed.open();
-    sqlitePrefixSeed.close();
+    await sqlitePrefixSeed.closeAndRelease();
     const sqlitePrefix = new Database(sqlitePrefixFile);
     sqlitePrefix.exec("CREATE TABLE sqliteXpayload (id INTEGER PRIMARY KEY, payload BLOB NOT NULL)");
     sqlitePrefix.prepare("INSERT INTO sqliteXpayload VALUES (1, ?)").run(Buffer.from([255, 0, 127]));
@@ -1035,7 +1162,7 @@ describe("EmbedDb", () => {
     db1.upsertNote("a.md", 1000, [
       { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "hello", vector: l2([1, 0, 0, 0]) }
     ]);
-    db1.close();
+    await db1.closeAndRelease();
     await fs.chmod(file, 0o640);
     const beforeMode = (await fs.stat(file)).mode & 0o777;
     await fs.chmod(dir, 0o750);
@@ -1118,7 +1245,7 @@ describe("EmbedDb", () => {
     configASeed.upsertNote("a.md", 1, [
       { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "config-a", vector: l2([1, 0, 0, 0]) }
     ]);
-    configASeed.close();
+    await configASeed.closeAndRelease();
     const expectedConfigA = await discoverEmbedDbConfig(configRaceFile, "/config-race");
     expect(expectedConfigA.kind).toBe("owned");
 
@@ -1133,7 +1260,7 @@ describe("EmbedDb", () => {
     configBWriter.upsertNote("b.md", 2, [
       { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "config-b", vector: l2([0, 1, 0, 0]) }
     ]);
-    configBWriter.close();
+    await configBWriter.closeAndRelease();
     const expectedConfigB = await discoverEmbedDbConfig(configRaceFile, "/config-race");
     expect(expectedConfigB.kind).toBe("owned");
     const beforeStaleConfigOpen = await exactEmbedLogicalSnapshot(configRaceFile);
@@ -1155,7 +1282,7 @@ describe("EmbedDb", () => {
       () => null,
       (error: unknown) => error
     );
-    staleConfigOpen.close();
+    await staleConfigOpen.closeAndRelease();
     expect(staleError).toBeInstanceOf(Error);
     const staleMessage = staleError instanceof Error ? staleError.message : "";
     expect(staleMessage).toBe("Embedding index configuration changed before open");
@@ -1174,7 +1301,7 @@ describe("EmbedDb", () => {
     });
     await currentConfigOpen.open(expectedConfigB);
     expect(currentConfigOpen.totalChunks()).toBe(1);
-    currentConfigOpen.close();
+    await currentConfigOpen.closeAndRelease();
 
     // Paired positive: an explicit writer can still move A to B when the live
     // file is unchanged since discovery A.
@@ -1190,7 +1317,7 @@ describe("EmbedDb", () => {
     explicitASeed.upsertNote("old.md", 3, [
       { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "old-config", vector: l2([0, 0, 1, 0]) }
     ]);
-    explicitASeed.close();
+    await explicitASeed.closeAndRelease();
     const expectedExplicitA = await discoverEmbedDbConfig(explicitOverrideFile, "/config-override");
     expect(expectedExplicitA.kind).toBe("owned");
     const explicitBWriter = new EmbedDb({
@@ -1202,7 +1329,7 @@ describe("EmbedDb", () => {
     });
     await explicitBWriter.open(expectedExplicitA);
     expect(explicitBWriter.totalChunks()).toBe(0);
-    explicitBWriter.close();
+    await explicitBWriter.closeAndRelease();
     const explicitBDiscovery = await discoverEmbedDbConfig(explicitOverrideFile, "/config-override");
     expect(
       explicitBDiscovery.kind === "owned" && {
@@ -1226,7 +1353,7 @@ describe("EmbedDb", () => {
     betweenReadsSeed.upsertNote("between.md", 7, [
       { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "between", vector: l2([0, 0, 1, 0]) }
     ]);
-    betweenReadsSeed.close();
+    await betweenReadsSeed.closeAndRelease();
     const betweenSetup = new Database(betweenReadsFile);
     betweenSetup.exec(`
       DROP TRIGGER embed_source_state_revision_insert;
@@ -1298,7 +1425,9 @@ describe("EmbedDb", () => {
     } finally {
       prototype.transaction = originalTransaction;
     }
-    expect(rootMutations).toBe(1);
+    // Current v5 requires the exact trigger inventory, so the hostile trigger
+    // is refused by the first admission read before bootstrap begins.
+    expect(rootMutations).toBe(0);
     const inspectBetween = new Database(betweenReadsFile, { readonly: true, fileMustExist: true });
     try {
       expect({
@@ -1318,7 +1447,7 @@ describe("EmbedDb", () => {
           .get()
       }).toEqual(betweenBefore);
       expect(inspectBetween.prepare("SELECT value FROM meta WHERE key = 'vault_root'").pluck().get()).toBe(
-        "/changed-between-admissions"
+        "/between-owner"
       );
     } finally {
       inspectBetween.close();
@@ -1334,12 +1463,12 @@ describe("EmbedDb", () => {
     db1.upsertNote("a.md", 1000, [
       { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "hello", vector: l2([1, 0, 0, 0]) }
     ]);
-    db1.close();
+    await db1.closeAndRelease();
 
     const db2 = new EmbedDb({ file, vaultRoot: "/v1", modelAlias: "bge", dim: 4 });
     await db2.open();
     expect(db2.totalChunks()).toBe(0);
-    db2.close();
+    await db2.closeAndRelease();
   });
 
   it("rebuilds when dim changes", async () => {
@@ -1349,12 +1478,12 @@ describe("EmbedDb", () => {
     db1.upsertNote("a.md", 1000, [
       { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "hello", vector: l2([1, 0, 0, 0]) }
     ]);
-    db1.close();
+    await db1.closeAndRelease();
 
     const db2 = new EmbedDb({ file, vaultRoot: "/v1", modelAlias: "multilingual", dim: 8 });
     await db2.open();
     expect(db2.totalChunks()).toBe(0);
-    db2.close();
+    await db2.closeAndRelease();
   });
 
   it("rejects vectors with the wrong dim at insert time", async () => {
@@ -1413,7 +1542,7 @@ describe("EmbedDb", () => {
         db.upsertNote("a.md", 1000, [{ chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "x", vector }])
       ).toThrow(/finite and L2-normalized/);
     }
-    db.close();
+    await db.closeAndRelease();
   });
 
   it("upsert replaces all chunks for a note (no orphan rows)", async () => {
@@ -1436,7 +1565,7 @@ describe("EmbedDb", () => {
       { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "p1-edited", vector: l2([1, 0, 0, 0]) }
     ]);
     expect(db.totalChunks()).toBe(1);
-    db.close();
+    await db.closeAndRelease();
   });
 
   it("deleteNote removes embeddings AND source_state", async () => {
@@ -1454,7 +1583,7 @@ describe("EmbedDb", () => {
     db.deleteNote("a.md");
     expect(db.totalChunks()).toBe(0);
     expect(db.getSourceStates().length).toBe(0);
-    db.close();
+    await db.closeAndRelease();
   });
 
   it("search ranks by cosine descending and respects the limit", async () => {
@@ -1480,7 +1609,7 @@ describe("EmbedDb", () => {
     expect(hits.length).toBe(2);
     expect(hits[0]?.rel_path).toBe("auth.md");
     expect(hits[0]?.score).toBeGreaterThan(hits[1]?.score ?? 0);
-    db.close();
+    await db.closeAndRelease();
   });
 
   it("search applies minScore threshold", async () => {
@@ -1503,7 +1632,7 @@ describe("EmbedDb", () => {
     const tight = db.search(l2([1, 0, 0, 0]), 10, { minScore: 0.5 });
     expect(tight.length).toBe(1);
     expect(tight[0]?.rel_path).toBe("a.md");
-    db.close();
+    await db.closeAndRelease();
   });
 
   it("search applies folder filter via rel_path LIKE prefix", async () => {
@@ -1523,7 +1652,7 @@ describe("EmbedDb", () => {
     const hits = db.search(l2([1, 0, 0, 0]), 10, { folder: "Auth" });
     expect(hits.length).toBe(1);
     expect(hits[0]?.rel_path).toBe("Auth/oauth.md");
-    db.close();
+    await db.closeAndRelease();
   });
 
   it("folder filter matches an emoji (astral-char) folder name (rc.43 M1 — substr by char, not JS UTF-16)", async () => {
@@ -1545,7 +1674,7 @@ describe("EmbedDb", () => {
     const hits = db.search(l2([1, 0, 0, 0]), 10, { folder: "📚Books" });
     expect(hits.length).toBe(1);
     expect(hits[0]?.rel_path).toBe("📚Books/oauth.md");
-    db.close();
+    await db.closeAndRelease();
   });
 
   it("search rejects query vectors with the wrong dim", async () => {
@@ -1557,7 +1686,7 @@ describe("EmbedDb", () => {
     });
     await db.open();
     expect(() => db.search(vec([1, 0, 0]), 10)).toThrow(/dim mismatch/);
-    db.close();
+    await db.closeAndRelease();
   });
 
   it("clearOnDisk removes the .embed.db file (idempotent)", async () => {
@@ -1567,7 +1696,9 @@ describe("EmbedDb", () => {
     db.upsertNote("a.md", 1000, [
       { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "x", vector: l2([1, 0, 0, 0]) }
     ]);
-    db.close();
+    await db.closeAndRelease();
+    const rollbackJournal = `${file}-journal`;
+    await fs.writeFile(rollbackJournal, "ROLLBACK_JOURNAL_SENTINEL");
 
     expect(
       await fs
@@ -1582,33 +1713,61 @@ describe("EmbedDb", () => {
         .then(() => true)
         .catch(() => false)
     ).toBe(false);
+    await expect(fs.lstat(rollbackJournal)).rejects.toMatchObject({ code: "ENOENT" });
     // Idempotent — second call returns false but doesn't throw.
     expect(await db.clearOnDisk()).toBe(false);
   });
 
-  // v3.9.0-rc.34 (deep-audit P-2) — clearOnDisk must ALSO remove the HNSW
-  // persistence sidecars (`<base>.hnsw.bin` + `<base>.hnsw.meta.json`), since
-  // the .meta.json carries `text_preview` (raw chunk text). Previously these
-  // survived `clear-embeddings`, a right-to-erasure gap for `--use-hnsw` users.
-  it("clearOnDisk also removes the HNSW sidecars (P-2 erasure)", async () => {
+  it.each(["rollback-journal directory"])(
+    "clearOnDisk preflights the complete SQLite family before an unsafe %s",
+    async () => {
+      const file = path.join(dir, "unsafe-journal.embed.db");
+      const wal = `${file}-wal`;
+      const shm = `${file}-shm`;
+      const journal = `${file}-journal`;
+      await fs.writeFile(file, "MAIN_SENTINEL");
+      await fs.writeFile(wal, "WAL_SENTINEL");
+      await fs.writeFile(shm, "SHM_SENTINEL");
+      await fs.mkdir(journal);
+      const db = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
+
+      await expect(db.clearOnDisk()).rejects.toThrow("Refusing to clear an unsafe embedding-index artifact");
+      expect(await fs.readFile(file, "utf8")).toBe("MAIN_SENTINEL");
+      expect(await fs.readFile(wal, "utf8")).toBe("WAL_SENTINEL");
+      expect(await fs.readFile(shm, "utf8")).toBe("SHM_SENTINEL");
+      expect((await fs.lstat(journal)).isDirectory()).toBe(true);
+    }
+  );
+
+  // clearOnDisk owns the complete HNSW family: legacy fixed binary, stable
+  // metadata pointer, immutable binary generations, and recognized crash
+  // temps/stages. Metadata carries raw text_preview, so every member is part
+  // of the same right-to-erasure boundary.
+  it("clearOnDisk removes legacy, generated, and crash-leftover HNSW artifacts", async () => {
     const file = path.join(dir, "vaultx.embed.db");
     const db = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
     await db.open();
     db.upsertNote("a.md", 1000, [
       { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "secret note text", vector: l2([1, 0, 0, 0]) }
     ]);
-    db.close();
+    await db.closeAndRelease();
     // Simulate the HNSW persist sidecars next to the embed-db (same base the
     // server derives: strip `.embed.db`, append `.hnsw`).
-    const base = `${file.replace(/\.embed\.db$/, "")}.hnsw`;
+    const base = hnswPersistBase(file);
     const binFile = `${base}.bin`;
     const metaFile = `${base}.meta.json`;
+    const generationFile = `${base}.${"a".repeat(48)}.bin`;
+    const generatedTmp = `${metaFile}.enquire-tmp-${"b".repeat(48)}`;
+    const generatedStage = `${generationFile}.enquire-stage-${"c".repeat(48)}`;
     await fs.writeFile(binFile, Buffer.from([1, 2, 3, 4]));
     await fs.writeFile(metaFile, JSON.stringify({ text_preview: "secret note text" }));
+    await fs.writeFile(generationFile, Buffer.from([5, 6, 7, 8]));
+    await fs.writeFile(generatedTmp, "secret note text");
+    await fs.mkdir(generatedStage, { mode: 0o700 });
+    await fs.writeFile(path.join(generatedStage, "artifact"), "secret note text", { mode: 0o600 });
 
     expect(await db.clearOnDisk()).toBe(true);
-    // Both the embed-db AND both HNSW sidecars must be gone.
-    for (const p of [file, binFile, metaFile]) {
+    for (const p of [file, binFile, metaFile, generationFile, generatedTmp, generatedStage]) {
       expect(
         await fs
           .stat(p)
@@ -1628,7 +1787,7 @@ describe("EmbedDb", () => {
     db.upsertNote("a.md", 1000, [
       { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "x", vector: l2([1, 0, 0, 0]) }
     ]);
-    db.close();
+    await db.closeAndRelease();
     const otherSidecar = path.join(dir, "someone-else.hnsw.bin");
     await fs.writeFile(otherSidecar, Buffer.from([9]));
 
@@ -1667,7 +1826,7 @@ describe("EmbedDb", () => {
     ]);
     const after = new Map(db.getSourceStates().map((s) => [s.rel_path, s.mtime_ms]));
     expect(after.get("a.md")).toBe(3000);
-    db.close();
+    await db.closeAndRelease();
 
     await assertQuarantineRetrievalLifecycle();
     await assertDeleteAndOrphanHydration();
@@ -1841,7 +2000,7 @@ describe("EmbedDb", () => {
     expect(hydrated).not.toHaveProperty("score");
     expect(db.getQuarantinedPaths()).toEqual([]);
     expect(db.computeSignature()).not.toContain(";quarantine=");
-    db.close();
+    await db.closeAndRelease();
   }
 
   async function assertDeleteAndOrphanHydration(): Promise<void> {
@@ -1878,7 +2037,7 @@ describe("EmbedDb", () => {
     db.quarantineSource("removed.md", "md");
     db.deleteNote("removed.md");
     expect(db.getQuarantinedPaths()).toEqual([]);
-    db.close();
+    await db.closeAndRelease();
 
     const Database = (await import("better-sqlite3")).default;
     const raw = new Database(file);
@@ -1887,13 +2046,13 @@ describe("EmbedDb", () => {
 
     const reopened = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
     await reopened.open();
-    expect(reopened.search(l2([1, 0, 0, 0]), 10)).toEqual([]);
-    expect(reopened.getAllVectors()).toEqual([]);
+    expect(() => reopened.search(l2([1, 0, 0, 0]), 10)).toThrow(/not admissible for a complete HNSW snapshot/);
+    expect(() => reopened.getAllVectors()).toThrow(/not admissible for a complete HNSW snapshot/);
     expect(reopened.getSearchRowsByIds(inserted.newIds).size).toBe(0);
     reopened.quarantineSource("orphan.md", "md");
     reopened.deleteNote("orphan.md");
     expect(reopened.getQuarantinedPaths()).toEqual([]);
-    reopened.close();
+    await reopened.closeAndRelease();
   }
 
   async function assertQuarantinePersistenceAndKindScope(): Promise<void> {
@@ -1902,14 +2061,14 @@ describe("EmbedDb", () => {
     await db.open();
     db.quarantineSource("note.md", "md");
     db.quarantineSource("paper.pdf", "pdf");
-    db.close();
+    await db.closeAndRelease();
 
     const reopened = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
     await reopened.open();
     expect(reopened.getQuarantinedPaths("md")).toEqual(["note.md"]);
     expect(reopened.getQuarantinedPaths("pdf")).toEqual(["paper.pdf"]);
     expect(reopened.auditKind("md").mismatched_files).toBe(1);
-    reopened.close();
+    await reopened.closeAndRelease();
   }
 
   async function assertLargeHydrationBatching(): Promise<void> {
@@ -1939,7 +2098,7 @@ describe("EmbedDb", () => {
     expect(hydrated.get(label)).toEqual(
       expect.objectContaining({ rel_path: "one.md", indexed_mtime_ms: 1234, indexed_revision: expect.any(Number) })
     );
-    db.close();
+    await db.closeAndRelease();
   }
 
   async function assertRevisionMigrationAndReadonlyReader(): Promise<void> {
@@ -1954,48 +2113,23 @@ describe("EmbedDb", () => {
         { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "sibling", vector: l2([0, 1, 0, 0]) }
       ]);
     } finally {
-      db.close();
+      await db.closeAndRelease();
     }
 
-    const Database = (await import("better-sqlite3")).default;
-    const legacy = new Database(file);
-    legacy.exec(`
-      DROP TRIGGER IF EXISTS embed_source_state_revision_insert;
-      DROP TRIGGER IF EXISTS embed_source_state_revision_update;
-      DROP TRIGGER IF EXISTS embed_source_state_revision_delete;
-      DROP TRIGGER IF EXISTS embed_source_quarantine_revision_insert;
-      DROP TRIGGER IF EXISTS embed_source_quarantine_revision_update;
-      DROP TRIGGER IF EXISTS embed_source_quarantine_revision_delete;
-      DELETE FROM source_revision;
-      CREATE TRIGGER embed_source_state_revision_insert
-      AFTER INSERT ON source_revision
-      BEGIN
-        DELETE FROM embeddings;
-      END;
-    `);
-    legacy.close();
-
-    await expect(openEmbedReceiptReader(file, "/v")).rejects.toThrow(/compatible index/);
-
-    // The same-name hostile trigger is admitted only so bootstrap can repair
-    // it. It must be dropped before the revision backfill; the old ordering
-    // fired this trigger and erased both embedding payloads.
-    const migrated = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
-    await migrated.open();
-    let oldLegacy: ReturnType<EmbedDb["searchWithReceipts"]>[number] | undefined;
-    let sibling: ReturnType<EmbedDb["searchWithReceipts"]>[number] | undefined;
+    const live = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
+    await live.open();
     try {
-      const migratedHits = new Map(migrated.searchWithReceipts(l2([1, 0, 0, 0]), 10).map((hit) => [hit.rel_path, hit]));
-      oldLegacy = migratedHits.get("legacy.md");
-      sibling = migratedHits.get("sibling.md");
-      if (!oldLegacy || !sibling) throw new Error("expected backfilled legacy receipts");
+      const hits = new Map(live.searchWithReceipts(l2([1, 0, 0, 0]), 10).map((hit) => [hit.rel_path, hit]));
+      const oldLegacy = hits.get("legacy.md");
+      const sibling = hits.get("sibling.md");
+      if (!oldLegacy || !sibling) throw new Error("expected canonical source receipts");
       expect(oldLegacy.indexed_revision).toBe(1);
-      expect(migrated.currentSourceReceiptMask([oldLegacy, sibling])).toEqual([true, true]);
+      expect(live.currentSourceReceiptMask([oldLegacy, sibling])).toEqual([true, true]);
 
       const reader = await openEmbedReceiptReader(file, "/v");
       try {
         expect(reader.currentSourceReceiptMask([oldLegacy, sibling])).toEqual([true, true]);
-        migrated.upsertNote("legacy.md", 1000, [
+        live.upsertNote("legacy.md", 1000, [
           {
             chunkIndex: 0,
             lineStart: 1,
@@ -2004,7 +2138,7 @@ describe("EmbedDb", () => {
             vector: l2([1, 0, 0, 0])
           }
         ]);
-        const newLegacy = migrated.searchWithReceipts(l2([1, 0, 0, 0]), 10).find((hit) => hit.rel_path === "legacy.md");
+        const newLegacy = live.searchWithReceipts(l2([1, 0, 0, 0]), 10).find((hit) => hit.rel_path === "legacy.md");
         if (!newLegacy) throw new Error("expected replacement receipt");
         expect(reader.currentSourceReceiptMask([oldLegacy, sibling, newLegacy])).toEqual([false, true, true]);
         expect(newLegacy.indexed_revision).toBeGreaterThan(oldLegacy.indexed_revision);
@@ -2014,12 +2148,13 @@ describe("EmbedDb", () => {
         reader.close();
         expect(reader.currentSourceReceiptMask([newLegacy])).toEqual([false]);
       } finally {
-        reader.close();
+        await reader.closeAndRelease();
       }
     } finally {
-      migrated.close();
+      await live.closeAndRelease();
     }
 
+    const Database = (await import("better-sqlite3")).default;
     const tampered = new Database(file);
     tampered.exec(`
       DROP TRIGGER embed_source_state_revision_insert;
@@ -2030,22 +2165,9 @@ describe("EmbedDb", () => {
       END;
     `);
     tampered.close();
+    const tamperedBefore = await exactEmbedLogicalSnapshot(file);
     await expect(openEmbedReceiptReader(file, "/v")).rejects.toThrow(/compatible index/);
-
-    const repaired = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
-    await repaired.open();
-    try {
-      const repairedReader = await openEmbedReceiptReader(file, "/v");
-      try {
-        const current = repaired.searchWithReceipts(l2([1, 0, 0, 0]), 10).find((hit) => hit.rel_path === "legacy.md");
-        if (!oldLegacy || !sibling || !current) throw new Error("expected receipt after canonical trigger repair");
-        expect(repairedReader.currentSourceReceiptMask([oldLegacy, sibling, current])).toEqual([false, true, true]);
-      } finally {
-        repairedReader.close();
-      }
-    } finally {
-      repaired.close();
-    }
+    await expectPathFreeEmbedOwnershipRefusal(file, "/v", tamperedBefore);
   }
 
   // v2.8.0 — PDF chunks indexed via the kind column.
@@ -2071,7 +2193,7 @@ describe("EmbedDb", () => {
       expect(byKind.get("a.md")).toBe("md");
       expect(byKind.get("paper.pdf")).toBe("pdf");
     } finally {
-      db.close();
+      await db.closeAndRelease();
     }
   });
 
@@ -2097,7 +2219,7 @@ describe("EmbedDb", () => {
       const all = db.getSourceStates().map((s) => s.rel_path);
       expect(all.sort()).toEqual(["a.md", "p.pdf"]);
     } finally {
-      db.close();
+      await db.closeAndRelease();
     }
   });
 
@@ -2138,7 +2260,7 @@ describe("EmbedDb", () => {
         mismatched_files: 1
       });
     } finally {
-      db.close();
+      await db.closeAndRelease();
     }
   });
 
@@ -2156,7 +2278,7 @@ describe("EmbedDb", () => {
       [{ chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "p0", vector: l2([0, 0, 1, 0]) }],
       "pdf"
     );
-    db.close();
+    await db.closeAndRelease();
 
     const Database = (await import("better-sqlite3")).default;
     const raw = new Database(file);
@@ -2174,7 +2296,7 @@ describe("EmbedDb", () => {
       });
       expect(reopened.auditKind("pdf").mismatched_files).toBe(0);
     } finally {
-      reopened.close();
+      await reopened.closeAndRelease();
     }
   });
 
@@ -2191,7 +2313,7 @@ describe("EmbedDb", () => {
       [{ chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "p0", vector: l2([0, 1, 0, 0]) }],
       "pdf"
     );
-    db.close();
+    await db.closeAndRelease();
 
     const Database = (await import("better-sqlite3")).default;
     const raw = new Database(file);
@@ -2217,7 +2339,7 @@ describe("EmbedDb", () => {
       });
       expect(reopened.auditKind("md").mismatched_files).toBe(0);
     } finally {
-      reopened.close();
+      await reopened.closeAndRelease();
     }
   });
 
@@ -2229,7 +2351,7 @@ describe("EmbedDb", () => {
       { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "a0", vector: l2([1, 0, 0, 0]) },
       { chunkIndex: 1, lineStart: 2, lineEnd: 2, textPreview: "a1", vector: l2([0, 1, 0, 0]) }
     ]);
-    db.close();
+    await db.closeAndRelease();
 
     const Database = (await import("better-sqlite3")).default;
     const raw = new Database(file);
@@ -2246,7 +2368,7 @@ describe("EmbedDb", () => {
         mismatched_files: 1
       });
     } finally {
-      reopened.close();
+      await reopened.closeAndRelease();
     }
   });
 
@@ -2261,7 +2383,7 @@ describe("EmbedDb", () => {
     ]);
     const healthyManifest = db.fingerprintKind("md");
     expect(db.auditVectorHealth("md")).toEqual({ invalid_vectors: 0 });
-    db.close();
+    await db.closeAndRelease();
 
     const Database = (await import("better-sqlite3")).default;
     const raw = new Database(file);
@@ -2271,7 +2393,7 @@ describe("EmbedDb", () => {
     const reopened = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
     await reopened.open();
     expect(reopened.auditKind("md").mismatched_files).toBe(1);
-    reopened.close();
+    await reopened.closeAndRelease();
 
     const corruptVector = new Database(file);
     corruptVector.prepare("UPDATE embeddings SET chunk_index = 1 WHERE rel_path = ? AND chunk_index = 0.5").run("a.md");
@@ -2281,7 +2403,7 @@ describe("EmbedDb", () => {
     const vectorAudit = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
     await vectorAudit.open();
     expect(vectorAudit.auditKind("md").mismatched_files).toBe(1);
-    vectorAudit.close();
+    await vectorAudit.closeAndRelease();
 
     const zeroBytes = Buffer.from(new Float32Array([0, 0, 0, 0]).buffer);
     const numericalVector = new Database(file);
@@ -2295,7 +2417,7 @@ describe("EmbedDb", () => {
     expect(numericalAudit.auditKind("md").mismatched_files).toBe(0);
     expect(numericalAudit.auditVectorHealth("md")).toEqual({ invalid_vectors: 1 });
     expect(numericalAudit.fingerprintKind("md")).not.toBe(healthyManifest);
-    numericalAudit.close();
+    await numericalAudit.closeAndRelease();
 
     const restoredBytes = Buffer.from(new Float32Array([0, 1, 0, 0]).buffer);
     const restoreVector = new Database(file);
@@ -2307,7 +2429,7 @@ describe("EmbedDb", () => {
     await restoredAudit.open();
     expect(restoredAudit.auditVectorHealth("md")).toEqual({ invalid_vectors: 0 });
     expect(restoredAudit.fingerprintKind("md")).toBe(healthyManifest);
-    restoredAudit.close();
+    await restoredAudit.closeAndRelease();
 
     const invalidKind = new Database(file);
     invalidKind.prepare("UPDATE embeddings SET kind = 'bogus' WHERE rel_path = ?").run("a.md");
@@ -2320,7 +2442,7 @@ describe("EmbedDb", () => {
       expect(kindAudit.auditKind("md").mismatched_files).toBe(1);
       expect(kindAudit.auditKind("pdf").mismatched_files).toBe(1);
     } finally {
-      kindAudit.close();
+      await kindAudit.closeAndRelease();
     }
 
     const crossKind = new Database(file);
@@ -2349,7 +2471,7 @@ describe("EmbedDb", () => {
         mismatched_files: 1
       });
     } finally {
-      crossKindAudit.close();
+      await crossKindAudit.closeAndRelease();
     }
   });
 
@@ -2361,19 +2483,19 @@ describe("EmbedDb", () => {
       { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "x", vector: l2([1, 0, 0, 0]) }
     ]);
     expect(db1.totalChunks()).toBe(1);
-    db1.close();
+    await db1.closeAndRelease();
 
     // Reopen with matching meta — should preserve data.
     const db2 = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
     await db2.open();
     expect(db2.totalChunks()).toBe(1);
-    db2.close();
+    await db2.closeAndRelease();
 
     const Database = (await import("better-sqlite3")).default;
 
-    // Current-v4 additive authority tables may both be absent after an older
-    // interrupted rollout. Exact same-root core ownership repairs them without
-    // rebuilding or changing the embedding payload/vector.
+    // Explicitly supported historical v4 metadata remains readable even when
+    // its optional authority ledger is absent. The v5 upgrade is deliberately
+    // destructive: it rotates physical identity and discards old vectors.
     const repairFile = path.join(dir, "v4-optional-repair.embed.db");
     await seedExactEmbedFile(repairFile, "repair.md");
     const repairRaw = new Database(repairFile);
@@ -2384,20 +2506,31 @@ describe("EmbedDb", () => {
          ORDER BY id`
       )
       .all();
+    const previousInstanceUuid = repairRaw
+      .prepare("SELECT value FROM meta WHERE key = 'instance_uuid'")
+      .pluck()
+      .get() as string;
+    const epochTriggers = repairRaw
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'trigger' AND name GLOB 'embed_mutation_epoch_*'")
+      .pluck()
+      .all() as string[];
+    for (const name of epochTriggers) repairRaw.exec(`DROP TRIGGER ${name}`);
     repairRaw.exec(`
       ${DROP_EMBED_REVISION_TRIGGERS_SQL}
       DROP TABLE source_quarantine;
       DROP TABLE source_revision;
+      UPDATE meta SET value = '4' WHERE key = 'schema_version';
+      DELETE FROM meta WHERE key IN ('instance_uuid', 'mutation_epoch');
     `);
     repairRaw.close();
     expect(await peekEmbedDbMeta(repairFile, "/v")).toEqual(
-      expect.objectContaining({ schema_version: String(EMBED_DB_SCHEMA_VERSION), vault_root: "/v" })
+      expect.objectContaining({ schema_version: "4", vault_root: "/v" })
     );
 
     const repairedV4 = new EmbedDb({ file: repairFile, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
     await repairedV4.open();
-    expect(repairedV4.totalChunks()).toBe(1);
-    repairedV4.close();
+    expect(repairedV4.totalChunks()).toBe(0);
+    await repairedV4.closeAndRelease();
     const repairedRaw = new Database(repairFile, { readonly: true, fileMustExist: true });
     try {
       expect(
@@ -2408,7 +2541,18 @@ describe("EmbedDb", () => {
              ORDER BY id`
           )
           .all()
-      ).toEqual(repairPayloadBefore);
+      ).toEqual([]);
+      expect(repairPayloadBefore).not.toEqual([]);
+      const currentMeta = new Map(
+        repairedRaw
+          .prepare("SELECT key, value FROM meta ORDER BY key")
+          .all<{ key: string; value: string }>()
+          .map(({ key, value }) => [key, value])
+      );
+      expect(currentMeta.get("schema_version")).toBe(String(EMBED_DB_SCHEMA_VERSION));
+      expect(currentMeta.get("instance_uuid")).toMatch(/^[0-9a-f]{32}$/);
+      expect(currentMeta.get("instance_uuid")).not.toBe(previousInstanceUuid);
+      expect(currentMeta.get("mutation_epoch")).toBe("1");
       const repairedTables = repairedRaw
         .prepare(
           `SELECT name, sql
@@ -2423,21 +2567,33 @@ describe("EmbedDb", () => {
         "typeof(revision) = 'integer'"
       );
       expect(repairedRaw.prepare("SELECT * FROM source_quarantine").all()).toEqual([]);
-      expect(repairedRaw.prepare("SELECT * FROM source_revision").all()).toEqual([
-        { rel_path: "repair.md", kind: "md", revision: 1 }
-      ]);
+      expect(repairedRaw.prepare("SELECT * FROM source_revision").all()).toEqual([]);
       expect(
         repairedRaw
-          .prepare("SELECT count(*) FROM sqlite_master WHERE type = 'trigger' AND name GLOB 'embed_*_revision_*'")
+          .prepare(
+            "SELECT count(*) FROM sqlite_master WHERE type = 'trigger' AND name GLOB 'embed_source_*_revision_*'"
+          )
           .pluck()
           .get()
       ).toBe(6);
+      expect(
+        repairedRaw
+          .prepare("SELECT count(*) FROM sqlite_master WHERE type = 'trigger' AND name GLOB 'embed_mutation_epoch_*'")
+          .pluck()
+          .get()
+      ).toBe(12);
     } finally {
       repairedRaw.close();
     }
 
     const raw = new Database(file);
+    const staleEpochTriggers = raw
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'trigger' AND name GLOB 'embed_mutation_epoch_*'")
+      .pluck()
+      .all() as string[];
+    for (const name of staleEpochTriggers) raw.exec(`DROP TRIGGER ${name}`);
     raw.prepare("UPDATE meta SET value = ? WHERE key = 'schema_version'").run(String(EMBED_DB_SCHEMA_VERSION - 1));
+    raw.prepare("DELETE FROM meta WHERE key IN ('instance_uuid', 'mutation_epoch')").run();
     raw.close();
 
     // POSITIVE: rc.19's fp32 → q8 inference-contract migration discards old vectors.
@@ -2447,7 +2603,7 @@ describe("EmbedDb", () => {
     db3.upsertNote("b.md", 2000, [
       { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "y", vector: l2([0, 1, 0, 0]) }
     ]);
-    db3.close();
+    await db3.closeAndRelease();
 
     const logicalSnapshot = () => {
       const inspection = new Database(file, { readonly: true, fileMustExist: true });
@@ -2519,7 +2675,7 @@ describe("EmbedDb", () => {
     // root are supported legacy provenance and may be destructively rebuilt.
     // The compact meta-table punctuation is intentional: SQLite preserves
     // caller formatting in sqlite_master, but whitespace around `(`, `)` and
-    // `,` is not part of the historical class identity. The current v4
+    // `,` is not part of the historical class identity. The current v5
     // preservation path was pinned by db2 above.
     for (const legacyVersion of [1, 2, 3]) {
       const legacyFile = path.join(dir, `legacy-v${legacyVersion}.embed.db`);
@@ -2577,7 +2733,7 @@ describe("EmbedDb", () => {
       const migrated = new EmbedDb({ file: legacyFile, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
       await migrated.open();
       expect(migrated.totalChunks()).toBe(0);
-      migrated.close();
+      await migrated.closeAndRelease();
     }
   });
 });
@@ -2675,7 +2831,7 @@ describe("EmbedDb int8 quantization", () => {
       expect(hits[0]?.rel_path).toBe("a.md");
       expect(hits[0]?.score).toBeGreaterThan(0.99);
     } finally {
-      db.close();
+      await db.closeAndRelease();
     }
   });
 
@@ -2700,7 +2856,7 @@ describe("EmbedDb int8 quantization", () => {
       { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "x", vector: l2([1, 0, 0, 0]) }
     ]);
     expect(f32.totalChunks()).toBe(1);
-    f32.close();
+    await f32.closeAndRelease();
 
     // Reopen with int8 — meta-mismatch must drop the embeddings table.
     const int8 = new EmbedDb({
@@ -2712,13 +2868,13 @@ describe("EmbedDb int8 quantization", () => {
     });
     await int8.open();
     expect(int8.totalChunks()).toBe(0);
-    int8.close();
+    await int8.closeAndRelease();
 
     // Swap back to f32 — same rebuild trigger.
     const f32again = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
     await f32again.open();
     expect(f32again.totalChunks()).toBe(0);
-    f32again.close();
+    await f32again.closeAndRelease();
   });
 
   it("preserves data when reopening with the same int8 mode (idempotent)", async () => {
@@ -2734,7 +2890,7 @@ describe("EmbedDb int8 quantization", () => {
     db1.upsertNote("a.md", 1000, [
       { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "y", vector: l2([1, 0, 0, 0]) }
     ]);
-    db1.close();
+    await db1.closeAndRelease();
 
     const db2 = new EmbedDb({
       file,
@@ -2745,7 +2901,7 @@ describe("EmbedDb int8 quantization", () => {
     });
     await db2.open();
     expect(db2.totalChunks()).toBe(1);
-    db2.close();
+    await db2.closeAndRelease();
   });
 
   it("ranks top-K identically to f32 on a 32-dim synthetic corpus (recall@5 = 100%)", async () => {
@@ -2810,8 +2966,8 @@ describe("EmbedDb int8 quantization", () => {
       // Total possible overlap = Q * k = 25. 90% → 22.5 → require ≥ 22.
       expect(overlapTotal).toBeGreaterThanOrEqual(22);
     } finally {
-      f32Db.close();
-      i8Db.close();
+      await f32Db.closeAndRelease();
+      await i8Db.closeAndRelease();
     }
   });
 
@@ -2838,7 +2994,32 @@ describe("EmbedDb int8 quantization", () => {
         expect(Math.abs((got?.[i] ?? 0) - (v[i] ?? 0))).toBeLessThan(0.01);
       }
     } finally {
-      db.close();
+      await db.closeAndRelease();
+    }
+  });
+
+  it("returns the exact DB-decoded vectors for int8 live HNSW updates", async () => {
+    const file = path.join(dir, "live-int8-vectors.embed.db");
+    const db = new EmbedDb({
+      file,
+      vaultRoot: "/v",
+      modelAlias: "multilingual",
+      dim: 4,
+      quantization: "int8"
+    });
+    await db.open();
+    try {
+      const input = l2([0.137, 0.283, -0.419, 0.851]);
+      const result = db.upsertNoteWithCanonicalVectors("live.md", 1, [
+        { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "live", vector: input }
+      ]);
+      const canonical = result.newVectors[0];
+      const rebuilt = db.captureHnswBuildSnapshot().vectors[0]?.vector;
+      expect(canonical).toBeInstanceOf(Float32Array);
+      expect(Array.from(canonical ?? [])).toEqual(Array.from(rebuilt ?? []));
+      expect(Array.from(canonical ?? [])).not.toEqual(Array.from(input));
+    } finally {
+      await db.closeAndRelease();
     }
   });
 
@@ -2875,8 +3056,1338 @@ describe("EmbedDb int8 quantization", () => {
       expect(a.computeSignature()).toMatch(/quant=f32/);
       expect(b.computeSignature()).toMatch(/quant=int8/);
     } finally {
-      a.close();
-      b.close();
+      await a.closeAndRelease();
+      await b.closeAndRelease();
+    }
+  });
+});
+
+describe("EmbedDb semantic-family lifetime state machine", () => {
+  async function inspectSemanticFamily(file: string) {
+    return inspectPersistenceLeases({ targetPath: file, familyKey: SEMANTIC_PERSISTENCE_FAMILY_KEY });
+  }
+
+  async function seedReceipt(file: string) {
+    const seed = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
+    await seed.open();
+    try {
+      seed.upsertNote("leased-reader.md", 1234, [
+        { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "leased", vector: l2([1, 0, 0, 0]) }
+      ]);
+      const receipt = seed.searchWithReceipts(l2([1, 0, 0, 0]), 1)[0];
+      if (!receipt) throw new Error("expected leased reader receipt fixture");
+      return receipt;
+    } finally {
+      await seed.closeAndRelease();
+    }
+  }
+
+  it("single-flights concurrent open and ignores hostile discovery getters on join and no-op", async () => {
+    const file = path.join(dir, "single-flight.embed.db");
+    const db = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
+    let getterReads = 0;
+    const irrelevantExpected = Object.defineProperty({}, "kind", {
+      get() {
+        getterReads += 1;
+        throw new Error("idempotent open must not inspect this getter");
+      }
+    }) as never;
+
+    const first = db.open();
+    const joined = db.open(irrelevantExpected);
+    await Promise.all([first, joined]);
+    await db.open(irrelevantExpected);
+    expect(getterReads).toBe(0);
+
+    const family = await inspectSemanticFamily(file);
+    const namespace = await inspectPersistenceNamespaceLeases(path.dirname(file));
+    expect(family.leases.map((lease) => lease.role)).toEqual(["shared"]);
+    expect(namespace.leases.map((lease) => lease.role)).toEqual(["shared"]);
+
+    await db.closeAndRelease();
+    expect((await inspectSemanticFamily(file)).leases).toEqual([]);
+    expect((await inspectPersistenceNamespaceLeases(path.dirname(file))).leases).toEqual([]);
+  });
+
+  it("holds a shared semantic-family lifetime so clear cannot erase an active receipt reader", async () => {
+    const file = path.join(dir, "receipt-reader-clear-interlock.embed.db");
+    const receipt = await seedReceipt(file);
+    const reader = await openEmbedReceiptReader(file, "/v");
+    const clearer = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
+    try {
+      expect((await inspectSemanticFamily(file)).leases.map((lease) => lease.role)).toEqual(["shared"]);
+      expect((await inspectPersistenceNamespaceLeases(path.dirname(file))).leases.map((lease) => lease.role)).toEqual([
+        "shared"
+      ]);
+
+      await expect(clearer.clearOnDisk()).rejects.toMatchObject({ name: "PersistenceLeaseConflictError" });
+      expect(reader.currentSourceReceiptMask([receipt])).toEqual([true]);
+      expect((await fs.lstat(file)).isFile()).toBe(true);
+    } finally {
+      await reader.closeAndRelease();
+    }
+  });
+
+  it("allows clear only after awaited receipt-reader release (negative control)", async () => {
+    const file = path.join(dir, "receipt-reader-clear-after-close.embed.db");
+    const receipt = await seedReceipt(file);
+    const reader = await openEmbedReceiptReader(file, "/v");
+
+    expect(reader.currentSourceReceiptMask([receipt])).toEqual([true]);
+    await reader.closeAndRelease();
+    expect(reader.currentSourceReceiptMask([receipt])).toEqual([false]);
+    expect((await inspectSemanticFamily(file)).leases).toEqual([]);
+    expect((await inspectPersistenceNamespaceLeases(path.dirname(file))).leases).toEqual([]);
+
+    const clearer = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
+    await expect(clearer.clearOnDisk()).resolves.toBe(true);
+    await expect(fs.lstat(file)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("retains a failed receipt-reader release for exact awaited retry", async () => {
+    const file = path.join(dir, "receipt-reader-release-retry.embed.db");
+    await seedReceipt(file);
+    const reader = await openEmbedReceiptReader(file, "/v");
+    const realUnlink = fs.unlink.bind(fs);
+    let injectedFailures = 0;
+    const unlinkSpy = vi.spyOn(fs, "unlink").mockImplementation(async (candidate) => {
+      if (injectedFailures === 0 && /^lease\.shared\./u.test(path.basename(String(candidate)))) {
+        injectedFailures += 1;
+        throw Object.assign(new Error("synthetic receipt-reader lease unlink failure"), { code: "EIO" });
+      }
+      return realUnlink(candidate);
+    });
+    try {
+      reader.close();
+      await expect(reader.closeAndRelease()).rejects.toMatchObject({ name: "PersistenceLeaseOwnershipError" });
+    } finally {
+      unlinkSpy.mockRestore();
+    }
+    expect(injectedFailures).toBe(1);
+    expect((await inspectSemanticFamily(file)).leases.map((lease) => lease.role)).toEqual(["shared"]);
+    expect((await inspectPersistenceNamespaceLeases(path.dirname(file))).leases.map((lease) => lease.role)).toEqual([
+      "shared"
+    ]);
+
+    await expect(reader.closeAndRelease()).resolves.toBeUndefined();
+    expect((await inspectSemanticFamily(file)).leases).toEqual([]);
+    expect((await inspectPersistenceNamespaceLeases(path.dirname(file))).leases).toEqual([]);
+  });
+
+  it("preserves a reachable ownership carrier from shared-reader acquisition failure", async () => {
+    const file = path.join(dir, "receipt-reader-acquire-ownership.embed.db");
+    await seedReceipt(file);
+    const eraser = await acquirePersistenceFamilyLease({
+      targetPath: file,
+      familyKey: SEMANTIC_PERSISTENCE_FAMILY_KEY,
+      role: "eraser"
+    });
+    const preexistingNamespaceIds = new Set(
+      (await inspectPersistenceNamespaceLeases(path.dirname(file))).leases.map((lease) => lease.id)
+    );
+    const realUnlink = fs.unlink.bind(fs);
+    let injectedFailures = 0;
+    const unlinkSpy = vi.spyOn(fs, "unlink").mockImplementation(async (candidate) => {
+      const basename = path.basename(String(candidate));
+      if (injectedFailures === 0 && /^lease\.shared\./u.test(basename) && !preexistingNamespaceIds.has(basename)) {
+        injectedFailures += 1;
+        throw Object.assign(new Error("synthetic reader acquisition rollback failure"), { code: "EIO" });
+      }
+      return realUnlink(candidate);
+    });
+    let rejected: unknown;
+    try {
+      await openEmbedReceiptReader(file, "/v");
+    } catch (error) {
+      rejected = error;
+    } finally {
+      unlinkSpy.mockRestore();
+    }
+
+    let ownership: PersistenceLeaseOwnershipError | null = null;
+    try {
+      expect(injectedFailures).toBe(1);
+      expect(rejected).toBeInstanceOf(PersistenceLeaseOwnershipError);
+      if (rejected instanceof PersistenceLeaseOwnershipError) ownership = rejected;
+      expect(ownership?.debtOwner.artifacts.length).toBeGreaterThan(0);
+      expect((await inspectSemanticFamily(file)).leases.map((lease) => lease.role)).toEqual(["eraser"]);
+      expect((await inspectPersistenceNamespaceLeases(path.dirname(file))).leases.map((lease) => lease.role)).toEqual([
+        "shared",
+        "shared"
+      ]);
+      await ownership?.debtOwner.release();
+    } finally {
+      await ownership?.debtOwner.release().catch(() => {});
+      await drainProcessPersistenceLeaseDebts();
+      await eraser.release();
+    }
+    expect((await inspectSemanticFamily(file)).leases).toEqual([]);
+    expect((await inspectPersistenceNamespaceLeases(path.dirname(file))).leases).toEqual([]);
+  });
+
+  it("keeps rollback ownership reachable inside the receipt-reader AggregateError carrier", async () => {
+    const file = path.join(dir, "receipt-reader-open-rollback-aggregate.embed.db");
+    await seedReceipt(file);
+    const realUnlink = fs.unlink.bind(fs);
+    let injectedFailures = 0;
+    const unlinkSpy = vi.spyOn(fs, "unlink").mockImplementation(async (candidate) => {
+      if (injectedFailures === 0 && /^lease\.shared\./u.test(path.basename(String(candidate)))) {
+        injectedFailures += 1;
+        throw Object.assign(new Error("synthetic incompatible-reader rollback failure"), { code: "EIO" });
+      }
+      return realUnlink(candidate);
+    });
+    let rejected: unknown;
+    try {
+      await openEmbedReceiptReader(file, "/foreign-vault");
+    } catch (error) {
+      rejected = error;
+    } finally {
+      unlinkSpy.mockRestore();
+    }
+
+    let ownership: PersistenceLeaseOwnershipError | null = null;
+    try {
+      expect(injectedFailures).toBe(1);
+      expect(rejected).toBeInstanceOf(AggregateError);
+      const errors = rejected instanceof AggregateError ? (rejected.errors as unknown[]) : [];
+      expect(errors[0]).toMatchObject({
+        message: "Embedding receipt reader requires an existing compatible index for the expected vault"
+      });
+      ownership =
+        errors.find(
+          (error): error is PersistenceLeaseOwnershipError => error instanceof PersistenceLeaseOwnershipError
+        ) ?? null;
+      expect(ownership?.debtOwner.artifacts.length).toBeGreaterThan(0);
+      expect((await inspectSemanticFamily(file)).leases.map((lease) => lease.role)).toEqual(["shared"]);
+      expect((await inspectPersistenceNamespaceLeases(path.dirname(file))).leases.map((lease) => lease.role)).toEqual([
+        "shared"
+      ]);
+      await ownership?.debtOwner.release();
+    } finally {
+      await ownership?.debtOwner.release().catch(() => {});
+      await drainProcessPersistenceLeaseDebts();
+    }
+    expect((await inspectSemanticFamily(file)).leases).toEqual([]);
+    expect((await inspectPersistenceNamespaceLeases(path.dirname(file))).leases).toEqual([]);
+  });
+
+  it("lets synchronous close win a chmod-blocked open without a late DB handle or lease marker", async () => {
+    const file = path.join(dir, "close-during-open.embed.db");
+    const db = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
+    let reachedChmod!: () => void;
+    const chmodStarted = new Promise<void>((resolve) => {
+      reachedChmod = resolve;
+    });
+    let unblockChmod!: () => void;
+    const chmodGate = new Promise<void>((resolve) => {
+      unblockChmod = resolve;
+    });
+    const realChmod = fs.chmod.bind(fs);
+    let blocked = false;
+    const chmodSpy = vi.spyOn(fs, "chmod").mockImplementation(async (candidate, mode) => {
+      await realChmod(candidate, mode);
+      if (!blocked && path.basename(String(candidate)) === path.basename(file)) {
+        blocked = true;
+        reachedChmod();
+        await chmodGate;
+      }
+    });
+    try {
+      const opening = db.open();
+      await chmodStarted;
+      db.close();
+      unblockChmod();
+      await expect(opening).rejects.toThrow(/close was requested while open was in progress/);
+      await db.closeAndRelease();
+      expect(() => db.totalChunks()).toThrow(/not open/);
+      expect((await inspectSemanticFamily(file)).leases).toEqual([]);
+      expect((await inspectPersistenceNamespaceLeases(path.dirname(file))).leases).toEqual([]);
+    } finally {
+      unblockChmod();
+      chmodSpy.mockRestore();
+      await db.closeAndRelease();
+    }
+  });
+
+  it("retains an exact lifetime after open rollback release failure and retries it on awaited close", async () => {
+    const file = path.join(dir, "open-rollback-retry.embed.db");
+    await seedExactEmbedFile(file, "owned.md");
+    const db = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
+    const realUnlink = fs.unlink.bind(fs);
+    let injectedFailures = 0;
+    const unlinkSpy = vi.spyOn(fs, "unlink").mockImplementation(async (candidate) => {
+      if (injectedFailures === 0 && /^lease\.shared\./u.test(path.basename(String(candidate)))) {
+        injectedFailures += 1;
+        throw Object.assign(new Error("synthetic retryable lease unlink failure"), { code: "EIO" });
+      }
+      return realUnlink(candidate);
+    });
+    try {
+      await expect(db.open({ kind: "missing" })).rejects.toBeInstanceOf(AggregateError);
+    } finally {
+      unlinkSpy.mockRestore();
+    }
+    expect(injectedFailures).toBe(1);
+    expect((await inspectSemanticFamily(file)).leases.map((lease) => lease.role)).toEqual(["shared"]);
+    expect((await inspectPersistenceNamespaceLeases(path.dirname(file))).leases.map((lease) => lease.role)).toEqual([
+      "shared"
+    ]);
+
+    await expect(db.closeAndRelease()).resolves.toBeUndefined();
+    expect((await inspectSemanticFamily(file)).leases).toEqual([]);
+    expect((await inspectPersistenceNamespaceLeases(path.dirname(file))).leases).toEqual([]);
+  });
+
+  it("does not let an older reopen continuation erase a later close request", async () => {
+    const file = path.join(dir, "reopen-superseded.embed.db");
+    const db = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
+    await db.open();
+    await db.closeAndRelease();
+
+    const internals = db as unknown as {
+      finishCloseAndRelease(): Promise<void>;
+      openOnce(...args: unknown[]): Promise<void>;
+    };
+    const originalFinish = internals.finishCloseAndRelease.bind(db);
+    const originalOpenOnce = internals.openOnce.bind(db);
+    let drainedResolve: (() => void) | undefined;
+    const drained = new Promise<void>((resolve) => {
+      drainedResolve = resolve;
+    });
+    let allowContinuationResolve: (() => void) | undefined;
+    const allowContinuation = new Promise<void>((resolve) => {
+      allowContinuationResolve = resolve;
+    });
+    let openOnceCalls = 0;
+    internals.openOnce = async (...args: unknown[]) => {
+      openOnceCalls += 1;
+      await originalOpenOnce(...args);
+    };
+    internals.finishCloseAndRelease = async () => {
+      await originalFinish();
+      drainedResolve?.();
+      await allowContinuation;
+    };
+
+    const staleReopen = db.open();
+    await drained;
+    db.close();
+    allowContinuationResolve?.();
+    await expect(staleReopen).rejects.toThrow("Embedding index reopen was superseded by a later close request");
+    expect(openOnceCalls).toBe(0);
+    expect(() => db.totalChunks()).toThrow(/not open/);
+    await db.closeAndRelease();
+    expect((await inspectSemanticFamily(file)).leases).toEqual([]);
+    expect((await inspectPersistenceNamespaceLeases(path.dirname(file))).leases).toEqual([]);
+  });
+});
+
+describe("EmbedDb durable generation identity and mutation epoch", () => {
+  it("captures the cheap generation identity and advances it with admitted mutations", async () => {
+    const file = path.join(dir, "cheap-generation-identity.embed.db");
+    const db = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
+    await db.open();
+    try {
+      const initial = db.captureGenerationIdentity();
+      const initialReceipt = db.captureHnswReceiptSnapshot().receipt;
+      expect(initial).toEqual({
+        dbInstanceUuid: initialReceipt.dbInstanceUuid,
+        dbMutationEpoch: initialReceipt.dbMutationEpoch
+      });
+
+      db.upsertNote("generation.md", 1, [
+        { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "generation", vector: l2([1, 0, 0, 0]) }
+      ]);
+      const advanced = db.captureGenerationIdentity();
+      expect(advanced.dbInstanceUuid).toBe(initial.dbInstanceUuid);
+      expect(advanced.dbMutationEpoch).toBeGreaterThan(initial.dbMutationEpoch);
+    } finally {
+      await db.closeAndRelease();
+    }
+  });
+
+  it("conditionally upserts under one exact generation and returns the committed UUID/epoch", async () => {
+    const file = path.join(dir, "conditional-generation-upsert.embed.db");
+    const db = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
+    await db.open();
+    try {
+      const expected = db.captureGenerationIdentity();
+      const result = db.upsertNoteWithCanonicalVectorsIfGeneration(expected, "conditional.md", 1, [
+        { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "conditional", vector: l2([1, 0, 0, 0]) }
+      ]);
+
+      expect(result.kind).toBe("committed");
+      if (result.kind !== "committed") throw new Error("expected the exact generation to commit");
+      expect(result.value.oldIds).toEqual([]);
+      expect(result.value.newIds).toHaveLength(1);
+      expect(result.committedGeneration.dbInstanceUuid).toBe(expected.dbInstanceUuid);
+      expect(result.committedGeneration.dbMutationEpoch).toBeGreaterThan(expected.dbMutationEpoch);
+      expect(db.captureGenerationIdentity()).toEqual(result.committedGeneration);
+    } finally {
+      await db.closeAndRelease();
+    }
+  });
+
+  it("performs no conditional DML after an external writer advances the expected epoch", async () => {
+    const file = path.join(dir, "conditional-generation-drift.embed.db");
+    const guarded = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
+    const external = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
+    await guarded.open();
+    await external.open();
+    try {
+      const staleExpected = guarded.captureGenerationIdentity();
+      external.upsertNote("external.md", 1, [
+        { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "external", vector: l2([0, 1, 0, 0]) }
+      ]);
+
+      const result = guarded.upsertNoteWithCanonicalVectorsIfGeneration(staleExpected, "must-not-write.md", 2, [
+        { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "forbidden", vector: l2([0, 0, 1, 0]) }
+      ]);
+
+      expect(result.kind).toBe("generation-drift");
+      if (result.kind !== "generation-drift") throw new Error("expected external generation drift");
+      expect(result.observedGeneration.dbMutationEpoch).toBeGreaterThan(staleExpected.dbMutationEpoch);
+      expect(guarded.getSourceStates().map((row) => row.rel_path)).toEqual(["external.md"]);
+      expect(guarded.captureGenerationIdentity()).toEqual(result.observedGeneration);
+    } finally {
+      await external.closeAndRelease();
+      await guarded.closeAndRelease();
+    }
+  });
+
+  it("conditionally deletes rows and preserves the exact epoch for a no-row delete", async () => {
+    const file = path.join(dir, "conditional-generation-delete.embed.db");
+    const db = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
+    await db.open();
+    try {
+      db.upsertNote("delete.md", 1, [
+        { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "delete", vector: l2([1, 0, 0, 0]) }
+      ]);
+      const beforeDelete = db.captureGenerationIdentity();
+      const deleted = db.deleteNoteIfGeneration(beforeDelete, "delete.md");
+      expect(deleted.kind).toBe("committed");
+      if (deleted.kind !== "committed") throw new Error("expected delete commit");
+      expect(deleted.value).toHaveLength(1);
+      expect(deleted.committedGeneration.dbMutationEpoch).toBeGreaterThan(beforeDelete.dbMutationEpoch);
+
+      const noRow = db.deleteNoteIfGeneration(deleted.committedGeneration, "missing.md");
+      expect(noRow).toEqual({
+        kind: "committed",
+        value: [],
+        committedGeneration: deleted.committedGeneration
+      });
+      expect(db.captureGenerationIdentity()).toEqual(deleted.committedGeneration);
+    } finally {
+      await db.closeAndRelease();
+    }
+  });
+
+  it("refuses malformed cheap generation identity instead of treating it as graph authority", async () => {
+    const file = path.join(dir, "cheap-generation-malformed.embed.db");
+    const db = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
+    await db.open();
+    try {
+      const Database = (await import("better-sqlite3")).default;
+      const mutate = new Database(file);
+      try {
+        mutate.prepare("UPDATE meta SET value = '01' WHERE key = 'mutation_epoch'").run();
+      } finally {
+        mutate.close();
+      }
+      expect(() => db.captureGenerationIdentity()).toThrow("Embedding generation identity is malformed");
+    } finally {
+      await db.closeAndRelease();
+    }
+  });
+
+  it("keeps UUID/epoch and performs no bootstrap write on exact reopen, then rotates UUID after clear", async () => {
+    const file = path.join(dir, "durable-generation-reopen.embed.db");
+    const first = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
+    await first.open();
+    const initial = first.captureHnswReceiptSnapshot().receipt;
+    expect(initial.dbInstanceUuid).toMatch(/^[0-9a-f]{32}$/);
+    expect(initial.dbMutationEpoch).toBe(1);
+    await first.closeAndRelease();
+
+    const Database = (await import("better-sqlite3")).default;
+    const prototype = Database.prototype as unknown as {
+      exec(sql: string): unknown;
+      prepare(sql: string): unknown;
+    };
+    const originalExec = prototype.exec;
+    const originalPrepare = prototype.prepare;
+    const bootstrapWrites: string[] = [];
+    prototype.exec = function trackedExec(this: unknown, sql: string): unknown {
+      if (/\b(?:CREATE|DROP|INSERT|UPDATE|DELETE)\b/iu.test(sql)) bootstrapWrites.push(sql);
+      return Reflect.apply(originalExec, this, [sql]);
+    };
+    prototype.prepare = function trackedPrepare(this: unknown, sql: string): unknown {
+      if (/^\s*(?:INSERT|UPDATE|DELETE)\b/iu.test(sql)) bootstrapWrites.push(sql);
+      return Reflect.apply(originalPrepare, this, [sql]);
+    };
+    const reopened = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
+    try {
+      await reopened.open();
+      expect(reopened.captureHnswReceiptSnapshot().receipt).toEqual(initial);
+    } finally {
+      await reopened.closeAndRelease();
+      prototype.exec = originalExec;
+      prototype.prepare = originalPrepare;
+    }
+    expect(bootstrapWrites).toEqual([]);
+
+    await reopened.clearOnDisk();
+    const recreated = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
+    await recreated.open();
+    try {
+      const replacement = recreated.captureHnswReceiptSnapshot().receipt;
+      expect(replacement.dbInstanceUuid).toMatch(/^[0-9a-f]{32}$/);
+      expect(replacement.dbInstanceUuid).not.toBe(initial.dbInstanceUuid);
+      expect(replacement.dbMutationEpoch).toBe(1);
+    } finally {
+      await recreated.closeAndRelease();
+    }
+  });
+
+  it("installs the exact 4x3 trigger census and rolls epoch back with a failed payload transaction", async () => {
+    const file = path.join(dir, "durable-generation-rollback.embed.db");
+    const db = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
+    await db.open();
+    try {
+      db.upsertNote("rollback.md", 1, [
+        { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "before", vector: l2([1, 0, 0, 0]) }
+      ]);
+      const before = db.captureHnswReceiptSnapshot();
+      expect(() =>
+        db.upsertNote("rollback.md", 2, [
+          { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "partial", vector: l2([0, 1, 0, 0]) },
+          { chunkIndex: 1, lineStart: 2, lineEnd: 2, textPreview: "invalid", vector: l2([1, 0, 0]) }
+        ])
+      ).toThrow(/vector dim mismatch/);
+      expect(db.captureHnswReceiptSnapshot()).toEqual(before);
+
+      const Database = (await import("better-sqlite3")).default;
+      const raw = new Database(file, { readonly: true, fileMustExist: true });
+      try {
+        const names = raw
+          .prepare(
+            "SELECT name FROM sqlite_master WHERE type = 'trigger' AND name GLOB 'embed_mutation_epoch_*' ORDER BY name"
+          )
+          .pluck()
+          .all() as string[];
+        expect(names).toEqual(
+          ["embeddings", "source_state", "source_quarantine", "source_revision"]
+            .flatMap((table) =>
+              ["delete", "insert", "update"].map((operation) => `embed_mutation_epoch_${table}_${operation}`)
+            )
+            .sort()
+        );
+      } finally {
+        raw.close();
+      }
+    } finally {
+      await db.closeAndRelease();
+    }
+  });
+
+  it("aborts a durable mutation before payload commit when epoch is exhausted", async () => {
+    const file = path.join(dir, "durable-generation-overflow.embed.db");
+    const db = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
+    await db.open();
+    try {
+      const Database = (await import("better-sqlite3")).default;
+      const raw = new Database(file);
+      raw.prepare("UPDATE meta SET value = ? WHERE key = 'mutation_epoch'").run(String(Number.MAX_SAFE_INTEGER));
+      raw.close();
+      const before = db.captureHnswReceiptSnapshot();
+      expect(before.receipt.dbMutationEpoch).toBe(Number.MAX_SAFE_INTEGER);
+      expect(() => db.quarantineSource("overflow.md", "md")).toThrow(/mutation epoch is invalid or exhausted/);
+      expect(db.captureHnswReceiptSnapshot()).toEqual(before);
+      expect(db.getQuarantinedPaths()).toEqual([]);
+    } finally {
+      await db.closeAndRelease();
+    }
+  });
+
+  it.each([
+    { field: "instance_uuid", value: "ABCDEF0123456789ABCDEF0123456789" },
+    { field: "instance_uuid", value: "0123456789abcdef0123456789abcde" },
+    { field: "instance_uuid", value: "g123456789abcdef0123456789abcdef" },
+    { field: "mutation_epoch", value: "0" },
+    { field: "mutation_epoch", value: "01" },
+    { field: "mutation_epoch", value: "1.0" },
+    { field: "mutation_epoch", value: "9007199254740992" },
+    { field: "mutation_epoch", value: "not-an-epoch" }
+  ])("refuses malformed current generation metadata: $field=$value", async ({ field, value }) => {
+    const file = path.join(dir, `malformed-generation-${field}-${value.replaceAll("/", "-")}.embed.db`);
+    await seedExactEmbedFile(file, "malformed.md");
+    const Database = (await import("better-sqlite3")).default;
+    const raw = new Database(file);
+    raw.prepare("UPDATE meta SET value = ? WHERE key = ?").run(value, field);
+    raw.close();
+    expect(await discoverEmbedDbConfig(file, "/v")).toEqual({ kind: "refused" });
+    const refused = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
+    await expect(refused.open()).rejects.toThrow(/ownership could not be verified/);
+  });
+
+  it.each(["instance_uuid", "mutation_epoch"])("refuses current generation metadata missing %s", async (field) => {
+    const file = path.join(dir, `missing-generation-${field}.embed.db`);
+    await seedExactEmbedFile(file, "missing.md");
+    const Database = (await import("better-sqlite3")).default;
+    const raw = new Database(file);
+    raw.prepare("DELETE FROM meta WHERE key = ?").run(field);
+    raw.close();
+    expect(await discoverEmbedDbConfig(file, "/v")).toEqual({ kind: "refused" });
+    const refused = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
+    await expect(refused.open()).rejects.toThrow(/ownership could not be verified/);
+  });
+
+  it("refuses a current schema missing one mutation trigger without repairing it", async () => {
+    const file = path.join(dir, "missing-epoch-trigger.embed.db");
+    await seedExactEmbedFile(file, "trigger.md");
+    const Database = (await import("better-sqlite3")).default;
+    const raw = new Database(file);
+    raw.exec("DROP TRIGGER embed_mutation_epoch_embeddings_update");
+    raw.close();
+    const before = await exactEmbedLogicalSnapshot(file);
+    await expectPathFreeEmbedOwnershipRefusal(file, "/v", before);
+  });
+});
+
+describe("EmbedDb atomic HNSW receipt snapshots", () => {
+  it("returns stable receipts and remains usable inside a nested better-sqlite3 transaction", async () => {
+    const file = path.join(dir, "hnsw-receipt-stable.embed.db");
+    const db = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
+    await db.open();
+    try {
+      db.upsertNote("stable.md", 1000, [
+        { chunkIndex: 0, lineStart: 10, lineEnd: 20, textPreview: "stable", vector: l2([1, 0, 0, 0]) }
+      ]);
+
+      const first = db.captureHnswReceiptSnapshot();
+      const second = db.captureHnswReceiptSnapshot();
+      expect(second).toEqual(first);
+      expect(second).not.toBe(first);
+      expect(second.rowsByLabel).not.toBe(first.rowsByLabel);
+
+      const firstLoad = db.captureHnswLoadSnapshot();
+      const secondLoad = db.captureHnswLoadSnapshot();
+      expect(firstLoad.receipt).toEqual(first.receipt);
+      expect(secondLoad).toEqual(firstLoad);
+      expect(secondLoad.vectorsByLabel).not.toBe(firstLoad.vectorsByLabel);
+      const label = [...firstLoad.vectorsByLabel.keys()][0];
+      if (label === undefined) throw new Error("expected load-authority label");
+      expect(secondLoad.vectorsByLabel.get(label)).not.toBe(firstLoad.vectorsByLabel.get(label));
+      expect(secondLoad.vectorsByLabel.get(label)).toEqual(l2([1, 0, 0, 0]));
+      const mutableFirst = firstLoad.vectorsByLabel.get(label);
+      if (!mutableFirst) throw new Error("expected detached load-authority vector");
+      mutableFirst[0] = 0;
+      expect(secondLoad.vectorsByLabel.get(label)).toEqual(l2([1, 0, 0, 0]));
+      expect(db.captureHnswLoadSnapshot().vectorsByLabel.get(label)).toEqual(l2([1, 0, 0, 0]));
+
+      const sqlite = (
+        db as unknown as {
+          requireDb(): {
+            transaction<T>(callback: () => T): () => T;
+          };
+        }
+      ).requireDb();
+      const nested = sqlite.transaction(() => db.captureHnswReceiptSnapshot())();
+      expect(nested).toEqual(first);
+      const nestedLoad = sqlite.transaction(() => db.captureHnswLoadSnapshot())();
+      expect(nestedLoad).toEqual(secondLoad);
+    } finally {
+      await db.closeAndRelease();
+    }
+  });
+
+  it.each([
+    { label: "one-byte-short", blobBytes: 15 },
+    { label: "bounded-oversized", blobBytes: 65_537 }
+  ])("rejects a $label vector BLOB in the aggregate before preparing the payload iterator", async ({ blobBytes }) => {
+    const file = path.join(dir, `hnsw-aggregate-vector-${blobBytes}.embed.db`);
+    const db = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
+    await db.open();
+    try {
+      db.upsertNote("vector.md", 1000, [
+        { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "vector", vector: l2([1, 0, 0, 0]) }
+      ]);
+
+      const Database = (await import("better-sqlite3")).default;
+      const raw = new Database(file);
+      try {
+        raw.prepare("UPDATE embeddings SET vector = zeroblob(?) WHERE rel_path = ?").run(blobBytes, "vector.md");
+      } finally {
+        raw.close();
+      }
+
+      const sqlite = (
+        db as unknown as {
+          requireDb(): { prepare(sql: string): object };
+        }
+      ).requireDb();
+      const prepareSpy = vi.spyOn(sqlite, "prepare");
+      try {
+        const error = thrownBy(() => db.captureHnswBuildSnapshot());
+        expect(error).toBeInstanceOf(EmbedSnapshotIntegrityError);
+        expect(error).not.toBeInstanceOf(EmbedSnapshotCapacityError);
+        expect(error).toMatchObject({ message: "Embedding rows are malformed during HNSW snapshot admission" });
+
+        const preparedSql = prepareSpy.mock.calls.map(([sql]) => sql);
+        expect(preparedSql.some((sql) => sql.includes("AS invalid_vector_count"))).toBe(true);
+        expect(preparedSql.some((sql) => sql.includes("SELECT e.id AS label"))).toBe(false);
+      } finally {
+        prepareSpy.mockRestore();
+      }
+    } finally {
+      await db.closeAndRelease();
+    }
+  });
+
+  it("never materializes a quarantined bounded-oversized vector BLOB", async () => {
+    const file = path.join(dir, "hnsw-quarantined-oversized-vector.embed.db");
+    const db = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
+    await db.open();
+    try {
+      const healthy = db.upsertNote("healthy.md", 1000, [
+        { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "healthy", vector: l2([1, 0, 0, 0]) }
+      ]);
+      const quarantined = db.upsertNote("quarantined.md", 1000, [
+        { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "quarantined", vector: l2([0, 1, 0, 0]) }
+      ]);
+      const healthyLabel = healthy.newIds[0];
+      const quarantinedLabel = quarantined.newIds[0];
+      if (healthyLabel === undefined || quarantinedLabel === undefined) {
+        throw new Error("expected HNSW aggregate-admission fixture labels");
+      }
+      db.quarantineSource("quarantined.md", "md");
+
+      const Database = (await import("better-sqlite3")).default;
+      const raw = new Database(file);
+      try {
+        raw.prepare("UPDATE embeddings SET vector = zeroblob(65537) WHERE id = ?").run(quarantinedLabel);
+        expect(raw.prepare("SELECT length(vector) FROM embeddings WHERE id = ?").pluck().get(quarantinedLabel)).toBe(
+          65_537
+        );
+      } finally {
+        raw.close();
+      }
+
+      const snapshot = db.captureHnswBuildSnapshot();
+      expect(snapshot.receipt.activeRows).toBe(1);
+      expect([...snapshot.rowsByLabel.keys()]).toEqual([healthyLabel]);
+      expect(snapshot.rowsByLabel.has(quarantinedLabel)).toBe(false);
+      expect(snapshot.vectors.map((row) => row.label)).toEqual([healthyLabel]);
+      expect(snapshot.receipt.signature).toContain(";quarantine=");
+    } finally {
+      await db.closeAndRelease();
+    }
+  });
+
+  it.each([
+    {
+      label: "quarantine oversized path",
+      sql: "INSERT INTO source_quarantine (rel_path, kind) VALUES (?, 'md')",
+      params: ["q".repeat(4097)] as readonly unknown[]
+    },
+    {
+      label: "quarantine wrong-storage path",
+      sql: "INSERT INTO source_quarantine (rel_path, kind) VALUES (?, 'md')",
+      params: [Buffer.from([113])] as readonly unknown[]
+    },
+    {
+      label: "source-state oversized path",
+      sql: `INSERT INTO source_state (rel_path, mtime_ms, n_chunks, kind, indexed_at)
+            VALUES (?, 1, 1, 'md', 'now')`,
+      params: ["s".repeat(4097)] as readonly unknown[]
+    },
+    {
+      label: "source-state wrong-storage mtime",
+      sql: `INSERT INTO source_state (rel_path, mtime_ms, n_chunks, kind, indexed_at)
+            VALUES ('state.md', ?, 1, 'md', 'now')`,
+      params: [Buffer.from([1])] as readonly unknown[]
+    },
+    {
+      label: "source-revision oversized path",
+      sql: "INSERT INTO source_revision (rel_path, kind, revision) VALUES (?, 'md', 1)",
+      params: ["r".repeat(4097)] as readonly unknown[]
+    },
+    {
+      label: "source-revision wrong-storage revision",
+      sql: "INSERT INTO source_revision (rel_path, kind, revision) VALUES ('revision.md', 'md', ?)",
+      params: [Buffer.from([1])] as readonly unknown[]
+    }
+  ])("rejects a $label in the authority envelope before preparing authority iterators", async ({ sql, params }) => {
+    const file = path.join(dir, "hnsw-authority-envelope.embed.db");
+    const db = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
+    await db.open();
+    try {
+      const Database = (await import("better-sqlite3")).default;
+      const raw = new Database(file);
+      try {
+        raw.pragma("ignore_check_constraints = ON");
+        raw.prepare(sql).run(...params);
+      } finally {
+        raw.close();
+      }
+
+      const sqlite = (
+        db as unknown as {
+          requireDb(): { prepare(sql: string): object };
+        }
+      ).requireDb();
+      const prepareSpy = vi.spyOn(sqlite, "prepare");
+      try {
+        const error = thrownBy(() => db.captureHnswReceiptSnapshot());
+        expect(error).toBeInstanceOf(EmbedSnapshotIntegrityError);
+        expect(error).not.toBeInstanceOf(EmbedSnapshotCapacityError);
+        expect(error).toMatchObject({
+          message: "Embedding authority manifests are malformed during HNSW capture"
+        });
+
+        const preparedSql = prepareSpy.mock.calls.map(([prepared]) => prepared);
+        expect(preparedSql.some((prepared) => prepared.includes("AS quarantine_invalid_count"))).toBe(true);
+        expect(
+          preparedSql.some((prepared) =>
+            prepared.includes("SELECT rel_path, kind FROM source_quarantine ORDER BY kind, rel_path")
+          )
+        ).toBe(false);
+        expect(preparedSql.some((prepared) => prepared.includes("SELECT s.rel_path, s.kind, s.mtime_ms"))).toBe(false);
+        expect(preparedSql.some((prepared) => prepared.includes("AS invalid_vector_count"))).toBe(false);
+        expect(preparedSql.some((prepared) => prepared.includes("SELECT e.id AS label"))).toBe(false);
+      } finally {
+        prepareSpy.mockRestore();
+      }
+    } finally {
+      await db.closeAndRelease();
+    }
+  });
+
+  it("admits exact per-cell path, preview, and vector boundaries", async () => {
+    const file = path.join(dir, "hnsw-admission-boundary.embed.db");
+    const db = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
+    await db.open();
+    try {
+      const sourcePath = `${"s".repeat(4093)}.md`;
+      const quarantinePath = `${"q".repeat(4093)}.md`;
+      const preview = "p".repeat(65_536);
+      expect(Buffer.byteLength(sourcePath, "utf8")).toBe(4096);
+      expect(Buffer.byteLength(quarantinePath, "utf8")).toBe(4096);
+      expect(Buffer.byteLength(preview, "utf8")).toBe(65_536);
+
+      const inserted = db.upsertNote(sourcePath, 1000, [
+        { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: preview, vector: l2([1, 0, 0, 0]) }
+      ]);
+      const label = inserted.newIds[0];
+      if (label === undefined) throw new Error("expected HNSW boundary fixture label");
+      db.quarantineSource(quarantinePath, "md");
+
+      const snapshot = db.captureHnswBuildSnapshot();
+      expect(snapshot.receipt.activeRows).toBe(1);
+      expect([...snapshot.rowsByLabel.keys()]).toEqual([label]);
+      expect(snapshot.rowsByLabel.get(label)).toMatchObject({ rel_path: sourcePath, text_preview: preview });
+      expect(snapshot.vectors).toHaveLength(1);
+      expect(snapshot.vectors[0]?.vector).toEqual(l2([1, 0, 0, 0]));
+      expect(snapshot.receipt.signature).toContain(";quarantine=");
+    } finally {
+      await db.closeAndRelease();
+    }
+  });
+
+  it("returns the typed capacity error before payload iteration when a valid aggregate exceeds its row budget", async () => {
+    const file = path.join(dir, "hnsw-admission-capacity-type.embed.db");
+    const db = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
+    await db.open();
+    try {
+      db.upsertNote("capacity.md", 1000, [
+        { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "capacity", vector: l2([1, 0, 0, 0]) }
+      ]);
+      expect(db.captureHnswReceiptSnapshot().receipt.activeRows).toBe(1);
+
+      const sqlite = (
+        db as unknown as {
+          requireDb(): { prepare(sql: string): object };
+        }
+      ).requireDb();
+      const originalPrepare = sqlite.prepare.bind(sqlite);
+      // A real row-count overflow needs 250,001 rows (or more than 64 MiB of
+      // admitted text). Keep this unit probe bounded: execute the real
+      // aggregate once, then change only its safe-integer row_count result.
+      // The successful baseline above is the negative control for the seam.
+      const prepareSpy = vi.spyOn(sqlite, "prepare").mockImplementation((sql) => {
+        const statement = originalPrepare(sql);
+        if (!sql.includes("AS invalid_vector_count")) return statement;
+        return new Proxy(statement, {
+          get(target, property, receiver) {
+            if (property !== "get") return Reflect.get(target, property, receiver);
+            return (...params: unknown[]) => {
+              const get = Reflect.get(target, "get");
+              if (typeof get !== "function") throw new Error("expected aggregate statement getter");
+              const row = Reflect.apply(get, target, params);
+              if (typeof row !== "object" || row === null) throw new Error("expected aggregate admission row");
+              return { ...(row as Record<string, unknown>), row_count: 250_001, vector_bytes: 250_001 * 16 };
+            };
+          }
+        });
+      });
+      try {
+        const error = thrownBy(() => db.captureHnswBuildSnapshot());
+        expect(error).toBeInstanceOf(EmbedSnapshotCapacityError);
+        expect(error).not.toBeInstanceOf(EmbedSnapshotIntegrityError);
+        expect(error).toMatchObject({
+          message: "Embedding rows exceed the bounded combined HNSW working-set admission envelope"
+        });
+        expect(prepareSpy.mock.calls.some(([sql]) => sql.includes("SELECT e.id AS label"))).toBe(false);
+      } finally {
+        prepareSpy.mockRestore();
+      }
+    } finally {
+      await db.closeAndRelease();
+    }
+  });
+
+  it("rejects a combined working set that passes the former independent row, text, and vector caps", async () => {
+    const file = path.join(dir, "hnsw-combined-working-set.embed.db");
+    const dim = 4096;
+    const db = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim });
+    await db.open();
+    try {
+      db.upsertNote("combined.md", 1000, [
+        {
+          chunkIndex: 0,
+          lineStart: 1,
+          lineEnd: 1,
+          textPreview: "combined",
+          vector: l2(new Array<number>(dim).fill(1))
+        }
+      ]);
+      expect(db.captureHnswLoadSnapshot().receipt.activeRows).toBe(1);
+
+      const sqlite = (
+        db as unknown as {
+          requireDb(): { prepare(sql: string): object };
+        }
+      ).requireDb();
+      const originalPrepare = sqlite.prepare.bind(sqlite);
+      const admittedRows = 50_000;
+      const encodedBytes = dim * 4;
+      const prepareSpy = vi.spyOn(sqlite, "prepare").mockImplementation((sql) => {
+        const statement = originalPrepare(sql);
+        if (!sql.includes("AS invalid_vector_count")) return statement;
+        return new Proxy(statement, {
+          get(target, property, receiver) {
+            if (property !== "get") return Reflect.get(target, property, receiver);
+            return (...params: unknown[]) => {
+              const get = Reflect.get(target, "get");
+              if (typeof get !== "function") throw new Error("expected aggregate statement getter");
+              const row = Reflect.apply(get, target, params);
+              if (typeof row !== "object" || row === null) throw new Error("expected aggregate admission row");
+              return {
+                ...(row as Record<string, unknown>),
+                row_count: admittedRows,
+                vector_bytes: admittedRows * encodedBytes
+              };
+            };
+          }
+        });
+      });
+      try {
+        const error = thrownBy(() => db.captureHnswLoadSnapshot());
+        expect(error).toBeInstanceOf(EmbedSnapshotCapacityError);
+        expect(error).toMatchObject({
+          message: "Embedding rows exceed the bounded combined HNSW working-set admission envelope"
+        });
+        expect(admittedRows).toBeLessThan(250_000);
+        const formerNativeEstimate = 8 * 1024 * 1024 + admittedRows * (dim * 4 + 16 * 2 * 4 + 4 + 8 + 256);
+        expect(formerNativeEstimate).toBeLessThan(1024 * 1024 * 1024);
+        expect(admittedRows * encodedBytes).toBeLessThan(1024 * 1024 * 1024);
+        expect(formerNativeEstimate + admittedRows * encodedBytes).toBeGreaterThan(1024 * 1024 * 1024);
+        expect(prepareSpy.mock.calls.some(([sql]) => sql.includes("SELECT e.id AS label"))).toBe(false);
+      } finally {
+        prepareSpy.mockRestore();
+      }
+    } finally {
+      await db.closeAndRelease();
+    }
+  });
+
+  it("changes the payload receipt for a same-count, same-label raw vector BLOB rewrite", async () => {
+    const file = path.join(dir, "hnsw-receipt-vector.embed.db");
+    const db = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
+    await db.open();
+    try {
+      const inserted = db.upsertNote("vector.md", 1000, [
+        { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "vector", vector: l2([1, 0, 0, 0]) }
+      ]);
+      const label = inserted.newIds[0];
+      if (label === undefined) throw new Error("expected HNSW receipt fixture label");
+      const before = db.captureHnswReceiptSnapshot();
+
+      const Database = (await import("better-sqlite3")).default;
+      const raw = new Database(file);
+      try {
+        const replacement = l2([0, 1, 0, 0]);
+        raw
+          .prepare("UPDATE embeddings SET vector = ? WHERE id = ?")
+          .run(Buffer.from(replacement.buffer, replacement.byteOffset, replacement.byteLength), label);
+      } finally {
+        raw.close();
+      }
+
+      const after = db.captureHnswReceiptSnapshot();
+      expect(after.receipt.activeRows).toBe(before.receipt.activeRows);
+      expect(after.receipt.maxLabel).toBe(before.receipt.maxLabel);
+      expect(after.receipt.liveLabelSha256).toBe(before.receipt.liveLabelSha256);
+      expect(after.rowsByLabel).toEqual(before.rowsByLabel);
+      expect(after.receipt.dbPayloadSha256).not.toBe(before.receipt.dbPayloadSha256);
+      expect(after.receipt.signature).not.toBe(before.receipt.signature);
+    } finally {
+      await db.closeAndRelease();
+    }
+  });
+
+  it("binds the ordered live-label manifest even when row count is unchanged", async () => {
+    const file = path.join(dir, "hnsw-receipt-label.embed.db");
+    const db = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
+    await db.open();
+    try {
+      const inserted = db.upsertNote("label.md", 1000, [
+        { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "label", vector: l2([1, 0, 0, 0]) }
+      ]);
+      const label = inserted.newIds[0];
+      if (label === undefined) throw new Error("expected HNSW receipt fixture label");
+      const before = db.captureHnswReceiptSnapshot();
+
+      const Database = (await import("better-sqlite3")).default;
+      const raw = new Database(file);
+      try {
+        raw.prepare("UPDATE embeddings SET id = id + 100 WHERE id = ?").run(label);
+      } finally {
+        raw.close();
+      }
+
+      const after = db.captureHnswReceiptSnapshot();
+      expect(after.receipt.activeRows).toBe(before.receipt.activeRows);
+      expect([...after.rowsByLabel.keys()]).toEqual([label + 100]);
+      expect(after.receipt.maxLabel).toBe(label + 100);
+      expect(after.receipt.liveLabelSha256).not.toBe(before.receipt.liveLabelSha256);
+      expect(after.receipt.signature).not.toBe(before.receipt.signature);
+    } finally {
+      await db.closeAndRelease();
+    }
+  });
+
+  it("isolates every persisted row/source field that must invalidate an HNSW generation", async () => {
+    const file = path.join(dir, "hnsw-receipt-fields.embed.db");
+    const db = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
+    await db.open();
+    try {
+      const inserted = db.upsertNote("fields.md", 1000, [
+        { chunkIndex: 0, lineStart: 10, lineEnd: 20, textPreview: "before", vector: l2([1, 0, 0, 0]) }
+      ]);
+      const label = inserted.newIds[0];
+      if (label === undefined) throw new Error("expected HNSW receipt fixture label");
+      const baseline = db.captureHnswReceiptSnapshot();
+
+      const Database = (await import("better-sqlite3")).default;
+      const raw = new Database(file);
+      try {
+        const revision = raw
+          .prepare("SELECT revision FROM source_revision WHERE rel_path = ? AND kind = 'md'")
+          .get("fields.md") as { revision: number } | undefined;
+        if (!revision) throw new Error("expected HNSW receipt fixture revision");
+        const setMtimeOnly = (mtimeMs: number) => {
+          raw.transaction(() => {
+            raw
+              .prepare("UPDATE source_state SET mtime_ms = ? WHERE rel_path = ? AND kind = 'md'")
+              .run(mtimeMs, "fields.md");
+            raw
+              .prepare("UPDATE source_revision SET revision = ? WHERE rel_path = ? AND kind = 'md'")
+              .run(revision.revision, "fields.md");
+          })();
+        };
+        const cases: ReadonlyArray<{
+          field: string;
+          changesPublicRow: boolean;
+          rejectsIncomplete?: boolean;
+          mutate(): void;
+          restore(): void;
+        }> = [
+          {
+            field: "text_preview",
+            changesPublicRow: true,
+            mutate: () => {
+              raw.prepare("UPDATE embeddings SET text_preview = 'after' WHERE id = ?").run(label);
+            },
+            restore: () => {
+              raw.prepare("UPDATE embeddings SET text_preview = 'before' WHERE id = ?").run(label);
+            }
+          },
+          {
+            field: "chunk_index",
+            changesPublicRow: true,
+            rejectsIncomplete: true,
+            mutate: () => {
+              raw.prepare("UPDATE embeddings SET chunk_index = 1 WHERE id = ?").run(label);
+            },
+            restore: () => {
+              raw.prepare("UPDATE embeddings SET chunk_index = 0 WHERE id = ?").run(label);
+            }
+          },
+          {
+            field: "line_start",
+            changesPublicRow: true,
+            mutate: () => {
+              raw.prepare("UPDATE embeddings SET line_start = 11 WHERE id = ?").run(label);
+            },
+            restore: () => {
+              raw.prepare("UPDATE embeddings SET line_start = 10 WHERE id = ?").run(label);
+            }
+          },
+          {
+            field: "line_end",
+            changesPublicRow: true,
+            mutate: () => {
+              raw.prepare("UPDATE embeddings SET line_end = 21 WHERE id = ?").run(label);
+            },
+            restore: () => {
+              raw.prepare("UPDATE embeddings SET line_end = 20 WHERE id = ?").run(label);
+            }
+          },
+          {
+            field: "indexed_mtime_ms",
+            changesPublicRow: false,
+            mutate: () => setMtimeOnly(2000),
+            restore: () => setMtimeOnly(1000)
+          },
+          {
+            field: "indexed_revision",
+            changesPublicRow: false,
+            mutate: () => {
+              raw
+                .prepare("UPDATE source_revision SET revision = ? WHERE rel_path = ? AND kind = 'md'")
+                .run(revision.revision + 1, "fields.md");
+            },
+            restore: () => {
+              raw
+                .prepare("UPDATE source_revision SET revision = ? WHERE rel_path = ? AND kind = 'md'")
+                .run(revision.revision, "fields.md");
+            }
+          }
+        ];
+
+        for (const fieldCase of cases) {
+          fieldCase.mutate();
+          if (fieldCase.rejectsIncomplete) {
+            const error = thrownBy(() => db.captureHnswReceiptSnapshot());
+            expect(error, fieldCase.field).toBeInstanceOf(EmbedSnapshotIntegrityError);
+            expect(error, fieldCase.field).toMatchObject({
+              message: "Embedding source state is incomplete during HNSW snapshot capture"
+            });
+          } else {
+            const changed = db.captureHnswReceiptSnapshot();
+            expect(changed.receipt.activeRows, fieldCase.field).toBe(baseline.receipt.activeRows);
+            expect(changed.receipt.liveLabelSha256, fieldCase.field).toBe(baseline.receipt.liveLabelSha256);
+            expect(changed.receipt.dbPayloadSha256, fieldCase.field).not.toBe(baseline.receipt.dbPayloadSha256);
+            expect(changed.receipt.signature, fieldCase.field).not.toBe(baseline.receipt.signature);
+            if (fieldCase.changesPublicRow) {
+              expect(changed.rowsByLabel, fieldCase.field).not.toEqual(baseline.rowsByLabel);
+            } else {
+              expect(changed.rowsByLabel, fieldCase.field).toEqual(baseline.rowsByLabel);
+            }
+          }
+          fieldCase.restore();
+          const restored = db.captureHnswReceiptSnapshot();
+          expect(restored.rowsByLabel, `${fieldCase.field} restore rows`).toEqual(baseline.rowsByLabel);
+          expect(restored.receipt.dbPayloadSha256, `${fieldCase.field} restore payload`).toBe(
+            baseline.receipt.dbPayloadSha256
+          );
+          expect(restored.receipt.liveLabelSha256, `${fieldCase.field} restore labels`).toBe(
+            baseline.receipt.liveLabelSha256
+          );
+          expect(restored.receipt.dbInstanceUuid, `${fieldCase.field} restore instance`).toBe(
+            baseline.receipt.dbInstanceUuid
+          );
+          expect(restored.receipt.dbMutationEpoch, `${fieldCase.field} restore epoch`).toBeGreaterThan(
+            baseline.receipt.dbMutationEpoch
+          );
+          expect(restored.receipt.signature, `${fieldCase.field} restore signature`).not.toBe(
+            baseline.receipt.signature
+          );
+        }
+      } finally {
+        raw.close();
+      }
+    } finally {
+      await db.closeAndRelease();
+    }
+  });
+
+  it("rejects a declared source whose chunk count or contiguous range is incomplete", async () => {
+    const file = path.join(dir, "hnsw-receipt-incomplete-source.embed.db");
+    const db = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
+    await db.open();
+    try {
+      db.upsertNote("complete.md", 1000, [
+        { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "first", vector: l2([1, 0, 0, 0]) },
+        { chunkIndex: 1, lineStart: 2, lineEnd: 2, textPreview: "second", vector: l2([0, 1, 0, 0]) }
+      ]);
+      expect(db.captureHnswReceiptSnapshot().receipt.activeRows).toBe(2);
+
+      const Database = (await import("better-sqlite3")).default;
+      const raw = new Database(file);
+      try {
+        raw.prepare("UPDATE source_state SET n_chunks = 3 WHERE rel_path = ? AND kind = 'md'").run("complete.md");
+        expect(() => db.captureHnswReceiptSnapshot()).toThrow(
+          "Embedding source state is incomplete during HNSW snapshot capture"
+        );
+
+        raw.prepare("UPDATE source_state SET n_chunks = 2 WHERE rel_path = ? AND kind = 'md'").run("complete.md");
+        expect(db.captureHnswReceiptSnapshot().receipt.activeRows).toBe(2);
+
+        raw.prepare("DELETE FROM embeddings WHERE rel_path = ? AND kind = 'md' AND chunk_index = 1").run("complete.md");
+        expect(() => db.captureHnswReceiptSnapshot()).toThrow(
+          "Embedding source state is incomplete during HNSW snapshot capture"
+        );
+        expect(() => db.captureHnswBuildSnapshot()).toThrow(
+          "Embedding source state is incomplete during HNSW snapshot capture"
+        );
+      } finally {
+        raw.close();
+      }
+    } finally {
+      await db.closeAndRelease();
+    }
+  });
+
+  it("rejects a count-preserving 0,2 gap and a declared source with zero physical rows", async () => {
+    const file = path.join(dir, "hnsw-receipt-count-preserving-gap.embed.db");
+    const db = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
+    await db.open();
+    try {
+      db.upsertNote("gap.md", 1000, [
+        { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "zero", vector: l2([1, 0, 0, 0]) },
+        { chunkIndex: 1, lineStart: 2, lineEnd: 2, textPreview: "one", vector: l2([0, 1, 0, 0]) }
+      ]);
+
+      const Database = (await import("better-sqlite3")).default;
+      const raw = new Database(file);
+      try {
+        raw.prepare("UPDATE embeddings SET chunk_index = 2 WHERE rel_path = ? AND chunk_index = 1").run("gap.md");
+
+        const sqlite = (
+          db as unknown as {
+            requireDb(): { prepare(sql: string): object };
+          }
+        ).requireDb();
+        const gapPrepareSpy = vi.spyOn(sqlite, "prepare");
+        try {
+          const gapError = thrownBy(() => db.captureHnswReceiptSnapshot());
+          expect(gapError).toBeInstanceOf(EmbedSnapshotIntegrityError);
+          expect(gapError).not.toBeInstanceOf(EmbedSnapshotCapacityError);
+          expect(gapError).toMatchObject({
+            message: "Embedding source state is incomplete during HNSW snapshot capture"
+          });
+          expect(gapPrepareSpy.mock.calls.some(([sql]) => sql.includes("AS invalid_vector_count"))).toBe(false);
+          expect(gapPrepareSpy.mock.calls.some(([sql]) => sql.includes("SELECT e.id AS label"))).toBe(false);
+        } finally {
+          gapPrepareSpy.mockRestore();
+        }
+
+        raw.prepare("UPDATE embeddings SET chunk_index = 1 WHERE rel_path = ? AND chunk_index = 2").run("gap.md");
+        expect(db.captureHnswReceiptSnapshot().receipt.activeRows).toBe(2);
+
+        raw.prepare("DELETE FROM embeddings WHERE rel_path = ?").run("gap.md");
+        const emptyPrepareSpy = vi.spyOn(sqlite, "prepare");
+        try {
+          const emptyError = thrownBy(() => db.captureHnswBuildSnapshot());
+          expect(emptyError).toBeInstanceOf(EmbedSnapshotIntegrityError);
+          expect(emptyError).not.toBeInstanceOf(EmbedSnapshotCapacityError);
+          expect(emptyError).toMatchObject({
+            message: "Embedding source state is incomplete during HNSW snapshot capture"
+          });
+          expect(emptyPrepareSpy.mock.calls.some(([sql]) => sql.includes("AS invalid_vector_count"))).toBe(false);
+          expect(emptyPrepareSpy.mock.calls.some(([sql]) => sql.includes("SELECT e.id AS label"))).toBe(false);
+        } finally {
+          emptyPrepareSpy.mockRestore();
+        }
+      } finally {
+        raw.close();
+      }
+    } finally {
+      await db.closeAndRelease();
+    }
+  });
+
+  it("rejects the whole HNSW snapshot when one non-quarantined row is malformed", async () => {
+    const file = path.join(dir, "hnsw-receipt-malformed.embed.db");
+    const db = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
+    await db.open();
+    try {
+      db.upsertNote("healthy.md", 1000, [
+        { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "healthy", vector: l2([1, 0, 0, 0]) }
+      ]);
+      db.upsertNote("malformed.md", 1000, [
+        { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "malformed", vector: l2([0, 1, 0, 0]) }
+      ]);
+
+      const Database = (await import("better-sqlite3")).default;
+      const raw = new Database(file);
+      try {
+        raw.prepare("UPDATE embeddings SET vector = x'00' WHERE rel_path = ?").run("malformed.md");
+      } finally {
+        raw.close();
+      }
+
+      for (const capture of [() => db.captureHnswReceiptSnapshot(), () => db.captureHnswBuildSnapshot()]) {
+        const error = thrownBy(capture);
+        expect(error).toBeInstanceOf(EmbedSnapshotIntegrityError);
+        expect(error).not.toBeInstanceOf(EmbedSnapshotCapacityError);
+        expect(error).toMatchObject({ message: "Embedding rows are malformed during HNSW snapshot admission" });
+      }
+    } finally {
+      await db.closeAndRelease();
+    }
+  });
+
+  it("excludes a quarantined malformed row from both receipt and build snapshots", async () => {
+    const file = path.join(dir, "hnsw-receipt-quarantined.embed.db");
+    const db = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
+    await db.open();
+    try {
+      const healthy = db.upsertNote("healthy.md", 1000, [
+        { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "healthy", vector: l2([1, 0, 0, 0]) }
+      ]);
+      const malformed = db.upsertNote("malformed.md", 1000, [
+        { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "malformed", vector: l2([0, 1, 0, 0]) }
+      ]);
+      const healthyLabel = healthy.newIds[0];
+      const malformedLabel = malformed.newIds[0];
+      if (healthyLabel === undefined || malformedLabel === undefined) {
+        throw new Error("expected HNSW receipt fixture labels");
+      }
+      db.quarantineSource("malformed.md", "md");
+
+      const Database = (await import("better-sqlite3")).default;
+      const raw = new Database(file);
+      try {
+        raw.prepare("UPDATE embeddings SET vector = x'00' WHERE id = ?").run(malformedLabel);
+      } finally {
+        raw.close();
+      }
+
+      const receiptSnapshot = db.captureHnswReceiptSnapshot();
+      const buildSnapshot = db.captureHnswBuildSnapshot();
+      expect(receiptSnapshot.receipt.activeRows).toBe(1);
+      expect([...receiptSnapshot.rowsByLabel.keys()]).toEqual([healthyLabel]);
+      expect(receiptSnapshot.rowsByLabel.has(malformedLabel)).toBe(false);
+      expect(buildSnapshot.receipt).toEqual(receiptSnapshot.receipt);
+      expect(buildSnapshot.rowsByLabel).toEqual(receiptSnapshot.rowsByLabel);
+      expect(buildSnapshot.vectors.map((row) => row.label)).toEqual([healthyLabel]);
+      expect(receiptSnapshot.receipt.signature).toContain(";quarantine=");
+    } finally {
+      await db.closeAndRelease();
     }
   });
 });
@@ -2898,13 +4409,14 @@ describe("EmbedDb upsertNote + deleteNote return ids (v3.9.0-rc.2)", () => {
         { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "first", vector: v },
         { chunkIndex: 1, lineStart: 2, lineEnd: 2, textPreview: "second", vector: v }
       ]);
+      expect(Object.keys(r).sort()).toEqual(["newIds", "oldIds"]);
       expect(r.oldIds).toEqual([]);
       expect(r.newIds).toHaveLength(2);
       // AUTOINCREMENT IDs are positive integers, monotonically increasing.
       expect(r.newIds[0]).toBeGreaterThan(0);
       expect(r.newIds[1]).toBeGreaterThan(r.newIds[0] ?? 0);
     } finally {
-      db.close();
+      await db.closeAndRelease();
       await fs.rm(dir, { recursive: true, force: true });
     }
   });
@@ -2934,7 +4446,7 @@ describe("EmbedDb upsertNote + deleteNote return ids (v3.9.0-rc.2)", () => {
         expect(second.oldIds.includes(newId)).toBe(false);
       }
     } finally {
-      db.close();
+      await db.closeAndRelease();
       await fs.rm(dir, { recursive: true, force: true });
     }
   });
@@ -2953,7 +4465,7 @@ describe("EmbedDb upsertNote + deleteNote return ids (v3.9.0-rc.2)", () => {
       const deletedIds = db.deleteNote("a.md");
       expect(deletedIds).toEqual(r.newIds);
     } finally {
-      db.close();
+      await db.closeAndRelease();
       await fs.rm(dir, { recursive: true, force: true });
     }
   });
@@ -2968,13 +4480,13 @@ describe("EmbedDb upsertNote + deleteNote return ids (v3.9.0-rc.2)", () => {
       const deletedIds = db.deleteNote("ghost.md");
       expect(deletedIds).toEqual([]);
     } finally {
-      db.close();
+      await db.closeAndRelease();
       await fs.rm(dir, { recursive: true, force: true });
     }
   });
 });
 
-describe("peekEmbedDbMeta is truly safe — never throws (v3.10.0-rc.34, RCA sibling of peekFtsMetaSafe)", () => {
+describe("peekEmbedDbMeta is fail-soft after exact namespace admission (v3.10.0-rc.34)", () => {
   // Pass trivially when better-sqlite3 is absent (the peek returns null at the
   // dep-load catch before reaching `new Database`); when present (CI + dev) the
   // directory/corrupt cases exercise the rc.34 fix — pre-fix `new Database()`
@@ -2987,19 +4499,32 @@ describe("peekEmbedDbMeta is truly safe — never throws (v3.10.0-rc.34, RCA sib
     await expect(assertEmbedDbRecoveryOwnership(missing, "/v")).resolves.toBeUndefined();
   });
 
-  it("returns null (not throw) when the path is a DIRECTORY", async () => {
-    const d = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-embed-dir-"));
+  it("returns null (not throw) when an admitted .embed.db path is a DIRECTORY", async () => {
+    const parent = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-embed-dir-"));
+    const d = path.join(parent, "directory.embed.db");
+    await fs.mkdir(d);
     try {
       const modeBefore = (await fs.stat(d)).mode & 0o777;
       expect(await peekEmbedDbMeta(d)).toBeNull();
       expect(await discoverEmbedDbConfig(d, "/v")).toEqual({ kind: "refused" });
       expect(await discoverEmbedDbConfigCached(d, "/v")).toEqual({ kind: "refused" });
       const directoryDb = new EmbedDb({ file: d, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
-      await expect(directoryDb.open()).rejects.toThrow("Embedding index could not be inspected");
+      let openError: unknown;
+      try {
+        await directoryDb.open();
+      } catch (error) {
+        openError = error;
+      } finally {
+        await directoryDb.closeAndRelease();
+      }
+      expect(openError).toBeInstanceOf(Error);
+      const openMessage = openError instanceof Error ? openError.message : String(openError);
+      expect(openMessage).toBe("Embedding index artifact family could not be admitted");
+      expect(openMessage).not.toContain(d);
       expect((await fs.stat(d)).mode & 0o777).toBe(modeBefore);
       await expectPathFreeRecoveryOwnershipRefusal(d, "/v");
     } finally {
-      await fs.rm(d, { recursive: true, force: true });
+      await fs.rm(parent, { recursive: true, force: true });
     }
   });
 

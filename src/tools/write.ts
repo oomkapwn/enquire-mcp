@@ -1,5 +1,5 @@
 import * as path from "node:path";
-import { advanceFence, type FenceChar } from "../fence.js";
+import { advanceFence, type FenceState } from "../fence.js";
 import { parseFrontmatter, stringifyFrontmatter } from "../frontmatter.js";
 import { foldName, foldTag, lookupFoldedAny } from "../name-fold.js";
 import { resolvePeriodicNoteName } from "../periodic.js";
@@ -993,7 +993,7 @@ export function rewriteOutsideCodeFences(
   oldRawsToNew: Map<string, { kind: "wikilink" | "embed"; newRaw: string }>
 ): { content: string; count: number } {
   const { lines, ends } = splitLinesWithEnds(content);
-  let fenceMarker: FenceChar | null = null;
+  let fenceMarker: FenceState | null = null;
   let count = 0;
   const out: string[] = [];
   for (const line of lines) {
@@ -1054,7 +1054,7 @@ export function replaceStringOutsideCodeFences(
 ): { content: string; count: number } {
   if (!search) return { content, count: 0 };
   const { lines, ends } = splitLinesWithEnds(content);
-  let fenceMarker: FenceChar | null = null;
+  let fenceMarker: FenceState | null = null;
   let count = 0;
   const out: string[] = [];
   // v3.11.1-rc.1 — fold the needle PER CODE POINT (foldForMatch), NOT whole-string

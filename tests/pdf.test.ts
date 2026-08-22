@@ -14,6 +14,7 @@ import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { textResult } from "../src/mcp-result.js";
 import { extractPdfText, isPdfjsAvailable } from "../src/pdf.js";
 import { listPdfs, readPdf } from "../src/tools/index.js";
 import { Vault } from "../src/vault.js";
@@ -59,6 +60,7 @@ describe("extractPdfText (v2.7.0)", () => {
     const result = await extractPdfText(buf);
     expect(result.metadata.title).toBe("My Paper");
     expect(result.metadata.author).toBe("Alex");
+    expect(Object.hasOwn(result.metadata, "subject")).toBe(false);
   });
 
   it("returns empty metadata when the PDF has no Info dict", async () => {
@@ -66,6 +68,7 @@ describe("extractPdfText (v2.7.0)", () => {
     const result = await extractPdfText(buf);
     expect(result.metadata.title).toBeUndefined();
     expect(result.metadata.author).toBeUndefined();
+    expect(Object.keys(result.metadata)).toEqual([]);
   });
 
   it("computes per-page char_count correctly", async () => {
@@ -393,6 +396,8 @@ describe("readPdf (v2.7.0)", () => {
     const result = await readPdf(v, { path: "paper.pdf" });
     expect(result.metadata?.title).toBe("Title X");
     expect(result.metadata?.author).toBe("Author Y");
+    expect(Object.values(result.metadata ?? {})).not.toContain(undefined);
+    expect(() => textResult(result)).not.toThrow();
   });
 
   it("omits metadata when include_metadata: false", async () => {

@@ -12,6 +12,7 @@
 // running tests in parallel. Each test cleans up its server with
 // `httpServer.close()`.
 
+import { EventEmitter } from "node:events";
 import { promises as fs } from "node:fs";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -57,6 +58,41 @@ function modernDiscoverBody(id: string | number = 1): Record<string, unknown> {
     method: "server/discover",
     params: { _meta: MODERN_ENVELOPE }
   };
+}
+
+/** In-memory `http.Server` lifecycle for startup rollback tests. It exercises
+ * the production ownership orchestration without requiring a sandbox TCP bind. */
+function createStartupListenerFixture(options: { listenError?: Error; closeError?: Error } = {}): {
+  server: ReturnType<typeof createServer>;
+  closeCalls: () => number;
+} {
+  const emitter = new EventEmitter();
+  let listening = false;
+  let closes = 0;
+  const server = emitter as unknown as ReturnType<typeof createServer>;
+  Object.defineProperty(server, "listening", { configurable: true, get: () => listening });
+  server.listen = ((...args: unknown[]) => {
+    if (options.listenError) {
+      queueMicrotask(() => emitter.emit("error", options.listenError));
+      return server;
+    }
+    listening = true;
+    const finalArg = args[args.length - 1];
+    const callback = typeof finalArg === "function" ? (finalArg as () => void) : undefined;
+    queueMicrotask(() => callback?.());
+    return server;
+  }) as typeof server.listen;
+  server.address = (() =>
+    listening ? { address: "127.0.0.1", family: "IPv4", port: 43123 } : null) as typeof server.address;
+  server.close = ((callback?: (error?: Error) => void) => {
+    closes += 1;
+    listening = false;
+    queueMicrotask(() => callback?.(options.closeError));
+    return server;
+  }) as typeof server.close;
+  server.closeIdleConnections = () => {};
+  server.closeAllConnections = () => {};
+  return { server, closeCalls: () => closes };
 }
 
 function modernHttpV2Problems(source: string): string[] {
@@ -120,8 +156,17 @@ function modernHttpV2Problems(source: string): string[] {
     problems.push("routing: official classifier does not precede legacy session requirements");
   }
   const awaitProtocolOwners = shutdown.indexOf("await Promise.all([modernClose, legacyClose]);");
-  const closeSharedDeps = shutdown.indexOf("await extras.deps.watcher?.close();");
-  if (!(awaitProtocolOwners >= 0 && awaitProtocolOwners < closeSharedDeps)) {
+  const closeTcp = shutdown.indexOf("await closeServerBounded(server);", Math.max(0, awaitProtocolOwners));
+  const captureSharedDeps = shutdown.indexOf("extras.cleanupOwner ??= createPreparedServerCleanupOwner(");
+  const closeSharedDeps = shutdown.indexOf("await extras.cleanupOwner.cleanup();", Math.max(0, captureSharedDeps));
+  if (
+    !(
+      awaitProtocolOwners >= 0 &&
+      awaitProtocolOwners < closeTcp &&
+      closeTcp < captureSharedDeps &&
+      captureSharedDeps < closeSharedDeps
+    )
+  ) {
     problems.push("shutdown: protocol owners do not close before shared dependencies");
   }
   if (
@@ -806,34 +851,34 @@ describe("readJsonBody (v3.6 — body-size cap branch)", () => {
 
   it("throws when body exceeds maxBytes", async () => {
     const big = Buffer.alloc(200, 65); // 200 bytes of 'A'
-    await expect(readJsonBody(asReq(big), 100)).rejects.toThrow(/exceeds max/);
+    await expect(readJsonBody(asReq(big), 100)).rejects.toMatchObject({ name: "BodyTooLargeError" });
   });
 });
 
-// v3.7.12 M4 — body-cap derivation. Pre-3.7.12 the HTTP body cap was a
-// hardcoded 4MB which was BELOW the default per-file cap of 5MB; the cap is
-// now scaled from `maxFileBytes` so writes at the file limit don't 413.
-describe("deriveHttpBodyCap (v3.7.12 M4)", () => {
-  it("defaults to max(4MB, DEFAULT_MAX_FILE_BYTES * 1.5) when maxFileBytes unset", () => {
+// The decoded file budget and its JSON wire representation are different
+// units: an ASCII control byte can expand to the six-byte `\u00xx` spelling.
+describe("deriveHttpBodyCap", () => {
+  it("covers worst-case JSON escaping plus a bounded envelope under defaults", () => {
     const cap = deriveHttpBodyCap(undefined);
-    const expected = Math.max(4 * 1024 * 1024, Math.floor(DEFAULT_MAX_FILE_BYTES * 1.5));
+    const expected = Math.max(4 * 1024 * 1024, DEFAULT_MAX_FILE_BYTES * 6 + 64 * 1024);
     expect(cap).toBe(expected);
-    // Sanity: the derived cap MUST be ≥ DEFAULT_MAX_FILE_BYTES, otherwise
-    // a create_note at the file limit would 413 at the HTTP layer.
-    expect(cap).toBeGreaterThanOrEqual(DEFAULT_MAX_FILE_BYTES);
+    expect(cap).toBeGreaterThanOrEqual(DEFAULT_MAX_FILE_BYTES * 6 + 2);
   });
 
-  it("scales 1.5x from a user-provided maxFileBytes", () => {
+  it("admits a 10 MiB decoded file without exceeding the operational ceiling", () => {
     const tenMb = 10 * 1024 * 1024;
     const cap = deriveHttpBodyCap(String(tenMb));
-    expect(cap).toBe(Math.floor(tenMb * 1.5));
+    expect(cap).toBe(tenMb * 6 + 64 * 1024);
+    expect(cap).toBeLessThanOrEqual(64 * 1024 * 1024);
   });
 
-  it("holds the 4MB floor for tiny vault caps", () => {
-    // A user passing --max-file-bytes=1048576 (1MB) still gets the 4MB
-    // floor so tools/list / search responses are unaffected.
-    const cap = deriveHttpBodyCap(String(1 * 1024 * 1024));
+  it("holds the 4 MiB floor for a tiny decoded file cap", () => {
+    const cap = deriveHttpBodyCap("1");
     expect(cap).toBe(4 * 1024 * 1024);
+  });
+
+  it("rejects a decoded file budget whose worst-case wire form exceeds 64 MiB", () => {
+    expect(() => deriveHttpBodyCap(String(12 * 1024 * 1024))).toThrow(/request ceiling/);
   });
 
   it("falls back to default on malformed input", () => {
@@ -845,16 +890,13 @@ describe("deriveHttpBodyCap (v3.7.12 M4)", () => {
     expect(deriveHttpBodyCap("nonsense")).toBe(deriveHttpBodyCap(undefined));
   });
 
-  // Negative-control: explicit assertion that pre-3.7.12's hardcoded 4MB
-  // would have under-capped the default (5MB) file cap. If someone reverts
-  // the derivation, this test fails LOUDLY.
-  it("(negative-control) derived cap > legacy 4MB hardcoded cap under defaults", () => {
+  // Negative-control: the superseded 1.5x formula cannot carry worst-case
+  // escaped content even though the decoded content itself is within limit.
+  it("(negative-control) rejects the legacy 1.5x escaping assumption", () => {
     const cap = deriveHttpBodyCap(undefined);
-    const legacy = 4 * 1024 * 1024;
-    expect(
-      cap,
-      "v3.7.12 M4 regression: derived cap must exceed the legacy 4MB to accommodate the 5MB default file cap"
-    ).toBeGreaterThan(legacy);
+    const legacy = Math.floor(DEFAULT_MAX_FILE_BYTES * 1.5);
+    expect(legacy).toBeLessThan(DEFAULT_MAX_FILE_BYTES * 6 + 2);
+    expect(cap).toBeGreaterThan(legacy);
   });
 });
 
@@ -1042,6 +1084,204 @@ describe("startHttpServer end-to-end (v2.6.0)", () => {
       }
     };
   }
+
+  it("causally rolls pre-bind and post-listen faults back without masking the startup cause", async () => {
+    const order: string[] = [];
+    const startupError = new Error("injected post-listen failure");
+    const protocolClose = vi.fn(async () => void order.push("protocol"));
+    const listenerFixture = createStartupListenerFixture();
+    const signalCounts = {
+      sigint: process.listenerCount("SIGINT"),
+      sigterm: process.listenerCount("SIGTERM"),
+      beforeExit: process.listenerCount("beforeExit")
+    };
+    let listener: ReturnType<typeof createServer> | undefined;
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      // Positive regression: a real Node Server reports ERR_SERVER_NOT_RUNNING
+      // when cleanup closes it after listen() failed. That state is terminal,
+      // so the original bind error must remain the exact public failure.
+      const bindError = Object.assign(new Error("injected bind failure"), { code: "EADDRINUSE" });
+      const notRunning = Object.assign(new Error("Server is not running."), { code: "ERR_SERVER_NOT_RUNNING" });
+      const failedBindFixture = createStartupListenerFixture({ listenError: bindError, closeError: notRunning });
+      const failedBindProtocolClose = vi.fn(async () => {});
+      await expect(
+        startHttpServer(
+          {
+            vault: root,
+            port: 0,
+            host: "127.0.0.1",
+            bearerToken: TOKEN,
+            installSignalHandlers: true,
+            embeddingIndex: false,
+            persistentIndex: false
+          },
+          {
+            modernHandlerClose: failedBindProtocolClose,
+            httpServerFactory: () => failedBindFixture.server
+          }
+        )
+      ).rejects.toBe(bindError);
+      expect(failedBindProtocolClose).toHaveBeenCalledTimes(1);
+      expect(failedBindFixture.closeCalls()).toBe(1);
+      expect(failedBindFixture.server.listening).toBe(false);
+
+      await expect(
+        startHttpServer(
+          {
+            vault: root,
+            port: 0,
+            host: "127.0.0.1",
+            bearerToken: TOKEN,
+            installSignalHandlers: true,
+            embeddingIndex: false,
+            persistentIndex: false
+          },
+          {
+            modernHandlerClose: protocolClose,
+            httpServerFactory: () => listenerFixture.server,
+            beforeStartupCommit: (server, deps) => {
+              listener = server;
+              const closePersistence = deps.vault.closePersistence.bind(deps.vault);
+              deps.vault.closePersistence = async () => {
+                order.push("deps");
+                await closePersistence();
+              };
+              throw startupError;
+            }
+          }
+        )
+      ).rejects.toBe(startupError);
+      expect(protocolClose).toHaveBeenCalledTimes(1);
+      expect(listener?.listening).toBe(false);
+      expect(listener?.address()).toBeNull();
+      expect(listenerFixture.closeCalls()).toBe(1);
+      expect(order).toEqual(["protocol", "deps"]);
+      expect(process.listenerCount("SIGINT")).toBe(signalCounts.sigint);
+      expect(process.listenerCount("SIGTERM")).toBe(signalCounts.sigterm);
+      expect(process.listenerCount("beforeExit")).toBe(signalCounts.beforeExit);
+      expect(stderr.mock.calls.some(([message]) => String(message).includes("transport=http"))).toBe(false);
+    } finally {
+      stderr.mockRestore();
+    }
+  });
+
+  it("aggregates a post-listen fault with a shared-dependency cleanup failure", async () => {
+    const startupError = new Error("injected post-listen failure");
+    const dependencyError = new Error("injected dependency release failure");
+    const listenerFixture = createStartupListenerFixture();
+    let listener: ReturnType<typeof createServer> | undefined;
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      let thrown: unknown;
+      try {
+        await startHttpServer(
+          {
+            vault: root,
+            port: 0,
+            host: "127.0.0.1",
+            bearerToken: TOKEN,
+            installSignalHandlers: false,
+            embeddingIndex: false,
+            persistentIndex: false
+          },
+          {
+            httpServerFactory: () => listenerFixture.server,
+            beforeStartupCommit: (server, deps) => {
+              listener = server;
+              deps.ftsIndex = {
+                closeAndRelease: async () => {
+                  throw dependencyError;
+                }
+              } as unknown as NonNullable<Parameters<typeof createHttpHandler>[0]["ftsIndex"]>;
+              throw startupError;
+            }
+          }
+        );
+      } catch (error) {
+        thrown = error;
+      }
+      expect(thrown).toBeInstanceOf(AggregateError);
+      expect((thrown as AggregateError).errors).toEqual([startupError, dependencyError]);
+      expect(listener?.listening).toBe(false);
+      expect(listener?.address()).toBeNull();
+      expect(listenerFixture.closeCalls()).toBe(1);
+
+      // NEGATIVE control: only Node's idempotent terminal code is swallowed.
+      // A genuine listener-cleanup failure must remain aggregated after the
+      // exact startup cause, or the ownership gate would false-green debt.
+      const bindError = Object.assign(new Error("injected bind failure"), { code: "EADDRINUSE" });
+      const listenerCleanupError = new Error("injected listener cleanup failure");
+      const failedBindFixture = createStartupListenerFixture({
+        listenError: bindError,
+        closeError: listenerCleanupError
+      });
+      let failedBindThrown: unknown;
+      try {
+        await startHttpServer(
+          {
+            vault: root,
+            port: 0,
+            host: "127.0.0.1",
+            bearerToken: TOKEN,
+            installSignalHandlers: false,
+            embeddingIndex: false,
+            persistentIndex: false
+          },
+          { httpServerFactory: () => failedBindFixture.server }
+        );
+      } catch (error) {
+        failedBindThrown = error;
+      }
+      expect(failedBindThrown).toBeInstanceOf(AggregateError);
+      expect((failedBindThrown as AggregateError).errors).toEqual([bindError, listenerCleanupError]);
+      expect(failedBindFixture.closeCalls()).toBe(1);
+    } finally {
+      stderr.mockRestore();
+    }
+  });
+
+  it("NEGATIVE control — successful post-listen commit does not run rollback before return", async () => {
+    const protocolClose = vi.fn(async () => {});
+    const dependencyClose = vi.fn(async () => {});
+    const listenerFixture = createStartupListenerFixture();
+    let hookCalls = 0;
+    const httpServer = await startHttpServer(
+      {
+        vault: root,
+        port: 0,
+        host: "127.0.0.1",
+        bearerToken: TOKEN,
+        installSignalHandlers: false,
+        embeddingIndex: false,
+        persistentIndex: false
+      },
+      {
+        modernHandlerClose: protocolClose,
+        httpServerFactory: () => listenerFixture.server,
+        beforeStartupCommit: (_server, deps) => {
+          hookCalls += 1;
+          const closePersistence = deps.vault.closePersistence.bind(deps.vault);
+          deps.vault.closePersistence = async () => {
+            await dependencyClose();
+            await closePersistence();
+          };
+        }
+      }
+    );
+    try {
+      expect(hookCalls).toBe(1);
+      expect(httpServer.listening).toBe(true);
+      expect(listenerFixture.closeCalls()).toBe(0);
+      expect(protocolClose).not.toHaveBeenCalled();
+      expect(dependencyClose).not.toHaveBeenCalled();
+    } finally {
+      await shutdownHttpServer(httpServer);
+    }
+    expect(protocolClose).toHaveBeenCalledTimes(1);
+    expect(dependencyClose).toHaveBeenCalledTimes(1);
+    expect(listenerFixture.closeCalls()).toBe(1);
+  });
 
   it("rejects unauthenticated POST /mcp with 401", async () => {
     const s = await spawn();
@@ -2038,6 +2278,75 @@ describe("startHttpServer stateful sessions (v2.14.0)", () => {
     await expect(shutdownHttpServer(httpServer)).resolves.toBeUndefined();
   });
 
+  it("does not memoize a listener close error as success and retries the same listener", async () => {
+    const listenerFixture = createStartupListenerFixture();
+    const exactListener = listenerFixture.server;
+    let attempts = 0;
+    exactListener.close = ((callback?: (error?: Error) => void) => {
+      attempts++;
+      queueMicrotask(() => callback?.(attempts === 1 ? new Error("transient listener close") : undefined));
+      return exactListener;
+    }) as typeof exactListener.close;
+
+    await expect(shutdownHttpServer(exactListener)).rejects.toThrow("transient listener close");
+    await expect(shutdownHttpServer(exactListener)).resolves.toBeUndefined();
+    expect(attempts).toBe(2);
+    // Completed listener closure remains memoized and is not repeated.
+    await expect(shutdownHttpServer(exactListener)).resolves.toBeUndefined();
+    expect(attempts).toBe(2);
+  });
+
+  it("retries failed HTTP dependency ownership once before choosing the signal exit status", async () => {
+    let vaultReleaseAttempts = 0;
+    let cacheFlushes = 0;
+    const listenerFixture = createStartupListenerFixture();
+    const httpServer = await startHttpServer(
+      {
+        vault: root,
+        port: 0,
+        host: "127.0.0.1",
+        bearerToken: TOKEN,
+        stateful: false,
+        persistentCache: true,
+        installSignalHandlers: false
+      },
+      {
+        httpServerFactory: () => listenerFixture.server,
+        beforeStartupCommit: (_listener, deps) => {
+          const exactClose = deps.vault.closePersistence.bind(deps.vault);
+          const exactSave = deps.vault.saveDiskCache.bind(deps.vault);
+          deps.vault.closePersistence = async () => {
+            vaultReleaseAttempts++;
+            if (vaultReleaseAttempts === 1) throw new Error("transient exact vault release");
+            await exactClose();
+          };
+          deps.vault.saveDiskCache = async () => {
+            cacheFlushes++;
+            await exactSave();
+          };
+        }
+      }
+    );
+
+    let exitCode: number | undefined;
+    makeHttpShutdownHandler(httpServer, (code) => {
+      exitCode = code;
+    })();
+    await vi.waitFor(() => expect(exitCode).toBe(0));
+    expect(httpServer.address()).toBeNull();
+    expect(vaultReleaseAttempts).toBe(2);
+    expect(cacheFlushes).toBe(1);
+
+    // The bounded retry used the retained owner. Only the failed Vault stage
+    // ran twice; already-terminal stages were not repeated.
+    await expect(shutdownHttpServer(httpServer)).resolves.toBeUndefined();
+    expect(vaultReleaseAttempts).toBe(2);
+    expect(cacheFlushes).toBe(1);
+    // Completed cleanup remains an idempotent no-op.
+    await expect(shutdownHttpServer(httpServer)).resolves.toBeUndefined();
+    expect(vaultReleaseAttempts).toBe(2);
+  });
+
   // v3.10.0-rc.19 (audit M3) — the SIGINT/SIGTERM orchestrator must AWAIT the
   // full graceful teardown (shutdownHttpServer: drain → close TCP listener →
   // flush cache → close fts/watcher/embed-db) and only THEN exit. Pre-rc.19 a
@@ -2117,6 +2426,13 @@ describe("startHttpServer stateful sessions (v2.14.0)", () => {
   // completes — NOT wait out the grace. A naive `setTimeout(resolve, grace)` impl
   // would fail this (it'd always take ~the full grace).
   it("closeServerBounded resolves promptly (well under the grace) when nothing lingers (rc.23 control)", async () => {
+    // Bind-failure control: this is Node's real callback behavior after a
+    // listener never started (`ERR_SERVER_NOT_RUNNING`). It is already a
+    // terminal owner state and must be idempotent cleanup success.
+    const neverBound = createServer();
+    await expect(closeServerBounded(neverBound, 5000)).resolves.toBeUndefined();
+    expect(neverBound.listening).toBe(false);
+
     const srv = createServer((_req, res) => res.end("ok"));
     await new Promise<void>((r) => srv.listen(0, "127.0.0.1", () => r()));
     const t0 = Date.now();

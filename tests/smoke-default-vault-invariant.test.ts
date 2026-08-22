@@ -13,7 +13,10 @@
 // lives under tmpdir, not the home vault) and a behavioral NEGATIVE control —
 // the auditor's own G-1 harness inverted: run the no-arg smoke with a controlled
 // HOME containing a sentinel real-vault note and assert the sentinel is NEVER
-// read. Skips gracefully if dist/ isn't built (same pattern as e2e-handlers).
+// read. The positive case also structurally pins early serve-http child-close
+// observation plus timeout cancellation, with a causal mutation control, so a
+// fast startup crash cannot regress into a misleading eight-second timeout.
+// Skips gracefully if dist/ isn't built (same pattern as e2e-handlers).
 
 import { spawnSync } from "node:child_process";
 import { existsSync, promises as fs } from "node:fs";
@@ -28,6 +31,22 @@ const distEntry = path.join(repoRoot, "dist", "index.js");
 const smokeScript = path.join(repoRoot, "scripts", "smoke.mjs");
 const tmpDirs: string[] = [];
 
+function httpStartupObservationProblems(source: string): string[] {
+  const start = source.indexOf("async function smokeHttp(");
+  const httpSmoke = start >= 0 ? source.slice(start) : "";
+  const problems: string[] = [];
+  if (!httpSmoke.includes('httpProc.once("close"')) {
+    problems.push("HTTP smoke does not observe child close before declaring a startup timeout");
+  }
+  if (!httpSmoke.includes("clearTimeout(timeout)")) {
+    problems.push("HTTP smoke leaves its startup timeout alive after an earlier outcome");
+  }
+  if (httpSmoke.includes("Promise.race([")) {
+    problems.push("HTTP smoke still races only the ready banner against an uncleared timer");
+  }
+  return problems;
+}
+
 afterEach(async () => {
   for (const d of tmpDirs.splice(0)) {
     await fs.rm(d, { recursive: true, force: true }).catch(() => {});
@@ -35,7 +54,7 @@ afterEach(async () => {
 });
 
 describe("smoke default-vault target (audit G-1)", () => {
-  it("POSITIVE — createSyntheticVault builds under tmpdir, not the home vault", async () => {
+  it("POSITIVE — synthetic target and HTTP startup observer are structurally guarded", async () => {
     const vault = (await createSyntheticVault()) as string;
     tmpDirs.push(vault);
     const homeVault = path.join(os.homedir(), "Documents", "Obsidian Vault");
@@ -44,6 +63,15 @@ describe("smoke default-vault target (audit G-1)", () => {
     // It's a usable vault: the canonical fixture notes exist.
     expect(existsSync(path.join(vault, "INDEX.md"))).toBe(true);
     expect(existsSync(path.join(vault, "01_Projects", "Apollo.md"))).toBe(true);
+
+    const smokeSource = await fs.readFile(smokeScript, "utf8");
+    expect(httpStartupObservationProblems(smokeSource)).toEqual([]);
+    // Causal mutation control: deleting the early-child observation recreates
+    // the misleading eight-second timeout that hid the real startup error.
+    const blindMutant = smokeSource.replace('httpProc.once("close"', 'httpProc.once("ignored-close"');
+    expect(httpStartupObservationProblems(blindMutant)).toContain(
+      "HTTP smoke does not observe child close before declaring a startup timeout"
+    );
   });
 
   it("NEGATIVE control — no-arg smoke never reads ~/Documents/Obsidian Vault", async (ctx) => {

@@ -3,8 +3,12 @@ import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { load } from "js-yaml";
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
+import { expectedCoverageSourceFiles } from "../scripts/lib/coverage-policy.mjs";
+// @ts-expect-error — dependency-free .mjs workflow helper has no declaration file.
+import { inspectReleaseProvenanceWorkflow } from "../scripts/lib/oia-release-claims.mjs";
 import { DEFAULT_RERANKER_ALIAS, EMBEDDING_MODELS } from "../src/embeddings.js";
 import { tierServeFlags } from "../src/mcp-config.js";
 import { TOOL_MANIFEST } from "../src/tool-manifest.js";
@@ -74,6 +78,43 @@ function promptsMissingFrom(section: string, registered: Set<string>): string[] 
   return [...registered].filter((p) => !new RegExp(`\`${p}\``).test(section));
 }
 
+function boundedSection(source: string, start: string, end: string): string {
+  const startAt = source.indexOf(start);
+  if (startAt < 0) return "";
+  const endAt = source.indexOf(end, startAt + start.length);
+  return endAt < 0 ? source.slice(startAt) : source.slice(startAt, endAt);
+}
+
+function pdfOcrPublicContractProblems(readPdf: string, ocrPdf: string): string[] {
+  const normalize = (text: string): string => {
+    const normalizedQuotes = text.replace(/["'`]/g, "");
+    const normalizedWhitespace = normalizedQuotes.replace(/\s+/g, " ");
+    return normalizedWhitespace.toLowerCase();
+  };
+  const read = normalize(readPdf);
+  const ocr = normalize(ocrPdf);
+  const problems: string[] = [];
+  const requireAll = (surface: string, label: string, needles: readonly string[]): void => {
+    for (const needle of needles) {
+      if (!surface.includes(needle)) problems.push(`${label} missing ${needle}`);
+    }
+  };
+  const shared = [
+    "status: ok | empty | failed",
+    "complete",
+    "utf-8",
+    "item",
+    "node",
+    "page-result",
+    "aggregate",
+    "stops before later pages",
+    "single bounded"
+  ] as const;
+  requireAll(read, "read_pdf", [...shared, "pdf_text_budget_exceeded"]);
+  requireAll(ocr, "ocr_pdf", [...shared, "ocr_text_budget_exceeded", "finite", "null", "never nan"]);
+  return problems;
+}
+
 const PUBLIC_READMES = [
   "README.md",
   "README.zh.md",
@@ -90,6 +131,186 @@ const PUBLIC_READMES = [
 
 function containsExactInteger(text: string, value: number): boolean {
   return new RegExp(`(?:^|\\D)${value}(?:\\D|$)`).test(text);
+}
+
+type PreviewFontEntry = Readonly<{
+  file: string;
+  sha256: string;
+  family: string;
+  subfamily: string;
+  fullName: string;
+  version: string;
+  postScriptName: string;
+  copyright: string;
+  embeddedLicenseDescription: string;
+  embeddedLicenseUrl: string;
+}>;
+
+type PreviewFontProvenance = Readonly<{
+  schemaVersion: number;
+  source: Readonly<{
+    repository: string;
+    tag: string;
+    commit: string;
+    releaseUrl: string;
+    archiveUrl: string;
+    archiveSha256: string;
+    archiveDirectory: string;
+  }>;
+  license: Readonly<{
+    file: string;
+    spdx: string;
+    sha256: string;
+    reservedFontNames: readonly string[];
+  }>;
+  fonts: readonly PreviewFontEntry[];
+}>;
+
+type PreviewFontEvidence = Readonly<{
+  manifestRaw: string;
+  bundled: ReadonlyMap<string, Buffer>;
+}>;
+
+const PREVIEW_FONT_SOURCE = Object.freeze({
+  repository: "https://github.com/liberationfonts/liberation-fonts",
+  tag: "2.1.5",
+  commit: "4b0192046158094654e865245832c66d2104219e",
+  releaseUrl: "https://github.com/liberationfonts/liberation-fonts/releases/tag/2.1.5",
+  archiveUrl: "https://github.com/liberationfonts/liberation-fonts/files/7261482/liberation-fonts-ttf-2.1.5.tar.gz",
+  archiveSha256: "7191c669bf38899f73a2094ed00f7b800553364f90e2637010a69c0e268f25d0",
+  archiveDirectory: "liberation-fonts-ttf-2.1.5"
+});
+
+const PREVIEW_FONT_SHA256 = Object.freeze({
+  "LiberationSans-Regular.ttf": "76d04c18ea243f426b7de1f3ad208e927008f961dc5945e5aad352d0dfde8ee8",
+  "LiberationSans-Bold.ttf": "788abee4c806d660e8aee46689dd8540cd4bb98da03dcc9d171ce3efd99a9173"
+});
+const PREVIEW_FONT_LICENSE_SHA256 = "93fed46019c38bbe566b479d22148e2e8a1e85ada614accb0211c37b2c61c19b";
+
+const PREVIEW_FONT_NAME_IDS = {
+  copyright: 0,
+  family: 1,
+  subfamily: 2,
+  fullName: 4,
+  version: 5,
+  postScriptName: 6,
+  embeddedLicenseDescription: 13,
+  embeddedLicenseUrl: 14
+} as const;
+
+function sha256(bytes: Buffer | string): string {
+  return createHash("sha256").update(bytes).digest("hex");
+}
+
+/** Read platform-independent Unicode/Windows records from a TrueType `name` table. */
+function openTypeNames(font: Buffer): ReadonlyMap<number, ReadonlySet<string>> {
+  if (font.length < 12) throw new Error("truncated sfnt header");
+  const tableCount = font.readUInt16BE(4);
+  let nameTableOffset = -1;
+  let nameTableLength = -1;
+  for (let index = 0; index < tableCount; index++) {
+    const recordOffset = 12 + index * 16;
+    if (recordOffset + 16 > font.length) throw new Error("truncated sfnt directory");
+    if (font.toString("ascii", recordOffset, recordOffset + 4) !== "name") continue;
+    nameTableOffset = font.readUInt32BE(recordOffset + 8);
+    nameTableLength = font.readUInt32BE(recordOffset + 12);
+  }
+  if (nameTableOffset < 0 || nameTableOffset + nameTableLength > font.length) {
+    throw new Error("missing or truncated sfnt name table");
+  }
+  const recordCount = font.readUInt16BE(nameTableOffset + 2);
+  const storageOffset = nameTableOffset + font.readUInt16BE(nameTableOffset + 4);
+  const names = new Map<number, Set<string>>();
+  for (let index = 0; index < recordCount; index++) {
+    const recordOffset = nameTableOffset + 6 + index * 12;
+    if (recordOffset + 12 > nameTableOffset + nameTableLength) throw new Error("truncated name record");
+    const platform = font.readUInt16BE(recordOffset);
+    if (platform !== 0 && platform !== 3) continue;
+    const nameId = font.readUInt16BE(recordOffset + 6);
+    const length = font.readUInt16BE(recordOffset + 8);
+    const valueOffset = storageOffset + font.readUInt16BE(recordOffset + 10);
+    if (valueOffset + length > nameTableOffset + nameTableLength || length % 2 !== 0) {
+      throw new Error("invalid UTF-16BE name record");
+    }
+    let value = "";
+    for (let offset = valueOffset; offset < valueOffset + length; offset += 2) {
+      value += String.fromCharCode(font.readUInt16BE(offset));
+    }
+    const values = names.get(nameId) ?? new Set<string>();
+    values.add(value);
+    names.set(nameId, values);
+  }
+  return names;
+}
+
+/** Bind committed font bytes and embedded rights metadata to one reviewed rights-holder release. */
+function previewFontProvenanceProblems(evidence: PreviewFontEvidence): string[] {
+  const problems: string[] = [];
+  let manifest: PreviewFontProvenance;
+  try {
+    manifest = JSON.parse(evidence.manifestRaw) as PreviewFontProvenance;
+  } catch {
+    return ["invalid font provenance JSON"];
+  }
+  if (manifest.schemaVersion !== 1) problems.push("unsupported font provenance schema");
+  if (JSON.stringify(manifest.source) !== JSON.stringify(PREVIEW_FONT_SOURCE)) {
+    problems.push("font rights-holder release is not locked");
+  }
+
+  const expectedFiles = ["LiberationSans-Regular.ttf", "LiberationSans-Bold.ttf"];
+  if (manifest.fonts?.map((font) => font.file).join("\n") !== expectedFiles.join("\n")) {
+    problems.push("font manifest file set or order drift");
+  }
+  for (const font of manifest.fonts ?? []) {
+    const bundled = evidence.bundled.get(font.file);
+    if (!bundled) {
+      problems.push(`missing font evidence ${font.file}`);
+      continue;
+    }
+    const reviewedSha256 = PREVIEW_FONT_SHA256[font.file as keyof typeof PREVIEW_FONT_SHA256];
+    if (reviewedSha256 === undefined || font.sha256 !== reviewedSha256) {
+      problems.push(`reviewed release digest drift ${font.file}`);
+    }
+    if (sha256(bundled) !== font.sha256) problems.push(`bundled digest drift ${font.file}`);
+    if (
+      font.version !== "Version 2.1.5" ||
+      font.embeddedLicenseDescription !== "Licensed under the SIL Open Font License, Version 1.1" ||
+      font.embeddedLicenseUrl !== "http://scripts.sil.org/OFL" ||
+      !font.copyright.includes("2010 Google Corporation") ||
+      !font.copyright.includes("2012 Red Hat, Inc.")
+    ) {
+      problems.push(`embedded font rights drift ${font.file}`);
+    }
+    try {
+      const names = openTypeNames(bundled);
+      for (const [field, nameId] of Object.entries(PREVIEW_FONT_NAME_IDS) as [keyof PreviewFontEntry, number][]) {
+        if (!names.get(nameId)?.has(font[field])) problems.push(`font metadata drift ${font.file}:${field}`);
+      }
+    } catch {
+      problems.push(`invalid OpenType font ${font.file}`);
+    }
+  }
+
+  const license = evidence.bundled.get(manifest.license?.file);
+  if (!license) {
+    problems.push("missing font license evidence");
+  } else {
+    const licenseText = license.toString("utf8");
+    if (manifest.license.sha256 !== PREVIEW_FONT_LICENSE_SHA256) problems.push("reviewed license digest drift");
+    if (sha256(license) !== manifest.license.sha256) problems.push("font license digest drift");
+    if (manifest.license.spdx !== "OFL-1.1" || !licenseText.includes("SIL OPEN FONT LICENSE Version 1.1")) {
+      problems.push("font license identifier drift");
+    }
+    for (const reservedName of ["Arimo", "Tinos", "Cousine", "Liberation"]) {
+      if (!manifest.license.reservedFontNames?.includes(reservedName) || !licenseText.includes(reservedName)) {
+        problems.push(`missing reserved font name ${reservedName}`);
+      }
+    }
+    for (const copyright of ["2010 Google Corporation", "2012 Red Hat, Inc."]) {
+      if (!licenseText.includes(copyright)) problems.push(`missing font license copyright ${copyright}`);
+    }
+  }
+  return problems;
 }
 
 type McpbDocumentationContract = Readonly<{
@@ -109,8 +330,8 @@ function mcpbClaimRegion(markdown: string): string {
   const lines = markdown.split("\n");
   const selected = new Set<number>();
   for (let index = 0; index < lines.length; index++) {
-    if (!/MCPB|enquire-mcp-basic/iu.test(lines[index] ?? "")) continue;
-    for (let offset = 0; offset <= 4 && index + offset < lines.length; offset++) selected.add(index + offset);
+    if (!/MCPB|enquire-mcp-basic/u.test(lines[index] ?? "")) continue;
+    for (let offset = 0; offset <= 8 && index + offset < lines.length; offset++) selected.add(index + offset);
   }
   return [...selected]
     .sort((left, right) => left - right)
@@ -193,6 +414,7 @@ function publicCiPostureProblems(
       problems.push(`${label} missing ${branchProtected} branch-protected`);
     }
     if (/(?:^|\D)5(?:\D|$)/.test(row)) problems.push(`${label} still carries the stale five-advisory count`);
+    if (/(?:^|\D)7(?:\D|$)/.test(row)) problems.push(`${label} still carries the stale branch-protection count`);
   }
   for (const marker of [
     "docs",
@@ -204,7 +426,7 @@ function publicCiPostureProblems(
     "CodeQL",
     "release.yml",
     "mcpb-basic",
-    "2026-07-23"
+    "2026-08-21"
   ]) {
     if (!detail.includes(marker)) problems.push(`detail missing ${marker}`);
   }
@@ -614,6 +836,282 @@ function oiaFindingReportProblems(stderr: string, expectedExitCode: number): str
   return problems;
 }
 
+type WorkflowRecord = Record<string, unknown>;
+
+function workflowRecord(value: unknown): WorkflowRecord | null {
+  return typeof value === "object" && value !== null && !Array.isArray(value) ? (value as WorkflowRecord) : null;
+}
+
+function workflowSteps(job: WorkflowRecord | null): WorkflowRecord[] {
+  return Array.isArray(job?.steps)
+    ? job.steps.map(workflowRecord).filter((step): step is WorkflowRecord => step !== null)
+    : [];
+}
+
+/** Pin the coverage producer and OIA consumer to one fail-closed workflow-run artifact. */
+function coverageOiaWorkflowProblems(source: string): string[] {
+  let document: WorkflowRecord | null;
+  try {
+    document = workflowRecord(load(source));
+  } catch {
+    return ["CI workflow is not valid YAML"];
+  }
+  const jobs = workflowRecord(document?.jobs);
+  const coverage = workflowRecord(jobs?.coverage);
+  const oia = workflowRecord(jobs?.oia);
+  if (coverage === null || oia === null) return ["coverage and OIA jobs must both exist"];
+
+  const problems: string[] = [];
+  const coverageSteps = workflowSteps(coverage);
+  const uploadIndexes = coverageSteps
+    .map((step, index) =>
+      step.uses === "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a" ? index : -1
+    )
+    .filter((index) => index >= 0);
+  const upload = uploadIndexes.length === 1 ? coverageSteps[uploadIndexes[0] ?? -1] : undefined;
+  const uploadWith = workflowRecord(upload?.with);
+  const measurementIndex = coverageSteps.findIndex((step) => step.run === "npm run test:coverage");
+  if (
+    uploadIndexes.length !== 1 ||
+    uploadWith === null ||
+    JSON.stringify(Object.keys(uploadWith).sort()) !== JSON.stringify(["if-no-files-found", "name", "path"].sort()) ||
+    uploadWith.name !== "coverage-report" ||
+    uploadWith.path !== "coverage/" ||
+    uploadWith["if-no-files-found"] !== "error" ||
+    measurementIndex < 0 ||
+    (uploadIndexes[0] ?? -1) <= measurementIndex ||
+    upload?.if !== undefined ||
+    upload?.["continue-on-error"] !== undefined ||
+    coverage["continue-on-error"] !== undefined
+  ) {
+    problems.push("coverage must upload a non-empty pinned same-run coverage-report after measurement");
+  }
+
+  const needs = typeof oia.needs === "string" ? [oia.needs] : Array.isArray(oia.needs) ? oia.needs : [];
+  const oiaSteps = workflowSteps(oia);
+  const downloadIndexes = oiaSteps
+    .map((step, index) =>
+      step.uses === "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c" ? index : -1
+    )
+    .filter((index) => index >= 0);
+  const download = downloadIndexes.length === 1 ? oiaSteps[downloadIndexes[0] ?? -1] : undefined;
+  const downloadWith = workflowRecord(download?.with);
+  const checkIndexes = oiaSteps
+    .map((step, index) => (step.run === "npm run check:oia" ? index : -1))
+    .filter((index) => index >= 0);
+  const check = checkIndexes.length === 1 ? oiaSteps[checkIndexes[0] ?? -1] : undefined;
+  if (
+    !needs.includes("coverage") ||
+    downloadIndexes.length !== 1 ||
+    downloadWith === null ||
+    JSON.stringify(Object.keys(downloadWith).sort()) !== JSON.stringify(["digest-mismatch", "name", "path"].sort()) ||
+    downloadWith.name !== "coverage-report" ||
+    downloadWith.path !== "coverage" ||
+    downloadWith["digest-mismatch"] !== "error" ||
+    checkIndexes.length !== 1 ||
+    (downloadIndexes[0] ?? Number.MAX_SAFE_INTEGER) >= (checkIndexes[0] ?? -1) ||
+    download?.if !== undefined ||
+    download?.["continue-on-error"] !== undefined ||
+    check?.if !== undefined ||
+    check?.["continue-on-error"] !== undefined ||
+    oia.if !== undefined ||
+    oia["continue-on-error"] !== undefined
+  ) {
+    problems.push("OIA must need coverage and consume its exact pinned same-run artifact before checking");
+  }
+  return problems;
+}
+
+async function assertCoverageOiaEvidenceContract(): Promise<void> {
+  const ciWorkflow = await read(".github/workflows/ci.yml");
+  expect(coverageOiaWorkflowProblems(ciWorkflow), "coverage-to-OIA evidence contract drift").toEqual([]);
+  const coverageContractProblem =
+    "OIA must need coverage and consume its exact pinned same-run artifact before checking";
+  const downloadBlock =
+    "      - name: Download same-run coverage evidence\n" +
+    "        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1\n" +
+    "        with:\n" +
+    "          name: coverage-report\n" +
+    "          path: coverage\n" +
+    "          digest-mismatch: error\n";
+  expect(
+    coverageOiaWorkflowProblems(
+      replaceExactly(
+        ciWorkflow,
+        "          name: coverage-report\n          path: coverage/\n          if-no-files-found: error",
+        "          name: coverage-report\n          path: coverage/\n          if-no-files-found: warn"
+      )
+    )
+  ).toContain("coverage must upload a non-empty pinned same-run coverage-report after measurement");
+  for (const mutant of [
+    replaceExactly(ciWorkflow, "    needs: coverage\n    steps:", "    needs: test\n    steps:"),
+    replaceExactly(ciWorkflow, downloadBlock, ""),
+    replaceExactly(
+      ciWorkflow,
+      downloadBlock,
+      replaceExactly(
+        downloadBlock,
+        "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
+        "actions/download-artifact@v8"
+      )
+    ),
+    replaceExactly(
+      ciWorkflow,
+      "          path: coverage\n          digest-mismatch: error",
+      "          path: coverage\n          run-id: 123\n          digest-mismatch: error"
+    ),
+    replaceExactly(
+      ciWorkflow,
+      "      - run: npm run check:oia",
+      "      - continue-on-error: true\n        run: npm run check:oia"
+    )
+  ]) {
+    expect(coverageOiaWorkflowProblems(mutant)).toContain(coverageContractProblem);
+  }
+
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-oia-coverage-"));
+  const fixtureRoot = path.join(tempRoot, "repo");
+  try {
+    const excludedRoots = new Set([".git", "coverage", "dist", "node_modules"]);
+    await fs.cp(repoRoot, fixtureRoot, {
+      recursive: true,
+      filter(source) {
+        const relative = path.relative(repoRoot, source);
+        const topLevel = relative.split(path.sep)[0] ?? "";
+        return relative === "" || !excludedRoots.has(topLevel);
+      }
+    });
+    await fs.symlink(path.join(repoRoot, "node_modules"), path.join(fixtureRoot, "node_modules"), "dir");
+
+    const coverageCheckerFixture = path.join(fixtureRoot, "scripts", "check-per-file-coverage.mjs");
+    const coverageCheckerSource = await fs.readFile(coverageCheckerFixture, "utf8");
+    await fs.writeFile(
+      coverageCheckerFixture,
+      replaceExactly(
+        coverageCheckerSource,
+        '  "src/watcher.ts": { branches: 53 },',
+        '  "src/watcher.ts": { branches: 53 }, // current 50%'
+      )
+    );
+
+    const runOia = (): string => {
+      const result = spawnSync(
+        process.execPath,
+        [path.join(fixtureRoot, "scripts", "oia-walk.mjs"), "--skip-network", "--allow"],
+        {
+          cwd: fixtureRoot,
+          encoding: "utf8",
+          timeout: 30_000,
+          maxBuffer: 2 * 1024 * 1024
+        }
+      );
+      const output = `${result.stdout ?? ""}${result.stderr ?? ""}`;
+      expect(result.error, output).toBeUndefined();
+      expect(result.signal, output).toBeNull();
+      expect(result.status, output).toBe(0);
+      return output;
+    };
+
+    const missingOutput = runOia();
+    expect(missingOutput).toContain("[COVERAGE-SUMMARY-MISSING] coverage/coverage-summary.json:1");
+
+    const coverageEntry = (pct: number) => ({
+      lines: { total: 1, covered: 1, skipped: 0, pct },
+      statements: { total: 1, covered: 1, skipped: 0, pct },
+      functions: { total: 1, covered: 1, skipped: 0, pct },
+      branches: { total: 1, covered: 1, skipped: 0, pct }
+    });
+    const expectedCoverageFiles = expectedCoverageSourceFiles(fixtureRoot);
+    const watcherCoveragePath = path.join(fixtureRoot, "src", "watcher.ts");
+    const measuredEntry = coverageEntry(50);
+    const sourceCoverageEntries = Object.fromEntries(
+      expectedCoverageFiles.map((file) => [path.join(fixtureRoot, ...file.split("/")), measuredEntry])
+    );
+    const validCoverageSummary = {
+      total: coverageEntry(50),
+      ...sourceCoverageEntries
+    };
+    const coverageDir = path.join(fixtureRoot, "coverage");
+    const coverageSummaryFixture = path.join(coverageDir, "coverage-summary.json");
+    await fs.mkdir(coverageDir);
+    await fs.writeFile(coverageSummaryFixture, JSON.stringify(validCoverageSummary));
+    const validOutput = runOia();
+    expect(validOutput, "a complete finite matching summary must satisfy Check 6").not.toMatch(
+      /\[(?:COVERAGE-|STALE-COVERAGE-COMMENT)/u
+    );
+    expect(validOutput, "the real release command must semantically earn its documented L2 claim").not.toMatch(
+      /\[SLSA-/u
+    );
+
+    const omittedFile = expectedCoverageFiles.find((file) => file !== "src/watcher.ts") ?? "";
+    expect(omittedFile).not.toBe("");
+    const omittedCoverageSummary = { ...validCoverageSummary };
+    delete omittedCoverageSummary[path.join(fixtureRoot, ...omittedFile.split("/"))];
+    await fs.writeFile(coverageSummaryFixture, JSON.stringify(omittedCoverageSummary));
+    const omittedOutput = runOia();
+    expect(omittedOutput).toContain("[COVERAGE-UNIVERSE-DRIFT]");
+    expect(omittedOutput).toContain(`missing=1 [${omittedFile}]`);
+
+    await fs.writeFile(
+      coverageSummaryFixture,
+      JSON.stringify({
+        ...validCoverageSummary,
+        [path.join(fixtureRoot, "src", "index.ts")]: measuredEntry
+      })
+    );
+    const extraOutput = runOia();
+    expect(extraOutput).toContain("[COVERAGE-UNIVERSE-DRIFT]");
+    expect(extraOutput).toContain("extra=1 [src/index.ts]");
+
+    await fs.writeFile(coverageSummaryFixture, "{");
+    const malformedOutput = runOia();
+    expect(malformedOutput).toContain("[COVERAGE-SUMMARY-MALFORMED]");
+    expect(malformedOutput).toContain("coverage-summary.json is not valid JSON");
+
+    const missingFieldSummary = {
+      ...validCoverageSummary,
+      total: {
+        ...validCoverageSummary.total,
+        lines: { total: 1, covered: 1, skipped: 0 }
+      }
+    };
+    await fs.writeFile(coverageSummaryFixture, JSON.stringify(missingFieldSummary));
+    const missingFieldOutput = runOia();
+    expect(missingFieldOutput).toContain("[COVERAGE-SUMMARY-MALFORMED]");
+    expect(missingFieldOutput).toContain("total.lines.pct is missing");
+
+    await fs.writeFile(
+      coverageSummaryFixture,
+      JSON.stringify({
+        ...validCoverageSummary,
+        total: {
+          ...validCoverageSummary.total,
+          lines: { ...validCoverageSummary.total.lines, pct: Number.POSITIVE_INFINITY }
+        }
+      })
+    );
+    const nonFiniteOutput = runOia();
+    expect(nonFiniteOutput).toContain("[COVERAGE-SUMMARY-MALFORMED]");
+    expect(nonFiniteOutput).toContain("total.lines.pct must be a finite number from 0 through 100");
+
+    await fs.writeFile(
+      coverageSummaryFixture,
+      JSON.stringify({
+        ...validCoverageSummary,
+        [watcherCoveragePath]: {
+          ...measuredEntry,
+          branches: { ...measuredEntry.branches, pct: 75 }
+        }
+      })
+    );
+    const staleCommentOutput = runOia();
+    expect(staleCommentOutput).toContain("[STALE-COVERAGE-COMMENT]");
+    expect(staleCommentOutput).toContain("coverage-summary.json says 75.00%");
+  } finally {
+    await fs.rm(tempRoot, { recursive: true, force: true });
+  }
+}
+
 describe("docs/code consistency — README mirrors registered MCP surface", () => {
   it("every tool in TOOL_MANIFEST appears in README", async () => {
     const readme = await read("README.md");
@@ -655,6 +1153,45 @@ describe("docs/code consistency — README mirrors registered MCP surface", () =
     const section = "| `summarize_recent_edits` | `since_minutes?` | … |";
     const missing = promptsMissingFrom(section, new Set(["summarize_recent_edits", "vault_research"]));
     expect(missing).toEqual(["vault_research"]);
+  });
+
+  it("PDF/OCR public contracts match bounded extraction evidence", async () => {
+    const registry = await read("src/tool-registry.ts");
+    const apiMd = await read("docs/api.md");
+    const surfaces = [
+      {
+        name: "src/tool-registry.ts",
+        readPdf: boundedSection(
+          registry,
+          'server.registerTool(\n    "obsidian_read_pdf"',
+          'server.registerTool(\n    "obsidian_ocr_pdf"'
+        ),
+        ocrPdf: boundedSection(registry, 'server.registerTool(\n    "obsidian_ocr_pdf"', "// v2.0.0-beta.3: gated")
+      },
+      {
+        name: "docs/api.md",
+        readPdf: boundedSection(apiMd, "## `obsidian_read_pdf`", "## `obsidian_ocr_pdf`"),
+        ocrPdf: boundedSection(apiMd, "## `obsidian_ocr_pdf`", "## Write tools")
+      }
+    ];
+
+    for (const surface of surfaces) {
+      expect(
+        pdfOcrPublicContractProblems(surface.readPdf, surface.ocrPdf),
+        `${surface.name} PDF/OCR contract drift`
+      ).toEqual([]);
+    }
+  });
+
+  it("NEGATIVE: stale PDF/OCR success-only descriptions fail the bounded-evidence contract", () => {
+    const problems = pdfOcrPublicContractProblems(
+      "Returns PDF page text and full_text.",
+      "Returns OCR page text, confidence, and mean confidence."
+    );
+    expect(problems).toContain("read_pdf missing status: ok | empty | failed");
+    expect(problems).toContain("read_pdf missing pdf_text_budget_exceeded");
+    expect(problems).toContain("ocr_pdf missing never nan");
+    expect(problems).toContain("ocr_pdf missing ocr_text_budget_exceeded");
   });
 
   // v2.0.0-beta.2 architecture invariant: extend docs-consistency to catch
@@ -1353,6 +1890,7 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
   // Check 10 rc.20). Pin every surface that states the count to oia-walk.mjs's
   // self-declared canonical number, so adding a check forces a docs sync.
   it("OIA check count is consistent across oia-walk.mjs, AGENTS.md, ROADMAP.md (rc.22)", async () => {
+    await assertCoverageOiaEvidenceContract();
     const oia = await read("scripts/oia-walk.mjs");
     const canon = /canonical count is "(\d+)"/.exec(oia);
     expect(canon, 'scripts/oia-walk.mjs must declare `canonical count is "N"`').not.toBeNull();
@@ -1608,6 +2146,10 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
 
   it("social-preview composition keeps the TOP-1 message and exact proof count", async () => {
     const svg = await read("assets/social-preview.svg");
+    const renderer = await read("scripts/render-social-preview.mjs");
+    const pkgRaw = await read("package.json");
+    const lockRaw = await read("package-lock.json");
+    const fontProvenanceRaw = await read("assets/fonts/font-provenance.json");
     const actual = await countActualTests();
     const actualTools = manifestToolNames().size;
     const actualPrompts = registeredNames(await read("src/prompts.ts"), "registerPrompt").size;
@@ -1638,6 +2180,62 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
       }
       return problems;
     };
+    const deterministicRendererProblems = (
+      candidateRenderer: string,
+      candidateSvg: string,
+      candidatePkgRaw: string,
+      candidateLockRaw: string
+    ): string[] => {
+      const problems: string[] = [];
+      const imports = [...candidateRenderer.matchAll(/from\s+"([^"]+)"/g)].map((match) => match[1] ?? "");
+      const pkg = JSON.parse(candidatePkgRaw) as {
+        devDependencies?: Record<string, string>;
+        files?: string[];
+      };
+      const lock = JSON.parse(candidateLockRaw) as {
+        packages?: Record<string, { dev?: boolean; integrity?: string; version?: string }>;
+      };
+      if (!imports.includes("@resvg/resvg-wasm")) problems.push("renderer must import the pinned WASM rasterizer");
+      for (const nativeRenderer of ["sharp", "@napi-rs/canvas", "canvas"]) {
+        if (imports.includes(nativeRenderer)) problems.push(`renderer must not import native ${nativeRenderer}`);
+      }
+      for (const marker of [
+        'import.meta.resolve("@resvg/resvg-wasm/index_bg.wasm")',
+        '"LiberationSans-Regular.ttf"',
+        '"LiberationSans-Bold.ttf"',
+        '"LICENSE_LIBERATION"',
+        '"font-provenance.json"',
+        "assertFontProvenance(JSON.parse(provenanceRaw), fontBuffers, license);",
+        "fontBuffers",
+        'href="data:image/png;base64,'
+      ]) {
+        if (!candidateRenderer.includes(marker)) problems.push(`renderer missing deterministic input ${marker}`);
+      }
+      if (/\b(?:fontFiles|fontDirs|loadSystemFonts)\b/.test(candidateRenderer)) {
+        problems.push("renderer must not consult system font configuration");
+      }
+      if (!candidateSvg.startsWith('<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640"')) {
+        problems.push("SVG must declare the canonical 1280x640 viewport");
+      }
+      if (!candidateSvg.includes('font-family="Liberation Sans"')) {
+        problems.push("SVG must use only the committed Liberation Sans family");
+      }
+      if (/(?:-apple-system|BlinkMacSystemFont|Segoe UI|Roboto|Helvetica|Arial|sans-serif)/.test(candidateSvg)) {
+        problems.push("SVG must not name a platform font fallback");
+      }
+      if (pkg.devDependencies?.["@resvg/resvg-wasm"] !== "2.6.2") {
+        problems.push("WASM renderer must be an exact devDependency");
+      }
+      const lockEntry = lock.packages?.["node_modules/@resvg/resvg-wasm"];
+      if (lockEntry?.version !== "2.6.2" || lockEntry.dev !== true || !lockEntry.integrity?.startsWith("sha512-")) {
+        problems.push("WASM renderer lock entry must pin version, integrity, and dev scope");
+      }
+      const publishedAssets = pkg.files?.filter((entry) => entry === "assets" || entry.startsWith("assets/")) ?? [];
+      if (publishedAssets.length !== 1 || publishedAssets[0] !== "assets/social-preview.png") {
+        problems.push("only the rendered social preview may enter the published npm package");
+      }
+      return problems;
+    };
     expect(previewProblems(svg)).toEqual([]);
     expect(previewProblems(replaceExactly(svg, "EVERY AGENT.", "ONE AGENT.", 1))).toContain("missing EVERY AGENT.");
     expect(previewProblems(replaceExactly(svg, `>${actual}</text>`, `>${actual + 1}</text>`, 1))).toContain(
@@ -1651,10 +2249,165 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
     ).toContain(`stale MCP PROMPTS count ${actualPrompts + 1}`);
     expect(previewProblems(replaceExactly(svg, "MCP PROMPTS", "WORKFLOWS", 1))).toContain("stale WORKFLOWS label");
 
-    const renderer = await read("scripts/render-social-preview.mjs");
+    expect(deterministicRendererProblems(renderer, svg, pkgRaw, lockRaw)).toEqual([]);
+    expect(
+      deterministicRendererProblems(
+        replaceExactly(renderer, 'from "@resvg/resvg-wasm"', 'from "sharp"', 1),
+        svg,
+        pkgRaw,
+        lockRaw
+      )
+    ).toEqual(
+      expect.arrayContaining([
+        "renderer must import the pinned WASM rasterizer",
+        "renderer must not import native sharp"
+      ])
+    );
+    expect(
+      deterministicRendererProblems(
+        renderer,
+        replaceExactly(svg, 'font-family="Liberation Sans"', 'font-family="-apple-system, Arial"', 1),
+        pkgRaw,
+        lockRaw
+      )
+    ).toEqual(
+      expect.arrayContaining([
+        "SVG must use only the committed Liberation Sans family",
+        "SVG must not name a platform font fallback"
+      ])
+    );
+    expect(
+      deterministicRendererProblems(
+        renderer,
+        svg,
+        replaceExactly(pkgRaw, '"@resvg/resvg-wasm": "2.6.2"', '"@resvg/resvg-wasm": "^2.6.2"', 1),
+        lockRaw
+      )
+    ).toContain("WASM renderer must be an exact devDependency");
+    expect(
+      deterministicRendererProblems(
+        renderer,
+        svg,
+        replaceExactly(pkgRaw, '"assets/social-preview.png"', '"assets"', 1),
+        lockRaw
+      )
+    ).toContain("only the rendered social preview may enter the published npm package");
+    expect(
+      deterministicRendererProblems(
+        replaceExactly(
+          renderer,
+          "assertFontProvenance(JSON.parse(provenanceRaw), fontBuffers, license);",
+          "void provenanceRaw;",
+          1
+        ),
+        svg,
+        pkgRaw,
+        lockRaw
+      )
+    ).toContain(
+      "renderer missing deterministic input assertFontProvenance(JSON.parse(provenanceRaw), fontBuffers, license);"
+    );
+
     expect(renderer).toContain('"social-preview-art.png"');
-    expect(renderer).toContain(".composite([{ input: overlay }])");
     expect((await fs.stat(path.join(repoRoot, "assets/social-preview-art.png"))).size).toBeGreaterThan(100_000);
+    const fontFiles = ["LiberationSans-Regular.ttf", "LiberationSans-Bold.ttf"] as const;
+    const provenance = JSON.parse(fontProvenanceRaw) as PreviewFontProvenance;
+    const bundled = new Map<string, Buffer>();
+    for (const file of [...fontFiles, "LICENSE_LIBERATION"]) {
+      bundled.set(file, await fs.readFile(path.join(repoRoot, "assets", "fonts", file)));
+    }
+    const fontEvidence = { manifestRaw: fontProvenanceRaw, bundled };
+    expect(previewFontProvenanceProblems(fontEvidence)).toEqual([]);
+
+    const regular = bundled.get("LiberationSans-Regular.ttf");
+    expect(regular).toBeDefined();
+    const damagedRegular = Buffer.from(regular ?? []);
+    damagedRegular[damagedRegular.length - 1] = (damagedRegular[damagedRegular.length - 1] ?? 0) ^ 1;
+    expect(
+      previewFontProvenanceProblems({
+        ...fontEvidence,
+        bundled: new Map(bundled).set("LiberationSans-Regular.ttf", damagedRegular)
+      })
+    ).toContain("bundled digest drift LiberationSans-Regular.ttf");
+
+    const staleDigestManifest: PreviewFontProvenance = {
+      ...provenance,
+      fonts: provenance.fonts.map((font, index) => (index === 0 ? { ...font, sha256: "0".repeat(64) } : font))
+    };
+    expect(
+      previewFontProvenanceProblems({ ...fontEvidence, manifestRaw: JSON.stringify(staleDigestManifest) })
+    ).toEqual(
+      expect.arrayContaining([
+        "reviewed release digest drift LiberationSans-Regular.ttf",
+        "bundled digest drift LiberationSans-Regular.ttf"
+      ])
+    );
+
+    const staleMetadataManifest: PreviewFontProvenance = {
+      ...provenance,
+      fonts: provenance.fonts.map((font, index) => (index === 0 ? { ...font, subfamily: "Book" } : font))
+    };
+    expect(
+      previewFontProvenanceProblems({ ...fontEvidence, manifestRaw: JSON.stringify(staleMetadataManifest) })
+    ).toContain("font metadata drift LiberationSans-Regular.ttf:subfamily");
+
+    const staleSourceManifest: PreviewFontProvenance = {
+      ...provenance,
+      source: { ...provenance.source, tag: "2.1.4" }
+    };
+    expect(
+      previewFontProvenanceProblems({ ...fontEvidence, manifestRaw: JSON.stringify(staleSourceManifest) })
+    ).toContain("font rights-holder release is not locked");
+
+    const staleRightsManifest: PreviewFontProvenance = {
+      ...provenance,
+      fonts: provenance.fonts.map((font, index) =>
+        index === 0 ? { ...font, embeddedLicenseDescription: "Licensed under an unreviewed license" } : font
+      )
+    };
+    expect(
+      previewFontProvenanceProblems({ ...fontEvidence, manifestRaw: JSON.stringify(staleRightsManifest) })
+    ).toEqual(
+      expect.arrayContaining([
+        "embedded font rights drift LiberationSans-Regular.ttf",
+        "font metadata drift LiberationSans-Regular.ttf:embeddedLicenseDescription"
+      ])
+    );
+
+    const license = bundled.get("LICENSE_LIBERATION");
+    expect(license).toBeDefined();
+    const damagedLicense = Buffer.concat([license ?? Buffer.alloc(0), Buffer.from("\nmutation")]);
+    expect(
+      previewFontProvenanceProblems({
+        ...fontEvidence,
+        bundled: new Map(bundled).set("LICENSE_LIBERATION", damagedLicense)
+      })
+    ).toContain("font license digest drift");
+
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-social-preview-"));
+    try {
+      const outputs = [path.join(tempRoot, "first.png"), path.join(tempRoot, "second.png")];
+      for (const output of outputs) {
+        const rendered = spawnSync(
+          process.execPath,
+          [path.join(repoRoot, "scripts/render-social-preview.mjs"), "--output", output],
+          { cwd: repoRoot, encoding: "utf8", timeout: 30_000 }
+        );
+        expect(rendered.status, `${rendered.stdout}\n${rendered.stderr}`).toBe(0);
+      }
+      const [first, second, committed] = await Promise.all([
+        fs.readFile(outputs[0] ?? ""),
+        fs.readFile(outputs[1] ?? ""),
+        fs.readFile(path.join(repoRoot, "assets/social-preview.png"))
+      ]);
+      expect(sha256(first)).toBe(sha256(second));
+      expect(sha256(first)).toBe(sha256(committed));
+      expect(first.subarray(0, 8).toString("hex")).toBe("89504e470d0a1a0a");
+      expect(first.readUInt32BE(16)).toBe(1280);
+      expect(first.readUInt32BE(20)).toBe(640);
+    } finally {
+      await fs.rm(tempRoot, { recursive: true, force: true });
+    }
   });
 
   // v3.9.0-rc.37 (audit F1) — ROADMAP.md carried a stale "Process maturity —
@@ -1850,6 +2603,7 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
     // run without dist/, so only CI treats a missing declaration as a failure;
     // the local path returns without claiming compile-consumer evidence.
     const publicDeclarations = [
+      ["@oomkapwn/enquire-mcp", path.join(repoRoot, "dist", "index.d.ts")],
       ["@oomkapwn/enquire-mcp/fts5", path.join(repoRoot, "dist", "fts5.d.ts")],
       ["@oomkapwn/enquire-mcp/embed-db", path.join(repoRoot, "dist", "embed-db.d.ts")],
       ["@oomkapwn/enquire-mcp/hnsw", path.join(repoRoot, "dist", "hnsw.d.ts")]
@@ -1895,6 +2649,7 @@ import type {
   EmbedReceiptSearchHit,
   EmbedSearchHit
 } from "@oomkapwn/enquire-mcp/embed-db";
+import type { ServerDeps } from "@oomkapwn/enquire-mcp";
 import type {
   ChunkKind,
   FtsIndex,
@@ -1905,6 +2660,7 @@ import type {
   FtsSearchHit,
   TokenizeMode
 } from "@oomkapwn/enquire-mcp/fts5";
+import type { HnswPersistedMeta } from "@oomkapwn/enquire-mcp/hnsw";
 
 type EmbedDbModule = typeof import("@oomkapwn/enquire-mcp/embed-db");
 type FtsModule = typeof import("@oomkapwn/enquire-mcp/fts5");
@@ -1965,8 +2721,17 @@ type LegacyHnswRow = {
   text_preview: string;
   kind: EmbedChunkKind;
 };
+type ExpectedHnswPersistedMetaV1 = {
+  formatVersion: 1;
+  dim: number;
+  size: number;
+  signature: string;
+  rowsByLabel: Record<string, LegacyHnswRow>;
+  writtenAt: string;
+};
 
 export type PersistedIndexPublicConsumerContract = [
+  Assert<Equal<ServerDeps["enabledTools"], Set<string>>>,
   Assert<Equal<ChunkKind, "md" | "pdf">>,
   Assert<Equal<TokenizeMode, "unicode61" | "trigram">>,
   Assert<
@@ -2063,6 +2828,8 @@ export type PersistedIndexPublicConsumerContract = [
         readonly model_alias: string;
         readonly dim: string;
         readonly quantization?: EmbedQuantization;
+        readonly instance_uuid?: string;
+        readonly mutation_epoch?: string;
       }
     >
   >,
@@ -2130,6 +2897,23 @@ export type PersistedIndexPublicConsumerContract = [
       ) => EmbedReceiptSearchHit[]
     >
   >,
+  Assert<
+    Equal<
+      EmbedDb["upsertNote"],
+      (
+        relPath: string,
+        mtimeMs: number,
+        chunks: ReadonlyArray<{
+          chunkIndex: number;
+          lineStart: number;
+          lineEnd: number;
+          textPreview: string;
+          vector: Float32Array;
+        }>,
+        kind?: EmbedChunkKind
+      ) => { oldIds: number[]; newIds: number[] }
+    >
+  >,
   Assert<Equal<EmbedDb["getAllVectors"], () => LegacyEmbedVectorRow[]>>,
   Assert<
     Equal<
@@ -2139,6 +2923,7 @@ export type PersistedIndexPublicConsumerContract = [
   >,
   Assert<Equal<EmbedReceiptSearchHit["indexed_mtime_ms"], number>>,
   Assert<Equal<EmbedReceiptSearchHit["indexed_revision"], number>>,
+  Assert<Equal<HnswPersistedMeta, ExpectedHnswPersistedMetaV1>>,
   Assert<
     Equal<
       keyof EmbedReceiptSearchHit,
@@ -2166,14 +2951,17 @@ export type PersistedIndexPublicConsumerContract = [
 ];
 `;
 
-    // Compile all five causal controls in ONE additional TypeScript program.
+    // Compile all eight causal controls in ONE additional TypeScript program.
     // Each deliberately-invalid declaration stays on its own named line so the
     // assertion below can attribute the expected diagnostic to that contract,
     // rather than accepting the same TS code emitted by an unrelated control.
     const negativeConsumerSource = (): string => `${publicConsumerSource()}
 type NegativeLegacyFtsReceiptLeak = Assert<Equal<FtsIndex["search"], (rawQuery: string, opts?: FtsSearchOptions) => FtsReceiptSearchHit[]>>;
+type NegativeNullableServerDepsEnabledTools = Assert<Equal<ServerDeps["enabledTools"], Set<string> | null>>;
 type NegativeOptionalRevision = Assert<Equal<FtsReceiptSearchHit["indexed_revision"], number | undefined>>;
+type NegativeMissingEmbedGeneration = Assert<Equal<EmbedDbOwnedMeta, Omit<EmbedDbOwnedMeta, "instance_uuid" | "mutation_epoch">>>;
 type NegativeHnswHelperSwap = Assert<Equal<HnswModule["hnswResultsToHits"], (result: { labels: number[]; distances: number[] }, rowByLabel: ReadonlyMap<number, LegacyHnswRow>) => EmbedReceiptSearchHit[]>>;
+type NegativeHnswPersistedMetaV2 = Assert<Equal<HnswPersistedMeta, Omit<ExpectedHnswPersistedMetaV1, "formatVersion"> & { formatVersion: 2; binFile: string; binSha256: string }>>;
 declare const negativeUnownedDiscovery: EmbedDbConfigDiscovery;
 export const NegativeUnownedVaultRoot: string = negativeUnownedDiscovery.meta.vault_root;
 export type NegativeMissingSubpath = typeof import("@oomkapwn/enquire-mcp/fts5-missing");
@@ -2251,9 +3039,12 @@ export type NegativeMissingSubpath = typeof import("@oomkapwn/enquire-mcp/fts5-m
     const negativeSource = negativeConsumerSource();
     const negativeDiagnostics = compileConsumer(negativeSource);
     const causalControls = [
+      ["NegativeNullableServerDepsEnabledTools", 2344, undefined],
       ["NegativeLegacyFtsReceiptLeak", 2344, undefined],
       ["NegativeOptionalRevision", 2344, undefined],
+      ["NegativeMissingEmbedGeneration", 2344, undefined],
       ["NegativeHnswHelperSwap", 2344, undefined],
+      ["NegativeHnswPersistedMetaV2", 2344, undefined],
       ["NegativeUnownedVaultRoot", 2339, "Property 'meta' does not exist"],
       ["NegativeMissingSubpath", 2307, "Cannot find module '@oomkapwn/enquire-mcp/fts5-missing'"]
     ] as const;
@@ -2268,7 +3059,7 @@ export type NegativeMissingSubpath = typeof import("@oomkapwn/enquire-mcp/fts5-m
       return { expectedCode, expectedMessage, marker, markerLine };
     });
     const causalLines = new Set(controlsWithLines.map(({ markerLine }) => markerLine));
-    expect(causalLines.size, "all five negative controls must occupy pairwise-distinct lines").toBe(
+    expect(causalLines.size, "all eight negative controls must occupy pairwise-distinct lines").toBe(
       causalControls.length
     );
     expect(
@@ -2289,7 +3080,7 @@ export type NegativeMissingSubpath = typeof import("@oomkapwn/enquire-mcp/fts5-m
       const diagnosticLine = diagnostic.file.getLineAndCharacterOfPosition(diagnostic.start).line;
       expect(
         causalLines.has(diagnosticLine),
-        `negative diagnostic escaped the five causal lines:\n${formatDiagnostics([diagnostic])}`
+        `negative diagnostic escaped the eight causal lines:\n${formatDiagnostics([diagnostic])}`
       ).toBe(true);
       const lineDiagnostics = diagnosticsByLine.get(diagnosticLine) ?? [];
       lineDiagnostics.push(diagnostic);
@@ -2704,13 +3495,13 @@ export type NegativeMissingSubpath = typeof import("@oomkapwn/enquire-mcp/fts5-m
     const requiredMatch = /REQUIRED="([^"]+)"/.exec(releaseYml);
     expect(requiredMatch, 'release.yml must declare REQUIRED="..."').not.toBeNull();
     const releaseRequired = (requiredMatch?.[1] ?? "").split("|").filter(Boolean).length;
-    expect(releaseRequired).toBe(12);
+    expect(releaseRequired).toBe(13);
 
-    // Live branch-protection snapshot re-derived with `gh api` on 2026-07-23.
+    // Live branch-protection snapshot re-derived with `gh api` on 2026-08-21.
     // External settings are intentionally date-stamped; this invariant keeps
     // every public translation on one snapshot instead of pretending the
     // number can be derived from tracked workflow YAML.
-    const branchProtected = 7;
+    const branchProtected = 13;
     const actualTests = await countActualTests();
     const embeddings = await read("src/embeddings.ts");
     const aliasMatch = /DEFAULT_RERANKER_ALIAS\s*=\s*"([^"]+)"/.exec(embeddings);
@@ -2739,17 +3530,12 @@ export type NegativeMissingSubpath = typeof import("@oomkapwn/enquire-mcp/fts5-m
       expect(ciTableRows, `${file} must carry exactly two CI posture table rows`).toHaveLength(2);
 
       const ciRowBlock = ciTableRows.map(({ line }) => line).join("\n");
-      const expectedReleaseRequiredOccurrences = file === "README.ar.md" ? 2 : 3;
+      const expectedCiCountOccurrences = file === "README.ar.md" ? 4 : 5;
       const inflatedCiRowBlock = replaceIntegerAllExactly(
-        replaceIntegerAllExactly(
-          replaceIntegerAllExactly(ciRowBlock, actualTests, `1${actualTests}`, 1),
-          releaseRequired,
-          `1${releaseRequired}`,
-          expectedReleaseRequiredOccurrences
-        ),
-        branchProtected,
-        `1${branchProtected}`,
-        2
+        replaceIntegerAllExactly(ciRowBlock, actualTests, `1${actualTests}`, 1),
+        releaseRequired,
+        `1${releaseRequired}`,
+        expectedCiCountOccurrences
       );
       const inflatedCiRows = inflatedCiRowBlock.split("\n");
       expect(inflatedCiRows, `${file} CI mutation must preserve the two-row shape`).toHaveLength(2);
@@ -2766,6 +3552,20 @@ export type NegativeMissingSubpath = typeof import("@oomkapwn/enquire-mcp/fts5-m
       expect(
         publicCiPostureProblems(inflatedCiCounts, releaseRequired, branchProtected, actualTests).length,
         `${file} exact-count detector must reject digit-prefixed lookalikes`
+      ).toBeGreaterThan(0);
+
+      const summaryRow = ciTableRows[0]?.line ?? "";
+      const branchCountIndex = summaryRow.lastIndexOf(String(branchProtected));
+      expect(branchCountIndex, `${file} summary must expose a distinct branch-protected count`).toBeGreaterThan(-1);
+      const staleSummaryRow = `${summaryRow.slice(0, branchCountIndex)}7${summaryRow.slice(
+        branchCountIndex + String(branchProtected).length
+      )}`;
+      const staleBranchCounts = markdownLines
+        .map((line, index) => (index === ciTableRows[0]?.index ? staleSummaryRow : line))
+        .join("\n");
+      expect(
+        publicCiPostureProblems(staleBranchCounts, releaseRequired, branchProtected, actualTests).length,
+        `${file} branch-protection detector must reject the previous live snapshot count`
       ).toBeGreaterThan(0);
     }
 
@@ -2908,8 +3708,8 @@ export type NegativeMissingSubpath = typeof import("@oomkapwn/enquire-mcp/fts5-m
 
     for (const file of ["AGENTS.md", "llms.txt", "llms-ctx.txt", "ROADMAP.md"]) {
       const body = await read(file);
-      expect(body, `${file} must carry the release-required count`).toContain("12 release-required");
-      expect(body, `${file} must carry the branch-protected snapshot`).toMatch(/7 .{0,20}branch-protected/);
+      expect(body, `${file} must carry the release-required count`).toContain("13 release-required");
+      expect(body, `${file} must carry the branch-protected snapshot`).toMatch(/13 .{0,30}branch-protected/);
       expect(body, `${file} must not retain the five-advisory fiction`).not.toMatch(/5 advisory/i);
     }
 
@@ -2965,7 +3765,7 @@ export type NegativeMissingSubpath = typeof import("@oomkapwn/enquire-mcp/fts5-m
         ciWorkflow,
         "        run: node scripts/npm-ci-with-retry.mjs",
         "        run: npm ci",
-        13
+        14
       );
       await fs.writeFile(
         ciFixture,
@@ -3082,14 +3882,77 @@ export type NegativeMissingSubpath = typeof import("@oomkapwn/enquire-mcp/fts5-m
       );
       const releaseFixture = path.join(fixtureRoot, ".github", "workflows", "release.yml");
       const releaseWorkflow = await fs.readFile(releaseFixture, "utf8");
+      expect(inspectReleaseProvenanceWorkflow(load(releaseWorkflow)).problems).toEqual([]);
+      const provenanceMutants = [
+        {
+          label: "missing explicit provenance flag",
+          source: replaceExactly(
+            releaseWorkflow,
+            '                --provenance --access public --tag "$CHANNEL" --ignore-scripts',
+            '                --access public --tag "$CHANNEL" --ignore-scripts'
+          ),
+          problem: /exactly one npm publish --provenance/u
+        },
+        {
+          label: "disabled closed provenance config",
+          source: replaceExactly(
+            releaseWorkflow,
+            "                NPM_CONFIG_PROVENANCE=true \\\n",
+            "                NPM_CONFIG_PROVENANCE=false \\\n"
+          ),
+          problem: /pin NPM_CONFIG_PROVENANCE=true/u
+        },
+        ...(["NPM_ID_TOKEN", "SIGSTORE_ID_TOKEN", "GITLAB_CI"] as const).flatMap((carrier) => [
+          {
+            label: `${carrier} survives at the irreversible publish command`,
+            source: replaceExactly(releaseWorkflow, `--unset=${carrier}`, ""),
+            problem: /unconditionally unset NPM_ID_TOKEN, SIGSTORE_ID_TOKEN, and GITLAB_CI/u
+          },
+          {
+            label: `${carrier} is not closed in the publish step environment`,
+            source: replaceExactly(releaseWorkflow, `          ${carrier}: ''`, `          ${carrier}: inherited`),
+            problem: /pin empty step env/u
+          }
+        ]),
+        {
+          label: "inherited provenance config survives",
+          source: replaceExactly(
+            releaseWorkflow,
+            "|npm_config_provenance|npm_config_provenance_file)",
+            "|npm_config_provenance_file)"
+          ),
+          problem: /scrub both provenance and provenance-file/u
+        },
+        {
+          label: "inherited provenance-file config survives",
+          source: replaceExactly(
+            releaseWorkflow,
+            "|npm_config_provenance|npm_config_provenance_file)",
+            "|npm_config_provenance)"
+          ),
+          problem: /scrub both provenance and provenance-file/u
+        }
+      ] as const;
+      for (const mutant of provenanceMutants) {
+        expect(inspectReleaseProvenanceWorkflow(load(mutant.source)).problems, mutant.label).toContainEqual(
+          expect.stringMatching(mutant.problem)
+        );
+      }
+      const releaseWithoutTrustedPublishingOidc = replaceExactly(
+        releaseWorkflow,
+        "      id-token: write\n    environment:\n      name: npm-publish",
+        "    environment:\n      name: npm-publish"
+      );
       await fs.writeFile(
         releaseFixture,
         replaceExactly(
-          releaseWorkflow,
+          releaseWithoutTrustedPublishingOidc,
           "      - name: Audit source and published-consumer dependency graphs\n" +
             "        run: /usr/bin/timeout --kill-after=10s 300s npm run check:audit",
           "      - name: Poison audit shell\n" +
             "        run: |\n" +
+            "          # npm publish --provenance (inert comment decoy)\n" +
+            "          echo 'npm publish --provenance is not the publisher'\n" +
             "          printf '%s\\n' 'exit 0' > \"$RUNNER_TEMP/audit-bypass.sh\"\n" +
             '          printf \'%s\\n\' "BASH_ENV=$RUNNER_TEMP/audit-bypass.sh" >> "$GITHUB_ENV"\n' +
             "      - name: Audit source and published-consumer dependency graphs\n" +
@@ -3221,6 +4084,12 @@ export type NegativeMissingSubpath = typeof import("@oomkapwn/enquire-mcp/fts5-m
       expect(output, "OIA must reject loss of the independently bounded audit phase").toContain("[NPM-AUDIT-DEADLINE]");
       expect(output, "OIA must reject semantic drift between install and the release audit").toContain(
         "[NPM-AUDIT-DEADLINE] .github/workflows/release.yml:"
+      );
+      expect(output, "comments and echo text must not replace the npm Trusted Publishing OIDC boundary").toContain(
+        "[SLSA-LEVEL-OVERCLAIM]"
+      );
+      expect(output, "the missing real publisher OIDC permission must fail the release mechanism itself").toContain(
+        "[SLSA-WORKFLOW-MECHANISM] .github/workflows/release.yml:1"
       );
       expect(output, "OIA must reject semantic drift in the helper retry policy").toContain("[NPM-CI-HELPER-POLICY]");
       expect(output, "OIA must reject a disabled shared entrypoint guard").toContain(
@@ -3525,6 +4394,27 @@ function checkAgentsCiGates(agents: string, actualRequired: number): string | nu
   return null;
 }
 
+/** Pure check: AGENTS.md numbered direct-gate inventory exactly matches release.yml REQUIRED. */
+function checkAgentsCiInventory(agents: string, actualNames: readonly string[]): string | null {
+  const direct = /Directly release-required[^\n]*:\n([\s\S]*?)\n\nAdditional unprotected checks:/.exec(agents);
+  if (!direct) return "AGENTS.md must carry a bounded numbered direct release-required inventory";
+  const listed = [...(direct[1] ?? "").matchAll(/^\d+\.\s+`([^`]+)`/gm)].map((match) => match[1] ?? "");
+  if (listed.length !== actualNames.length)
+    return `AGENTS.md numbered direct inventory has ${listed.length} entries; release.yml REQUIRED has ${actualNames.length}`;
+  for (const [index, expected] of actualNames.entries()) {
+    if (listed[index] !== expected)
+      return `AGENTS.md direct gate #${index + 1} is "${listed[index] ?? "<missing>"}"; expected "${expected}"`;
+  }
+  const additional =
+    /Additional unprotected checks:\n([\s\S]*?)(?=\nLive branch-protection snapshot)/.exec(agents)?.[1] ?? "";
+  const additionalNames = [...additional.matchAll(/^- `([^`]+)`/gm)].map((match) => match[1] ?? "");
+  for (const name of actualNames) {
+    if (additionalNames.includes(name))
+      return `AGENTS.md still lists directly required gate "${name}" as an additional unprotected check`;
+  }
+  return null;
+}
+
 describe("docs/code consistency — AI-agent text surfaces + AGENTS.md numeric claims", () => {
   async function countActualTests(): Promise<number> {
     const fs = await import("node:fs/promises");
@@ -3565,11 +4455,18 @@ describe("docs/code consistency — AI-agent text surfaces + AGENTS.md numeric c
     return { allTools, alwaysOn, ftsOptIn, diagnostic, writes, prompts };
   }
 
-  async function countRequiredCiGates(): Promise<number> {
+  async function requiredCiGates(): Promise<string[]> {
     const releaseYml = await read(".github/workflows/release.yml");
     const m = /REQUIRED="([^"]+)"/.exec(releaseYml);
     if (!m) throw new Error('release.yml must declare REQUIRED="...|..." regex');
-    return (m[1] ?? "").split("|").length;
+    return (m[1] ?? "").split("|").map((gate) => {
+      const unescapedGate = gate.replace(/\\([()])/g, "$1");
+      return unescapedGate;
+    });
+  }
+
+  async function countRequiredCiGates(): Promise<number> {
+    return (await requiredCiGates()).length;
   }
 
   async function countPerFileFloors(): Promise<number> {
@@ -3864,7 +4761,9 @@ describe("docs/code consistency — AI-agent text surfaces + AGENTS.md numeric c
   });
 
   it("AGENTS.md 'N release-required CI checks' matches release.yml REQUIRED count", async () => {
-    const err = checkAgentsCiGates(await read("AGENTS.md"), await countRequiredCiGates());
+    const agents = await read("AGENTS.md");
+    const actualNames = await requiredCiGates();
+    const err = checkAgentsCiGates(agents, actualNames.length) ?? checkAgentsCiInventory(agents, actualNames);
     expect(err, err ?? "").toBeNull();
   });
 
@@ -3938,6 +4837,24 @@ describe("docs/code consistency — AI-agent text surfaces + AGENTS.md numeric c
     expect(checkAgentsCiGates("11 release-required CI checks, 10 release-required CI checks", 11)).toMatch(/10/);
     // Zero mentions → fail
     expect(checkAgentsCiGates("no claim", 11)).toMatch(/at least once/);
+
+    const exactInventory =
+      "Directly release-required (all run on PRs):\n" +
+      "1. `lint` — lint\n" +
+      "2. `docker` — image smoke\n\n" +
+      "Additional unprotected checks:\n" +
+      "- `test-macos` is advisory.\n\n" +
+      "Live branch-protection snapshot";
+    expect(checkAgentsCiInventory(exactInventory, ["lint", "docker"])).toBeNull();
+    expect(
+      checkAgentsCiInventory(replaceExactly(exactInventory, "2. `docker`", "2. `smoke`"), ["lint", "docker"])
+    ).toMatch(/expected "docker"/);
+    expect(
+      checkAgentsCiInventory(
+        replaceExactly(exactInventory, "- `test-macos` is advisory.", "- `docker` is not branch-protected."),
+        ["lint", "docker"]
+      )
+    ).toMatch(/additional unprotected/);
   });
 
   // v3.11.0-rc.8 (pre-promotion audit LOW) — CITATION.cff `version` tracks the @latest

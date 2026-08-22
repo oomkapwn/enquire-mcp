@@ -53,6 +53,8 @@ const SHAPES: Record<string, (inner: string) => string> = {
   tilde: (i) => `${TT}\n${i}\n${TT}`,
   indented: (i) => `   ${BT}\n${i}\n   ${BT}`,
   mismatchedInner: (i) => `${BT}\n${TT}\n${i}\n${BT}`,
+  longOpenerShortInner: (i) => `\`\`\`\`\n${BT}\n${i}\n\`\`\`\``,
+  closeWithTrailingText: (i) => `${BT}\n${BT}not-a-close\n${i}\n${BT}`,
   inlineSpanLineStart: (i) => `${BT}${i}${BT}`,
   unclosed: (i) => `${BT}\n${i}`,
   unclosedTilde: (i) => `${TT}\n${i}`,

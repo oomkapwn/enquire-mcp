@@ -39,6 +39,12 @@ import { createServer, type Server as HttpServer, type IncomingMessage, type Ser
 import { NodeStreamableHTTPServerTransport, toNodeHandler, toWebRequest } from "@modelcontextprotocol/node";
 import { createMcpHandler, isLegacyRequest, type McpHttpHandler } from "@modelcontextprotocol/server";
 import { buildMcpServer, formatReadyBanner, prepareServerDeps, type ServeOptions, type ServerDeps } from "./index.js";
+import {
+  createPreparedServerCleanupOwner,
+  PreparedServerCleanupError,
+  type PreparedServerCleanupOwner,
+  retryIncompleteShutdownOnce
+} from "./shutdown.js";
 import { TOOL_MANIFEST } from "./tool-manifest.js";
 import { DEFAULT_MAX_FILE_BYTES } from "./vault.js";
 import { WriteRequestTracker } from "./write-lifecycle.js";
@@ -53,12 +59,20 @@ const DELETE_DRAIN_MS = 5000;
 const MODERN_DRAIN_MS = 5000;
 /** Bound for the SDK handler's graceful protocol close after write integrity settles. */
 const MODERN_CLOSE_MS = 3000;
+/** Minimum request budget retained for ordinary MCP envelopes. */
+const MIN_HTTP_JSON_BODY_BYTES = 4 * 1024 * 1024;
+/** Worst-case JSON string expansion: one decoded control byte becomes `\u00xx`. */
+const HTTP_JSON_ESCAPE_EXPANSION = 6;
+/** Fixed allowance for the JSON-RPC/MCP envelope around one file-sized string. */
+const HTTP_JSON_ENVELOPE_HEADROOM_BYTES = 64 * 1024;
+/** Process-memory safety ceiling for one buffered and parsed HTTP JSON request. */
+const MAX_HTTP_JSON_BODY_BYTES = 64 * 1024 * 1024;
 const PERSISTENT_WRITE_TOOLS = new Set(
   TOOL_MANIFEST.filter((tool) => tool.kind === "write" || tool.kind === "feedback").map((tool) => tool.name)
 );
 
 /**
- * Internal timing controls for deterministic lifecycle tests.
+ * Internal controls for deterministic transport and lifecycle tests.
  *
  * Production callers should omit this object. It is intentionally separate
  * from {@link HttpServeOptions} so no CLI/config surface can weaken the normal
@@ -81,6 +95,12 @@ export interface HttpTransportInternals {
   afterDeleteMarkedClosing?: (sessionId: string) => void | Promise<void>;
   /** Pause after a modern request owns an in-flight slot; used only by lifecycle tests. */
   afterModernRequestAdmitted?: () => void | Promise<void>;
+  /** Fault-injection point after listen and owner installation but before startup commits. */
+  beforeStartupCommit?: (server: HttpServer, deps: ServerDeps) => void | Promise<void>;
+  /** Replace TCP listener construction in ownership tests without binding an operating-system socket. */
+  httpServerFactory?: (requestListener: (req: IncomingMessage, res: ServerResponse) => void) => HttpServer;
+  /** Override the already-validated production JSON body cap with a small test-only limit. */
+  maxBodyBytes?: number;
 }
 
 /**
@@ -89,24 +109,29 @@ export interface HttpTransportInternals {
  * available over HTTP too.
  */
 export interface HttpServeOptions extends ServeOptions {
-  /** TCP port to listen on. */
+  /** TCP port to listen on. Must be a safe integer in [0, 65535]; 0 requests an ephemeral port. */
   port: number;
   /**
-   * Bind host. Default 127.0.0.1 — explicit because remote-MCP must
-   * opt-in to bind 0.0.0.0. Most users should keep it on localhost and
-   * front it with Tailscale Funnel / Cloudflare Tunnel for remote access
-   * (auth-and-encryption-in-depth). See docs/http-transport.md.
+   * Non-empty bind host with no outer whitespace. Default 127.0.0.1 —
+   * explicit because remote-MCP must opt-in to bind 0.0.0.0. Most users should
+   * keep it on localhost and front it with Tailscale Funnel / Cloudflare
+   * Tunnel for remote access (auth-and-encryption-in-depth).
+   * See docs/http-transport.md.
    */
   host: string;
   /**
-   * Bearer token. Comparing constant-time. Required: a missing token
-   * fails closed at startup (we refuse to bind without auth). Generate
+   * Bearer token of at least 16 characters with no outer whitespace.
+   * Comparing constant-time. Required: a missing token fails closed at startup
+   * (we refuse to bind without auth). Generate
    * with: `node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"`.
    */
   bearerToken: string;
-  /** URL path prefix for the MCP endpoint. Default `/mcp`. */
+  /**
+   * Canonical absolute URL pathname for the MCP endpoint.
+   * Default `/mcp`; must differ from `healthPath`.
+   */
   mcpPath?: string;
-  /** Max requests per minute per bearer token. Default 120. 0 disables. */
+  /** Max requests per minute per bearer token. Safe non-negative integer; default 120. 0 disables. */
   rateLimitPerMinute?: number;
   /**
    * Exact HTTP(S) Origin allowlist. Repeatable. Default empty: requests
@@ -115,7 +140,10 @@ export interface HttpServeOptions extends ServeOptions {
    * rejected at startup because they cannot enforce DNS-rebinding admission.
    */
   corsOrigins?: string[];
-  /** Optional path-prefix to match a /health probe under (e.g. for Tailscale). Default `/health`. */
+  /**
+   * Canonical absolute URL pathname for the health probe.
+   * Default `/health`; must differ from `mcpPath`.
+   */
   healthPath?: string;
   /**
    * v2.14.0 — when `true`, the HTTP transport runs in stateful mode:
@@ -130,14 +158,15 @@ export interface HttpServeOptions extends ServeOptions {
   stateful?: boolean;
   /**
    * v2.14.0 — when stateful, evict sessions idle longer than this many
-   * milliseconds. Default 30 minutes. Sweep runs lazily on every
-   * request (no separate timer). Idle = time since the last
+   * milliseconds. Must be a positive safe integer. Default 30 minutes.
+   * Sweep runs lazily on every request (no separate timer). Idle = time since the last
    * `handleRequest` for that session.
    */
   sessionIdleTimeoutMs?: number;
   /**
    * v2.14.0 — max concurrent sessions. New sessions beyond this cap are
-   * rejected with 503 + `Retry-After`. Default 100; protects against
+   * rejected with 503 + `Retry-After`. Must be a positive safe integer.
+   * Default 100; protects against
    * memory exhaustion under adversarial create-and-abandon traffic.
    */
   maxSessions?: number;
@@ -150,6 +179,139 @@ export interface HttpServeOptions extends ServeOptions {
    * underlying resource cleanup.
    */
   installSignalHandlers?: boolean;
+}
+
+const MAX_HTTP_PORT = 65_535;
+const MAX_HTTP_INTEGER = Number.MAX_SAFE_INTEGER;
+const HTTP_ROUTE_BASE = new URL("http://enquire.invalid");
+const HTTP_BOOLEAN_OPTIONS = [
+  "stateful",
+  "installSignalHandlers"
+] as const satisfies readonly (keyof HttpServeOptions)[];
+
+function assertHttpInteger(
+  value: unknown,
+  name: "port" | "rateLimitPerMinute" | "sessionIdleTimeoutMs" | "maxSessions",
+  minimum: number,
+  maximum: number
+): asserts value is number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < minimum || value > maximum) {
+    throw new TypeError(`HTTP serve option ${name} must be a safe integer in [${minimum}, ${maximum}]`);
+  }
+}
+
+function normalizeHttpRoutePath(value: unknown, name: "mcpPath" | "healthPath"): string {
+  if (typeof value !== "string") {
+    throw new TypeError(`HTTP serve option ${name} must be a string`);
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(value, HTTP_ROUTE_BASE);
+  } catch {
+    throw new TypeError(`HTTP serve option ${name} must be a canonical absolute pathname`);
+  }
+  if (
+    !value.startsWith("/") ||
+    value.startsWith("//") ||
+    value.includes("?") ||
+    value.includes("#") ||
+    /%(?![0-9a-fA-F]{2})/.test(value) ||
+    parsed.origin !== HTTP_ROUTE_BASE.origin ||
+    parsed.pathname !== value ||
+    parsed.search !== "" ||
+    parsed.hash !== ""
+  ) {
+    throw new TypeError(`HTTP serve option ${name} must be a canonical absolute pathname without query or fragment`);
+  }
+  return value;
+}
+
+/**
+ * Validate and normalize the public HTTP transport configuration without
+ * coercing caller-controlled values. This boundary is dependency-free so both
+ * direct handler construction and listener startup reject invalid transport
+ * options before touching server dependencies, request bodies, or sockets.
+ *
+ * Inherited {@link ServeOptions} fields are validated by the server layer,
+ * except `maxFileBytes`: its HTTP wire-budget coupling is admitted here so an
+ * impossible body cap fails before vault/index preparation or socket listen.
+ *
+ * @param value - Untrusted programmatic HTTP serve configuration.
+ * @returns A shallow copy with default route paths and normalized CORS origins.
+ * @throws {TypeError} When an HTTP option has the wrong runtime type or domain.
+ * @throws {RangeError} When `maxFileBytes` cannot fit the bounded HTTP representation.
+ * @example
+ * ```ts
+ * const opts = normalizeHttpServeOptions({
+ *   vault: "/notes",
+ *   port: 3000,
+ *   host: "127.0.0.1",
+ *   bearerToken: "replace-with-a-secret"
+ * });
+ * ```
+ */
+export function normalizeHttpServeOptions(value: unknown): HttpServeOptions {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new TypeError("HTTP serve options must be an object");
+  }
+  const opts = value as Record<string, unknown>;
+
+  assertHttpInteger(opts.port, "port", 0, MAX_HTTP_PORT);
+  for (const name of ["host", "bearerToken"] as const) {
+    if (typeof opts[name] !== "string") {
+      throw new TypeError(`HTTP serve option ${name} must be a string`);
+    }
+  }
+  const host = opts.host as string;
+  if (host.length === 0 || host.trim() !== host) {
+    throw new TypeError("HTTP serve option host must be non-empty and contain no outer whitespace");
+  }
+  const bearerToken = opts.bearerToken as string;
+  if (bearerToken.length < 16 || bearerToken.trim() !== bearerToken) {
+    throw new TypeError(
+      "enquire serve-http: --bearer-token is required, must be ≥16 chars, and contain no outer whitespace. " +
+        "Generate one with: enquire-mcp gen-token"
+    );
+  }
+
+  for (const name of HTTP_BOOLEAN_OPTIONS) {
+    const option = opts[name];
+    if (option !== undefined && typeof option !== "boolean") {
+      throw new TypeError(`HTTP serve option ${name} must be a boolean`);
+    }
+  }
+  if (
+    opts.corsOrigins !== undefined &&
+    (!Array.isArray(opts.corsOrigins) || !opts.corsOrigins.every((origin) => typeof origin === "string"))
+  ) {
+    throw new TypeError("HTTP serve option corsOrigins must be an array of strings");
+  }
+  if (opts.rateLimitPerMinute !== undefined) {
+    assertHttpInteger(opts.rateLimitPerMinute, "rateLimitPerMinute", 0, MAX_HTTP_INTEGER);
+  }
+  if (opts.sessionIdleTimeoutMs !== undefined) {
+    assertHttpInteger(opts.sessionIdleTimeoutMs, "sessionIdleTimeoutMs", 1, MAX_HTTP_INTEGER);
+  }
+  if (opts.maxSessions !== undefined) {
+    assertHttpInteger(opts.maxSessions, "maxSessions", 1, MAX_HTTP_INTEGER);
+  }
+  if (opts.maxFileBytes !== undefined && typeof opts.maxFileBytes !== "string") {
+    throw new TypeError("HTTP serve option maxFileBytes must be a string");
+  }
+  deriveHttpBodyCap(opts.maxFileBytes as string | undefined);
+
+  const mcpPath = normalizeHttpRoutePath(opts.mcpPath === undefined ? "/mcp" : opts.mcpPath, "mcpPath");
+  const healthPath = normalizeHttpRoutePath(opts.healthPath === undefined ? "/health" : opts.healthPath, "healthPath");
+  if (mcpPath === healthPath) {
+    throw new TypeError("HTTP serve options mcpPath and healthPath must be distinct");
+  }
+
+  return {
+    ...(value as HttpServeOptions),
+    mcpPath,
+    healthPath,
+    corsOrigins: normalizeCorsOrigins(opts.corsOrigins as string[] | undefined)
+  };
 }
 
 /**
@@ -228,30 +390,32 @@ function verifyBearer(authHeader: string | undefined, expectedToken: string): st
  *
  * @param origins - Configured `--cors-origin` values.
  * @returns A de-duplicated list of exact serialized origins.
- * @throws Error when any entry is not a safe exact HTTP(S) origin.
+ * @throws TypeError when any entry is not a safe exact HTTP(S) origin.
  * @internal
  */
 export function normalizeCorsOrigins(origins: readonly string[] = []): string[] {
   const normalized = new Set<string>();
   for (const origin of origins) {
     if (origin === "*" || origin === "null") {
-      throw new Error(
+      throw new TypeError(
         `enquire serve-http: --cors-origin ${JSON.stringify(origin)} is unsafe; list each exact HTTP(S) origin`
       );
     }
     if (origin.trim() !== origin || origin.length === 0) {
-      throw new Error("enquire serve-http: --cors-origin entries must be non-empty and contain no outer whitespace");
+      throw new TypeError(
+        "enquire serve-http: --cors-origin entries must be non-empty and contain no outer whitespace"
+      );
     }
     let parsed: URL;
     try {
       parsed = new URL(origin);
     } catch {
-      throw new Error(
+      throw new TypeError(
         `enquire serve-http: invalid --cors-origin ${JSON.stringify(origin)}; expected an exact HTTP(S) origin`
       );
     }
     if ((parsed.protocol !== "http:" && parsed.protocol !== "https:") || parsed.origin !== origin) {
-      throw new Error(
+      throw new TypeError(
         `enquire serve-http: invalid --cors-origin ${JSON.stringify(origin)}; use only scheme + host + optional port`
       );
     }
@@ -322,15 +486,58 @@ export function isJsonContentType(value: string | string[] | undefined): boolean
   return essence === "application/json" && !(quoted && quotedComma);
 }
 
-/** Read the entire request body (UTF-8 JSON). Returns undefined for empty. */
+/**
+ * Typed signal that the declared or streamed request body exceeded its admitted
+ * byte budget. The HTTP boundary maps this type to a generic 413 response while
+ * ordinary JSON syntax failures remain 400 parse errors.
+ *
+ * @example
+ * ```ts
+ * throw new BodyTooLargeError();
+ * ```
+ * @internal
+ */
+export class BodyTooLargeError extends Error {
+  constructor() {
+    super("HTTP request body exceeds its admitted byte budget");
+    this.name = "BodyTooLargeError";
+  }
+}
+
+function declaredContentLengthExceeds(req: IncomingMessage, maxBytes: number): boolean {
+  const raw = req.headers?.["content-length"];
+  if (typeof raw !== "string" || !/^[0-9]+$/u.test(raw)) return false;
+  const normalized = raw.replace(/^0+/u, "") || "0";
+  const maximum = String(maxBytes);
+  return normalized.length > maximum.length || (normalized.length === maximum.length && normalized > maximum);
+}
+
+/**
+ * Read and parse one bounded UTF-8 JSON request body.
+ *
+ * A valid numeric `Content-Length` is rejected before stream consumption when
+ * it exceeds the cap. Chunked bodies and under-declared bodies remain protected
+ * by the incremental byte counter.
+ *
+ * @param req - Incoming Node request stream.
+ * @param maxBytes - Positive safe-integer wire-byte budget.
+ * @returns Parsed JSON, or `undefined` for an empty body.
+ * @throws {BodyTooLargeError} If declared or observed bytes exceed `maxBytes`.
+ * @throws {SyntaxError} If the admitted non-empty body is not valid JSON.
+ * @internal
+ */
 async function readJsonBody(req: IncomingMessage, maxBytes: number): Promise<unknown> {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > MAX_HTTP_JSON_BODY_BYTES) {
+    throw new TypeError(`HTTP JSON body cap must be a safe integer in [1, ${MAX_HTTP_JSON_BODY_BYTES}]`);
+  }
+  if (declaredContentLengthExceeds(req, maxBytes)) throw new BodyTooLargeError();
   const chunks: Buffer[] = [];
   let total = 0;
   for await (const chunk of req) {
     const buf = Buffer.from(chunk);
     total += buf.length;
     if (total > maxBytes) {
-      throw new Error(`request body exceeds max ${maxBytes} bytes`);
+      throw new BodyTooLargeError();
     }
     chunks.push(buf);
   }
@@ -750,16 +957,38 @@ export function parseMaxFileBytes(raw: string | undefined): number | undefined {
 }
 
 /**
- * v3.7.12 M4 — derive the HTTP body-size cap from the vault's `maxFileBytes`
- * (or `DEFAULT_MAX_FILE_BYTES` when unset). Scales 1.5× to leave headroom
- * for the JSON-RPC envelope + string-escaping overhead, with a 4 MB floor
- * so tiny vaults don't shrink the cap below `tools/list` response size.
+ * Derive an honest HTTP JSON wire-byte budget from the decoded vault-file cap.
  *
- * @internal — exported only for tests.
+ * JSON can encode one decoded control byte as the six-byte `\u00xx` form, so
+ * the request budget reserves six wire bytes per admitted UTF-8 content byte,
+ * plus 64 KiB for the surrounding JSON-RPC/MCP envelope. A 4 MiB floor retains
+ * ordinary small-request compatibility. The result may not exceed the explicit
+ * 64 MiB operational ceiling because this transport buffers bytes, decoded
+ * text, and the parsed object at the same time; configurations that cannot keep
+ * the worst-case one-file request inside that ceiling fail at startup instead
+ * of silently advertising an unusable `maxFileBytes` value.
+ *
+ * @param maxFileBytes - CLI spelling of the decoded per-file byte cap.
+ * @returns The admitted HTTP JSON wire-byte budget.
+ * @throws {RangeError} If a valid file cap cannot fit under the operational ceiling.
+ * @example
+ * ```ts
+ * deriveHttpBodyCap("5242880"); // worst-case-safe budget for a 5 MiB file
+ * ```
+ * @internal
  */
 export function deriveHttpBodyCap(maxFileBytes: string | undefined): number {
   const vaultMaxBytes = parseMaxFileBytes(maxFileBytes) ?? DEFAULT_MAX_FILE_BYTES;
-  return Math.max(4 * 1024 * 1024, Math.floor(vaultMaxBytes * 1.5));
+  const maxRepresentableFileBytes = Math.floor(
+    (MAX_HTTP_JSON_BODY_BYTES - HTTP_JSON_ENVELOPE_HEADROOM_BYTES) / HTTP_JSON_ESCAPE_EXPANSION
+  );
+  if (vaultMaxBytes > maxRepresentableFileBytes) {
+    throw new RangeError(
+      `HTTP maxFileBytes=${vaultMaxBytes} cannot fit its worst-case JSON encoding under the ${MAX_HTTP_JSON_BODY_BYTES}-byte request ceiling`
+    );
+  }
+  const escapedFileAndEnvelope = vaultMaxBytes * HTTP_JSON_ESCAPE_EXPANSION + HTTP_JSON_ENVELOPE_HEADROOM_BYTES;
+  return Math.max(MIN_HTTP_JSON_BODY_BYTES, escapedFileAndEnvelope);
 }
 
 async function waitForBoundedSettlement(task: Promise<void>, timeoutMs: number): Promise<boolean> {
@@ -884,29 +1113,37 @@ function createModernHttpLifecycle(
   };
 }
 
+/**
+ * Build the request handler over already-prepared shared dependencies.
+ *
+ * @param deps - Shared vault, index, watcher, and feedback dependencies.
+ * @param value - HTTP transport configuration; runtime-validated before dependency use.
+ * @param out - Optional lifecycle out-parameter used by {@link startHttpServer}.
+ * @param internals - Test-only body, lifecycle timing, and hook overrides.
+ * @returns An async Node HTTP request handler.
+ * @throws {TypeError} When HTTP transport configuration is invalid.
+ * @throws {RangeError} When `maxFileBytes` cannot fit the bounded HTTP representation.
+ */
 export function createHttpHandler(
   deps: ServerDeps,
-  opts: HttpServeOptions,
-  /**
-   * v3.8.7 P2-11 — optional out-param. If provided, the function
-   * assigns `.registry` to the stateful-mode `SessionRegistry` (or
-   * `null` in stateless mode) and `.modern` to the SDK v2 handler lifecycle.
-   * `startHttpServer` wires both into `shutdownHttpServer` via the
-   * `httpServerExtras` WeakMap. Existing call sites that don't pass `out`
-   * remain unaffected.
-   */
+  value: HttpServeOptions,
   out?: { registry: SessionRegistry | null; modern?: ModernHttpLifecycle },
   internals: HttpTransportInternals = {}
 ): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
+  const opts = normalizeHttpServeOptions(value);
   const mcpPath = opts.mcpPath ?? "/mcp";
   const healthPath = opts.healthPath ?? "/health";
-  const corsOrigins = normalizeCorsOrigins(opts.corsOrigins);
+  const corsOrigins = opts.corsOrigins ?? [];
   const limiter = new RateLimiter(opts.rateLimitPerMinute ?? 120);
-  // v3.7.12 M4 — body cap derived from the vault's `maxFileBytes` via
-  // `deriveHttpBodyCap`. Previously hardcoded 4 MB, which was BELOW the default
-  // per-file cap of 5 MB — a `create_note` with a 4.5 MB payload would clear
-  // `Vault.assertSize` but be rejected at the HTTP layer with a confusing 413.
-  const maxBodyBytes = deriveHttpBodyCap(opts.maxFileBytes);
+  // One worst-case-safe production cap is derived during fail-fast option
+  // admission and repeated here only to retain the local numeric value. Tests
+  // may replace it with a small positive limit; no CLI/config surface can raise
+  // the fixed operational ceiling.
+  const productionMaxBodyBytes = deriveHttpBodyCap(opts.maxFileBytes);
+  const maxBodyBytes = internals.maxBodyBytes ?? productionMaxBodyBytes;
+  if (!Number.isSafeInteger(maxBodyBytes) || maxBodyBytes < 1 || maxBodyBytes > MAX_HTTP_JSON_BODY_BYTES) {
+    throw new TypeError(`HTTP JSON body cap must be a safe integer in [1, ${MAX_HTTP_JSON_BODY_BYTES}]`);
+  }
 
   // v2.14.0 stateful-mode state.
   const stateful = opts.stateful === true;
@@ -1014,7 +1251,11 @@ export function createHttpHandler(
         try {
           body = await readJsonBody(req, maxBodyBytes);
         } catch (err) {
-          sendJsonRpcError(res, 400, -32700, err instanceof Error ? err.message : "Parse error");
+          if (err instanceof BodyTooLargeError) {
+            sendJsonRpcError(res, 413, -32000, "Request body too large");
+          } else {
+            sendJsonRpcError(res, 400, -32700, "Parse error");
+          }
           return;
         }
 
@@ -1460,6 +1701,16 @@ interface HttpServerExtras {
   modern: ModernHttpLifecycle;
   /** Server deps so shutdownHttpServer can close watcher/fts/embed-db cleanly. */
   deps: ServerDeps;
+  /** False until listen succeeds; failed startup must not publish cache bytes. */
+  flushVaultCache: boolean;
+  /** Retry state for the exact protocol owner published by this generation. */
+  modernClosed: boolean;
+  /** Retry state for the exact legacy registry published by this generation. */
+  legacyClosed: boolean;
+  /** Retry state for the exact listener published by this generation. */
+  listenerClosed: boolean;
+  /** Lazily captured dependency owner, retained until every stage succeeds. */
+  cleanupOwner?: PreparedServerCleanupOwner;
 }
 const httpServerExtras = new WeakMap<HttpServer, HttpServerExtras>();
 /** One teardown promise per server so concurrent programmatic callers join the
@@ -1483,12 +1734,19 @@ const httpServerShutdowns = new WeakMap<HttpServer, Promise<void>>();
  */
 const HTTP_CLOSE_GRACE_MS = 3000;
 
-/** Close an `http.Server` with a bounded grace (see {@link HTTP_CLOSE_GRACE_MS}).
- *  Resolves as soon as `close()` completes, or after `graceMs` once stragglers
- *  are force-closed — never hangs on a lingering keep-alive connection.
- *  `graceMs` is injectable for tests; production callers use the default. */
+/**
+ * Close an `http.Server` with a bounded grace (see {@link HTTP_CLOSE_GRACE_MS}).
+ * Resolves as soon as `close()` completes, or after `graceMs` once stragglers
+ * are force-closed — never hangs on a lingering keep-alive connection.
+ *
+ * @param server - Exact listener owner to close.
+ * @param graceMs - Bounded wait before active stragglers are force-closed.
+ * @returns A promise that resolves when Node confirms listener closure, including
+ * a listener that never bound or is already stopped (`ERR_SERVER_NOT_RUNNING`).
+ * @throws Any other synchronous or callback listener-close error.
+ */
 export function closeServerBounded(server: HttpServer, graceMs: number = HTTP_CLOSE_GRACE_MS): Promise<void> {
-  return new Promise<void>((resolve) => {
+  return new Promise<void>((resolve, reject) => {
     const grace = setTimeout(() => {
       // Force-close active stragglers (Node ≥18.2; engines floor is ≥22.13).
       try {
@@ -1498,10 +1756,23 @@ export function closeServerBounded(server: HttpServer, graceMs: number = HTTP_CL
       }
     }, graceMs);
     if (typeof grace.unref === "function") grace.unref();
-    server.close(() => {
+    try {
+      server.close((error) => {
+        clearTimeout(grace);
+        // A failed `listen()` leaves the exact Server owner unbound. Node then
+        // reports ERR_SERVER_NOT_RUNNING from close(), but there is no listener
+        // debt to retain: treating that idempotent terminal state as a cleanup
+        // failure masks the real bind error (EADDRINUSE/EACCES/EPERM) inside a
+        // misleading startup AggregateError.
+        if (error && (error as NodeJS.ErrnoException).code !== "ERR_SERVER_NOT_RUNNING") reject(error);
+        else resolve();
+      });
+    } catch (error) {
       clearTimeout(grace);
-      resolve();
-    });
+      if ((error as NodeJS.ErrnoException)?.code === "ERR_SERVER_NOT_RUNNING") resolve();
+      else reject(error);
+      return;
+    }
     // Idle keep-alive sockets won't end on their own; close them now so the
     // common case (no in-flight request) resolves immediately rather than
     // waiting out the grace.
@@ -1533,8 +1804,8 @@ export function closeServerBounded(server: HttpServer, graceMs: number = HTTP_CL
  *   2. `httpServer.close()` — stop accepting new connections + wait for
  *      existing ones to drain. Node's http.Server doesn't actively
  *      terminate keep-alive sockets unless we ask it to.
- *   3. Close vault, fts5 index, watcher, watcherEmbedDb — same order
- *      as the SIGINT cleanup chain in startHttpServer.
+ *   3. Close feedback lifetime, watcher, watcherEmbedDb, vault cache, and fts5
+ *      index — the same dependency order as the stdio cleanup chain.
  *
  * Idempotent: sequential and concurrent calls on the same server join the
  * same memoized teardown promise.
@@ -1550,15 +1821,41 @@ export async function shutdownHttpServer(server: HttpServer): Promise<void> {
       await closeServerBounded(server);
       return;
     }
-    httpServerExtras.delete(server);
+    const cleanupErrors: unknown[] = [];
     // Close both era gates synchronously, then drain independently. Legacy
     // sessions retain their stronger persistent-write tail; modern exchanges
     // receive their bounded grace before the SDK handler aborts stragglers.
     // Both protocol owners are closed before the shared deps below.
-    const modernClose = extras.modern.close().catch(() => {});
-    const legacyClose = extras.registry?.closeAll().catch(() => {}) ?? Promise.resolve();
+    const modernClose = extras.modernClosed
+      ? Promise.resolve()
+      : extras.modern.close().then(
+          () => {
+            extras.modernClosed = true;
+          },
+          (error: unknown) => {
+            cleanupErrors.push(error);
+          }
+        );
+    const legacyClose =
+      extras.legacyClosed || !extras.registry
+        ? Promise.resolve()
+        : extras.registry.closeAll().then(
+            () => {
+              extras.legacyClosed = true;
+            },
+            (error: unknown) => {
+              cleanupErrors.push(error);
+            }
+          );
     await Promise.all([modernClose, legacyClose]);
-    await closeServerBounded(server);
+    if (!extras.listenerClosed) {
+      try {
+        await closeServerBounded(server);
+        extras.listenerClosed = true;
+      } catch (error) {
+        cleanupErrors.push(error);
+      }
+    }
     // Close deps last — they own SQLite + chokidar handles that should
     // outlive in-flight requests (which we drained above). Vault doesn't
     // own a SQLite handle (no `close()` method), but it owns the
@@ -1572,30 +1869,40 @@ export async function shutdownHttpServer(server: HttpServer): Promise<void> {
     // closeAll(5s)+closeServerBounded(3s) window threw on a closed SQLite handle and the
     // whole event (fts + embed + hnsw) was dropped. Then close the watcher's embed-db,
     // flush the vault cache, and close fts LAST.
-    try {
-      await extras.deps.watcher?.close();
-    } catch {
-      /* best-effort */
+    extras.cleanupOwner ??= createPreparedServerCleanupOwner(extras.deps, {
+      flushVaultCache: extras.flushVaultCache
+    });
+    const dependencyFailures = await extras.cleanupOwner.cleanup();
+    if (dependencyFailures.length > 0) {
+      cleanupErrors.push(
+        new PreparedServerCleanupError(
+          `HTTP dependency shutdown was incomplete at stage(s): ${dependencyFailures
+            .map(({ stage }) => stage)
+            .join(", ")}`,
+          dependencyFailures,
+          extras.cleanupOwner
+        )
+      );
     }
-    try {
-      extras.deps.watcherEmbedDb?.close();
-    } catch {
-      /* best-effort */
+    if (cleanupErrors.length > 0) {
+      throw new AggregateError(
+        cleanupErrors,
+        `HTTP shutdown was incomplete; retained stage(s): ${[
+          ...(extras.modernClosed ? [] : ["modern-protocol"]),
+          ...(extras.legacyClosed || !extras.registry ? [] : ["legacy-protocol"]),
+          ...(extras.listenerClosed ? [] : ["listener"]),
+          ...extras.cleanupOwner.pendingStages
+        ].join(", ")}`
+      );
     }
-    if (extras.deps.vault.persistentCacheEnabled) {
-      try {
-        await extras.deps.vault.saveDiskCache();
-      } catch {
-        /* best-effort */
-      }
-    }
-    try {
-      extras.deps.ftsIndex?.close();
-    } catch {
-      /* best-effort */
-    }
+    httpServerExtras.delete(server);
   })();
   httpServerShutdowns.set(server, shutdownTask);
+  void shutdownTask.catch(() => {
+    // A rejected attempt is not a terminal memoized success. Keep `extras`
+    // reachable and let the next caller resume only the failed stages.
+    if (httpServerShutdowns.get(server) === shutdownTask) httpServerShutdowns.delete(server);
+  });
   return shutdownTask;
 }
 
@@ -1628,11 +1935,13 @@ export function makeHttpShutdownHandler(
   return () => {
     if (running) return;
     running = true;
-    void shutdownHttpServer(server)
-      .catch(() => {
-        /* best-effort — never block exit on a teardown error */
-      })
-      .finally(() => exit(0));
+    void retryIncompleteShutdownOnce(() => shutdownHttpServer(server)).then(
+      () => exit(0),
+      () => {
+        process.stderr.write("enquire: HTTP shutdown incomplete after bounded retry; retained cleanup debt\n");
+        exit(1);
+      }
+    );
   };
 }
 
@@ -1640,100 +1949,177 @@ export function makeHttpShutdownHandler(
  * Bind and start the HTTP transport.
  *
  * @param opts - HTTP serve configuration.
- * @param internals - Test-only timing controls; production callers omit it.
+ * @param internals - Test-only body and timing controls; production callers omit it.
  * @returns The underlying server for lifecycle control and inspection.
+ * @throws {TypeError} When HTTP transport configuration is invalid.
+ * @throws {RangeError} When `maxFileBytes` cannot fit the bounded HTTP representation.
  */
 export async function startHttpServer(
   opts: HttpServeOptions,
   internals: HttpTransportInternals = {}
 ): Promise<HttpServer> {
-  if (!opts.bearerToken || opts.bearerToken.length < 16) {
-    throw new Error(
-      "enquire serve-http: --bearer-token is required and must be ≥16 chars. " +
-        "Generate one with: enquire-mcp gen-token"
-    );
-  }
-  // Fail invalid Origin policy before opening the vault, SQLite indexes,
-  // watcher, or listening socket.
-  const normalizedOpts: HttpServeOptions = {
-    ...opts,
-    corsOrigins: normalizeCorsOrigins(opts.corsOrigins)
-  };
+  // Own every HTTP-only runtime check before opening the vault, SQLite
+  // indexes, watcher, request handler, or listening socket.
+  const normalizedOpts = normalizeHttpServeOptions(opts);
   const deps = await prepareServerDeps(normalizedOpts);
   // v3.8.7 P2-11 — capture the stateful registry via the out-param so
   // we can wire it into `shutdownHttpServer` via the WeakMap below.
   const handlerOut: { registry: SessionRegistry | null; modern?: ModernHttpLifecycle } = { registry: null };
-  const handler = createHttpHandler(deps, normalizedOpts, handlerOut, internals);
-  const httpServer = createServer((req, res) => {
-    void handler(req, res);
-  });
-  const modern = handlerOut.modern;
-  if (!modern) {
-    // `createHttpHandler` always publishes the lifecycle before returning.
-    // Keep this fail-closed guard so a future refactor cannot start a listener
-    // whose modern exchanges are absent from shutdown ownership.
-    throw new Error("enquire serve-http: modern HTTP lifecycle was not initialized");
-  }
-  httpServerExtras.set(httpServer, { registry: handlerOut.registry, modern, deps });
-
-  // v3.10.0-rc.19 (audit M3) — ONE graceful-shutdown orchestrator on signal.
-  // `shutdownHttpServer` already drains in-flight stateful sessions, closes the
-  // TCP listener, flushes the persistent cache, and closes fts/watcher/embed-db,
-  // so a single handler that AWAITS it (then exits) replaces the four separate
-  // pre-rc.19 listeners (flush / closeWatcher / closeFts / shutdown). The old
-  // flush listener called `process.exit(0)` the moment its fast cache flush
-  // resolved — racing ahead of the up-to-5s session drain and cutting off
-  // in-flight requests; the other three were pure duplication of work
-  // shutdownHttpServer already does. Skipped under installSignalHandlers=false
-  // so tests can spawn many servers in one process without accumulating
-  // SIGINT/SIGTERM listeners.
-  if (normalizedOpts.installSignalHandlers !== false) {
-    const onSignal = makeHttpShutdownHandler(httpServer);
-    process.once("SIGINT", onSignal);
-    process.once("SIGTERM", onSignal);
-    // beforeExit (natural drain, no signal): best-effort teardown, never exit.
-    // Idempotent via shutdownHttpServer's memoized promise; guarded so the async
-    // teardown it schedules can't make beforeExit re-fire in a loop.
-    let beforeExitRan = false;
-    process.on("beforeExit", () => {
-      if (beforeExitRan) return;
-      beforeExitRan = true;
-      void shutdownHttpServer(httpServer).catch(() => {});
+  let httpServer: HttpServer | undefined;
+  let startupExtras: HttpServerExtras | undefined;
+  let onSignal: (() => void) | undefined;
+  let onBeforeExit: (() => void) | undefined;
+  let sigintInstalled = false;
+  let sigtermInstalled = false;
+  let beforeExitInstalled = false;
+  try {
+    const handler = createHttpHandler(deps, normalizedOpts, handlerOut, internals);
+    const createHttpServer = internals.httpServerFactory ?? ((requestListener) => createServer(requestListener));
+    httpServer = createHttpServer((req, res) => {
+      void handler(req, res);
     });
-  }
+    const modern = handlerOut.modern;
+    if (!modern) {
+      // `createHttpHandler` always publishes the lifecycle before returning.
+      // Keep this fail-closed guard so a future refactor cannot start a listener
+      // whose modern exchanges are absent from shutdown ownership.
+      throw new Error("enquire serve-http: modern HTTP lifecycle was not initialized");
+    }
+    // Cache publication remains disabled until listen succeeds. A failed bind
+    // owns cleanup, but must not publish a partially prepared generation.
+    startupExtras = {
+      registry: handlerOut.registry,
+      modern,
+      deps,
+      flushVaultCache: false,
+      modernClosed: false,
+      legacyClosed: handlerOut.registry === null,
+      listenerClosed: false
+    };
+    httpServerExtras.set(httpServer, startupExtras);
+    const listener = httpServer;
 
-  await new Promise<void>((resolve, reject) => {
-    httpServer.once("error", reject);
-    httpServer.listen(normalizedOpts.port, normalizedOpts.host, () => {
-      httpServer.removeListener("error", reject);
-      resolve();
+    await new Promise<void>((resolve, reject) => {
+      listener.once("error", reject);
+      listener.listen(normalizedOpts.port, normalizedOpts.host, () => {
+        listener.removeListener("error", reject);
+        resolve();
+      });
     });
-  }).catch(async (err) => {
-    // v3.10.0-rc.70 (round-3 re-sweep, reserve-before-try) — a listen() failure (EADDRINUSE /
-    // EACCES on a privileged port) happens AFTER prepareServerDeps already opened the fts5 +
-    // watcher-embed-db SQLite handles and started the chokidar watcher (recorded in the
-    // httpServerExtras WeakMap above). Nothing else calls shutdownHttpServer on a synchronous
-    // boot throw (the signal handlers never fire), so close those deps before re-throwing rather
-    // than leak them until the process exits.
-    await shutdownHttpServer(httpServer).catch(() => {});
-    throw err;
-  });
 
-  const addr = httpServer.address();
-  const bound =
-    addr && typeof addr === "object"
-      ? `http://${addr.address === "::" ? "::" : addr.address}:${addr.port}`
-      : `http://${normalizedOpts.host}:${normalizedOpts.port}`;
-  const corsLabel =
-    (normalizedOpts.corsOrigins?.length ?? 0) > 0 ? `, cors=${normalizedOpts.corsOrigins?.length ?? 0}` : "";
-  const rateLabel =
-    (normalizedOpts.rateLimitPerMinute ?? 120) > 0
-      ? `, rate-limit=${normalizedOpts.rateLimitPerMinute ?? 120}/min`
-      : "";
-  process.stderr.write(
-    `${formatReadyBanner(deps)} (transport=http, bound=${bound}${normalizedOpts.mcpPath ?? "/mcp"}${corsLabel}${rateLabel})\n`
-  );
-  return httpServer;
+    // Install process handlers only after a successful bind. Every
+    // registration, address/banner computation, and write remains inside the
+    // same post-acquire ownership boundary until the server is returned.
+    if (normalizedOpts.installSignalHandlers !== false) {
+      onSignal = makeHttpShutdownHandler(listener);
+      process.once("SIGINT", onSignal);
+      sigintInstalled = true;
+      process.once("SIGTERM", onSignal);
+      sigtermInstalled = true;
+      let beforeExitRan = false;
+      onBeforeExit = () => {
+        if (beforeExitRan) return;
+        beforeExitRan = true;
+        void shutdownHttpServer(listener).catch(() => {
+          process.stderr.write("enquire: HTTP before-exit cleanup incomplete; retained cleanup debt\n");
+          process.exitCode = 1;
+        });
+      };
+      process.on("beforeExit", onBeforeExit);
+      beforeExitInstalled = true;
+    }
+
+    const addr = listener.address();
+    const bound =
+      addr && typeof addr === "object"
+        ? `http://${addr.address === "::" ? "::" : addr.address}:${addr.port}`
+        : `http://${normalizedOpts.host}:${normalizedOpts.port}`;
+    const corsLabel =
+      (normalizedOpts.corsOrigins?.length ?? 0) > 0 ? `, cors=${normalizedOpts.corsOrigins?.length ?? 0}` : "";
+    const rateLabel =
+      (normalizedOpts.rateLimitPerMinute ?? 120) > 0
+        ? `, rate-limit=${normalizedOpts.rateLimitPerMinute ?? 120}/min`
+        : "";
+    if (internals.beforeStartupCommit) await internals.beforeStartupCommit(listener, deps);
+    process.stderr.write(
+      `${formatReadyBanner(deps)} (transport=http, bound=${bound}${normalizedOpts.mcpPath ?? "/mcp"}${corsLabel}${rateLabel})\n`
+    );
+
+    // Publishing the cache and returning the listener are the startup commit.
+    // Until this exact point, rollback must remain no-flush even though bind
+    // has already succeeded.
+    startupExtras.flushVaultCache = true;
+    return listener;
+  } catch (error) {
+    // Remove any partially installed process owner before tearing down the
+    // protocol/listener graph it could otherwise race or retain.
+    if (sigintInstalled && onSignal) process.removeListener("SIGINT", onSignal);
+    if (sigtermInstalled && onSignal) process.removeListener("SIGTERM", onSignal);
+    if (beforeExitInstalled && onBeforeExit) process.removeListener("beforeExit", onBeforeExit);
+
+    const cleanupErrors: unknown[] = [];
+    if (httpServer && httpServerExtras.has(httpServer)) {
+      try {
+        // startupExtras.flushVaultCache is still false: protocol owners and
+        // the listener close before shared persistence dependencies.
+        await shutdownHttpServer(httpServer);
+      } catch (cleanupError) {
+        if (cleanupError instanceof AggregateError) cleanupErrors.push(...cleanupError.errors);
+        else cleanupErrors.push(cleanupError);
+      }
+    } else {
+      // createHttpHandler can publish a lifecycle before a later setup throw.
+      // Retain the direct local owners until each close has been attempted.
+      try {
+        await handlerOut.modern?.close();
+      } catch (cleanupError) {
+        cleanupErrors.push(cleanupError);
+      }
+      try {
+        await handlerOut.registry?.closeAll();
+      } catch (cleanupError) {
+        cleanupErrors.push(cleanupError);
+      }
+      if (httpServer) {
+        try {
+          await closeServerBounded(httpServer);
+        } catch (cleanupError) {
+          cleanupErrors.push(cleanupError);
+        }
+      }
+      const cleanupOwner = createPreparedServerCleanupOwner(deps, { flushVaultCache: false });
+      const dependencyFailures = await cleanupOwner.cleanup();
+      if (dependencyFailures.length > 0) {
+        cleanupErrors.push(
+          new PreparedServerCleanupError(
+            `HTTP startup dependency cleanup was incomplete at stage(s): ${dependencyFailures
+              .map(({ stage }) => stage)
+              .join(", ")}`,
+            dependencyFailures,
+            cleanupOwner
+          )
+        );
+      }
+    }
+    if (cleanupErrors.length > 0) {
+      const retainedOwnerFailure = cleanupErrors.find(
+        (cleanupError): cleanupError is PreparedServerCleanupError => cleanupError instanceof PreparedServerCleanupError
+      );
+      if (retainedOwnerFailure) {
+        throw new PreparedServerCleanupError(
+          "enquire serve-http startup failed and dependency cleanup was incomplete",
+          retainedOwnerFailure.failures,
+          retainedOwnerFailure.cleanupOwner,
+          [error, ...cleanupErrors.filter((cleanupError) => cleanupError !== retainedOwnerFailure)]
+        );
+      }
+      throw new AggregateError(
+        [error, ...cleanupErrors],
+        "enquire serve-http startup failed and dependency cleanup was incomplete"
+      );
+    }
+    throw error;
+  }
 }
 
 // Re-export the rate limiter and helpers for tests.

@@ -90,7 +90,7 @@ describe("peekFtsMetaSafe (v3.6.2 K-1b — sibling class)", () => {
     const file = path.join(tmpDir, "trigram.fts5.db");
     const idx = new FtsIndex({ file, vaultRoot: tmpDir, tokenize: "trigram" });
     await idx.open();
-    idx.close();
+    await idx.closeAndRelease();
     const meta = await peekFtsMetaSafe(file);
     expect(meta).not.toBeNull();
     expect(meta?.tokenize_mode).toBe("trigram");
@@ -112,7 +112,7 @@ describe("peekFtsMetaSafe (v3.6.2 K-1b — sibling class)", () => {
     const file = path.join(tmpDir, "regression.fts5.db");
     const idx = new FtsIndex({ file, vaultRoot: tmpDir, tokenize: "trigram" });
     await idx.open();
-    idx.close();
+    await idx.closeAndRelease();
     // Multiple peeks must be idempotent + non-destructive.
     for (let i = 0; i < 3; i++) {
       const m = await peekFtsMetaSafe(file);
@@ -121,7 +121,7 @@ describe("peekFtsMetaSafe (v3.6.2 K-1b — sibling class)", () => {
     // Re-open with the matching tokenize — no DROP.
     const idx2 = new FtsIndex({ file, vaultRoot: tmpDir, tokenize: "trigram" });
     await idx2.open();
-    idx2.close();
+    await idx2.closeAndRelease();
     const finalMeta = await peekFtsMetaSafe(file);
     expect(finalMeta?.tokenize_mode).toBe("trigram");
   });
@@ -135,7 +135,7 @@ describe("peekFtsMetaSafe (v3.6.2 K-1b — sibling class)", () => {
     const file = path.join(tmpDir, "k1b.fts5.db");
     const idx = new FtsIndex({ file, vaultRoot: tmpDir, tokenize: "trigram" });
     await idx.open();
-    idx.close();
+    await idx.closeAndRelease();
     const meta = await peekFtsMetaSafe(file);
     // Historical diagnostic contract: never fabricate "unicode61" here.
     expect(meta?.tokenize_mode).toBe("trigram");
@@ -183,7 +183,7 @@ describe("K-1 historical peek compatibility guards (v3.6.3)", () => {
     // Build with trigram.
     const idx1 = new FtsIndex({ file, vaultRoot: tmpDir, tokenize: "trigram" });
     await idx1.open();
-    idx1.close();
+    await idx1.closeAndRelease();
 
     // Historical compatibility pattern; production uses discoverFtsIndexConfig.
     const peeked = await peekFtsMetaSafe(file);
@@ -191,7 +191,7 @@ describe("K-1 historical peek compatibility guards (v3.6.3)", () => {
     const honored = peeked?.tokenize_mode ?? "unicode61";
     const idx2 = new FtsIndex({ file, vaultRoot: tmpDir, tokenize: honored });
     await idx2.open();
-    idx2.close();
+    await idx2.closeAndRelease();
 
     const after = await peekFtsMetaSafe(file);
     expect(after?.tokenize_mode).toBe("trigram");

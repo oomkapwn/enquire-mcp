@@ -1493,8 +1493,8 @@ async function main() {
   process.stderr.write(`bench: vault root = ${vaultRoot}\n`);
 
   const tmpIndexDir = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-bench-idx-"));
-  const ftsFile = path.join(tmpIndexDir, "fts5.db");
-  const embedFile = path.join(tmpIndexDir, "embed.db");
+  const ftsFile = path.join(tmpIndexDir, "bench.fts5.db");
+  const embedFile = path.join(tmpIndexDir, "bench.embed.db");
 
   const vault = new Vault(vaultRoot);
   await vault.ensureExists();

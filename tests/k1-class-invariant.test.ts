@@ -48,7 +48,7 @@ const DISCOVERY_MARKERS = ["discoverEmbedDbConfig", "discoverEmbedDbConfigCached
 const SAFE_MARKER = "SAFE BY DESIGN";
 // Context window — must accommodate discovery, fail-closed state branching,
 // and supported-config projection before construction. The caller-pattern
-// inventory below separately proves exact def-use/order at all ten sites.
+// inventory below separately proves exact def-use/order at all eleven sites.
 const CONTEXT_LINES = 128;
 
 interface ConstructorSite {
@@ -70,7 +70,7 @@ interface ProductionConfigurationCall {
 
 const EXPECTED_PRODUCTION_DISCOVERY_CALLS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
   "src/cli.ts": { discoverEmbedDbConfig: 2, discoverFtsIndexConfig: 4 },
-  "src/server.ts": { discoverEmbedDbConfig: 2, discoverFtsIndexConfig: 1 },
+  "src/server.ts": { discoverEmbedDbConfig: 3, discoverFtsIndexConfig: 1 },
   "src/tools/search.ts": { discoverEmbedDbConfigCached: 1 }
 };
 const CONFIGURATION_DEFINING_MODULES = new Set(["src/embed-db.ts", "src/fts5.ts"]);
@@ -98,7 +98,7 @@ function productionConfigurationCalls(file: string, source: string): ProductionC
   return calls;
 }
 
-/** Pin all production callers to the reviewed ten-site fail-closed inventory. */
+/** Pin all production callers to the reviewed eleven-site fail-closed inventory. */
 function productionConfigurationInventoryProblems(calls: readonly ProductionConfigurationCall[]): string[] {
   const problems: string[] = [];
   const counts = new Map<string, number>();
@@ -123,8 +123,8 @@ function productionConfigurationInventoryProblems(calls: readonly ProductionConf
       if (actual !== expected) problems.push(`${file} ${name}: expected ${expected}, found ${actual}`);
     }
   }
-  if (productionDiscoveryTotal !== 10) {
-    problems.push(`global production discovery inventory: expected 10, found ${productionDiscoveryTotal}`);
+  if (productionDiscoveryTotal !== 11) {
+    problems.push(`global production discovery inventory: expected 11, found ${productionDiscoveryTotal}`);
   }
   return problems;
 }
@@ -214,8 +214,31 @@ function tokenizerCallerProblems(cliSource: string, serverSource: string): strin
   if (!serve.includes("...(tokenize !== undefined ? { tokenize } : {})")) {
     problems.push("serve: validated tokenizer is not forwarded");
   }
-  if (!serveHttp.includes("const { tokenize: rawTokenize, ...httpBaseOpts } = opts;")) {
-    problems.push("serve-http: raw tokenizer is not removed before forwarding validated options");
+  const httpRawProjections = [
+    ["tokenize", "rawTokenize"],
+    ["port", "rawPort"],
+    ["host", "rawHost"],
+    ["bearerToken", "rawBearerToken"],
+    ["bearerTokenEnv", "rawBearerTokenEnv"],
+    ["mcpPath", "rawMcpPath"],
+    ["rateLimit", "rawRateLimit"],
+    ["corsOrigin", "rawCorsOrigins"],
+    ["healthPath", "rawHealthPath"],
+    ["stateful", "rawStateful"],
+    ["sessionIdleTimeoutMs", "rawSessionIdleTimeoutMs"],
+    ["maxSessions", "rawMaxSessions"],
+    ["quantizeEmbeddings", "rawQuantizeEmbeddings"]
+  ] as const;
+  for (const [option, local] of httpRawProjections) {
+    if (!serveHttp.includes(`${option}: ${local},`)) {
+      problems.push(`serve-http: raw HTTP option ${option} is not projected before forwarding`);
+    }
+  }
+  if (
+    !serveHttp.includes("        ...serveBaseOpts\n      } = opts;") ||
+    !serveHttp.includes("        ...serveBaseOpts,\n        ...(tokenize !== undefined ? { tokenize } : {})")
+  ) {
+    problems.push("serve-http: projected ServeOptions rest is not captured and forwarded");
   }
   if (!serveHttp.includes("...(tokenize !== undefined ? { tokenize } : {})")) {
     problems.push("serve-http: validated tokenizer is not forwarded");
@@ -241,13 +264,13 @@ function tokenizerCallerProblems(cliSource: string, serverSource: string): strin
       label: "cli custom/default canonical-root FTS path",
       source: cliSource,
       needle: "const indexFile = opts.indexFile ?? defaultIndexFile(v.root);",
-      expected: 1
+      expected: 2
     },
     {
       label: "cli default-only canonical-root FTS paths",
       source: cliSource,
       needle: "const indexFile = defaultIndexFile(v.root);",
-      expected: 2
+      expected: 1
     },
     {
       label: "programmatic custom/default FTS path",
@@ -316,6 +339,12 @@ function configurationDiscoveryRootProblems(cliSource: string, serverSource: str
       expected: 2
     },
     {
+      label: "server non-HNSW integrity Embed canonical-root discovery",
+      source: serverSource,
+      needle: "discoverEmbedDbConfig(startupEmbedFile, vault.root)",
+      expected: 1
+    },
+    {
       label: "search cached Embed canonical-root discovery",
       source: searchSource,
       needle: "discoverEmbedDbConfigCached(embedFile, vault.root)",
@@ -331,7 +360,7 @@ function configurationDiscoveryRootProblems(cliSource: string, serverSource: str
     { label: "CLI FTS", source: cliSource, marker: "discoverFtsIndexConfig(", expected: 4 },
     { label: "CLI Embed", source: cliSource, marker: "discoverEmbedDbConfig(", expected: 2 },
     { label: "server FTS", source: serverSource, marker: "discoverFtsIndexConfig(", expected: 1 },
-    { label: "server Embed", source: serverSource, marker: "discoverEmbedDbConfig(", expected: 2 },
+    { label: "server Embed", source: serverSource, marker: "discoverEmbedDbConfig(", expected: 3 },
     { label: "search cached Embed", source: searchSource, marker: "discoverEmbedDbConfigCached(", expected: 1 },
     { label: "CLI legacy FTS peek", source: cliSource, marker: "peekFtsMetaSafe(", expected: 0 },
     { label: "CLI legacy Embed peek", source: cliSource, marker: "peekEmbedDbMeta(", expected: 0 },
@@ -348,8 +377,8 @@ function configurationDiscoveryRootProblems(cliSource: string, serverSource: str
     countLiteral(cliSource, "discoverEmbedDbConfig(") +
     countLiteral(serverSource, "discoverEmbedDbConfig(") +
     countLiteral(searchSource, "discoverEmbedDbConfig(");
-  if (uncachedEmbedDiscoveries !== 4) {
-    problems.push(`uncached Embed discovery inventory: expected 4, found ${uncachedEmbedDiscoveries}`);
+  if (uncachedEmbedDiscoveries !== 5) {
+    problems.push(`uncached Embed discovery inventory: expected 5, found ${uncachedEmbedDiscoveries}`);
   }
   return problems;
 }
@@ -370,13 +399,14 @@ interface FailClosedCallerSpec {
   acquisition: string;
   className: "EmbedDb" | "FtsIndex";
   discoveryBinding: string;
+  constructorBinding?: string;
   instanceBinding: string;
   nullableDiscovery?: boolean;
   openTryAncestors?: number;
   openFailurePolicy?: "finally-propagate" | "rethrow" | "fail-soft-null";
 }
 
-/** Build the reviewed one-to-one fail-closed contract for all ten production callers. */
+/** Build the reviewed one-to-one fail-closed contract for all eleven production callers. */
 function failClosedCallerSpecs(cliSource: string, serverSource: string, searchSource: string): FailClosedCallerSpec[] {
   return [
     {
@@ -498,6 +528,21 @@ function failClosedCallerSpecs(cliSource: string, serverSource: string, searchSo
       instanceBinding: "watcherEmbedDb"
     },
     {
+      label: "server non-HNSW integrity Embed",
+      source: serverSource,
+      start: "if (startupEmbedDbAvailable && !opts.useHnsw) {",
+      end: "// v2.13.0 — opt-in HNSW",
+      discovery: "discoverEmbedDbConfig(startupEmbedFile, vault.root)",
+      refusal: 'if (discovered.kind === "missing" || discovered.kind === "refused")',
+      refusalEffect: 'throw new EmbedSnapshotIntegrityError("Embedding index configuration could not be verified");',
+      reviewedTryAncestors: 1,
+      resolver: "resolveStoredEmbeddingConfiguration(discovered.meta)",
+      acquisition: "new EmbedDb({",
+      className: "EmbedDb",
+      discoveryBinding: "discovered",
+      instanceBinding: "integrityDb"
+    },
+    {
       label: "server HNSW Embed",
       source: serverSource,
       start: "if (opts.useHnsw) {",
@@ -510,6 +555,7 @@ function failClosedCallerSpecs(cliSource: string, serverSource: string, searchSo
       acquisition: "new EmbedDb({",
       className: "EmbedDb",
       discoveryBinding: "discovered",
+      constructorBinding: "hnswSnapshotDb",
       instanceBinding: "db"
     },
     {
@@ -889,12 +935,13 @@ interface BoundConstructor {
 
 function boundConstructor(node: ts.NewExpression, spec: FailClosedCallerSpec): BoundConstructor | null {
   if (!ts.isIdentifier(node.expression) || node.expression.text !== spec.className) return null;
+  const constructorBinding = spec.constructorBinding ?? spec.instanceBinding;
   const parent = node.parent;
   if (
     ts.isVariableDeclaration(parent) &&
     parent.initializer === node &&
     ts.isIdentifier(parent.name) &&
-    parent.name.text === spec.instanceBinding
+    parent.name.text === constructorBinding
   ) {
     return { expression: node, binding: parent.name };
   }
@@ -903,7 +950,7 @@ function boundConstructor(node: ts.NewExpression, spec: FailClosedCallerSpec): B
     parent.right === node &&
     parent.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
     ts.isIdentifier(parent.left) &&
-    parent.left.text === spec.instanceBinding
+    parent.left.text === constructorBinding
   ) {
     return { expression: node, binding: parent.left };
   }
@@ -1098,7 +1145,7 @@ function reviewedOpenFailurePolicy(
       enclosingTry.catchClause === undefined &&
       finallyBlock !== undefined &&
       finallyBlock.statements.length === 1 &&
-      finallyBlock.statements[0]?.getText(sourceFile) === `${spec.instanceBinding}.close();`
+      finallyBlock.statements[0]?.getText(sourceFile) === `await ${spec.instanceBinding}.closeAndRelease();`
     );
   }
 
@@ -1116,7 +1163,7 @@ function reviewedOpenFailurePolicy(
   if (policy === "rethrow") {
     return (
       catchStatements.length === 2 &&
-      catchStatements[0]?.getText(sourceFile) === `${spec.instanceBinding}.close();` &&
+      catchStatements[0]?.getText(sourceFile) === `await ${spec.instanceBinding}.closeAndRelease();` &&
       catchStatements[1]?.getText(sourceFile) === "throw err;"
     );
   }
@@ -1125,13 +1172,42 @@ function reviewedOpenFailurePolicy(
   const cleanup = catchStatements[0];
   const nullAssignment = catchStatements[1];
   const diagnostic = catchStatements[2];
+  const cleanupCatch = cleanup && ts.isTryStatement(cleanup) ? cleanup.catchClause : undefined;
+  const cleanupErrorBinding = cleanupCatch?.variableDeclaration?.name;
+  const cleanupThrow = cleanupCatch?.block.statements[0];
+  const aggregate = cleanupThrow && ts.isThrowStatement(cleanupThrow) ? cleanupThrow.expression : undefined;
+  const aggregateErrors =
+    aggregate && ts.isNewExpression(aggregate) && aggregate.arguments?.length === 2
+      ? aggregate.arguments[0]
+      : undefined;
+  const aggregateMessage =
+    aggregate && ts.isNewExpression(aggregate) && aggregate.arguments?.length === 2
+      ? aggregate.arguments[1]
+      : undefined;
+  const cleanupFailureIsCausal =
+    cleanupCatch !== undefined &&
+    cleanupCatch.block.statements.length === 1 &&
+    cleanupErrorBinding !== undefined &&
+    ts.isIdentifier(cleanupErrorBinding) &&
+    cleanupErrorBinding.text === "cleanupError" &&
+    aggregate !== undefined &&
+    ts.isNewExpression(aggregate) &&
+    aggregate.expression.getText(sourceFile) === "AggregateError" &&
+    aggregateErrors !== undefined &&
+    ts.isArrayLiteralExpression(aggregateErrors) &&
+    aggregateErrors.elements.length === 2 &&
+    aggregateErrors.elements[0]?.getText(sourceFile) === "err" &&
+    aggregateErrors.elements[1]?.getText(sourceFile) === "cleanupError" &&
+    aggregateMessage !== undefined &&
+    ts.isStringLiteral(aggregateMessage) &&
+    aggregateMessage.text === "FTS startup failed and its persistence lifetime could not be released";
   return (
     cleanup !== undefined &&
     ts.isTryStatement(cleanup) &&
     cleanup.finallyBlock === undefined &&
     cleanup.tryBlock.statements.length === 1 &&
-    cleanup.tryBlock.statements[0]?.getText(sourceFile) === `${spec.instanceBinding}?.close();` &&
-    cleanup.catchClause?.block.statements.length === 0 &&
+    cleanup.tryBlock.statements[0]?.getText(sourceFile) === `await ${spec.instanceBinding}?.closeAndRelease();` &&
+    cleanupFailureIsCausal &&
     nullAssignment?.getText(sourceFile) === `${spec.instanceBinding} = null;` &&
     diagnostic !== undefined &&
     ts.isExpressionStatement(diagnostic) &&
@@ -1193,7 +1269,7 @@ function hoistedInstanceCaptureInvokedBeforeOpen(
 }
 
 /**
- * Bind each of the ten preflight reads to exactly one constructor and its
+ * Bind each of the eleven preflight reads to exactly one constructor and its
  * first awaited open. Textual proximity is insufficient: the same const
  * binding must cross the discovery -> constructor -> open boundary unchanged.
  */
@@ -1247,7 +1323,9 @@ function configurationDiscoveryOpenBindingProblems(
     });
 
     if (classConstructions.length !== 1 || boundConstructions.length !== 1) {
-      problems.push(`${spec.label}: constructor is not uniquely bound to ${spec.instanceBinding}`);
+      problems.push(
+        `${spec.label}: constructor is not uniquely bound to ${spec.constructorBinding ?? spec.instanceBinding}`
+      );
       continue;
     }
     const construction = boundConstructions[0];
@@ -1258,6 +1336,42 @@ function configurationDiscoveryOpenBindingProblems(
     }
     const openCall = instanceOpenCalls[0];
     if (!openCall) continue;
+    let instanceAliasBinding: ts.Identifier | null = null;
+    if (spec.constructorBinding && spec.constructorBinding !== spec.instanceBinding) {
+      const aliases: ts.Identifier[] = [];
+      visitExecutionBody(discovery.block, (node) => {
+        if (
+          ts.isVariableDeclaration(node) &&
+          ts.isIdentifier(node.name) &&
+          node.name.text === spec.instanceBinding &&
+          node.initializer !== undefined &&
+          ts.isIdentifier(node.initializer) &&
+          node.initializer.text === spec.constructorBinding &&
+          (node.parent.flags & ts.NodeFlags.Const) !== 0
+        ) {
+          aliases.push(node.name);
+        }
+      });
+      instanceAliasBinding = aliases.length === 1 ? (aliases[0] ?? null) : null;
+      if (
+        !instanceAliasBinding ||
+        !(
+          construction.expression.getStart(sourceFile) < instanceAliasBinding.getStart(sourceFile) &&
+          instanceAliasBinding.getStart(sourceFile) < openCall.getStart(sourceFile)
+        ) ||
+        bindingMutationBetween(
+          discovery.block,
+          sourceFile,
+          spec.constructorBinding,
+          construction.expression.end,
+          openCall.getStart(sourceFile)
+        )
+      ) {
+        problems.push(
+          `${spec.label}: constructor authority is not passed through one immutable ${spec.instanceBinding} alias`
+        );
+      }
+    }
     const openArgument = openCall.arguments[0];
     const awaitedOpen = ts.isAwaitExpression(openCall.parent) ? openCall.parent : null;
     const exactOpen =
@@ -1301,6 +1415,7 @@ function configurationDiscoveryOpenBindingProblems(
         ts.isIdentifier(node) &&
         node.text === spec.instanceBinding &&
         node !== construction.binding &&
+        node !== instanceAliasBinding &&
         at >= discovery.block.getStart(sourceFile) &&
         at < openAt
       ) {
@@ -1318,8 +1433,8 @@ function configurationDiscoveryOpenBindingProblems(
       problems.push(`${spec.label}: constructed instance is used or reassigned before open`);
     }
   }
-  if (specs.length !== 10) {
-    problems.push(`discovery/open binding inventory: expected 10 specs, found ${specs.length}`);
+  if (specs.length !== 11) {
+    problems.push(`discovery/open binding inventory: expected 11 specs, found ${specs.length}`);
   }
   return problems;
 }
@@ -1464,9 +1579,24 @@ function storedEmbeddingConfigurationHelperProblems(source: string): string[] {
 interface AdmissionOrderSpec {
   label: "Embed" | "FTS";
   className: "EmbedDb" | "FtsIndex";
-  openStart: string;
-  openEnd: string;
-  openParameterType: "EmbedDbConfigDiscovery" | "FtsIndexDiscovery";
+  mutatingOpenStart: string;
+  mutatingOpenEnd: string;
+  publicOpenParameterType: "EmbedDbConfigDiscovery" | "FtsIndexDiscovery";
+  cloneStatement: string;
+  liveFastPath: string;
+  initialJoin: string;
+  unsafeInitialJoin: string;
+  closeDrain: string;
+  closeCondition: string;
+  closeTokenCapture: string;
+  closeFinish: string;
+  closeSupersededGuard: string;
+  closeReset: readonly string[];
+  postDrainJoin: string;
+  delegation: string;
+  attemptSentinel: "null" | "undefined";
+  admissionContainer: "direct" | "try";
+  freshMkdir: string;
   handle: string;
   firstGuard: string;
   firstAssert?: string;
@@ -1578,6 +1708,186 @@ function exactClassMethod(
   return methods.length === 1 ? (methods[0] ?? null) : null;
 }
 
+function directStatementsWithExactText(
+  method: ts.MethodDeclaration,
+  sourceFile: ts.SourceFile,
+  expected: string
+): ts.Statement[] {
+  return method.body?.statements.filter((statement) => statement.getText(sourceFile) === expected) ?? [];
+}
+
+/**
+ * Protect the stable public API and its single-flight orchestration separately
+ * from the mutating admission performed by `openOnce`. Keeping these checks
+ * separate prevents a future refactor from satisfying the admission invariant
+ * with a decoy in the public wrapper while bypassing its join/close state
+ * machine.
+ */
+function publicOpenWrapperProblems(source: string, spec: AdmissionOrderSpec): string[] {
+  const problems: string[] = [];
+  const sourceFile = ts.createSourceFile(
+    `${spec.className}.ts`,
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TS
+  );
+  const method = exactClassMethod(sourceFile, spec.className, "open");
+  if (!method?.body) return [`${spec.label} public open: exact AST method is missing`];
+
+  const parameter = method.parameters.length === 1 ? method.parameters[0] : undefined;
+  const modifiers = method.modifiers?.map((modifier) => modifier.kind) ?? [];
+  const signatureIsExact =
+    modifiers.length === 1 &&
+    modifiers.includes(ts.SyntaxKind.AsyncKeyword) &&
+    !modifiers.includes(ts.SyntaxKind.PrivateKeyword) &&
+    !modifiers.includes(ts.SyntaxKind.ProtectedKeyword) &&
+    !modifiers.includes(ts.SyntaxKind.StaticKeyword) &&
+    parameter !== undefined &&
+    ts.isIdentifier(parameter.name) &&
+    parameter.name.text === "expectedDiscovery" &&
+    parameter.questionToken !== undefined &&
+    parameter.dotDotDotToken === undefined &&
+    parameter.initializer === undefined &&
+    parameter.type?.getText(sourceFile) === spec.publicOpenParameterType &&
+    method.type?.getText(sourceFile) === "Promise<void>";
+  if (!signatureIsExact) {
+    problems.push(`${spec.label} public open: exact optional-discovery API signature changed`);
+  }
+
+  const statements = method.body.statements;
+  const direct = (text: string): ts.Statement[] => directStatementsWithExactText(method, sourceFile, text);
+  const liveFastPaths = direct(spec.liveFastPath);
+  const joinTextIsShared = spec.initialJoin === spec.postDrainJoin;
+  const initialJoinCandidates = direct(spec.initialJoin);
+  const initialJoins = joinTextIsShared ? initialJoinCandidates.slice(0, 1) : initialJoinCandidates;
+  const clones = direct(spec.cloneStatement);
+  const closeDrains = direct(spec.closeDrain);
+  const closeBranches = statements.filter(
+    (statement): statement is ts.IfStatement =>
+      ts.isIfStatement(statement) && statement.expression.getText(sourceFile) === spec.closeCondition
+  );
+  const closeBranch = closeBranches.length === 1 ? closeBranches[0] : undefined;
+  const closeBlock = closeBranch && ts.isBlock(closeBranch.thenStatement) ? closeBranch.thenStatement : undefined;
+  const closeStatements = closeBlock?.statements ?? [];
+  const closeText = (expected: string): ts.Statement[] =>
+    closeStatements.filter((statement) => statement.getText(sourceFile) === expected);
+  const tokenCaptures = closeText(spec.closeTokenCapture);
+  const privateFinishes = closeText(spec.closeFinish);
+  const supersededGuards = closeText(spec.closeSupersededGuard);
+  const postDrainJoins = joinTextIsShared ? initialJoinCandidates.slice(1, 2) : direct(spec.postDrainJoin);
+  const delegations = direct(spec.delegation);
+  const assignments = direct("this.openAttempt = attempt;");
+  const trackedTryText =
+    `try {\n      await attempt;\n    } finally {\n` +
+    `      if (this.openAttempt === attempt) this.openAttempt = ${spec.attemptSentinel};\n` +
+    "    }";
+  const trackedTries = direct(trackedTryText);
+  const openOnceCalls: ts.CallExpression[] = [];
+  const awaits: ts.AwaitExpression[] = [];
+  const inspectWrapper = (node: ts.Node): void => {
+    if (
+      ts.isCallExpression(node) &&
+      node.expression.getText(sourceFile) === "this.openOnce" &&
+      node.arguments.length === 1
+    ) {
+      openOnceCalls.push(node);
+    }
+    if (ts.isAwaitExpression(node)) awaits.push(node);
+    ts.forEachChild(node, inspectWrapper);
+  };
+  inspectWrapper(method.body);
+
+  if (liveFastPaths.length !== 1) {
+    problems.push(`${spec.label} public open: exact live-handle no-op guard is not unique`);
+  }
+  if (initialJoins.length !== 1 || (joinTextIsShared && initialJoinCandidates.length > 2)) {
+    problems.push(`${spec.label} public open: exact pre-drain single-flight join is not unique`);
+  }
+  if (clones.length !== 1) {
+    problems.push(`${spec.label} public open: caller authority snapshot is not unique`);
+  }
+  if (closeDrains.length !== 1) {
+    problems.push(`${spec.label} public open: exact close-drain branch is not unique`);
+  }
+  if (closeBranches.length !== 1 || !closeBlock) {
+    problems.push(`${spec.label} public open: close-drain condition/block changed`);
+  }
+  if (tokenCaptures.length !== 1) {
+    problems.push(`${spec.label} public open: close-request token capture is not unique`);
+  }
+  if (privateFinishes.length !== 1) {
+    problems.push(`${spec.label} public open: private close drain changed`);
+  }
+  if (supersededGuards.length !== 1) {
+    problems.push(`${spec.label} public open: later-close generation guard changed`);
+  }
+  const expectedCloseSequence = [
+    spec.closeTokenCapture,
+    spec.closeFinish,
+    spec.closeSupersededGuard,
+    ...spec.closeReset
+  ];
+  if (
+    closeStatements.length !== expectedCloseSequence.length ||
+    expectedCloseSequence.some((expected, index) => closeStatements[index]?.getText(sourceFile) !== expected)
+  ) {
+    problems.push(`${spec.label} public open: token-capture/drain/compare/reset sequence changed`);
+  }
+  if (postDrainJoins.length !== 1 || (joinTextIsShared && initialJoinCandidates.length !== 2)) {
+    problems.push(`${spec.label} public open: post-drain single-flight recheck is not unique`);
+  }
+  if (delegations.length !== 1) {
+    problems.push(`${spec.label} public open: exact openOnce delegation is not unique`);
+  }
+  if (openOnceCalls.length !== 1 || openOnceCalls[0]?.getText(sourceFile) !== "this.openOnce(expected)") {
+    problems.push(`${spec.label} public open: openOnce call census changed`);
+  }
+  if (assignments.length !== 1 || trackedTries.length !== 1) {
+    problems.push(`${spec.label} public open: tracked single-flight settlement changed`);
+  }
+
+  const liveFastPath = liveFastPaths[0];
+  const initialJoin = initialJoins[0];
+  const clone = clones[0];
+  const closeDrain = closeDrains[0];
+  const postDrainJoin = postDrainJoins[0];
+  const delegation = delegations[0];
+  const assignment = assignments[0];
+  const trackedTry = trackedTries[0];
+  const ordered = [liveFastPath, initialJoin, clone, closeDrain, postDrainJoin, delegation, assignment, trackedTry];
+  if (
+    ordered.some((statement) => statement === undefined) ||
+    ordered.some((statement, index) => index > 0 && statement!.getStart(sourceFile) <= ordered[index - 1]!.end)
+  ) {
+    problems.push(`${spec.label} public open: fast-path/clone/drain/join/delegate order changed`);
+  }
+  if (delegation && assignment && statements.indexOf(assignment) !== statements.indexOf(delegation) + 1) {
+    problems.push(`${spec.label} public open: openOnce promise is not immediately tracked`);
+  }
+  if (assignment && trackedTry && statements.indexOf(trackedTry) !== statements.indexOf(assignment) + 1) {
+    problems.push(`${spec.label} public open: tracked promise settlement is not adjacent`);
+  }
+  const firstAwait = awaits.sort((left, right) => left.getStart(sourceFile) - right.getStart(sourceFile))[0];
+  if (!clone || (firstAwait && clone.end >= firstAwait.getStart(sourceFile))) {
+    problems.push(`${spec.label} public open: caller authority is not snapshotted before the first await`);
+  }
+
+  const mutatingTokens = [
+    "preflightSqliteArtifactFamily(",
+    "loadBetterSqlite()",
+    "new Ctor(",
+    spec.firstGuard,
+    spec.expectedAssert,
+    spec.bootstrapCall
+  ];
+  const methodText = method.getText(sourceFile);
+  if (mutatingTokens.some((token) => methodText.includes(token))) {
+    problems.push(`${spec.label} public open: mutating admission escaped openOnce`);
+  }
+  return problems;
+}
+
 function statementsWithExactText(root: ts.Node, sourceFile: ts.SourceFile, expected: string): ts.Statement[] {
   const matches: ts.Statement[] = [];
   const visit = (node: ts.Node): void => {
@@ -1670,7 +1980,12 @@ function isExactContinuityGuard(
 
 function admissionOrderProblems(source: string, spec: AdmissionOrderSpec): string[] {
   const problems: string[] = [];
-  const open = sectionBetween(source, `${spec.label} open`, spec.openStart, spec.openEnd).text;
+  const open = sectionBetween(
+    source,
+    `${spec.label} mutating openOnce`,
+    spec.mutatingOpenStart,
+    spec.mutatingOpenEnd
+  ).text;
   const bootstrap = sectionBetween(source, `${spec.label} bootstrap`, spec.bootstrapStart, spec.bootstrapEnd).text;
   const artifactChmod = `[this.file, \`\${this.file}-wal\`, \`\${this.file}-shm\`].map((p) => fs.chmod`;
   const openSteps = [
@@ -1688,11 +2003,11 @@ function admissionOrderProblems(source: string, spec: AdmissionOrderSpec): strin
   for (const step of openSteps) {
     const at = open.indexOf(step.needle);
     if (at < 0) {
-      problems.push(`${spec.label} open: ${step.label} is missing`);
+      problems.push(`${spec.label} openOnce: ${step.label} is missing`);
       continue;
     }
     if (at < previousAt) {
-      problems.push(`${spec.label} open: ${step.label} runs before ${previousLabel}`);
+      problems.push(`${spec.label} openOnce: ${step.label} runs before ${previousLabel}`);
     }
     previousAt = at;
     previousLabel = step.label;
@@ -1705,23 +2020,31 @@ function admissionOrderProblems(source: string, spec: AdmissionOrderSpec): strin
     true,
     ts.ScriptKind.TS
   );
-  const openMethod = exactClassMethod(sourceFile, spec.className, "open");
+  const openMethod = exactClassMethod(sourceFile, spec.className, "openOnce");
   if (!openMethod?.body) {
-    problems.push(`${spec.label} open: exact AST method is missing`);
+    problems.push(`${spec.label} openOnce: exact AST method is missing`);
   } else {
     const parameter = openMethod.parameters.length === 1 ? openMethod.parameters[0] : undefined;
+    const modifiers = openMethod.modifiers?.map((modifier) => modifier.kind) ?? [];
     const signatureIsExact =
-      openMethod.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.AsyncKeyword) === true &&
+      modifiers.length === 2 &&
+      modifiers[0] === ts.SyntaxKind.PrivateKeyword &&
+      modifiers[1] === ts.SyntaxKind.AsyncKeyword &&
+      modifiers.includes(ts.SyntaxKind.PrivateKeyword) &&
+      modifiers.includes(ts.SyntaxKind.AsyncKeyword) &&
+      !modifiers.includes(ts.SyntaxKind.PublicKeyword) &&
+      !modifiers.includes(ts.SyntaxKind.ProtectedKeyword) &&
+      !modifiers.includes(ts.SyntaxKind.StaticKeyword) &&
       parameter !== undefined &&
       ts.isIdentifier(parameter.name) &&
-      parameter.name.text === "expectedDiscovery" &&
-      parameter.questionToken !== undefined &&
+      parameter.name.text === "expected" &&
+      parameter.questionToken === undefined &&
       parameter.dotDotDotToken === undefined &&
       parameter.initializer === undefined &&
-      parameter.type?.getText(sourceFile) === spec.openParameterType &&
+      parameter.type?.getText(sourceFile) === `${spec.publicOpenParameterType} | null` &&
       openMethod.type?.getText(sourceFile) === "Promise<void>";
     if (!signatureIsExact) {
-      problems.push(`${spec.label} open: exact optional-discovery signature changed`);
+      problems.push(`${spec.label} openOnce: exact private mutating signature changed`);
     }
     const handles = statementsWithExactText(openMethod.body, sourceFile, spec.handle);
     const firstGuards = statementsWithExactText(openMethod.body, sourceFile, spec.firstGuard);
@@ -1730,53 +2053,68 @@ function admissionOrderProblems(source: string, spec: AdmissionOrderSpec): strin
       : [];
     const expectedAssertions = statementsWithExactText(openMethod.body, sourceFile, spec.expectedAssert);
     const bootstraps = statementsWithExactText(openMethod.body, sourceFile, spec.bootstrapCall);
+    const familyPreflights = statementsWithExactText(
+      openMethod.body,
+      sourceFile,
+      "fileExisted = await preflightSqliteArtifactFamily(this.file);"
+    );
     if (handles.length !== 1) {
-      problems.push(`${spec.label} open: exact AST live-handle assignment is not unique`);
+      problems.push(`${spec.label} openOnce: exact AST live-handle assignment is not unique`);
     }
     if (firstGuards.length !== 1) {
-      problems.push(`${spec.label} open: exact AST first guard is not unique`);
+      problems.push(`${spec.label} openOnce: exact AST first guard is not unique`);
     }
     if (spec.firstAssert && firstAssertions.length !== 1) {
-      problems.push(`${spec.label} open: exact AST first guard assertion is not unique`);
+      problems.push(`${spec.label} openOnce: exact AST first guard assertion is not unique`);
     }
     if (expectedAssertions.length !== 1) {
-      problems.push(`${spec.label} open: exact AST expected-discovery assertion is not unique`);
+      problems.push(`${spec.label} openOnce: exact AST expected-discovery assertion is not unique`);
     }
     if (bootstraps.length !== 1) {
-      problems.push(`${spec.label} open: exact AST bootstrap call is not unique`);
+      problems.push(`${spec.label} openOnce: exact AST bootstrap call is not unique`);
     }
     const handle = handles[0];
     const firstGuard = firstGuards[0];
     if (handle && firstGuard) {
       if (handle.end >= firstGuard.getStart(sourceFile)) {
-        problems.push(`${spec.label} open: AST first guard does not follow live handle`);
+        problems.push(`${spec.label} openOnce: AST first guard does not follow live handle`);
       } else if (callCountBetween(openMethod.body, sourceFile, handle.end, firstGuard.getStart(sourceFile)) > 0) {
-        problems.push(`${spec.label} open: call runs between live handle and first guard`);
+        problems.push(`${spec.label} openOnce: call runs between live handle and first guard`);
       }
     }
     const handleTry = handle ? directTryStatement(handle) : null;
-    const admissionTry = firstGuard ? directTryStatement(firstGuard) : null;
-    const openStatements = openMethod.body.statements;
-    const handleTryAt = handleTry ? openStatements.indexOf(handleTry) : -1;
-    const admissionTryAt = admissionTry ? openStatements.indexOf(admissionTry) : -1;
+    const finalPreflight = familyPreflights.find(
+      (statement) => handleTry !== null && directTryStatement(statement) === handleTry
+    );
+    const admissionTry = firstGuard && spec.admissionContainer === "try" ? directTryStatement(firstGuard) : null;
+    const directBlock = handleTry?.parent;
+    const peerStatements = directBlock && ts.isBlock(directBlock) ? directBlock.statements : undefined;
+    const handleTryAt = handleTry && peerStatements ? peerStatements.indexOf(handleTry) : -1;
+    const admissionTryAt = admissionTry && peerStatements ? peerStatements.indexOf(admissionTry) : -1;
     const guardedStatements = [
       firstGuard,
       ...(spec.firstAssert ? [firstAssertions[0]] : []),
       expectedAssertions[0],
       bootstraps[0]
     ];
-    const guardedSequenceIsExact = guardedStatements.every(
-      (statement, index) => statement !== undefined && admissionTry?.tryBlock.statements[index] === statement
-    );
+    const guardedSequenceIsExact = guardedStatements.every((statement, index) => {
+      if (statement === undefined) return false;
+      if (spec.admissionContainer === "try") return admissionTry?.tryBlock.statements[index] === statement;
+      return peerStatements?.[handleTryAt + 1 + index] === statement;
+    });
     if (
-      handleTry?.tryBlock.statements.length !== 1 ||
-      handleTry.tryBlock.statements[0] !== handle ||
-      !admissionTry ||
-      handleTryAt < 0 ||
-      admissionTryAt !== handleTryAt + 1 ||
-      !guardedSequenceIsExact
+      handleTry?.tryBlock.statements.length !== 2 ||
+      handleTry.tryBlock.statements[0] !== finalPreflight ||
+      handleTry.tryBlock.statements[1] !== handle
     ) {
-      problems.push(`${spec.label} open: exact guarded admission sequence changed`);
+      problems.push(`${spec.label} openOnce: final SQLite family preflight is not immediately before live handle`);
+    }
+    const admissionPlacementIsExact =
+      spec.admissionContainer === "try"
+        ? admissionTry !== null && admissionTry.parent === directBlock && admissionTryAt === handleTryAt + 1
+        : firstGuard?.parent === directBlock;
+    if (handleTryAt < 0 || !admissionPlacementIsExact || !guardedSequenceIsExact) {
+      problems.push(`${spec.label} openOnce: exact guarded admission sequence changed`);
     }
   }
 
@@ -1864,12 +2202,77 @@ function admissionOrderProblems(source: string, spec: AdmissionOrderSpec): strin
   return problems;
 }
 
+function mutateOpenOnceExactly(
+  source: string,
+  spec: AdmissionOrderSpec,
+  needle: string,
+  replacement: string,
+  expectedOccurrences = 1
+): string {
+  const openOnce = sectionBetween(
+    source,
+    `${spec.label} mutating openOnce mutation`,
+    spec.mutatingOpenStart,
+    spec.mutatingOpenEnd
+  ).text;
+  const mutantOpenOnce = replaceExactly(openOnce, needle, replacement, expectedOccurrences);
+  return replaceExactly(source, openOnce, mutantOpenOnce);
+}
+
+function mutatePublicOpenExactly(
+  source: string,
+  spec: AdmissionOrderSpec,
+  needle: string,
+  replacement: string,
+  expectedOccurrences = 1
+): string {
+  const publicOpen = sectionBetween(
+    source,
+    `${spec.label} public open mutation`,
+    `  async open(expectedDiscovery?: ${spec.publicOpenParameterType}): Promise<void> {`,
+    spec.mutatingOpenStart
+  ).text;
+  const mutantPublicOpen = replaceExactly(publicOpen, needle, replacement, expectedOccurrences);
+  return replaceExactly(source, publicOpen, mutantPublicOpen);
+}
+
 const FTS_ADMISSION_ORDER: AdmissionOrderSpec = {
   label: "FTS",
   className: "FtsIndex",
-  openStart: "  async open(expectedDiscovery?: FtsIndexDiscovery): Promise<void> {",
-  openEnd: "  /** Remove the index file",
-  openParameterType: "FtsIndexDiscovery",
+  mutatingOpenStart: "  private async openOnce(expected: FtsIndexDiscovery | null): Promise<void> {",
+  mutatingOpenEnd: "  /**\n   * Remove the index file",
+  publicOpenParameterType: "FtsIndexDiscovery",
+  cloneStatement: "const expected = cloneFtsIndexDiscovery(expectedDiscovery);",
+  liveFastPath: "if (this.db && !this.closeRequested) return;",
+  initialJoin:
+    "if (this.openAttempt !== undefined && !this.closeRequested && this.closeAttempt === undefined) {\n" +
+    "      return this.openAttempt;\n" +
+    "    }",
+  unsafeInitialJoin: "if (this.openAttempt !== undefined) return this.openAttempt;",
+  closeDrain:
+    "if (this.closeRequested || this.closeAttempt !== undefined) {\n" +
+    "      const observedCloseRequest = this.closeRequestToken;\n" +
+    "      await this.finishCloseAndRelease();\n" +
+    "      if (this.closeRequestToken !== observedCloseRequest) {\n" +
+    '        throw new Error("FTS index reopen was superseded by a later close request");\n' +
+    "      }\n" +
+    "      this.closeAttempt = undefined;\n" +
+    "      this.closeAttemptFailed = false;\n" +
+    "      this.closeRequested = false;\n" +
+    "    }",
+  closeCondition: "this.closeRequested || this.closeAttempt !== undefined",
+  closeTokenCapture: "const observedCloseRequest = this.closeRequestToken;",
+  closeFinish: "await this.finishCloseAndRelease();",
+  closeSupersededGuard:
+    "if (this.closeRequestToken !== observedCloseRequest) {\n" +
+    '        throw new Error("FTS index reopen was superseded by a later close request");\n' +
+    "      }",
+  closeReset: ["this.closeAttempt = undefined;", "this.closeAttemptFailed = false;", "this.closeRequested = false;"],
+  postDrainJoin: "if (this.openAttempt !== undefined) return this.openAttempt;",
+  delegation: "const attempt = this.openOnce(expected);",
+  attemptSentinel: "undefined",
+  admissionContainer: "try",
+  freshMkdir: "fs.mkdir(parentDir, { recursive: true, mode: 0o700 })",
   handle: "this.db = new Ctor(this.file) as Db;",
   firstGuard: "const initialAdmission = this.inspectAdmission();",
   expectedAssert: "assertExpectedFtsDiscovery(expected, fileExisted, initialAdmission);",
@@ -1889,9 +2292,37 @@ const FTS_ADMISSION_ORDER: AdmissionOrderSpec = {
 const EMBED_ADMISSION_ORDER: AdmissionOrderSpec = {
   label: "Embed",
   className: "EmbedDb",
-  openStart: "  async open(expectedDiscovery?: EmbedDbConfigDiscovery): Promise<void> {",
-  openEnd: "  /**\n   * Remove the embed db",
-  openParameterType: "EmbedDbConfigDiscovery",
+  mutatingOpenStart: "  private async openOnce(expected: EmbedDbConfigDiscovery | null): Promise<void> {",
+  mutatingOpenEnd: "  /**\n   * Remove the embed db",
+  publicOpenParameterType: "EmbedDbConfigDiscovery",
+  cloneStatement: "const expected = cloneEmbedDbOpenDiscovery(expectedDiscovery);",
+  liveFastPath: "if (this.db && !this.closeRequested) return;",
+  initialJoin: "if (this.openAttempt && !this.closeRequested && !this.closeAttempt) return this.openAttempt;",
+  unsafeInitialJoin: "if (this.openAttempt) return this.openAttempt;",
+  closeDrain:
+    "if (this.closeRequested || this.closeAttempt) {\n" +
+    "      const observedCloseRequest = this.closeRequestToken;\n" +
+    "      await this.finishCloseAndRelease();\n" +
+    "      if (this.closeRequestToken !== observedCloseRequest) {\n" +
+    '        throw new Error("Embedding index reopen was superseded by a later close request");\n' +
+    "      }\n" +
+    "      this.closeAttempt = null;\n" +
+    "      this.closeAttemptFailed = false;\n" +
+    "      this.closeRequested = false;\n" +
+    "    }",
+  closeCondition: "this.closeRequested || this.closeAttempt",
+  closeTokenCapture: "const observedCloseRequest = this.closeRequestToken;",
+  closeFinish: "await this.finishCloseAndRelease();",
+  closeSupersededGuard:
+    "if (this.closeRequestToken !== observedCloseRequest) {\n" +
+    '        throw new Error("Embedding index reopen was superseded by a later close request");\n' +
+    "      }",
+  closeReset: ["this.closeAttempt = null;", "this.closeAttemptFailed = false;", "this.closeRequested = false;"],
+  postDrainJoin: "if (this.openAttempt) return this.openAttempt;",
+  delegation: "const attempt = this.openOnce(expected);",
+  attemptSentinel: "null",
+  admissionContainer: "direct",
+  freshMkdir: "fs.mkdir(path.dirname(this.file), { recursive: true, mode: 0o700 })",
   handle: "this.db = new Ctor(this.file) as Db;",
   firstGuard: "const admission = inspectEmbedAdmission(this.db, this.vaultRoot);",
   firstAssert: "assertEmbedAdmission(admission);",
@@ -1908,43 +2339,98 @@ const EMBED_ADMISSION_ORDER: AdmissionOrderSpec = {
 
 function freshParentPreparationProblems(ftsSource: string, embedSource: string): string[] {
   const problems: string[] = [];
+  const familyPreflight = "fileExisted = await preflightSqliteArtifactFamily(this.file);";
   const ftsOpen = sectionBetween(
     ftsSource,
-    "FTS open",
-    FTS_ADMISSION_ORDER.openStart,
-    FTS_ADMISSION_ORDER.openEnd
+    "FTS mutating openOnce",
+    FTS_ADMISSION_ORDER.mutatingOpenStart,
+    FTS_ADMISSION_ORDER.mutatingOpenEnd
   ).text;
   const embedOpen = sectionBetween(
     embedSource,
-    "Embed open",
-    EMBED_ADMISSION_ORDER.openStart,
-    EMBED_ADMISSION_ORDER.openEnd
+    "Embed mutating openOnce",
+    EMBED_ADMISSION_ORDER.mutatingOpenStart,
+    EMBED_ADMISSION_ORDER.mutatingOpenEnd
   ).text;
 
   for (const entry of [
-    { label: "FTS", open: ftsOpen, handle: FTS_ADMISSION_ORDER.handle },
-    { label: "Embed", open: embedOpen, handle: EMBED_ADMISSION_ORDER.handle }
+    {
+      label: "FTS",
+      source: ftsSource,
+      className: FTS_ADMISSION_ORDER.className,
+      open: ftsOpen,
+      freshMkdir: FTS_ADMISSION_ORDER.freshMkdir
+    },
+    {
+      label: "Embed",
+      source: embedSource,
+      className: EMBED_ADMISSION_ORDER.className,
+      open: embedOpen,
+      freshMkdir: EMBED_ADMISSION_ORDER.freshMkdir
+    }
   ]) {
-    const targetProof = entry.open.indexOf("await fs.lstat(this.file);");
-    const freshGuard = entry.open.indexOf("if (!fileExisted) {");
-    const handleAt = entry.open.indexOf(entry.handle);
-    const freshBlock = sectionBetween(
-      entry.open,
-      `${entry.label} fresh-parent block`,
-      "if (!fileExisted) {",
-      "\n    try {\n      this.db = new Ctor"
-    ).text;
-    if (!(targetProof >= 0 && targetProof < freshGuard && freshGuard < handleAt)) {
-      problems.push(`${entry.label} open: fresh-parent preparation lacks a pre-handle target existence proof`);
+    const sourceFile = ts.createSourceFile(
+      `${entry.className}.ts`,
+      entry.source,
+      ts.ScriptTarget.Latest,
+      true,
+      ts.ScriptKind.TS
+    );
+    const openMethod = exactClassMethod(sourceFile, entry.className, "openOnce");
+    const preflights = openMethod?.body ? statementsWithExactText(openMethod.body, sourceFile, familyPreflight) : [];
+    const initialPreflight = preflights[0];
+    const initialTry = initialPreflight ? directTryStatement(initialPreflight) : null;
+    const loadStatements = openMethod?.body
+      ? statementsWithExactText(openMethod.body, sourceFile, "const Ctor = await loadBetterSqlite();")
+      : [];
+    const freshBranches: ts.IfStatement[] = [];
+    if (openMethod?.body) {
+      const visit = (node: ts.Node): void => {
+        if (ts.isIfStatement(node) && node.expression.getText(sourceFile) === "!fileExisted") {
+          freshBranches.push(node);
+        }
+        ts.forEachChild(node, visit);
+      };
+      visit(openMethod.body);
     }
-    if (!freshBlock.includes("await fs.mkdir(parentDir") || !freshBlock.includes("if (!parentExisted) {")) {
-      problems.push(`${entry.label} open: parent creation is not contained by the fresh-file branch`);
+    const loadStatement = loadStatements[0];
+    const freshBranch = freshBranches[0];
+    const freshBlock = freshBranch?.getText(sourceFile) ?? "";
+    if (preflights.length !== 2) {
+      problems.push(`${entry.label} openOnce: expected exactly two SQLite family preflights`);
     }
-    if (!freshBlock.includes("await fs.chmod(parentDir, 0o700)")) {
-      problems.push(`${entry.label} open: parent chmod is not limited to a newly-created fresh-file parent`);
+    if (
+      initialTry?.tryBlock.statements.length !== 1 ||
+      initialTry.tryBlock.statements[0] !== initialPreflight ||
+      loadStatements.length !== 1 ||
+      freshBranches.length !== 1 ||
+      !initialPreflight ||
+      !loadStatement ||
+      !freshBranch ||
+      !(
+        initialPreflight.getStart(sourceFile) < loadStatement.getStart(sourceFile) &&
+        loadStatement.getStart(sourceFile) < freshBranch.getStart(sourceFile)
+      )
+    ) {
+      problems.push(
+        `${entry.label} openOnce: initial SQLite family preflight must precede dependency load and fresh branch`
+      );
     }
-    if (countLiteral(entry.open, "fs.chmod(parentDir") !== 1) {
-      problems.push(`${entry.label} open: parent chmod escaped its single fresh-file exception`);
+    if (!freshBlock.includes(`await ${entry.freshMkdir};`)) {
+      problems.push(`${entry.label} openOnce: mode-0700 mkdir is not contained by the fresh-file branch`);
+    }
+    if (
+      freshBlock.includes("parentExisted") ||
+      freshBlock.includes("fs.stat(parentDir") ||
+      freshBlock.includes("fs.lstat(parentDir")
+    ) {
+      problems.push(`${entry.label} openOnce: parent ownership is inferred from a racy path stat`);
+    }
+    if (entry.open.includes("fs.chmod(parentDir")) {
+      problems.push(`${entry.label} openOnce: path chmod can mutate an existing/custom parent`);
+    }
+    if (countLiteral(entry.open, entry.freshMkdir) !== 1) {
+      problems.push(`${entry.label} openOnce: fresh parent must have one bounded recursive mode-0700 mkdir`);
     }
   }
   return problems;
@@ -2095,7 +2581,7 @@ describe("K-1 class invariant (v3.6.3 methodological guard; recursive scan since
     expect(failClosedSpecInventoryProblems(cliSource, serverSource, searchSource, configurationCalls)).toEqual([]);
     expect(storedEmbeddingConfigurationHelperProblems(embeddingsSource)).toEqual([]);
     expect(countLiteral(cliSource, "resolveStoredEmbeddingConfiguration(")).toBe(2);
-    expect(countLiteral(serverSource, "resolveStoredEmbeddingConfiguration(")).toBe(2);
+    expect(countLiteral(serverSource, "resolveStoredEmbeddingConfiguration(")).toBe(3);
     expect(countLiteral(searchSource, "resolveStoredEmbeddingConfiguration(")).toBe(1);
 
     const cliRootFiltersRemoved = replaceExactly(
@@ -2123,20 +2609,25 @@ describe("K-1 class invariant (v3.6.3 methodological guard; recursive scan since
       ])
     );
 
-    const serverRootFiltersRemoved = replaceAllExactly(
-      replaceExactly(
-        serverSource,
-        "discoverFtsIndexConfig(indexFile, vault.root)",
-        "discoverFtsIndexConfig(indexFile)"
+    const serverRootFiltersRemoved = replaceExactly(
+      replaceAllExactly(
+        replaceExactly(
+          serverSource,
+          "discoverFtsIndexConfig(indexFile, vault.root)",
+          "discoverFtsIndexConfig(indexFile)"
+        ),
+        "discoverEmbedDbConfig(embedFile, vault.root)",
+        "discoverEmbedDbConfig(embedFile)",
+        2
       ),
-      "discoverEmbedDbConfig(embedFile, vault.root)",
-      "discoverEmbedDbConfig(embedFile)",
-      2
+      "discoverEmbedDbConfig(startupEmbedFile, vault.root)",
+      "discoverEmbedDbConfig(startupEmbedFile)"
     );
     expect(configurationDiscoveryRootProblems(cliSource, serverRootFiltersRemoved, searchSource)).toEqual(
       expect.arrayContaining([
         "server FTS canonical-root discovery: expected 1, found 0",
-        "server Embed canonical-root discoveries: expected 2, found 0"
+        "server Embed canonical-root discoveries: expected 2, found 0",
+        "server non-HNSW integrity Embed canonical-root discovery: expected 1, found 0"
       ])
     );
 
@@ -2157,7 +2648,7 @@ describe("K-1 class invariant (v3.6.3 methodological guard; recursive scan since
     expect(configurationDiscoveryRootProblems(cliSource, serverSource, searchCacheRemoved)).toEqual(
       expect.arrayContaining([
         "search cached Embed canonical-root discovery: expected 1, found 0",
-        "uncached Embed discovery inventory: expected 4, found 5"
+        "uncached Embed discovery inventory: expected 5, found 6"
       ])
     );
 
@@ -2176,11 +2667,11 @@ describe("K-1 class invariant (v3.6.3 methodological guard; recursive scan since
     expect(rawPeekProblems).toEqual(
       expect.arrayContaining([
         "src/cli.ts discoverFtsIndexConfig: expected 4, found 3",
-        "global production discovery inventory: expected 10, found 9"
+        "global production discovery inventory: expected 11, found 10"
       ])
     );
     expect(failClosedSpecInventoryProblems(rawPeekCli, serverSource, searchSource, rawPeekCalls)).toContain(
-      "fail-closed caller spec inventory: 10 specs for 9 production discoveries"
+      "fail-closed caller spec inventory: 11 specs for 10 production discoveries"
     );
 
     const uncataloguedCaller = productionConfigurationCalls(
@@ -2193,7 +2684,7 @@ describe("K-1 class invariant (v3.6.3 methodological guard; recursive scan since
     expect(productionConfigurationInventoryProblems([...configurationCalls, ...uncataloguedCaller])).toEqual(
       expect.arrayContaining([
         "uncatalogued production discovery caller: src/new-index-caller.ts:2 discoverFtsIndexConfig",
-        "global production discovery inventory: expected 10, found 11"
+        "global production discovery inventory: expected 11, found 12"
       ])
     );
     expect(
@@ -2204,7 +2695,7 @@ describe("K-1 class invariant (v3.6.3 methodological guard; recursive scan since
     ).toEqual(
       expect.arrayContaining([
         "src/new-index-caller.ts discoverFtsIndexConfig: expected 1 fail-closed specs, found 0",
-        "fail-closed caller spec inventory: 10 specs for 11 production discoveries"
+        "fail-closed caller spec inventory: 11 specs for 12 production discoveries"
       ])
     );
 
@@ -2224,6 +2715,24 @@ describe("K-1 class invariant (v3.6.3 methodological guard; recursive scan since
     );
     expect(configurationDiscoveryOpenBindingProblems(cliSource, watcherWrongDiscovery, searchSource)).toContain(
       "server watcher Embed: awaited open is not bound to the exact discovery const"
+    );
+
+    const hnswConstructorAliasDropped = replaceExactly(
+      serverSource,
+      "          const db = hnswSnapshotDb;",
+      "          const db = hnswSnapshotDb!;"
+    );
+    expect(configurationDiscoveryOpenBindingProblems(cliSource, hnswConstructorAliasDropped, searchSource)).toContain(
+      "server HNSW Embed: constructor authority is not passed through one immutable db alias"
+    );
+
+    const integrityWrongDiscovery = replaceExactly(
+      serverSource,
+      "      await integrityDb.open(discovered);",
+      "      await integrityDb.open(discoveredEmbed);"
+    );
+    expect(configurationDiscoveryOpenBindingProblems(cliSource, integrityWrongDiscovery, searchSource)).toContain(
+      "server non-HNSW integrity Embed: awaited open is not bound to the exact discovery const"
     );
 
     const searchDeadOpenDecoy = replaceExactly(
@@ -2255,8 +2764,8 @@ describe("K-1 class invariant (v3.6.3 methodological guard; recursive scan since
 
     const queryOpenFailureSwallowed = replaceExactly(
       cliSource,
-      "      } finally {\n        ftsIndex.close();",
-      "      } catch {} finally {\n        ftsIndex.close();"
+      "        } finally {\n          await ftsIndex.closeAndRelease();",
+      "        } catch {} finally {\n          await ftsIndex.closeAndRelease();"
     );
     expect(configurationDiscoveryOpenBindingProblems(queryOpenFailureSwallowed, serverSource, searchSource)).toContain(
       "CLI query FTS: reviewed open failure policy changed"
@@ -2264,7 +2773,7 @@ describe("K-1 class invariant (v3.6.3 methodological guard; recursive scan since
 
     const evalOpenRethrowRemoved = replaceExactly(
       cliSource,
-      "          } catch (err) {\n            ftsIndex.close();\n            throw err;\n          }",
+      "          } catch (err) {\n            await ftsIndex.closeAndRelease();\n            throw err;\n          }",
       "          } catch {}"
     );
     expect(configurationDiscoveryOpenBindingProblems(evalOpenRethrowRemoved, serverSource, searchSource)).toContain(
@@ -2275,6 +2784,29 @@ describe("K-1 class invariant (v3.6.3 methodological guard; recursive scan since
     expect(configurationDiscoveryOpenBindingProblems(cliSource, serverOpenFailSoftNullRemoved, searchSource)).toContain(
       "server persistent FTS omitted tokenizer: reviewed open failure policy changed"
     );
+
+    const serverOpenCleanupDowngraded = replaceExactly(
+      serverSource,
+      "          await ftsIndex?.closeAndRelease(); // open() may have retained a retryable lifetime",
+      "          ftsIndex?.close();"
+    );
+    expect(configurationDiscoveryOpenBindingProblems(cliSource, serverOpenCleanupDowngraded, searchSource)).toContain(
+      "server persistent FTS omitted tokenizer: reviewed open failure policy changed"
+    );
+
+    const serverOpenCleanupFailureSwallowed = replaceExactly(
+      serverSource,
+      "          } catch (cleanupError) {\n" +
+        "            throw new AggregateError(\n" +
+        "              [err, cleanupError],\n" +
+        '              "FTS startup failed and its persistence lifetime could not be released"\n' +
+        "            );\n" +
+        "          }",
+      "          } catch {}"
+    );
+    expect(
+      configurationDiscoveryOpenBindingProblems(cliSource, serverOpenCleanupFailureSwallowed, searchSource)
+    ).toContain("server persistent FTS omitted tokenizer: reviewed open failure policy changed");
 
     const searchDiscoveryReassigned = replaceExactly(
       replaceExactly(
@@ -2459,11 +2991,12 @@ describe("K-1 class invariant (v3.6.3 methodological guard; recursive scan since
       serverSource,
       'if (discovered.kind === "missing" || discovered.kind === "refused")',
       "if (false)",
-      2
+      3
     );
     expect(configurationDiscoveryFailClosedProblems(cliSource, serverEmbedFallbackReenabled, searchSource)).toEqual(
       expect.arrayContaining([
         "server watcher Embed: refused discovery refusal/degrade is missing",
+        "server non-HNSW integrity Embed: refused discovery refusal/degrade is missing",
         "server HNSW Embed: refused discovery refusal/degrade is missing"
       ])
     );
@@ -2639,8 +3172,8 @@ describe("K-1 class invariant (v3.6.3 methodological guard; recursive scan since
 
     const serverFtsAcquisitionMovedAfterDegrade = replaceExactly(
       serverSource,
-      "    } else {\n      ftsIndex = new FtsIndex({ file: indexFile, vaultRoot: vault.root, tokenize });",
-      "    }\n    {\n      ftsIndex = new FtsIndex({ file: indexFile, vaultRoot: vault.root, tokenize });"
+      "      } else {\n        ftsIndex = new FtsIndex({ file: indexFile, vaultRoot: vault.root, tokenize });",
+      "      }\n      {\n        ftsIndex = new FtsIndex({ file: indexFile, vaultRoot: vault.root, tokenize });"
     );
     expect(
       configurationDiscoveryFailClosedProblems(cliSource, serverFtsAcquisitionMovedAfterDegrade, searchSource)
@@ -2654,6 +3187,11 @@ describe("K-1 class invariant (v3.6.3 methodological guard; recursive scan since
     );
     expect(tokenizerCallerProblems(rawCliFailOpen, serverSource)).toContain(
       "serve: exact tokenizer validation is missing"
+    );
+
+    const rawHttpProjectionDropped = replaceExactly(cliSource, "        rateLimit: rawRateLimit,\n", "");
+    expect(tokenizerCallerProblems(rawHttpProjectionDropped, serverSource)).toContain(
+      "serve-http: raw HTTP option rateLimit is not projected before forwarding"
     );
 
     const serverValidation =
@@ -2677,8 +3215,23 @@ describe("K-1 class invariant (v3.6.3 methodological guard; recursive scan since
       "cli custom/default vault-root FTS paths: expected 2, found 1"
     );
 
+    const queryCustomPathDropped = replaceExactly(
+      cliSource,
+      "const indexFile = opts.indexFile ?? defaultIndexFile(v.root);",
+      "const indexFile = defaultIndexFile(v.root);",
+      2
+    );
+    expect(tokenizerCallerProblems(queryCustomPathDropped, serverSource)).toEqual(
+      expect.arrayContaining([
+        "cli custom/default canonical-root FTS path: expected 2, found 1",
+        "cli default-only canonical-root FTS paths: expected 1, found 2"
+      ])
+    );
+
     const ftsSource = await fs.readFile(path.resolve(process.cwd(), "src", "fts5.ts"), "utf8");
     const embedSource = await fs.readFile(path.resolve(process.cwd(), "src", "embed-db.ts"), "utf8");
+    expect(publicOpenWrapperProblems(ftsSource, FTS_ADMISSION_ORDER)).toEqual([]);
+    expect(publicOpenWrapperProblems(embedSource, EMBED_ADMISSION_ORDER)).toEqual([]);
     expect(admissionOrderProblems(ftsSource, FTS_ADMISSION_ORDER)).toEqual([]);
     expect(admissionOrderProblems(embedSource, EMBED_ADMISSION_ORDER)).toEqual([]);
     expect(freshParentPreparationProblems(ftsSource, embedSource)).toEqual([]);
@@ -2690,127 +3243,123 @@ describe("K-1 class invariant (v3.6.3 methodological guard; recursive scan since
       "  async open(expectedDiscovery?: FtsIndexDiscovery): Promise<void> {",
       "  async open(): Promise<void> {"
     );
-    expect(admissionOrderProblems(ftsOpenSignatureDropped, FTS_ADMISSION_ORDER)).toContain(
-      "FTS open: exact optional-discovery signature changed"
+    expect(publicOpenWrapperProblems(ftsOpenSignatureDropped, FTS_ADMISSION_ORDER)).toContain(
+      "FTS public open: exact optional-discovery API signature changed"
     );
     const embedOpenSignatureWrongType = replaceExactly(
       embedSource,
       "  async open(expectedDiscovery?: EmbedDbConfigDiscovery): Promise<void> {",
       "  async open(expectedDiscovery?: FtsIndexDiscovery): Promise<void> {"
     );
-    expect(admissionOrderProblems(embedOpenSignatureWrongType, EMBED_ADMISSION_ORDER)).toContain(
-      "Embed open: exact optional-discovery signature changed"
+    expect(publicOpenWrapperProblems(embedOpenSignatureWrongType, EMBED_ADMISSION_ORDER)).toContain(
+      "Embed public open: exact optional-discovery API signature changed"
     );
 
-    const ftsOpenCallBeforeGuard = replaceExactly(
+    const ftsOpenCallBeforeGuard = mutateOpenOnceExactly(
       ftsSource,
-      "      this.db = new Ctor(this.file) as Db;\n",
-      "      this.db = new Ctor(this.file) as Db;\n" + '      this.db.exec("CREATE TABLE admission_bypass(x)");\n'
+      FTS_ADMISSION_ORDER,
+      "this.db = new Ctor(this.file) as Db;\n",
+      "this.db = new Ctor(this.file) as Db;\n" + 'this.db.exec("CREATE TABLE admission_bypass(x)");\n'
     );
     expect(admissionOrderProblems(ftsOpenCallBeforeGuard, FTS_ADMISSION_ORDER)).toContain(
-      "FTS open: call runs between live handle and first guard"
+      "FTS openOnce: call runs between live handle and first guard"
     );
-    const embedOpenCallBeforeGuard = replaceExactly(
+    const embedOpenCallBeforeGuard = mutateOpenOnceExactly(
       embedSource,
-      "      this.db = new Ctor(this.file) as Db;\n",
-      "      this.db = new Ctor(this.file) as Db;\n" + '      this.db.prepare("DELETE FROM embeddings").run();\n'
+      EMBED_ADMISSION_ORDER,
+      "this.db = new Ctor(this.file) as Db;\n",
+      "this.db = new Ctor(this.file) as Db;\n" + 'this.db.prepare("DELETE FROM embeddings").run();\n'
     );
     expect(admissionOrderProblems(embedOpenCallBeforeGuard, EMBED_ADMISSION_ORDER)).toContain(
-      "Embed open: call runs between live handle and first guard"
+      "Embed openOnce: call runs between live handle and first guard"
     );
 
-    const embedOpenCallBetweenGuardAndAssert = replaceExactly(
+    const embedOpenCallBetweenGuardAndAssert = mutateOpenOnceExactly(
       embedSource,
-      "      const admission = inspectEmbedAdmission(this.db, this.vaultRoot);\n" +
-        "      assertEmbedAdmission(admission);",
-      "      const admission = inspectEmbedAdmission(this.db, this.vaultRoot);\n" +
-        '      this.db.prepare("DELETE FROM embeddings").run();\n' +
-        "      assertEmbedAdmission(admission);"
+      EMBED_ADMISSION_ORDER,
+      EMBED_ADMISSION_ORDER.firstGuard,
+      `${EMBED_ADMISSION_ORDER.firstGuard}\nthis.db.prepare("DELETE FROM embeddings").run();`
     );
     expect(admissionOrderProblems(embedOpenCallBetweenGuardAndAssert, EMBED_ADMISSION_ORDER)).toContain(
-      "Embed open: exact guarded admission sequence changed"
+      "Embed openOnce: exact guarded admission sequence changed"
     );
 
-    const ftsOpenCallBetweenGuardAndBootstrap = replaceExactly(
+    const ftsOpenCallBetweenGuardAndBootstrap = mutateOpenOnceExactly(
       ftsSource,
-      "      const initialAdmission = this.inspectAdmission();\n" +
-        "      assertExpectedFtsDiscovery(expected, fileExisted, initialAdmission);",
-      "      const initialAdmission = this.inspectAdmission();\n" +
-        '      this.db.exec("CREATE TABLE admission_bypass(x)");\n' +
-        "      assertExpectedFtsDiscovery(expected, fileExisted, initialAdmission);"
+      FTS_ADMISSION_ORDER,
+      FTS_ADMISSION_ORDER.firstGuard,
+      `${FTS_ADMISSION_ORDER.firstGuard}\nthis.db.exec("CREATE TABLE admission_bypass(x)");`
     );
     expect(admissionOrderProblems(ftsOpenCallBetweenGuardAndBootstrap, FTS_ADMISSION_ORDER)).toContain(
-      "FTS open: exact guarded admission sequence changed"
+      "FTS openOnce: exact guarded admission sequence changed"
     );
 
-    const embedOpenCallBetweenAssertAndBootstrap = replaceExactly(
+    const embedOpenCallBetweenAssertAndBootstrap = mutateOpenOnceExactly(
       embedSource,
-      "      assertExpectedEmbedDiscovery(expected, fileExisted, admission);\n" +
-        "      this.bootstrapSchema(admission.kind, admission.signature);",
-      "      assertExpectedEmbedDiscovery(expected, fileExisted, admission);\n" +
-        '      this.db.prepare("DELETE FROM embeddings").run();\n' +
-        "      this.bootstrapSchema(admission.kind, admission.signature);"
+      EMBED_ADMISSION_ORDER,
+      EMBED_ADMISSION_ORDER.expectedAssert,
+      `${EMBED_ADMISSION_ORDER.expectedAssert}\nthis.db.prepare("DELETE FROM embeddings").run();`
     );
     expect(admissionOrderProblems(embedOpenCallBetweenAssertAndBootstrap, EMBED_ADMISSION_ORDER)).toContain(
-      "Embed open: exact guarded admission sequence changed"
+      "Embed openOnce: exact guarded admission sequence changed"
     );
 
-    const ftsExpectedDiscoveryAssertionRemoved = replaceExactly(
+    const ftsExpectedDiscoveryAssertionRemoved = mutateOpenOnceExactly(
       ftsSource,
-      "      assertExpectedFtsDiscovery(expected, fileExisted, initialAdmission);\n",
+      FTS_ADMISSION_ORDER,
+      FTS_ADMISSION_ORDER.expectedAssert,
       ""
     );
     expect(admissionOrderProblems(ftsExpectedDiscoveryAssertionRemoved, FTS_ADMISSION_ORDER)).toContain(
-      "FTS open: exact AST expected-discovery assertion is not unique"
+      "FTS openOnce: exact AST expected-discovery assertion is not unique"
     );
-    const embedExpectedDiscoveryAssertionRemoved = replaceExactly(
+    const embedExpectedDiscoveryAssertionRemoved = mutateOpenOnceExactly(
       embedSource,
-      "      assertExpectedEmbedDiscovery(expected, fileExisted, admission);\n",
+      EMBED_ADMISSION_ORDER,
+      EMBED_ADMISSION_ORDER.expectedAssert,
       ""
     );
     expect(admissionOrderProblems(embedExpectedDiscoveryAssertionRemoved, EMBED_ADMISSION_ORDER)).toContain(
-      "Embed open: exact AST expected-discovery assertion is not unique"
+      "Embed openOnce: exact AST expected-discovery assertion is not unique"
     );
 
-    const ftsExpectedDiscoveryAssertionReordered = replaceExactly(
+    const ftsExpectedDiscoveryAssertionReordered = mutateOpenOnceExactly(
       ftsSource,
-      "      assertExpectedFtsDiscovery(expected, fileExisted, initialAdmission);\n" +
-        "      this.bootstrapSchema(initialAdmission);",
-      "      this.bootstrapSchema(initialAdmission);\n" +
-        "      assertExpectedFtsDiscovery(expected, fileExisted, initialAdmission);"
+      FTS_ADMISSION_ORDER,
+      `${FTS_ADMISSION_ORDER.expectedAssert}\n        ${FTS_ADMISSION_ORDER.bootstrapCall}`,
+      `${FTS_ADMISSION_ORDER.bootstrapCall}\n        ${FTS_ADMISSION_ORDER.expectedAssert}`
     );
     expect(admissionOrderProblems(ftsExpectedDiscoveryAssertionReordered, FTS_ADMISSION_ORDER)).toContain(
-      "FTS open: exact guarded admission sequence changed"
+      "FTS openOnce: exact guarded admission sequence changed"
     );
-    const embedExpectedDiscoveryAssertionReordered = replaceExactly(
+    const embedExpectedDiscoveryAssertionReordered = mutateOpenOnceExactly(
       embedSource,
-      "      assertEmbedAdmission(admission);\n" +
-        "      assertExpectedEmbedDiscovery(expected, fileExisted, admission);",
-      "      assertExpectedEmbedDiscovery(expected, fileExisted, admission);\n" +
-        "      assertEmbedAdmission(admission);"
+      EMBED_ADMISSION_ORDER,
+      `${EMBED_ADMISSION_ORDER.firstAssert}\n      ${EMBED_ADMISSION_ORDER.expectedAssert}`,
+      `${EMBED_ADMISSION_ORDER.expectedAssert}\n      ${EMBED_ADMISSION_ORDER.firstAssert}`
     );
     expect(admissionOrderProblems(embedExpectedDiscoveryAssertionReordered, EMBED_ADMISSION_ORDER)).toContain(
-      "Embed open: exact guarded admission sequence changed"
+      "Embed openOnce: exact guarded admission sequence changed"
     );
 
-    const ftsExpectedDiscoveryAssertionDecoy = replaceExactly(
+    const ftsExpectedDiscoveryAssertionDecoy = mutateOpenOnceExactly(
       ftsSource,
-      "      assertExpectedFtsDiscovery(expected, fileExisted, initialAdmission);",
-      "      if (false) {\n" +
-        "        assertExpectedFtsDiscovery(expected, fileExisted, initialAdmission);\n" +
-        "      }"
+      FTS_ADMISSION_ORDER,
+      FTS_ADMISSION_ORDER.expectedAssert,
+      `if (false) {\n${FTS_ADMISSION_ORDER.expectedAssert}\n}`
     );
     expect(admissionOrderProblems(ftsExpectedDiscoveryAssertionDecoy, FTS_ADMISSION_ORDER)).toContain(
-      "FTS open: exact guarded admission sequence changed"
+      "FTS openOnce: exact guarded admission sequence changed"
     );
-    const embedExpectedDiscoveryAssertionDecoy = replaceExactly(
+    const embedExpectedDiscoveryAssertionDecoy = mutateOpenOnceExactly(
       embedSource,
-      "      assertExpectedEmbedDiscovery(expected, fileExisted, admission);",
-      '      const expectedDiscoveryDecoy = "assertExpectedEmbedDiscovery(expected, fileExisted, admission);";\n' +
-        "      void expectedDiscoveryDecoy;"
+      EMBED_ADMISSION_ORDER,
+      EMBED_ADMISSION_ORDER.expectedAssert,
+      'const expectedDiscoveryDecoy = "assertExpectedEmbedDiscovery(expected, fileExisted, admission);";\n' +
+        "void expectedDiscoveryDecoy;"
     );
     expect(admissionOrderProblems(embedExpectedDiscoveryAssertionDecoy, EMBED_ADMISSION_ORDER)).toContain(
-      "Embed open: exact AST expected-discovery assertion is not unique"
+      "Embed openOnce: exact AST expected-discovery assertion is not unique"
     );
 
     const ftsBootstrapCallBeforeTxn = replaceExactly(
@@ -2961,56 +3510,69 @@ describe("K-1 class invariant (v3.6.3 methodological guard; recursive scan since
       ])
     );
 
-    const ftsJournalBeforeGuard = replaceExactly(
+    const ftsJournalBeforeGuard = mutateOpenOnceExactly(
       ftsSource,
-      "      const initialAdmission = this.inspectAdmission();",
-      '      this.db.pragma("journal_mode = WAL");\n      const initialAdmission = this.inspectAdmission();'
+      FTS_ADMISSION_ORDER,
+      FTS_ADMISSION_ORDER.firstGuard,
+      `this.db.pragma("journal_mode = WAL");\n${FTS_ADMISSION_ORDER.firstGuard}`
     );
     expect(admissionOrderProblems(ftsJournalBeforeGuard, FTS_ADMISSION_ORDER)).toContain(
-      "FTS open: journal_mode runs before bootstrap"
+      "FTS openOnce: journal_mode runs before bootstrap"
     );
-    const embedJournalBeforeGuard = replaceExactly(
+    const embedJournalBeforeGuard = mutateOpenOnceExactly(
       embedSource,
-      "      const admission = inspectEmbedAdmission(this.db, this.vaultRoot);",
-      '      this.db.pragma("journal_mode = WAL");\n' +
-        "      const admission = inspectEmbedAdmission(this.db, this.vaultRoot);"
+      EMBED_ADMISSION_ORDER,
+      EMBED_ADMISSION_ORDER.firstGuard,
+      `this.db.pragma("journal_mode = WAL");\n${EMBED_ADMISSION_ORDER.firstGuard}`
     );
     expect(admissionOrderProblems(embedJournalBeforeGuard, EMBED_ADMISSION_ORDER)).toContain(
-      "Embed open: journal_mode runs before bootstrap"
+      "Embed openOnce: journal_mode runs before bootstrap"
     );
 
     const artifactChmodBlock =
-      "    await Promise.all(\n" +
-      `      [this.file, \`\${this.file}-wal\`, \`\${this.file}-shm\`].map((p) => fs.chmod(p, 0o600).catch(() => {}))\n` +
-      "    );\n";
-    const earlyArtifactChmod =
-      "      await Promise.all(\n" +
+      "await Promise.all(\n" +
       `        [this.file, \`\${this.file}-wal\`, \`\${this.file}-shm\`].map((p) => fs.chmod(p, 0o600).catch(() => {}))\n` +
-      "      );\n";
-    const ftsChmodBeforeGuard = replaceExactly(
-      replaceExactly(ftsSource, artifactChmodBlock, ""),
-      "      const initialAdmission = this.inspectAdmission();",
-      `${earlyArtifactChmod}      const initialAdmission = this.inspectAdmission();`
+      "      );";
+    const earlyArtifactChmod =
+      "await Promise.all(\n" +
+      `  [this.file, \`\${this.file}-wal\`, \`\${this.file}-shm\`].map((p) => fs.chmod(p, 0o600).catch(() => {}))\n` +
+      ");\n";
+    const ftsChmodBeforeGuard = mutateOpenOnceExactly(
+      mutateOpenOnceExactly(ftsSource, FTS_ADMISSION_ORDER, artifactChmodBlock, ""),
+      FTS_ADMISSION_ORDER,
+      FTS_ADMISSION_ORDER.firstGuard,
+      `${earlyArtifactChmod}${FTS_ADMISSION_ORDER.firstGuard}`
     );
     expect(admissionOrderProblems(ftsChmodBeforeGuard, FTS_ADMISSION_ORDER)).toContain(
-      "FTS open: artifact chmod runs before synchronous"
+      "FTS openOnce: artifact chmod runs before synchronous"
     );
-    const embedChmodBeforeGuard = replaceExactly(
-      replaceExactly(embedSource, artifactChmodBlock, ""),
-      "      const admission = inspectEmbedAdmission(this.db, this.vaultRoot);",
-      `${earlyArtifactChmod}      const admission = inspectEmbedAdmission(this.db, this.vaultRoot);`
+    const embedChmodBeforeGuard = mutateOpenOnceExactly(
+      mutateOpenOnceExactly(embedSource, EMBED_ADMISSION_ORDER, artifactChmodBlock, ""),
+      EMBED_ADMISSION_ORDER,
+      EMBED_ADMISSION_ORDER.firstGuard,
+      `${earlyArtifactChmod}${EMBED_ADMISSION_ORDER.firstGuard}`
     );
     expect(admissionOrderProblems(embedChmodBeforeGuard, EMBED_ADMISSION_ORDER)).toContain(
-      "Embed open: artifact chmod runs before synchronous"
+      "Embed openOnce: artifact chmod runs before synchronous"
     );
 
-    const ftsFreshGuardRemoved = replaceExactly(ftsSource, "if (!fileExisted) {", "if (true) {");
-    expect(freshParentPreparationProblems(ftsFreshGuardRemoved, embedSource)).toContain(
-      "FTS open: fresh-parent preparation lacks a pre-handle target existence proof"
+    const ftsFreshGuardRemoved = mutateOpenOnceExactly(
+      ftsSource,
+      FTS_ADMISSION_ORDER,
+      "if (!fileExisted) {",
+      "if (true) {"
     );
-    const embedFreshGuardRemoved = replaceExactly(embedSource, "if (!fileExisted) {", "if (true) {");
+    expect(freshParentPreparationProblems(ftsFreshGuardRemoved, embedSource)).toContain(
+      "FTS openOnce: initial SQLite family preflight must precede dependency load and fresh branch"
+    );
+    const embedFreshGuardRemoved = mutateOpenOnceExactly(
+      embedSource,
+      EMBED_ADMISSION_ORDER,
+      "if (!fileExisted) {",
+      "if (true) {"
+    );
     expect(freshParentPreparationProblems(ftsSource, embedFreshGuardRemoved)).toContain(
-      "Embed open: fresh-parent preparation lacks a pre-handle target existence proof"
+      "Embed openOnce: initial SQLite family preflight must precede dependency load and fresh branch"
     );
 
     const ftsContinuityDropped = replaceExactly(
@@ -3029,6 +3591,213 @@ describe("K-1 class invariant (v3.6.3 methodological guard; recursive scan since
     expect(admissionOrderProblems(embedContinuityDropped, EMBED_ADMISSION_ORDER)).toContain(
       "Embed bootstrap: guard continuity comparison is missing"
     );
+  });
+
+  it.for([
+    { store: "FTS" as const, file: "fts5.ts", spec: FTS_ADMISSION_ORDER },
+    { store: "Embed" as const, file: "embed-db.ts", spec: EMBED_ADMISSION_ORDER }
+  ])("rejects a $store public-open delegation that no longer tracks openOnce", async ({ file, spec }) => {
+    const source = await fs.readFile(path.resolve(process.cwd(), "src", file), "utf8");
+    const mutant = replaceExactly(source, spec.delegation, "const attempt = Promise.resolve();");
+    expect(publicOpenWrapperProblems(mutant, spec)).toContain(
+      `${spec.label} public open: exact openOnce delegation is not unique`
+    );
+  });
+
+  it.for([
+    { store: "FTS" as const, file: "fts5.ts", spec: FTS_ADMISSION_ORDER },
+    { store: "Embed" as const, file: "embed-db.ts", spec: EMBED_ADMISSION_ORDER }
+  ])("rejects a $store authority snapshot after the first await", async ({ file, spec }) => {
+    const source = await fs.readFile(path.resolve(process.cwd(), "src", file), "utf8");
+    const mutant = replaceExactly(source, spec.cloneStatement, `await Promise.resolve();\n    ${spec.cloneStatement}`);
+    expect(publicOpenWrapperProblems(mutant, spec)).toContain(
+      `${spec.label} public open: caller authority is not snapshotted before the first await`
+    );
+  });
+
+  it.for([
+    { store: "FTS" as const, file: "fts5.ts", spec: FTS_ADMISSION_ORDER },
+    { store: "Embed" as const, file: "embed-db.ts", spec: EMBED_ADMISSION_ORDER }
+  ])("rejects a $store public wrapper with a second hidden openOnce call", async ({ file, spec }) => {
+    const source = await fs.readFile(path.resolve(process.cwd(), "src", file), "utf8");
+    const mutant = replaceExactly(source, spec.delegation, `${spec.delegation}\n    void this.openOnce(expected);`);
+    expect(publicOpenWrapperProblems(mutant, spec)).toContain(
+      `${spec.label} public open: openOnce call census changed`
+    );
+  });
+
+  it.for([
+    { store: "FTS" as const, file: "fts5.ts", spec: FTS_ADMISSION_ORDER },
+    { store: "Embed" as const, file: "embed-db.ts", spec: EMBED_ADMISSION_ORDER }
+  ])("rejects a $store public wrapper without the post-drain join", async ({ file, spec }) => {
+    const source = await fs.readFile(path.resolve(process.cwd(), "src", file), "utf8");
+    const publicOpen = sectionBetween(
+      source,
+      `${spec.label} public-open mutation fixture`,
+      `  async open(expectedDiscovery?: ${spec.publicOpenParameterType}): Promise<void> {`,
+      spec.mutatingOpenStart
+    ).text;
+    const postDrainAt = publicOpen.lastIndexOf(spec.postDrainJoin);
+    expect(postDrainAt).toBeGreaterThanOrEqual(0);
+    const mutantOpen = `${publicOpen.slice(0, postDrainAt)}void 0;${publicOpen.slice(
+      postDrainAt + spec.postDrainJoin.length
+    )}`;
+    const mutant = replaceExactly(source, publicOpen, mutantOpen);
+    expect(publicOpenWrapperProblems(mutant, spec)).toContain(
+      `${spec.label} public open: post-drain single-flight recheck is not unique`
+    );
+  });
+
+  it.for([
+    { store: "FTS" as const, file: "fts5.ts", spec: FTS_ADMISSION_ORDER },
+    { store: "Embed" as const, file: "embed-db.ts", spec: EMBED_ADMISSION_ORDER }
+  ])("rejects a $store pre-drain join that can return a close-doomed attempt", async ({ file, spec }) => {
+    const source = await fs.readFile(path.resolve(process.cwd(), "src", file), "utf8");
+    const mutant = replaceExactly(source, spec.initialJoin, spec.unsafeInitialJoin);
+    expect(publicOpenWrapperProblems(mutant, spec)).toContain(
+      `${spec.label} public open: exact pre-drain single-flight join is not unique`
+    );
+  });
+
+  it.for([
+    { store: "FTS" as const, file: "fts5.ts", spec: FTS_ADMISSION_ORDER },
+    { store: "Embed" as const, file: "embed-db.ts", spec: EMBED_ADMISSION_ORDER }
+  ])("rejects a $store reopen that drops the later-close generation comparison", async ({ file, spec }) => {
+    const source = await fs.readFile(path.resolve(process.cwd(), "src", file), "utf8");
+    const mutant = mutatePublicOpenExactly(source, spec, spec.closeSupersededGuard, "void 0;");
+    expect(publicOpenWrapperProblems(mutant, spec)).toContain(
+      `${spec.label} public open: later-close generation guard changed`
+    );
+  });
+
+  it.for([
+    { store: "FTS" as const, file: "fts5.ts", spec: FTS_ADMISSION_ORDER },
+    { store: "Embed" as const, file: "embed-db.ts", spec: EMBED_ADMISSION_ORDER }
+  ])("rejects a $store reopen that re-enters public closeAndRelease", async ({ file, spec }) => {
+    const source = await fs.readFile(path.resolve(process.cwd(), "src", file), "utf8");
+    const mutant = mutatePublicOpenExactly(source, spec, spec.closeFinish, "await this.closeAndRelease();");
+    expect(publicOpenWrapperProblems(mutant, spec)).toContain(`${spec.label} public open: private close drain changed`);
+  });
+
+  it.for([
+    { store: "FTS" as const, file: "fts5.ts", spec: FTS_ADMISSION_ORDER },
+    { store: "Embed" as const, file: "embed-db.ts", spec: EMBED_ADMISSION_ORDER }
+  ])("rejects a $store later-close comparison moved after flag clearing", async ({ file, spec }) => {
+    const source = await fs.readFile(path.resolve(process.cwd(), "src", file), "utf8");
+    const resetSequence = spec.closeReset.join("\n      ");
+    const reorderedDrain = replaceExactly(
+      spec.closeDrain,
+      `${spec.closeSupersededGuard}\n      ${resetSequence}`,
+      `${resetSequence}\n      ${spec.closeSupersededGuard}`
+    );
+    const mutant = mutatePublicOpenExactly(source, spec, spec.closeDrain, reorderedDrain);
+    expect(publicOpenWrapperProblems(mutant, spec)).toContain(
+      `${spec.label} public open: token-capture/drain/compare/reset sequence changed`
+    );
+  });
+
+  it.for([
+    { store: "FTS" as const, file: "fts5.ts", spec: FTS_ADMISSION_ORDER },
+    { store: "Embed" as const, file: "embed-db.ts", spec: EMBED_ADMISSION_ORDER }
+  ])("rejects a $store openOnce that loses its private mutating signature", async ({ file, spec }) => {
+    const source = await fs.readFile(path.resolve(process.cwd(), "src", file), "utf8");
+    const mutant = replaceExactly(source, spec.mutatingOpenStart, spec.mutatingOpenStart.replace("private ", ""));
+    expect(admissionOrderProblems(mutant, spec)).toContain(
+      `${spec.label} openOnce: exact private mutating signature changed`
+    );
+  });
+
+  it.for([
+    { store: "FTS" as const, file: "fts5.ts", spec: FTS_ADMISSION_ORDER },
+    { store: "Embed" as const, file: "embed-db.ts", spec: EMBED_ADMISSION_ORDER }
+  ])("rejects a $store admission guard removed from openOnce", async ({ file, spec }) => {
+    const source = await fs.readFile(path.resolve(process.cwd(), "src", file), "utf8");
+    const mutant = replaceExactly(source, spec.firstGuard, "void 0;");
+    expect(admissionOrderProblems(mutant, spec)).toContain(
+      `${spec.label} openOnce: exact AST first guard is not unique`
+    );
+  });
+
+  it.for([
+    { store: "FTS" as const, file: "fts5.ts", spec: FTS_ADMISSION_ORDER },
+    { store: "Embed" as const, file: "embed-db.ts", spec: EMBED_ADMISSION_ORDER }
+  ])("rejects a $store admission guard moved from openOnce into public open", async ({ file, spec }) => {
+    const source = await fs.readFile(path.resolve(process.cwd(), "src", file), "utf8");
+    const removed = replaceExactly(source, spec.firstGuard, "void 0;");
+    const mutant = replaceExactly(removed, spec.cloneStatement, `${spec.firstGuard}\n    ${spec.cloneStatement}`);
+    expect(admissionOrderProblems(mutant, spec)).toContain(
+      `${spec.label} openOnce: exact AST first guard is not unique`
+    );
+    expect(publicOpenWrapperProblems(mutant, spec)).toContain(
+      `${spec.label} public open: mutating admission escaped openOnce`
+    );
+  });
+
+  it.for([
+    { store: "FTS" as const, phase: "initial" as const, mutation: "missing" as const },
+    { store: "FTS" as const, phase: "initial" as const, mutation: "reordered" as const },
+    { store: "FTS" as const, phase: "final" as const, mutation: "missing" as const },
+    { store: "FTS" as const, phase: "final" as const, mutation: "reordered" as const },
+    { store: "Embed" as const, phase: "initial" as const, mutation: "missing" as const },
+    { store: "Embed" as const, phase: "initial" as const, mutation: "reordered" as const },
+    { store: "Embed" as const, phase: "final" as const, mutation: "missing" as const },
+    { store: "Embed" as const, phase: "final" as const, mutation: "reordered" as const }
+  ])("rejects a $store $phase family-preflight that is $mutation", async ({ store, phase, mutation }) => {
+    const ftsSource = await fs.readFile(path.resolve(process.cwd(), "src", "fts5.ts"), "utf8");
+    const embedSource = await fs.readFile(path.resolve(process.cwd(), "src", "embed-db.ts"), "utf8");
+    const source = store === "FTS" ? ftsSource : embedSource;
+    const admissionSpec = store === "FTS" ? FTS_ADMISSION_ORDER : EMBED_ADMISSION_ORDER;
+    const handle = admissionSpec.handle;
+    const preflight = "fileExisted = await preflightSqliteArtifactFamily(this.file);";
+    const dependencyLoad = "const Ctor = await loadBetterSqlite();";
+    const openOnce = sectionBetween(
+      source,
+      `${store} mutating openOnce mutation fixture`,
+      admissionSpec.mutatingOpenStart,
+      admissionSpec.mutatingOpenEnd
+    ).text;
+    const offsets: number[] = [];
+    for (
+      let offset = openOnce.indexOf(preflight);
+      offset >= 0;
+      offset = openOnce.indexOf(preflight, offset + preflight.length)
+    ) {
+      offsets.push(offset);
+    }
+    expect(offsets).toHaveLength(2);
+    const mutateOccurrence = (body: string, occurrence: number, replacement: string): string => {
+      const at = offsets[occurrence];
+      expect(at).toBeTypeOf("number");
+      return body.slice(0, at) + replacement + body.slice((at ?? -1) + preflight.length);
+    };
+
+    let mutantOpen: string;
+    if (phase === "initial" && mutation === "missing") {
+      mutantOpen = mutateOccurrence(openOnce, 0, "fileExisted = false;");
+    } else if (phase === "initial") {
+      mutantOpen = mutateOccurrence(openOnce, 0, "fileExisted = false;");
+      mutantOpen = replaceExactly(mutantOpen, dependencyLoad, `${dependencyLoad}\n      ${preflight}`);
+    } else if (mutation === "missing") {
+      mutantOpen = mutateOccurrence(openOnce, 1, "fileExisted = false;");
+    } else {
+      mutantOpen = mutateOccurrence(openOnce, 1, "fileExisted = false;");
+      mutantOpen = replaceExactly(mutantOpen, handle, `${handle}\n      ${preflight}`);
+    }
+    const mutant = replaceExactly(source, openOnce, mutantOpen);
+
+    const ftsCandidate = store === "FTS" ? mutant : ftsSource;
+    const embedCandidate = store === "Embed" ? mutant : embedSource;
+    if (phase === "initial") {
+      expect(freshParentPreparationProblems(ftsCandidate, embedCandidate)).toContain(
+        mutation === "missing"
+          ? `${store} openOnce: expected exactly two SQLite family preflights`
+          : `${store} openOnce: initial SQLite family preflight must precede dependency load and fresh branch`
+      );
+    } else {
+      expect(admissionOrderProblems(mutant, admissionSpec)).toContain(
+        `${store} openOnce: final SQLite family preflight is not immediately before live handle`
+      );
+    }
   });
 
   it("at least 6 EmbedDb/FtsIndex sites are tracked (sanity — invariant has scope)", async () => {

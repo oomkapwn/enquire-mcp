@@ -155,7 +155,7 @@ describe("Vault.readPaths (v1.6 strict allowlist)", () => {
     expect(out.every((n) => !n.path.startsWith("Private/"))).toBe(true);
   });
 
-  it("when readPaths is empty, behaviour matches v1.5 (no allowlist filter)", async () => {
+  it("when readPaths is omitted, behaviour matches v1.5 (no allowlist filter)", async () => {
     const v = new Vault(root);
     await v.ensureExists();
     const out = await listNotes(v, { limit: 200 });
@@ -163,5 +163,11 @@ describe("Vault.readPaths (v1.6 strict allowlist)", () => {
     expect(out.some((n) => n.path === "A.md")).toBe(true);
     expect(out.some((n) => n.path === "Public/p1.md")).toBe(true);
     expect(out.some((n) => n.path === "Private/secret.md")).toBe(true);
+  });
+
+  it("rejects an explicit empty readPaths allowlist instead of exposing the whole vault", () => {
+    expect(() => new Vault(root, { readPaths: [] })).toThrow(
+      new TypeError("Vault option readPaths must not be an empty allowlist")
+    );
   });
 });

@@ -30,7 +30,7 @@ function availability(overrides: Partial<InitializeToolAvailability> = {}): Init
     diagnosticSearchTools: false,
     writeTools: false,
     feedbackTool: false,
-    enabledTools: new Set(),
+    enabledTools: null,
     disabledTools: new Set(),
     ...overrides
   };
@@ -210,6 +210,25 @@ describe("MCP initialize instructions", () => {
     }
   });
 
+  it("treats an explicit empty allowlist as exposing zero tools", () => {
+    const profile = resolveInitializeToolProfile(
+      availability({
+        hasFtsIndex: true,
+        diagnosticSearchTools: true,
+        writeTools: true,
+        feedbackTool: true,
+        enabledTools: new Set()
+      })
+    );
+    const instructions = buildInitializeInstructions(profile);
+
+    expect(profile.availableTools.size).toBe(0);
+    expect(profile.toolFiltersActive).toBe(true);
+    expect(instructions).toContain("No general recall tool is exposed");
+    expect(instructions).toContain("Vault mutation tools are not exposed");
+    expect(instructions).toContain("allowlist or denylist is active");
+  });
+
   it("NEGATIVE: removing every workflow entrypoint produces an honest no-general-recall fallback", () => {
     const disabledTools = new Set(
       TOOL_MANIFEST.filter((entry) =>
@@ -246,7 +265,7 @@ describe("MCP initialize instructions", () => {
           diagnosticSearchTools: false,
           writeTools: false,
           feedbackTool: false,
-          enabledTools: new Set(),
+          enabledTools: null,
           disabledTools: new Set()
         })
       );

@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
 import { Command } from "commander";
+import { executeCachePrune, previewCachePrune } from "./cache-prune.js";
 import {
   CACHE_FILE_HELP,
   CACHE_SIZE_HELP,
@@ -16,12 +17,15 @@ import {
   EMBEDDING_INDEX_HELP,
   ENABLE_WRITE_HELP,
   ENABLED_TOOLS_HELP,
+  EXCLUDE_GLOB_HELP,
   INDEX_FILE_HELP,
   MAX_FILE_BYTES_HELP,
+  NO_HNSW_PERSIST_HELP,
   PERSISTENT_CACHE_HELP,
   PERSISTENT_INDEX_HELP,
   PROMPTS_HELP,
   QUANTIZE_EMBEDDINGS_HELP,
+  READ_PATHS_HELP,
   TOKENIZE_HELP,
   WATCH_HELP
 } from "./cli-help.js";
@@ -45,7 +49,8 @@ import {
   defaultIndexFile,
   discoverFtsIndexConfig,
   FtsIndex,
-  planCachePrune,
+  syncFtsIndex,
+  syncPdfFtsIndex,
   type TokenizeMode
 } from "./fts5.js";
 import { VERSION } from "./index.js";
@@ -65,14 +70,7 @@ import {
 } from "./mcp-config.js";
 import { ocrLangIsInstalled, resolveTessdataDir } from "./ocr.js";
 import { validateServeHttpRetrievalOpts } from "./retrieval-opts.js";
-import {
-  type ServeOptions,
-  startServer,
-  syncEmbedDb,
-  syncFtsIndex,
-  syncPdfEmbedDb,
-  syncPdfFtsIndex
-} from "./server.js";
+import { type ServeOptions, startServer, syncEmbedDb, syncPdfEmbedDb } from "./server.js";
 import { embedDbPath, parsePositiveInt, parseQuantizationMode } from "./tool-registry.js";
 import { searchHybrid } from "./tools/index.js";
 import { Vault } from "./vault.js";
@@ -206,10 +204,7 @@ function addAdvancedRetrievalOptions(cmd: Command): Command {
       "--late-chunk-context <chars>",
       "v2.15.0 — late-chunking-style context windowing on embeddings. When > 0, prepends doc title + heading breadcrumb + tails of neighboring chunks (this many chars from each side) before sending to the embedder. Typical +2-5 NDCG@10 retrieval boost at zero new dep cost. Default 0 (off; matches v2.1.0+ breadcrumb-only behavior). Applies during `build-embeddings` and, with `serve --watch`, to subsequently refreshed chunks; it does not rebuild existing rows at serve start."
     )
-    .option(
-      "--no-hnsw-persist",
-      "v2.16.0 — disable HNSW index persistence. By default (with --use-hnsw), the index is saved to a sidecar `.hnsw.bin` + `.meta.json` next to `.embed.db` after the first build, then re-loaded on subsequent serve starts when the embed-db signature matches. Skipping persistence means a fresh rebuild every serve start. Pass this flag if you can't write to the cache dir or want diagnostic-fresh builds."
-    )
+    .option("--no-hnsw-persist", NO_HNSW_PERSIST_HELP)
     .option(
       "--ocr-pdfs",
       "v3.9.0-rc.1 — when used with --watch + --include-pdfs, run Tesseract OCR on image-only / scanned PDFs that pdfjs can't read text from, so the watcher's embed-db sync keeps OCR'd PDFs in sync with edits during a long serve session. Without this flag, image-only PDF events drop the embed-db rows (FTS5 still reindexes from empty pages). OCR is slow (~1-2s per page on M1 CPU; bounded by --ocr-max-pages, default 200). Requires `tesseract.js` + `@napi-rs/canvas` optional dependencies + the language pack pre-installed via `enquire-mcp install-ocr-lang <code>` (the explicit, opt-in download). serve itself makes NO outbound network call — a missing pack throws fail-closed before the worker starts (v3.9.0-rc.10 offline enforcement). See SECURITY.md \"OCR network posture\"."
@@ -232,7 +227,7 @@ function addAdvancedRetrievalOptions(cmd: Command): Command {
     )
     .option(
       "--feedback-weight <w>",
-      "v3.11.0 — OPT-IN closed-loop feedback re-ranking for `obsidian_search`, and the gate for the `obsidian_mark_useful` tool. A number in [0, 1]; default 0 (OFF — no feedback tool, no boost; ranking stays purely relevance-driven). When > 0, registers `obsidian_mark_useful` (agents record which recalled notes actually helped a query) and re-sorts the fused order by `(1 - w) * relevanceRank + w * feedbackScore`, where feedbackScore = useful/(useful+notUseful+1) per note. 0.15-0.3 gently favors notes marked useful; 1.0 sorts almost purely by recorded usefulness. State persists per-vault in a cache sidecar containing the canonical absolute vault root plus relative path keys, counts, and ISO timestamps — no note content, snippets, or query text; erased by `enquire-mcp prune`."
+      "v3.11.0 — OPT-IN closed-loop feedback re-ranking for `obsidian_search`, and the gate for the `obsidian_mark_useful` tool. A number in [0, 1]; default 0 (OFF — no feedback tool, no boost; ranking stays purely relevance-driven). When > 0, registers `obsidian_mark_useful` (agents record which recalled notes actually helped a query) and re-sorts the fused order by `(1 - w) * relevanceRank + w * feedbackScore`, where feedbackScore = useful/(useful+notUseful+1) per note. 0.15-0.3 gently favors notes marked useful; 1.0 sorts almost purely by recorded usefulness. State persists in a root-checked, legacy-routing-key-scoped cache sidecar containing the canonical absolute vault root plus relative path keys, counts, and ISO timestamps — no note content, snippets, or query text. `prune` recognizes other stems; the SHA1-12 stem is not collision-proof vault identity."
     );
 }
 
@@ -284,14 +279,8 @@ export async function main(invocation?: ConfigInput["invocation"]): Promise<void
     .option("--persistent-index", PERSISTENT_INDEX_HELP)
     .option("--index-file <path>", INDEX_FILE_HELP)
     .option("--tokenize <mode>", TOKENIZE_HELP)
-    .option(
-      "--exclude-glob <pattern...>",
-      "Glob pattern(s) — paths matching any pattern are invisible to all tools and refuse direct reads. Supports `*`, `**`, `?`. Repeatable. Example: `--exclude-glob '02_Personal/**' '*.private.md'`."
-    )
-    .option(
-      "--read-paths <pattern...>",
-      "Strict allowlist — when set, ONLY paths matching one of these glob patterns are visible. Complement to --exclude-glob (denylist). If both are set: a path must match an allow-glob AND not match any exclude-glob. Same glob semantics as --exclude-glob (`*`, `**`, `?`). Repeatable. Example: `--read-paths '01_Projects/**' '99_Daily/**'`."
-    )
+    .option("--exclude-glob <pattern...>", EXCLUDE_GLOB_HELP)
+    .option("--read-paths <pattern...>", READ_PATHS_HELP)
     .option("--watch", WATCH_HELP)
     .option("--disabled-tools <name...>", DISABLED_TOOLS_HELP)
     .option("--enabled-tools <name...>", ENABLED_TOOLS_HELP)
@@ -369,8 +358,8 @@ export async function main(invocation?: ConfigInput["invocation"]): Promise<void
     .option("--persistent-index", PERSISTENT_INDEX_HELP)
     .option("--index-file <path>", INDEX_FILE_HELP)
     .option("--tokenize <mode>", TOKENIZE_HELP)
-    .option("--exclude-glob <pattern...>", "Privacy denylist (same semantics as `serve`).")
-    .option("--read-paths <pattern...>", "Privacy allowlist (same semantics as `serve`).")
+    .option("--exclude-glob <pattern...>", EXCLUDE_GLOB_HELP)
+    .option("--read-paths <pattern...>", READ_PATHS_HELP)
     .option("--watch", WATCH_HELP)
     .option("--disabled-tools <name...>", DISABLED_TOOLS_HELP)
     .option("--enabled-tools <name...>", ENABLED_TOOLS_HELP)
@@ -385,14 +374,34 @@ export async function main(invocation?: ConfigInput["invocation"]): Promise<void
   addAdvancedRetrievalOptions(serveHttpCmd)
     .option("--quantize-embeddings <mode>", QUANTIZE_EMBEDDINGS_HELP)
     .action(async (opts: HttpServeCli) => {
-      const { tokenize: rawTokenize, ...httpBaseOpts } = opts;
+      // Project Commander's raw HTTP-only spellings away before the closed-world
+      // ServeOptions boundary. Keeping a generic `...opts` rest here leaked
+      // `rateLimit`, `bearerTokenEnv`, and `corsOrigin` into prepareServerDeps;
+      // once ServeOptions became typo-strict, an otherwise valid serve-http
+      // invocation failed before opening the vault. Every transport field is
+      // named explicitly so a future CLI-only option cannot cross accidentally.
+      const {
+        tokenize: rawTokenize,
+        port: rawPort,
+        host: rawHost,
+        bearerToken: rawBearerToken,
+        bearerTokenEnv: rawBearerTokenEnv,
+        mcpPath: rawMcpPath,
+        rateLimit: rawRateLimit,
+        corsOrigin: rawCorsOrigins,
+        healthPath: rawHealthPath,
+        stateful: rawStateful,
+        sessionIdleTimeoutMs: rawSessionIdleTimeoutMs,
+        maxSessions: rawMaxSessions,
+        quantizeEmbeddings: rawQuantizeEmbeddings,
+        ...serveBaseOpts
+      } = opts;
       const tokenize = rawTokenize === undefined ? undefined : assertTokenizeMode(rawTokenize, "--tokenize");
       // rc.42 F1 — enforce "zero cloud calls during serve" for the HTTP transport too
       // (bearer-reachable embeddings_search / reranker). Set offline before any load.
       setEmbeddingsOffline();
-      const tokenFromArg = typeof opts.bearerToken === "string" ? opts.bearerToken.trim() : "";
-      const tokenFromEnv =
-        typeof opts.bearerTokenEnv === "string" ? (process.env[opts.bearerTokenEnv] ?? "").trim() : "";
+      const tokenFromArg = typeof rawBearerToken === "string" ? rawBearerToken.trim() : "";
+      const tokenFromEnv = typeof rawBearerTokenEnv === "string" ? (process.env[rawBearerTokenEnv] ?? "").trim() : "";
       const bearerToken = tokenFromArg.length > 0 ? tokenFromArg : tokenFromEnv;
       if (!bearerToken) {
         process.stderr.write(
@@ -416,41 +425,43 @@ export async function main(invocation?: ConfigInput["invocation"]): Promise<void
       // and for scenarios where the user binds via a tunnel and doesn't
       // care which local port. So we use a non-negative-integer check
       // here, NOT parsePositiveInt (which would reject 0).
-      const portNum = Number(opts.port ?? "3000");
-      if (!Number.isFinite(portNum) || !Number.isInteger(portNum) || portNum < 0 || portNum > 65535) {
-        throw new Error(`--port must be an integer in [0, 65535]; got "${opts.port}"`);
+      const portRaw = rawPort ?? "3000";
+      const portNum = /^(?:0|[1-9][0-9]*)$/u.test(portRaw) ? Number(portRaw) : Number.NaN;
+      if (!Number.isSafeInteger(portNum) || portNum < 0 || portNum > 65535) {
+        throw new Error(`--port must be an integer in [0, 65535]; got "${rawPort}"`);
       }
       // v2.14.0 — stateful-mode opts. Tolerate missing flags (default to
       // standard values) and validate parsed integers.
       const sessionIdleMs =
-        opts.sessionIdleTimeoutMs !== undefined
-          ? parsePositiveInt(opts.sessionIdleTimeoutMs, "--session-idle-timeout-ms")
+        rawSessionIdleTimeoutMs !== undefined
+          ? parsePositiveInt(rawSessionIdleTimeoutMs, "--session-idle-timeout-ms")
           : 30 * 60 * 1000;
-      const maxSessionsCap =
-        opts.maxSessions !== undefined ? parsePositiveInt(opts.maxSessions, "--max-sessions") : 100;
+      const maxSessionsCap = rawMaxSessions !== undefined ? parsePositiveInt(rawMaxSessions, "--max-sessions") : 100;
       // v2.17.0 — fail fast on a typo'd quantization mode.
-      const quantMode = parseQuantizationMode(opts.quantizeEmbeddings as string | undefined);
+      const quantMode = parseQuantizationMode(rawQuantizeEmbeddings as string | undefined);
+      const rateLimitRaw = rawRateLimit ?? "120";
+      const rateLimitPerMinute = /^(?:0|[1-9][0-9]*)$/u.test(rateLimitRaw) ? Number(rateLimitRaw) : Number.NaN;
       const httpOpts = {
-        ...httpBaseOpts,
+        ...serveBaseOpts,
         ...(tokenize !== undefined ? { tokenize } : {}),
         ...(quantMode !== undefined ? { quantizeEmbeddings: quantMode } : {}),
         port: portNum,
-        host: opts.host ?? "127.0.0.1",
+        host: rawHost ?? "127.0.0.1",
         bearerToken,
-        mcpPath: opts.mcpPath ?? "/mcp",
-        rateLimitPerMinute: opts.rateLimit !== undefined ? Number(opts.rateLimit) : 120,
-        corsOrigins: opts.corsOrigin ?? [],
-        healthPath: opts.healthPath ?? "/health",
-        stateful: opts.stateful === true,
+        mcpPath: rawMcpPath ?? "/mcp",
+        rateLimitPerMinute,
+        corsOrigins: rawCorsOrigins ?? [],
+        healthPath: rawHealthPath ?? "/health",
+        stateful: rawStateful === true,
         sessionIdleTimeoutMs: sessionIdleMs,
         maxSessions: maxSessionsCap
       } as const;
       if (
-        !Number.isFinite(httpOpts.rateLimitPerMinute) ||
+        !Number.isSafeInteger(httpOpts.rateLimitPerMinute) ||
         httpOpts.rateLimitPerMinute < 0 ||
         !Number.isInteger(httpOpts.rateLimitPerMinute)
       ) {
-        throw new Error(`--rate-limit must be a non-negative integer; got "${opts.rateLimit}"`);
+        throw new Error(`--rate-limit must be a non-negative integer; got "${rawRateLimit}"`);
       }
       // v3.10.0-rc.62 (CLI-SERVEHTTP-RECENCY-FAILLATE) — fail FAST on a typo'd advanced-retrieval
       // flag. `startHttpServer` builds `prepareServerDeps` lazily (per session, on first request),
@@ -479,18 +490,21 @@ export async function main(invocation?: ConfigInput["invocation"]): Promise<void
     .option("--cache-file <path>", CACHE_FILE_HELP)
     .action(async (opts: { vault: string; cacheFile?: string }) => {
       const vault = new Vault(opts.vault, { persistentCache: true, cacheFile: opts.cacheFile });
-      await vault.ensureExists();
-      const removed = await vault.clearDiskCache();
-      if (removed) {
-        process.stdout.write(`enquire: removed cache file ${vault.cacheFile}\n`);
-      } else {
-        process.stdout.write(`enquire: no cache file at ${vault.cacheFile}\n`);
+      try {
+        const removed = await vault.clearDiskCache();
+        if (removed) {
+          process.stdout.write(`enquire: removed cache file ${vault.cacheFile}\n`);
+        } else {
+          process.stdout.write(`enquire: no cache file at ${vault.cacheFile}\n`);
+        }
+      } finally {
+        await vault.closePersistence();
       }
     });
 
   program
     .command("clear-index")
-    .description("Delete the FTS5 search-index files (.fts5.db + WAL/SHM sidecar) for a given vault")
+    .description("Delete the FTS5 search-index files (.fts5.db + WAL/SHM/rollback-journal sidecars) for a given vault")
     .requiredOption("--vault <path>", "Vault whose index to delete")
     .option("--index-file <path>", INDEX_FILE_HELP)
     .action(async (opts: { vault: string; indexFile?: string }) => {
@@ -522,60 +536,79 @@ export async function main(invocation?: ConfigInput["invocation"]): Promise<void
     .requiredOption("--vault <path>", "Path to the Obsidian vault root")
     .option("--limit <n>", "Max results (default 10)", "10")
     .option("--index-file <path>", INDEX_FILE_HELP)
+    .option("--exclude-glob <pattern...>", EXCLUDE_GLOB_HELP)
+    .option("--read-paths <pattern...>", READ_PATHS_HELP)
     .option("--json", "Emit the full JSON response instead of the pretty list")
-    .action(async (text: string, opts: { vault: string; limit?: string; indexFile?: string; json?: boolean }) => {
-      // One-shot query is a read/runtime path, not an installation command.
-      // Match serve/serve-http: a missing model cache fails closed instead of
-      // turning an apparently local query into an implicit network download.
-      setEmbeddingsOffline();
-      const v = new Vault(opts.vault);
-      await v.ensureExists();
-      const limit = parsePositiveInt(opts.limit ?? "10", "--limit");
-      const indexFile = opts.indexFile ?? defaultIndexFile(v.root);
-      // Discover the full admitted configuration before constructing (v3.6.4
-      // K-1: never DROP TABLE on a mismatch) — identical to `eval`.
-      const discovered = await discoverFtsIndexConfig(indexFile, v.root);
-      if (discovered.kind === "refused") {
-        throw new Error("FTS index configuration could not be verified");
+    .action(
+      async (
+        text: string,
+        opts: {
+          vault: string;
+          limit?: string;
+          indexFile?: string;
+          excludeGlob?: string[];
+          readPaths?: string[];
+          json?: boolean;
+        }
+      ) => {
+        // One-shot query is a read/runtime path, not an installation command.
+        // Match serve/serve-http: a missing model cache fails closed instead of
+        // turning an apparently local query into an implicit network download.
+        setEmbeddingsOffline();
+        const v = new Vault(opts.vault, { excludeGlobs: opts.excludeGlob, readPaths: opts.readPaths });
+        await v.ensureExists();
+        const limit = parsePositiveInt(opts.limit ?? "10", "--limit");
+        const indexFile = opts.indexFile ?? defaultIndexFile(v.root);
+        // Discover the full admitted configuration before constructing (v3.6.4
+        // K-1: never DROP TABLE on a mismatch) — identical to `eval`.
+        const discovered = await discoverFtsIndexConfig(indexFile, v.root);
+        if (discovered.kind === "refused") {
+          throw new Error("FTS index configuration could not be verified");
+        }
+        const honoredTokenize: TokenizeMode = discovered.kind === "owned" ? discovered.meta.tokenize_mode : "unicode61";
+        const ftsIndex = new FtsIndex({ file: indexFile, vaultRoot: v.root, tokenize: honoredTokenize });
+        try {
+          await ftsIndex.open(discovered);
+          await syncFtsIndex(v, ftsIndex);
+          const result = await searchHybrid(v, { query: text, limit }, { ftsIndex, embedFile: embedDbPath(v.root) });
+          if (opts.json) {
+            process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+            return;
+          }
+          if (result.signal_errors?.embeddings) {
+            process.stderr.write(`enquire query: embeddings unavailable — ${result.signal_errors.embeddings}\n`);
+          }
+          const signals = result.signals_used.length > 0 ? result.signals_used.join("+") : "none";
+          process.stdout.write(`\n${result.matches.length} result(s) for "${text}"  (signals: ${signals})\n\n`);
+          for (const m of result.matches) {
+            const loc = m.line_start ? `:${m.line_start}` : "";
+            const snippet = m.snippet.replace(/\s+/g, " ").trim().slice(0, 160);
+            process.stdout.write(`  ${m.path}${loc}  [${m.kind}]\n    ${snippet}\n`);
+          }
+          process.stdout.write("\n");
+        } finally {
+          await ftsIndex.closeAndRelease();
+        }
       }
-      const honoredTokenize: TokenizeMode = discovered.kind === "owned" ? discovered.meta.tokenize_mode : "unicode61";
-      const ftsIndex = new FtsIndex({ file: indexFile, vaultRoot: v.root, tokenize: honoredTokenize });
-      try {
-        await ftsIndex.open(discovered);
-        await syncFtsIndex(v, ftsIndex);
-        const result = await searchHybrid(v, { query: text, limit }, { ftsIndex, embedFile: embedDbPath(v.root) });
-        if (opts.json) {
-          process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
-          return;
-        }
-        if (result.signal_errors?.embeddings) {
-          process.stderr.write(`enquire query: embeddings unavailable — ${result.signal_errors.embeddings}\n`);
-        }
-        const signals = result.signals_used.length > 0 ? result.signals_used.join("+") : "none";
-        process.stdout.write(`\n${result.matches.length} result(s) for "${text}"  (signals: ${signals})\n\n`);
-        for (const m of result.matches) {
-          const loc = m.line_start ? `:${m.line_start}` : "";
-          const snippet = m.snippet.replace(/\s+/g, " ").trim().slice(0, 160);
-          process.stdout.write(`  ${m.path}${loc}  [${m.kind}]\n    ${snippet}\n`);
-        }
-        process.stdout.write("\n");
-      } finally {
-        ftsIndex.close();
-      }
-    });
+    );
 
   // v3.10.0-rc.14 (bug-report Issue 8) — GC the per-vault index clutter that
   // accumulates in the cache dir over time (one index set per vault path/config
-  // hash). `clear-cache`/`clear-index` only target the CURRENT vault; `prune`
-  // removes all OTHER vaults' enquire artifacts, keeping the one you name.
-  // Dry-run by DEFAULT (destructive → opt in with --yes). Only ever touches
-  // files matching enquire's strict artifact pattern (see `planCachePrune`).
+  // hash). `clear-cache`/`clear-index` target the named vault's configured/default
+  // paths; `prune` removes recognized artifacts under OTHER legacy hash stems and
+  // keeps the one you name. The 12-hex stem is a routing hint, not collision-proof
+  // vault identity. Dry-run by DEFAULT (destructive → opt in with --yes). It touches
+  // only the strict reserved filename namespace (see `planCachePrune`); filename
+  // recognition is not proof of which same-account process created an entry.
   program
     .command("prune")
     .description(
-      "Delete cached index artifacts for OTHER vaults, keeping only the named vault's — GCs the per-vault clutter that builds up in the cache dir. Dry-run by default; pass --yes to actually delete. Only ever removes enquire's own `<hash>.{json,fts5.db,embed.db,hnsw.bin,hnsw.meta.json,feedback.json}` files (incl. the `.json` parse cache that holds full note bodies, the `.feedback.json` usefulness tally, and `.tmp`/WAL sidecars)."
+      "Delete recognized cache artifacts under hash stems OTHER than the named vault's legacy first-12-hex SHA-1 routing stem. The stem is not collision-proof vault identity. Dry-run by default; inspect it before passing --yes. Selection is limited to the reserved `<hash>.{json,fts5.db,embed.db,hnsw.bin,hnsw.meta.json,feedback.json}` namespace, immutable HNSW generation names, and strictly-shaped temp/WAL/SHM/rollback-journal sidecars; matching names are recognized, not creation-provenanced. A visible watcher startup interlock for any selected stem vetoes the whole plan and remains exact-vault clear-embeddings recovery only."
     )
-    .requiredOption("--vault <path>", "Vault whose index to KEEP (all OTHER enquire cache artifacts are removed)")
+    .requiredOption(
+      "--vault <path>",
+      "Vault whose legacy hash stem to KEEP (recognized artifacts under OTHER stems are removed)"
+    )
     .option("--yes", "Actually delete (without this, prune only PREVIEWS what would be removed)")
     .action(async (opts: { vault: string; yes?: boolean }) => {
       const v = new Vault(opts.vault);
@@ -583,49 +616,48 @@ export async function main(invocation?: ConfigInput["invocation"]): Promise<void
       const keepFile = defaultIndexFile(v.root);
       const cacheDir = path.dirname(keepFile);
       const keepHash = path.basename(keepFile).split(".")[0] ?? "";
-      let entries: string[];
-      try {
-        entries = await fs.readdir(cacheDir);
-      } catch {
-        process.stdout.write(`enquire prune: no cache directory at ${cacheDir} — nothing to prune\n`);
-        return;
+      if (opts.yes) {
+        try {
+          const { bytes, removable, removed } = await executeCachePrune(cacheDir, keepHash);
+          if (removable.length === 0) {
+            process.stdout.write(
+              `enquire prune: cache already clean (kept ${keepHash}.*; 0 other artifacts in ${cacheDir})\n`
+            );
+            return;
+          }
+          const mb = (bytes / 1024 / 1024).toFixed(1);
+          process.stdout.write(
+            `enquire prune: removed ${removed} artifact(s) (~${mb} MB) from ${cacheDir}, kept ${keepHash}.*\n`
+          );
+          return;
+        } catch (err) {
+          if (!(typeof err === "object" && err !== null && "code" in err && err.code === "ENOENT")) throw err;
+          process.stdout.write(`enquire prune: no cache directory at ${cacheDir} — nothing to prune\n`);
+          return;
+        }
       }
-      const removable = planCachePrune(entries, keepHash);
+      let preview: Awaited<ReturnType<typeof previewCachePrune>>;
+      try {
+        preview = await previewCachePrune(cacheDir, keepHash);
+      } catch (err) {
+        if (typeof err === "object" && err !== null && "code" in err && err.code === "ENOENT") {
+          process.stdout.write(`enquire prune: no cache directory at ${cacheDir} — nothing to prune\n`);
+          return;
+        }
+        throw new Error("Unable to inspect the cache directory for prune", { cause: err });
+      }
+      const { bytes, removable } = preview;
       if (removable.length === 0) {
         process.stdout.write(
           `enquire prune: cache already clean (kept ${keepHash}.*; 0 other artifacts in ${cacheDir})\n`
         );
         return;
       }
-      // Best-effort byte sum for the report.
-      let bytes = 0;
-      for (const name of removable) {
-        try {
-          bytes += (await fs.stat(path.join(cacheDir, name))).size;
-        } catch {
-          /* unreadable — skip in the tally */
-        }
-      }
       const mb = (bytes / 1024 / 1024).toFixed(1);
       const sample = `${removable.slice(0, 5).join(", ")}${removable.length > 5 ? ", …" : ""}`;
-      if (!opts.yes) {
-        process.stdout.write(
-          `enquire prune (DRY RUN): would remove ${removable.length} artifact(s) (~${mb} MB) from ${cacheDir}, keeping ${keepHash}.*\n` +
-            `  Re-run with --yes to delete. Sample: ${sample}\n`
-        );
-        return;
-      }
-      let removed = 0;
-      for (const name of removable) {
-        try {
-          await fs.rm(path.join(cacheDir, name), { force: true });
-          removed++;
-        } catch {
-          /* skip unremovable entries; report the rest */
-        }
-      }
       process.stdout.write(
-        `enquire prune: removed ${removed} artifact(s) (~${mb} MB) from ${cacheDir}, kept ${keepHash}.*\n`
+        `enquire prune (DRY RUN): would remove ${removable.length} artifact(s) (~${mb} MB) from ${cacheDir}, keeping ${keepHash}.*\n` +
+          `  Re-run with --yes to delete. Sample: ${sample}\n`
       );
     });
 
@@ -641,14 +673,8 @@ export async function main(invocation?: ConfigInput["invocation"]): Promise<void
       "--include-pdfs",
       "v2.8.0 — also index PDFs into the FTS5 index. Off by default; PDF extraction is slower than markdown."
     )
-    .option(
-      "--exclude-glob <pattern...>",
-      "v3.6.2 (audit M-8) — privacy denylist (same semantics as `serve`). Paths matching any pattern are skipped at indexing time so the FTS5 db never contains private content at rest. Repeatable."
-    )
-    .option(
-      "--read-paths <pattern...>",
-      "v3.6.2 (audit M-8) — privacy allowlist (same semantics as `serve`). When set, ONLY matching paths are indexed. Repeatable."
-    )
+    .option("--exclude-glob <pattern...>", EXCLUDE_GLOB_HELP)
+    .option("--read-paths <pattern...>", READ_PATHS_HELP)
     .action(
       async (opts: {
         vault: string;
@@ -697,7 +723,7 @@ export async function main(invocation?: ConfigInput["invocation"]): Promise<void
             );
           }
         } finally {
-          idx.close();
+          await idx.closeAndRelease();
         }
       }
     );
@@ -827,8 +853,8 @@ export async function main(invocation?: ConfigInput["invocation"]): Promise<void
     .requiredOption("--vault <path>", "Path to the Obsidian vault root")
     .option("--embedding-model <alias>", `Model alias (default: ${DEFAULT_MODEL_ALIAS})`, DEFAULT_MODEL_ALIAS)
     .option("--embed-file <path>", EMBED_FILE_HELP)
-    .option("--exclude-glob <pattern...>", "Exclude paths matching glob (repeatable)")
-    .option("--read-paths <pattern...>", "Strict allowlist of glob patterns (repeatable)")
+    .option("--exclude-glob <pattern...>", EXCLUDE_GLOB_HELP)
+    .option("--read-paths <pattern...>", READ_PATHS_HELP)
     .option(
       "--include-pdfs",
       "v2.8.0 — also embed PDF chunks. Off by default; PDF extraction + embedding is ~10-30x slower than markdown per file."
@@ -916,7 +942,7 @@ export async function main(invocation?: ConfigInput["invocation"]): Promise<void
             );
           }
         } finally {
-          db.close();
+          await db.closeAndRelease();
         }
       }
     );
@@ -924,7 +950,7 @@ export async function main(invocation?: ConfigInput["invocation"]): Promise<void
   program
     .command("clear-embeddings")
     .description(
-      "Delete the embedding index files (.embed.db + WAL/SHM, HNSW sidecars, and any stranded watcher-startup interlock) for a given vault"
+      "Delete the embedding index files (.embed.db + WAL/SHM/rollback-journal, HNSW sidecars, and any stranded watcher-startup interlock) for a given vault"
     )
     .requiredOption("--vault <path>", "Vault whose embedding index to delete")
     .option("--embed-file <path>", EMBED_FILE_HELP)
@@ -985,8 +1011,8 @@ export async function main(invocation?: ConfigInput["invocation"]): Promise<void
         const result = await runDoctor({
           vault: opts.vault,
           tier,
-          ...(opts.indexFile ? { indexFile: opts.indexFile } : {}),
-          ...(opts.embedFile ? { embedFile: opts.embedFile } : {}),
+          ...(opts.indexFile !== undefined ? { indexFile: opts.indexFile } : {}),
+          ...(opts.embedFile !== undefined ? { embedFile: opts.embedFile } : {}),
           repairCommandPrefix: invocationPrefix,
           repairCommandPlatform: process.platform,
           ...(opts.excludeGlob ? { excludeGlobs: opts.excludeGlob } : {}),
@@ -1285,14 +1311,8 @@ export async function main(invocation?: ConfigInput["invocation"]): Promise<void
     )
     .option("--skip-embeddings", "Skip the install-model + build-embeddings steps (only build FTS5)")
     .option("--quantize-embeddings <mode>", QUANTIZE_EMBEDDINGS_HELP)
-    .option(
-      "--exclude-glob <pattern...>",
-      "v3.6.2 (audit M-8) — privacy denylist (same semantics as `serve`). Paths matching any pattern are skipped during BOTH the FTS5 index build AND the embedding build so neither db contains private content at rest. Repeatable."
-    )
-    .option(
-      "--read-paths <pattern...>",
-      "v3.6.2 (audit M-8) — privacy allowlist (same semantics as `serve`). When set, ONLY matching paths are indexed/embedded. Repeatable."
-    )
+    .option("--exclude-glob <pattern...>", EXCLUDE_GLOB_HELP)
+    .option("--read-paths <pattern...>", READ_PATHS_HELP)
     .action(
       async (
         opts: {
@@ -1357,7 +1377,7 @@ export async function main(invocation?: ConfigInput["invocation"]): Promise<void
             );
           }
         } finally {
-          idx.close();
+          await idx.closeAndRelease();
         }
 
         const quotedVault = shellQuote(v.root, process.platform);
@@ -1451,7 +1471,7 @@ export async function main(invocation?: ConfigInput["invocation"]): Promise<void
             );
           }
         } finally {
-          db.close();
+          await db.closeAndRelease();
         }
 
         const doctorTier = opts.includePdfs ? "hybrid-live" : "hybrid";
@@ -1496,6 +1516,9 @@ export async function main(invocation?: ConfigInput["invocation"]): Promise<void
     )
     .option("--reranker-top-n <n>", "How many top RRF candidates to rerank (default 50)", "50")
     .option("--persistent-index", "Open the FTS5 index for BM25 retrieval (recommended)")
+    .option("--index-file <path>", INDEX_FILE_HELP)
+    .option("--exclude-glob <pattern...>", EXCLUDE_GLOB_HELP)
+    .option("--read-paths <pattern...>", READ_PATHS_HELP)
     .option("--per-query", "Print per-query scores in addition to aggregates (verbose)")
     .option("--json", "Emit machine-readable JSON instead of the pretty table")
     .option(
@@ -1512,6 +1535,9 @@ export async function main(invocation?: ConfigInput["invocation"]): Promise<void
         rerankerModel?: string;
         rerankerTopN?: string;
         persistentIndex?: boolean;
+        indexFile?: string;
+        excludeGlob?: string[];
+        readPaths?: string[];
         perQuery?: boolean;
         json?: boolean;
         output?: string;
@@ -1528,13 +1554,13 @@ export async function main(invocation?: ConfigInput["invocation"]): Promise<void
         }
         process.stderr.write(`enquire eval: loaded ${queries.length} queries from ${opts.queries}\n`);
 
-        const v = new Vault(opts.vault);
+        const v = new Vault(opts.vault, { excludeGlobs: opts.excludeGlob, readPaths: opts.readPaths });
         await v.ensureExists();
 
         // Optional FTS5 index.
         let ftsIndex: FtsIndex | null = null;
         if (opts.persistentIndex) {
-          const indexFile = defaultIndexFile(v.root);
+          const indexFile = opts.indexFile ?? defaultIndexFile(v.root);
           // v3.6.4 K-1 closure (eval = diagnostic, MUST never destroy):
           // discover the admitted tokenize_mode before constructing. Without discovery,
           // an eval run against a `--tokenize trigram`-built index would
@@ -1551,7 +1577,7 @@ export async function main(invocation?: ConfigInput["invocation"]): Promise<void
             await ftsIndex.open(discovered);
             await syncFtsIndex(v, ftsIndex);
           } catch (err) {
-            ftsIndex.close();
+            await ftsIndex.closeAndRelease();
             throw err;
           }
         }
@@ -1636,7 +1662,7 @@ export async function main(invocation?: ConfigInput["invocation"]): Promise<void
             }
           }
         } finally {
-          if (ftsIndex) ftsIndex.close();
+          if (ftsIndex) await ftsIndex.closeAndRelease();
         }
       }
     );

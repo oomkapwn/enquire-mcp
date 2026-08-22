@@ -29,7 +29,6 @@
 
 import * as path from "node:path";
 import { foldName } from "./name-fold.js";
-import { parseNote } from "./parser.js";
 import type { Vault } from "./vault.js";
 
 /**
@@ -38,12 +37,82 @@ import type { Vault } from "./vault.js";
  * BFS (rc.34 R-5). `obsidian_get_communities` is always-registered and reads
  * EVERY `.md` to build a full adjacency map + run Louvain; on a pathological /
  * very large vault that is unbounded I/O + memory for a single tool call. We
- * cap the node set (newest-first by the vault's own listing order) so the
- * worst case is bounded regardless of vault size — defense-in-depth, not a
- * correctness limit (real vaults are far below the cap; Louvain itself is
- * already bounded by `MAX_PASSES`).
+ * admit a complete, deterministically sorted bounded inventory. A vault that
+ * exceeds the node or traversal ceiling fails closed rather than silently
+ * presenting a prefix as a complete graph. Louvain itself is additionally
+ * bounded by `MAX_PASSES`.
  */
 export const MAX_GRAPH_NODES = 50_000;
+
+/** Maximum directory entries inspected while discovering graph nodes. */
+export const MAX_GRAPH_VISITED_ENTRIES = 200_000;
+
+/** Maximum aggregate UTF-8 bytes retained for normalized graph-node paths. */
+export const MAX_GRAPH_NODE_UTF8_BYTES = 8 * 1024 * 1024;
+
+/** Maximum UTF-8 bytes accepted for one normalized graph-node path. */
+export const MAX_GRAPH_NODE_PATH_UTF8_BYTES = 16 * 1024;
+
+/** Maximum aggregate Markdown UTF-8 bytes parsed during one graph build. */
+export const MAX_GRAPH_SOURCE_UTF8_BYTES = 256 * 1024 * 1024;
+
+/** Maximum wikilink occurrences inspected during one graph build. */
+export const MAX_GRAPH_LINK_OCCURRENCES = 500_000;
+
+/** Maximum UTF-8 bytes accepted for one wikilink target. */
+export const MAX_GRAPH_LINK_TARGET_UTF8_BYTES = 16 * 1024;
+
+/** Maximum aggregate UTF-8 bytes inspected across wikilink targets. */
+export const MAX_GRAPH_LINK_TARGETS_UTF8_BYTES = 32 * 1024 * 1024;
+
+/** Maximum distinct undirected edges retained by one graph build. */
+export const MAX_GRAPH_EDGES = 250_000;
+
+/** Maximum members returned for any one community. */
+export const MAX_COMMUNITY_MEMBERS_PER_COMMUNITY = 2_048;
+
+/** Maximum JSON-string UTF-8 bytes returned for member paths and representative in one community. */
+export const MAX_COMMUNITY_MEMBER_UTF8_BYTES_PER_COMMUNITY = 512 * 1024;
+
+/** Maximum member occurrences returned across all communities. */
+export const MAX_COMMUNITY_RESPONSE_MEMBERS = 10_000;
+
+/** Maximum JSON-string UTF-8 bytes returned across all member paths and representatives. */
+export const MAX_COMMUNITY_RESPONSE_MEMBER_UTF8_BYTES = 2 * 1024 * 1024;
+
+/**
+ * Resource ceilings used by {@link buildWikilinkGraph}.
+ *
+ * Overrides exist so callers and small causal tests can request a stricter
+ * envelope. Every override is validated against the production maximum; this
+ * interface cannot be used to raise a server-side ceiling.
+ */
+export interface WikilinkGraphBudgets {
+  /** Maximum admitted Markdown nodes. */
+  maxNodes: number;
+  /** Maximum directory entries inspected by the bounded walker. */
+  maxVisitedEntries: number;
+  /** Maximum aggregate UTF-8 bytes retained for node paths. */
+  maxNodeUtf8Bytes: number;
+  /** Maximum aggregate UTF-8 bytes parsed from Markdown sources. */
+  maxSourceUtf8Bytes: number;
+  /** Maximum wikilink occurrences inspected. */
+  maxLinkOccurrences: number;
+  /** Maximum aggregate UTF-8 bytes inspected across wikilink targets. */
+  maxLinkTargetUtf8Bytes: number;
+  /** Maximum distinct undirected edges retained. */
+  maxEdges: number;
+}
+
+const DEFAULT_GRAPH_BUDGETS: Readonly<WikilinkGraphBudgets> = Object.freeze({
+  maxNodes: MAX_GRAPH_NODES,
+  maxVisitedEntries: MAX_GRAPH_VISITED_ENTRIES,
+  maxNodeUtf8Bytes: MAX_GRAPH_NODE_UTF8_BYTES,
+  maxSourceUtf8Bytes: MAX_GRAPH_SOURCE_UTF8_BYTES,
+  maxLinkOccurrences: MAX_GRAPH_LINK_OCCURRENCES,
+  maxLinkTargetUtf8Bytes: MAX_GRAPH_LINK_TARGETS_UTF8_BYTES,
+  maxEdges: MAX_GRAPH_EDGES
+});
 
 export interface WikilinkGraph {
   /** Node ID = vault-relative path (forward-slash normalized). */
@@ -82,6 +151,24 @@ export interface CommunityResult {
   membership: Map<string, number>;
 }
 
+function comparePaths(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+function graphBudgets(overrides: Partial<WikilinkGraphBudgets>): WikilinkGraphBudgets {
+  const admitted = { ...DEFAULT_GRAPH_BUDGETS };
+  for (const key of Object.keys(DEFAULT_GRAPH_BUDGETS) as Array<keyof WikilinkGraphBudgets>) {
+    const value = overrides[key];
+    if (value === undefined) continue;
+    const maximum = DEFAULT_GRAPH_BUDGETS[key];
+    if (!Number.isSafeInteger(value) || value < 1 || value > maximum) {
+      throw new TypeError(`${key} must be a positive safe integer no greater than ${maximum}`);
+    }
+    admitted[key] = value;
+  }
+  return admitted;
+}
+
 /**
  * Build the undirected wikilink graph from the vault. Each edge = a
  * resolved wikilink (we ignore broken ones — they wouldn't be part of
@@ -91,40 +178,95 @@ export interface CommunityResult {
  * Resolution: we use case-insensitive basename match (matches the
  * existing tools' behavior). A wikilink `[[Foo]]` resolves to a note
  * named `Foo.md` if exactly one such note exists; otherwise to the
- * first match by walk order.
+ * first match in deterministic path order.
+ *
+ * @param vault - Vault whose visible Markdown notes form the graph.
+ * @param overrides - Optional stricter resource ceilings. Values may not
+ *   exceed the production defaults.
+ * @returns A complete, resource-admitted graph snapshot.
+ * @throws {RangeError} If discovery, source, link, or edge admission is
+ *   incomplete or exceeds a configured ceiling.
  */
-export async function buildWikilinkGraph(vault: Vault): Promise<WikilinkGraph> {
-  await vault.ensureExists();
-  const listed = await vault.listFilesByExtension(".md");
-  // v3.9.0-rc.35 (AS#5 / R-B) — bound the node set so a pathological/huge vault
-  // can't drive unbounded I/O + memory through this always-registered tool.
-  // Truncate to MAX_GRAPH_NODES (graceful degradation; real vaults are far
-  // below the cap). Mirrors the rc.34 find_path R-5 MAX_VISITED cap.
-  const all = listed.length > MAX_GRAPH_NODES ? listed.slice(0, MAX_GRAPH_NODES) : listed;
+export async function buildWikilinkGraph(
+  vault: Vault,
+  overrides: Partial<WikilinkGraphBudgets> = {}
+): Promise<WikilinkGraph> {
+  const budgets = graphBudgets(overrides);
+  const listing = await vault.listFilesByExtensionsBounded([".md"], budgets.maxNodes, budgets.maxVisitedEntries);
+  if (!listing.complete || listing.entries.length > budgets.maxNodes) {
+    throw new RangeError(
+      `Wikilink graph requires a complete inventory within ${budgets.maxNodes} notes / ${budgets.maxVisitedEntries} visited entries`
+    );
+  }
+
+  // The walker order follows filesystem enumeration and therefore is not a
+  // stable ambiguity tiebreaker. Normalize and sort before building either the
+  // basename authority or the node/adjacency arrays.
+  const all = listing.entries
+    .map((entry) => ({ entry, nodePath: entry.relPath.replace(/\\/g, "/") }))
+    .sort((a, b) => comparePaths(a.nodePath, b.nodePath));
+
+  let nodeUtf8Bytes = 0;
+  for (const { nodePath } of all) {
+    const pathBytes = Buffer.byteLength(nodePath, "utf8");
+    if (pathBytes > MAX_GRAPH_NODE_PATH_UTF8_BYTES) {
+      throw new RangeError(`Wikilink graph node path exceeds ${MAX_GRAPH_NODE_PATH_UTF8_BYTES} UTF-8 bytes`);
+    }
+    if (pathBytes > budgets.maxNodeUtf8Bytes - nodeUtf8Bytes) {
+      throw new RangeError(`Wikilink graph node paths exceed ${budgets.maxNodeUtf8Bytes} aggregate UTF-8 bytes`);
+    }
+    nodeUtf8Bytes += pathBytes;
+  }
+
   // Build a basename index for resolving wikilinks.
   const byBasename = new Map<string, string>();
-  for (const e of all) {
-    const base = foldName(e.basename.replace(/\.md$/i, ""));
-    if (!byBasename.has(base)) byBasename.set(base, e.relPath.replace(/\\/g, "/"));
+  for (const { entry, nodePath } of all) {
+    const base = foldName(entry.basename.replace(/\.md$/i, ""));
+    if (!byBasename.has(base)) byBasename.set(base, nodePath);
   }
   const adj = new Map<string, Map<string, number>>();
-  const allPaths = all.map((e) => e.relPath.replace(/\\/g, "/"));
-  for (const p of allPaths) adj.set(p, new Map());
+  const allPaths = all.map(({ nodePath }) => nodePath);
+  for (const nodePath of allPaths) {
+    if (adj.has(nodePath)) throw new Error("Wikilink graph inventory contains a duplicate normalized note path");
+    adj.set(nodePath, new Map());
+  }
 
-  for (const e of all) {
-    const fromPath = e.relPath.replace(/\\/g, "/");
-    let body: string;
-    try {
-      body = await vault.readFile(e.absPath);
-    } catch {
-      continue;
+  let sourceUtf8Bytes = 0;
+  let linkOccurrences = 0;
+  let linkTargetUtf8Bytes = 0;
+  let edgeCount = 0;
+  for (const { entry, nodePath: fromPath } of all) {
+    const note = await vault.readNoteUncached(entry.absPath, entry.mtimeMs);
+    const bodyBytes = Buffer.byteLength(note.content, "utf8");
+    if (bodyBytes > budgets.maxSourceUtf8Bytes - sourceUtf8Bytes) {
+      throw new RangeError(`Wikilink graph sources exceed ${budgets.maxSourceUtf8Bytes} aggregate UTF-8 bytes`);
     }
-    // v3.11.5-rc.3 (post-rc.2 re-sweep, PARSER-DESYNC class) — go through parseNote so
-    // frontmatter + fenced/inline code are stripped BEFORE link extraction. Pre-rc.3 this
-    // called extractWikilinks on the RAW file body, so a `[[link]]` inside a ``` fence (or
-    // in frontmatter) created a phantom graph edge that skewed the community clustering +
-    // modularity the always-on obsidian_get_communities tool returns.
-    const links = parseNote(body).wikilinks;
+    sourceUtf8Bytes += bodyBytes;
+
+    // v3.11.5-rc.3 (post-rc.2 re-sweep, PARSER-DESYNC class) — use the Vault's
+    // canonical parsed-note path so frontmatter + fenced/inline code are stripped
+    // BEFORE link extraction. Pre-rc.3 a raw-body extractor let a `[[link]]` inside
+    // code/frontmatter create a phantom graph edge. The uncached staging read also
+    // avoids filling the shared parsed-note cache during this whole-vault operation.
+    const links = note.parsed.wikilinks;
+    if (links.length > budgets.maxLinkOccurrences - linkOccurrences) {
+      throw new RangeError(`Wikilink graph exceeds ${budgets.maxLinkOccurrences} wikilink occurrences`);
+    }
+    linkOccurrences += links.length;
+
+    let noteTargetUtf8Bytes = 0;
+    for (const link of links) {
+      const targetBytes = Buffer.byteLength(link.target, "utf8");
+      if (targetBytes > MAX_GRAPH_LINK_TARGET_UTF8_BYTES) {
+        throw new RangeError(`Wikilink target exceeds ${MAX_GRAPH_LINK_TARGET_UTF8_BYTES} UTF-8 bytes`);
+      }
+      if (targetBytes > budgets.maxLinkTargetUtf8Bytes - linkTargetUtf8Bytes - noteTargetUtf8Bytes) {
+        throw new RangeError(`Wikilink graph targets exceed ${budgets.maxLinkTargetUtf8Bytes} aggregate UTF-8 bytes`);
+      }
+      noteTargetUtf8Bytes += targetBytes;
+    }
+    linkTargetUtf8Bytes += noteTargetUtf8Bytes;
+
     for (const link of links) {
       // Normalize: strip section/block, take just the target part.
       const target = link.target.split(/[#^]/)[0]?.trim();
@@ -144,6 +286,12 @@ export async function buildWikilinkGraph(vault: Vault): Promise<WikilinkGraph> {
       const fromMap = adj.get(fromPath);
       const toMap = adj.get(toPath);
       if (!fromMap || !toMap) continue;
+      if (!fromMap.has(toPath)) {
+        if (edgeCount >= budgets.maxEdges) {
+          throw new RangeError(`Wikilink graph exceeds ${budgets.maxEdges} distinct undirected edges`);
+        }
+        edgeCount += 1;
+      }
       fromMap.set(toPath, (fromMap.get(toPath) ?? 0) + 1);
       toMap.set(fromPath, (toMap.get(fromPath) ?? 0) + 1);
     }
@@ -305,7 +453,7 @@ function finalize(
         representative: sorted[0] ?? ""
       };
     })
-    .sort((a, b) => b.size - a.size);
+    .sort((a, b) => b.size - a.size || a.id - b.id);
   return {
     community_count: communities.length,
     modularity: Math.round(modularity * 10000) / 10000,
@@ -331,6 +479,168 @@ function sortMembersByCentrality(members: string[], graph: WikilinkGraph, member
     const da = inDeg.get(a) ?? 0;
     const db = inDeg.get(b) ?? 0;
     if (da !== db) return db - da;
-    return a.localeCompare(b);
+    return comparePaths(a, b);
   });
+}
+
+function jsonStringUtf8Bytes(value: string): number {
+  return Buffer.byteLength(JSON.stringify(value), "utf8");
+}
+
+/**
+ * Build the bounded public response for `obsidian_get_communities`.
+ *
+ * Community totals remain exact, while returned community and member counts
+ * explicitly distinguish caller filtering from truncation. Membership is
+ * encoded once in `communities[].members`; the former duplicate path→id object
+ * is intentionally omitted. Member arrays are deterministic prefixes of the
+ * centrality ordering and are admitted against per-community and global count
+ * plus JSON UTF-8 byte ceilings before insertion. Byte receipts include every
+ * returned membership-path string occurrence: the representative and each
+ * entry of the member array.
+ *
+ * @param result - Complete detected partition.
+ * @param args - Optional minimum community size and maximum community count.
+ * @returns A bounded response with exact total/returned/truncation receipts.
+ */
+export function formatCommunityResponse(
+  result: CommunityResult,
+  args: { minSize?: number; limit?: number } = {}
+): {
+  community_count: number;
+  eligible_community_count: number;
+  returned_community_count: number;
+  filtered_community_count: number;
+  modularity: number;
+  iterations: number;
+  converged: boolean;
+  node_count: number;
+  eligible_member_count: number;
+  returned_member_count: number;
+  returned_membership_path_utf8_bytes: number;
+  communities_truncated: boolean;
+  members_truncated: boolean;
+  truncated: boolean;
+  membership_map_omitted: true;
+  communities: Array<{
+    id: number;
+    size: number;
+    returned_member_count: number;
+    returned_membership_path_utf8_bytes: number;
+    members_truncated: boolean;
+    members: string[];
+    representative: string;
+  }>;
+} {
+  const minSize = args.minSize ?? 1;
+  const limit = args.limit ?? 50;
+  if (!Number.isSafeInteger(minSize) || minSize < 0 || minSize > 1_000) {
+    throw new TypeError("minSize must be a non-negative safe integer no greater than 1000");
+  }
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 500) {
+    throw new TypeError("limit must be a positive safe integer no greater than 500");
+  }
+
+  let eligibleCommunityCount = 0;
+  let eligibleMemberCount = 0;
+  for (const community of result.communities) {
+    if (community.size < minSize) continue;
+    eligibleCommunityCount += 1;
+    eligibleMemberCount += community.size;
+  }
+
+  const communities: Array<{
+    id: number;
+    size: number;
+    returned_member_count: number;
+    returned_membership_path_utf8_bytes: number;
+    members_truncated: boolean;
+    members: string[];
+    representative: string;
+  }> = [];
+  let returnedMemberCount = 0;
+  let returnedMemberUtf8Bytes = 0;
+
+  for (const community of result.communities) {
+    if (community.size < minSize) continue;
+    if (communities.length >= limit) break;
+
+    const representativeBytes = jsonStringUtf8Bytes(community.representative);
+    if (representativeBytes > MAX_COMMUNITY_MEMBER_UTF8_BYTES_PER_COMMUNITY) {
+      throw new RangeError(
+        `One community representative exceeds ${MAX_COMMUNITY_MEMBER_UTF8_BYTES_PER_COMMUNITY} JSON UTF-8 bytes`
+      );
+    }
+    const firstMember = community.members[0];
+    if (community.size > 0 && firstMember === undefined) {
+      throw new Error("Detected community size is non-zero but its member inventory is empty");
+    }
+    const firstMemberBytes = firstMember === undefined ? 0 : jsonStringUtf8Bytes(firstMember);
+    if (
+      representativeBytes + firstMemberBytes > MAX_COMMUNITY_MEMBER_UTF8_BYTES_PER_COMMUNITY ||
+      representativeBytes + firstMemberBytes > MAX_COMMUNITY_RESPONSE_MEMBER_UTF8_BYTES - returnedMemberUtf8Bytes ||
+      (community.size > 0 && returnedMemberCount >= MAX_COMMUNITY_RESPONSE_MEMBERS)
+    ) {
+      break;
+    }
+
+    const members: string[] = [];
+    let communityMemberUtf8Bytes = representativeBytes;
+    returnedMemberUtf8Bytes += representativeBytes;
+    let globalBudgetExhausted = false;
+    for (const member of community.members) {
+      if (members.length >= MAX_COMMUNITY_MEMBERS_PER_COMMUNITY) break;
+      if (returnedMemberCount >= MAX_COMMUNITY_RESPONSE_MEMBERS) {
+        globalBudgetExhausted = true;
+        break;
+      }
+      const memberBytes = jsonStringUtf8Bytes(member);
+      if (memberBytes > MAX_COMMUNITY_MEMBER_UTF8_BYTES_PER_COMMUNITY) {
+        throw new RangeError(
+          `One community member exceeds ${MAX_COMMUNITY_MEMBER_UTF8_BYTES_PER_COMMUNITY} JSON UTF-8 bytes`
+        );
+      }
+      if (memberBytes > MAX_COMMUNITY_MEMBER_UTF8_BYTES_PER_COMMUNITY - communityMemberUtf8Bytes) break;
+      if (memberBytes > MAX_COMMUNITY_RESPONSE_MEMBER_UTF8_BYTES - returnedMemberUtf8Bytes) {
+        globalBudgetExhausted = true;
+        break;
+      }
+      members.push(member);
+      communityMemberUtf8Bytes += memberBytes;
+      returnedMemberUtf8Bytes += memberBytes;
+      returnedMemberCount += 1;
+    }
+
+    communities.push({
+      id: community.id,
+      size: community.size,
+      returned_member_count: members.length,
+      returned_membership_path_utf8_bytes: communityMemberUtf8Bytes,
+      members_truncated: members.length < community.size,
+      members,
+      representative: community.representative
+    });
+    if (globalBudgetExhausted) break;
+  }
+
+  const communitiesTruncated = communities.length < eligibleCommunityCount;
+  const membersTruncated = returnedMemberCount < eligibleMemberCount;
+  return {
+    community_count: result.community_count,
+    eligible_community_count: eligibleCommunityCount,
+    returned_community_count: communities.length,
+    filtered_community_count: result.community_count - eligibleCommunityCount,
+    modularity: result.modularity,
+    iterations: result.iterations,
+    converged: result.converged,
+    node_count: result.membership.size,
+    eligible_member_count: eligibleMemberCount,
+    returned_member_count: returnedMemberCount,
+    returned_membership_path_utf8_bytes: returnedMemberUtf8Bytes,
+    communities_truncated: communitiesTruncated,
+    members_truncated: membersTruncated,
+    truncated: communitiesTruncated || membersTruncated,
+    membership_map_omitted: true,
+    communities
+  };
 }

@@ -19,7 +19,7 @@ import {
 // v3.10.0-rc.22 (audit M8) — the REAL embed-hit privacy filter (was reimplemented
 // inline below; now exercised so search.ts's embeddingsSearch filter is covered).
 import { filterExcludedEmbedHits, filterLiveVaultHits } from "../src/tools/search.js";
-import { compileGlob, MAX_GLOB_PATTERN_LEN, Vault } from "../src/vault.js";
+import { compileGlob, MAX_GLOB_PATTERN_LEN, Vault, type VaultOptions } from "../src/vault.js";
 import { restrictedVaultPathReason } from "../src/vault-path-policy.js";
 
 let root: string;
@@ -948,6 +948,52 @@ describe("Vault constructor — privacy fail-closed (v2.0.0-beta.2)", () => {
 
   it("constructs cleanly with valid patterns (control)", () => {
     expect(() => new Vault(r, { readPaths: ["Public/**"] })).not.toThrow();
+  });
+
+  it.each([
+    ["enableWrite", "false"],
+    ["enableWrite", 1],
+    ["persistentCache", "false"],
+    ["persistentCache", 1]
+  ] as const)("rejects non-boolean runtime option %s=%s instead of enabling authority", (name, value) => {
+    expect(() => new Vault(r, { [name]: value } as unknown as VaultOptions)).toThrow(
+      new TypeError(`Vault option ${name} must be a boolean`)
+    );
+  });
+
+  it.each(["maxFileBytes", "maxCacheEntries", "maxDiskCacheBytes"] as const)(
+    "rejects non-positive or unsafe runtime option %s before filesystem use",
+    (name) => {
+      for (const value of [0, -1, Number.NaN, Number.POSITIVE_INFINITY, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+        expect(() => new Vault(r, { [name]: value } as VaultOptions)).toThrow(
+          new TypeError(`Vault option ${name} must be a positive safe integer`)
+        );
+      }
+    }
+  );
+
+  it("preserves exact false and true boolean authority values", () => {
+    expect(new Vault(r, { enableWrite: false, persistentCache: false }).writeEnabled).toBe(false);
+    expect(new Vault(r, { enableWrite: true, persistentCache: true }).writeEnabled).toBe(true);
+  });
+
+  it.each(["readPath", "excludeGlob", "enableWrites"])(
+    "rejects unknown runtime option %s instead of silently widening authority",
+    (name) => {
+      expect(() => new Vault(r, { [name]: ["Public/**"] } as unknown as VaultOptions)).toThrow(
+        new TypeError(`Unknown Vault option ${name}`)
+      );
+    }
+  );
+
+  it.each([null, [], "read-only"])("rejects a non-object options value %j", (value) => {
+    expect(() => new Vault(r, value as unknown as VaultOptions)).toThrow(
+      new TypeError("Vault options must be an object")
+    );
+  });
+
+  it.each(["", "   \t"])("rejects an empty vault root spelling %j", (badRoot) => {
+    expect(() => new Vault(badRoot)).toThrow(new TypeError("Vault root must be a non-empty path string"));
   });
 });
 

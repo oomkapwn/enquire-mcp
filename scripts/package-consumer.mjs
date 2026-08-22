@@ -1,15 +1,17 @@
 #!/usr/bin/env node
-// Fresh npm-tarball consumer gate. CI runs this unchanged on Linux, Windows,
-// and macOS; each runner verifies both normal and --omit=optional installs.
+// Fresh npm-tarball consumer gate. CI passes one previously built canonical
+// tarball to Linux, Windows, and macOS; consumers never repack that checkout.
 
 import { strict as assert } from "node:assert";
 import { spawnSync } from "node:child_process";
 import {
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   statSync,
   writeFileSync
@@ -18,11 +20,48 @@ import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { isEntrypoint } from "./lib/entrypoint.mjs";
+import { MAX_NPM_PACKAGE_TARBALL_BYTES, verifyNpmPackageArtifactManifest } from "./npm-package-artifact.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const PACKAGE_NAME = "@oomkapwn/enquire-mcp";
 const PACKAGE_DIR_PARTS = ["node_modules", "@oomkapwn", "enquire-mcp"];
-const TEXT_EXTENSIONS = new Set([".cjs", ".js", ".json", ".md", ".mjs", ".txt", ".ts"]);
+const TEXT_EXTENSIONS = new Set([".cjs", ".js", ".json", ".map", ".md", ".mjs", ".txt", ".ts"]);
+
+/** Closed-world Node-compatible import and capability probes for every optional dependency. */
+export const OPTIONAL_DEPENDENCY_PROBES = Object.freeze([
+  { packageName: "@huggingface/transformers", specifier: "@huggingface/transformers", exportPaths: [["pipeline"]] },
+  { packageName: "@napi-rs/canvas", specifier: "@napi-rs/canvas", exportPaths: [["createCanvas"]] },
+  {
+    packageName: "better-sqlite3",
+    specifier: "better-sqlite3",
+    exportPaths: [["default"]],
+    probeKind: "sqlite-memory"
+  },
+  {
+    packageName: "hnswlib-node",
+    specifier: "hnswlib-node",
+    exportPaths: [["HierarchicalNSW"], ["default", "HierarchicalNSW"]],
+    allowedMissingPlatforms: Object.freeze(["win32"])
+  },
+  { packageName: "pdfjs-dist", specifier: "pdfjs-dist/legacy/build/pdf.mjs", exportPaths: [["getDocument"]] },
+  { packageName: "tesseract.js", specifier: "tesseract.js", exportPaths: [["createWorker"]] }
+]);
+
+/**
+ * Decide whether npm may legitimately remove one failed optional native build.
+ *
+ * `hnswlib-node` is source-built during install and npm removes it after a
+ * Windows toolchain/ABI failure because it is optional. Every other declared
+ * optional dependency remains required by the full consumer lane, and an HNSW
+ * package that is present is still resolved and exercised below.
+ *
+ * @param probe - One closed-world optional dependency probe.
+ * @param platform - Node platform being verified.
+ * @returns Whether absence is explicitly admitted for this exact pair.
+ */
+export function optionalDependencyMayBeMissing(probe, platform = process.platform) {
+  return probe.allowedMissingPlatforms?.includes(platform) === true;
+}
 
 /**
  * Resolve npm without handing a `.cmd` shim to `spawnSync` on Windows.
@@ -66,6 +105,25 @@ function run(command, args, options = {}) {
 
 function runNpm(args, options = {}) {
   return run(NPM.command, [...NPM.argsPrefix, ...args], options);
+}
+
+/**
+ * Resolve the installed package bin shim without bypassing npm's generated
+ * consumer-facing launcher. Windows `.cmd` shims require `cmd.exe`; the fixed
+ * command string contains no path-derived shell text.
+ */
+export function packageCliProcessSpec(consumerDir, platform = process.platform, env = process.env) {
+  const binDirectory = path.join(consumerDir, "node_modules", ".bin");
+  if (platform === "win32") {
+    return Object.freeze({
+      args: ["/d", "/s", "/c", "enquire-mcp.cmd --version"],
+      command: typeof env.ComSpec === "string" && env.ComSpec.length > 0 ? env.ComSpec : "cmd.exe",
+      cwd: binDirectory,
+      shim: path.join(binDirectory, "enquire-mcp.cmd")
+    });
+  }
+  const shim = path.join(binDirectory, "enquire-mcp");
+  return Object.freeze({ args: ["--version"], command: shim, cwd: binDirectory, shim });
 }
 
 function normalizePackagePath(value) {
@@ -146,7 +204,21 @@ function assertNoLegacySdkSpecifiers(packageRoot) {
 function writeConsumerSources(consumerDir) {
   writeFileSync(
     path.join(consumerDir, "consumer.ts"),
-    `import { buildMcpServer, VERSION, type ServeOptions } from "${PACKAGE_NAME}";
+    `import {
+  buildMcpServer,
+  inspectPersistenceLeases,
+  inspectPersistenceNamespaceLeases,
+  recoverPersistenceLease,
+  recoverPersistenceNamespaceLease,
+  VERSION,
+  type PersistenceLeaseInspectableMarker,
+  type PersistenceLeaseInspection,
+  PersistenceLeaseOwnershipError,
+  type PersistenceLeaseTarget,
+  type RecoverPersistenceNamespaceLeaseOptions,
+  type RecoverPersistenceLeaseOptions,
+  type ServeOptions
+} from "${PACKAGE_NAME}";
 import type { McpServer } from "@modelcontextprotocol/server";
 import * as Bases from "${PACKAGE_NAME}/bases";
 import * as Communities from "${PACKAGE_NAME}/communities";
@@ -154,14 +226,34 @@ import * as EmbedDb from "${PACKAGE_NAME}/embed-db";
 import * as Fts5 from "${PACKAGE_NAME}/fts5";
 import * as Hnsw from "${PACKAGE_NAME}/hnsw";
 import { TOOL_MANIFEST, type ToolManifestEntry } from "${PACKAGE_NAME}/tool-manifest";
-import { Vault, type VaultOptions } from "${PACKAGE_NAME}/vault";
+import { Vault, type CachedNote, type VaultOptions } from "${PACKAGE_NAME}/vault";
 
 const version: string = VERSION;
 const options: ServeOptions = { vault: "." };
 const vaultOptions: VaultOptions = { readPaths: ["Public/**"] };
+const legacyCachedNote: CachedNote = {
+  content: "",
+  parsed: { frontmatter: {}, body: "", bodyStartLine: 1, wikilinks: [], embeds: [], tags: [] },
+  mtimeMs: 0
+};
 const first: ToolManifestEntry | undefined = TOOL_MANIFEST[0];
 const builtServer: McpServer = null as unknown as ReturnType<typeof buildMcpServer>;
-const surfaces = [Bases, Communities, EmbedDb, Fts5, Hnsw, Vault, buildMcpServer, builtServer, version, options, vaultOptions, first];
+const leaseTarget: PersistenceLeaseTarget = { targetPath: "/exact/cache/vault.embed.db", familyKey: "embed-db" };
+const leaseInspection: Promise<PersistenceLeaseInspection> = inspectPersistenceLeases(leaseTarget);
+const leaseRecoveryOptions: RecoverPersistenceLeaseOptions = {
+  ...leaseTarget,
+  markerId: "lease.shared.1.00000000000000000000000000000000.json",
+  assertQuiescent: async () => false
+};
+const leaseRecovery: Promise<PersistenceLeaseInspectableMarker> = recoverPersistenceLease(leaseRecoveryOptions);
+const namespaceInspection: Promise<PersistenceLeaseInspection> = inspectPersistenceNamespaceLeases("/exact/cache");
+const namespaceRecoveryOptions: RecoverPersistenceNamespaceLeaseOptions = {
+  parentPath: "/exact/cache",
+  markerId: "lease.shared.1.00000000000000000000000000000000.json",
+  assertQuiescent: async () => false
+};
+const namespaceRecovery: Promise<PersistenceLeaseInspectableMarker> = recoverPersistenceNamespaceLease(namespaceRecoveryOptions);
+const surfaces = [Bases, Communities, EmbedDb, Fts5, Hnsw, Vault, PersistenceLeaseOwnershipError, buildMcpServer, builtServer, version, options, vaultOptions, legacyCachedNote, first, leaseInspection, leaseRecovery, namespaceInspection, namespaceRecovery];
 void surfaces;
 `,
     "utf8"
@@ -189,12 +281,19 @@ void surfaces;
   writeFileSync(
     path.join(consumerDir, "runtime.mjs"),
     `import { strict as assert } from "node:assert";
-import { spawnSync } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildMcpServer, VERSION } from "${PACKAGE_NAME}";
+import {
+  buildMcpServer,
+  inspectPersistenceLeases,
+  inspectPersistenceNamespaceLeases,
+  PersistenceLeaseOwnershipError,
+  recoverPersistenceLease,
+  recoverPersistenceNamespaceLease,
+  VERSION
+} from "${PACKAGE_NAME}";
 import * as Bases from "${PACKAGE_NAME}/bases";
 import * as Communities from "${PACKAGE_NAME}/communities";
 import * as EmbedDb from "${PACKAGE_NAME}/embed-db";
@@ -208,17 +307,35 @@ const packageRoot = path.dirname(packageJsonPath);
 const pkg = JSON.parse(await readFile(packageJsonPath, "utf8"));
 assert.equal(VERSION, pkg.version, "root runtime version differs from packaged metadata");
 assert.equal(typeof buildMcpServer, "function", "semver-critical root buildMcpServer export is missing");
+assert.equal(
+  typeof inspectPersistenceLeases,
+  "function",
+  "operator lease-inspection export is missing from the installed package"
+);
+assert.equal(
+  typeof recoverPersistenceLease,
+  "function",
+  "operator lease-recovery export is missing from the installed package"
+);
+assert.equal(
+  typeof inspectPersistenceNamespaceLeases,
+  "function",
+  "operator namespace lease-inspection export is missing from the installed package"
+);
+assert.equal(
+  typeof recoverPersistenceNamespaceLease,
+  "function",
+  "operator namespace lease-recovery export is missing from the installed package"
+);
+assert.equal(
+  typeof PersistenceLeaseOwnershipError,
+  "function",
+  "operator ownership-debt error export is missing from the installed package"
+);
 assert.equal(TOOL_MANIFEST.length, 46, "tool-manifest subpath returned the wrong inventory");
 for (const [name, surface] of Object.entries({ Bases, Communities, EmbedDb, Fts5, Hnsw })) {
   assert.ok(Object.keys(surface).length > 0, name + " subpath exported no runtime surface");
 }
-
-const cli = spawnSync(process.execPath, [path.join(packageRoot, "dist", "index.js"), "--version"], {
-  encoding: "utf8",
-  stdio: ["ignore", "pipe", "pipe"]
-});
-assert.equal(cli.status, 0, "packaged CLI failed: " + cli.stderr);
-assert.equal(cli.stdout.trim(), pkg.version, "packaged CLI returned the wrong version");
 
 const vaultRoot = await mkdtemp(path.join(tmpdir(), "enquire-package-consumer-vault-"));
 const publicMarker = "public-package-consumer-marker";
@@ -264,6 +381,58 @@ try {
   );
 }
 
+function writeOptionalLoadabilityProbe(consumerDir, optionalProbes) {
+  writeFileSync(
+    path.join(consumerDir, "optional-loadability.mjs"),
+    `import { strict as assert } from "node:assert";
+import { fileURLToPath } from "node:url";
+import * as path from "node:path";
+
+const optionalProbes = ${JSON.stringify(optionalProbes)};
+const nodeModulesRoot = path.resolve("node_modules");
+for (const { packageName, specifier: importSpecifier, exportPaths, probeKind } of optionalProbes) {
+  const resolved = import.meta.resolve(importSpecifier);
+  assert.match(resolved, /^file:/, packageName + " did not resolve to an installed file");
+  const expectedPackageRoot = path.join(nodeModulesRoot, ...packageName.split("/"));
+  const relative = path.relative(expectedPackageRoot, fileURLToPath(resolved));
+  assert.ok(relative.length > 0 && !path.isAbsolute(relative) && relative !== ".." && !relative.startsWith(".." + path.sep), packageName + " resolved outside its installed package root");
+  const loaded = await import(importSpecifier);
+  const capability = exportPaths
+    .map((exportPath) => exportPath.reduce((value, key) => value?.[key], loaded))
+    .find((value) => typeof value === "function");
+  assert.equal(typeof capability, "function", packageName + " did not expose its reviewed runtime capability");
+  if (probeKind === "sqlite-memory") {
+    const database = new capability(":memory:");
+    try {
+      assert.equal(database.prepare("SELECT 1 AS ok").get().ok, 1, packageName + " native query probe failed");
+    } finally {
+      database.close();
+    }
+  }
+}
+`,
+    "utf8"
+  );
+}
+
+function verifyPackagedCli(consumerDir, packageRoot, expectedVersion, mode) {
+  const spec = packageCliProcessSpec(consumerDir);
+  const shimStat = lstatSync(spec.shim);
+  assert.ok(
+    shimStat.isFile() || shimStat.isSymbolicLink(),
+    `${mode}: installed node_modules/.bin/enquire-mcp shim is missing`
+  );
+  if (process.platform !== "win32") {
+    assert.equal(
+      realpathSync(spec.shim),
+      realpathSync(path.join(packageRoot, "dist", "index.js")),
+      `${mode}: installed CLI shim does not target the packaged bin entrypoint`
+    );
+  }
+  const version = run(spec.command, spec.args, { cwd: spec.cwd });
+  assert.equal(version.trim(), expectedVersion, `${mode}: installed CLI shim returned the wrong version`);
+}
+
 function verifyConsumer(tarballPath, mode, rootPackage, tempRoot) {
   const consumerDir = path.join(tempRoot, `consumer-${mode}`);
   mkdirSync(consumerDir);
@@ -288,15 +457,37 @@ function verifyConsumer(tarballPath, mode, rootPackage, tempRoot) {
   const packageRoot = path.join(consumerDir, ...PACKAGE_DIR_PARTS);
   assert.ok(existsSync(path.join(packageRoot, "dist", "index.js")), `${mode}: packed dist/index.js is missing`);
   assert.ok(!existsSync(path.join(packageRoot, "src")), `${mode}: source directory leaked into the package`);
+  const optionalNames = Object.keys(rootPackage.optionalDependencies ?? {});
+  assert.ok(optionalNames.length > 0, `${mode}: root package declares no optional dependency inventory to verify`);
+  const optionalProbes = OPTIONAL_DEPENDENCY_PROBES;
+  assert.deepEqual(
+    optionalProbes.map(({ packageName }) => packageName).sort(),
+    [...optionalNames].sort(),
+    `${mode}: optional dependency probe inventory differs from package.json`
+  );
   if (mode === "omit-optional") {
-    const optionalNames = Object.keys(rootPackage.optionalDependencies ?? {});
-    assert.ok(optionalNames.length > 0, `${mode}: root package declares no optional dependency inventory to verify`);
-    for (const optionalName of optionalNames) {
+    for (const { packageName: optionalName } of optionalProbes) {
       assert.ok(
-        !existsSync(path.join(consumerDir, "node_modules", optionalName)),
+        !existsSync(path.join(consumerDir, "node_modules", ...optionalName.split("/"))),
         `${mode}: ${optionalName} was installed despite --omit=optional`
       );
     }
+  } else {
+    const loadableOptionalProbes = [];
+    for (const optionalProbe of optionalProbes) {
+      const optionalName = optionalProbe.packageName;
+      const installed = existsSync(path.join(consumerDir, "node_modules", ...optionalName.split("/")));
+      if (!installed) {
+        assert.ok(
+          optionalDependencyMayBeMissing(optionalProbe, process.platform),
+          `${mode}: ${optionalName} is absent despite --include=optional`
+        );
+        continue;
+      }
+      loadableOptionalProbes.push(optionalProbe);
+    }
+    writeOptionalLoadabilityProbe(consumerDir, loadableOptionalProbes);
+    run(process.execPath, [path.join(consumerDir, "optional-loadability.mjs")], { cwd: consumerDir });
   }
   assert.ok(
     !existsSync(path.join(consumerDir, "node_modules", "@modelcontextprotocol", "sdk")),
@@ -304,6 +495,7 @@ function verifyConsumer(tarballPath, mode, rootPackage, tempRoot) {
   );
   assertNoBuildPathLeak(packageRoot);
   assertNoLegacySdkSpecifiers(packageRoot);
+  verifyPackagedCli(consumerDir, packageRoot, rootPackage.version, mode);
   writeConsumerSources(consumerDir);
 
   const tsc = path.join(ROOT, "node_modules", "typescript-native", "bin", "tsc");
@@ -315,9 +507,76 @@ function verifyConsumer(tarballPath, mode, rootPackage, tempRoot) {
   console.log(`[package-consumer] OK — ${process.platform}/${process.arch}/${mode}`);
 }
 
-export function runPackageConsumer() {
+/**
+ * Parse the closed-world canonical-artifact arguments used by remote CI.
+ * An empty argv retains the local developer convenience path; any non-empty
+ * invocation must provide every exact provenance binding once.
+ */
+export function parsePackageConsumerArgs(argv) {
+  if (!Array.isArray(argv)) throw new Error("package-consumer argv must be an array");
+  if (argv.length === 0) return null;
+  const expected = new Set(["--tarball", "--manifest", "--source-sha", "--run-id", "--run-attempt"]);
+  if (argv.length !== expected.size * 2) {
+    throw new Error("canonical consumer mode requires exactly tarball, manifest, source SHA, run id, and run attempt");
+  }
+  const values = {};
+  for (let index = 0; index < argv.length; index += 2) {
+    const flag = argv[index];
+    const value = argv[index + 1];
+    if (!expected.delete(flag) || typeof value !== "string" || value.length === 0 || value.startsWith("--")) {
+      throw new Error(`invalid or duplicate package-consumer argument ${String(flag)}`);
+    }
+    values[flag.slice(2).replaceAll("-", "_")] = value;
+  }
+  if (expected.size !== 0) throw new Error(`missing package-consumer arguments: ${[...expected].join(", ")}`);
+  return Object.freeze({
+    manifest: path.resolve(values.manifest),
+    runAttempt: values.run_attempt,
+    runId: values.run_id,
+    sourceSha: values.source_sha,
+    tarball: path.resolve(values.tarball)
+  });
+}
+
+function assertSourcePackageGraph(rootPackage) {
+  const rootLock = readFileSync(path.join(ROOT, "package-lock.json"), "utf8");
+  assert.doesNotMatch(
+    JSON.stringify(rootPackage),
+    /@modelcontextprotocol\/sdk/,
+    "source package.json retains the legacy MCP SDK dependency"
+  );
+  assert.doesNotMatch(rootLock, /@modelcontextprotocol\/sdk/, "source lockfile retains the legacy MCP SDK graph");
+}
+
+export function runPackageConsumer(argv = []) {
+  const canonicalArtifact = parsePackageConsumerArgs(argv);
   const tempRoot = mkdtempSync(path.join(tmpdir(), "enquire-package-consumer-"));
   try {
+    const rootPackage = JSON.parse(readFileSync(path.join(ROOT, "package.json"), "utf8"));
+    assertSourcePackageGraph(rootPackage);
+    if (canonicalArtifact !== null) {
+      for (const [label, artifactPath, maximumBytes] of [
+        ["manifest", canonicalArtifact.manifest, 64 * 1024],
+        ["tarball", canonicalArtifact.tarball, MAX_NPM_PACKAGE_TARBALL_BYTES]
+      ]) {
+        const stat = lstatSync(artifactPath);
+        assert.ok(
+          stat.isFile() && !stat.isSymbolicLink() && stat.size > 0 && stat.size <= maximumBytes,
+          `canonical ${label} must be a bounded regular non-symlink file`
+        );
+      }
+      const manifest = JSON.parse(readFileSync(canonicalArtifact.manifest, "utf8"));
+      const tarballBytes = readFileSync(canonicalArtifact.tarball);
+      verifyNpmPackageArtifactManifest(manifest, tarballBytes, rootPackage, {
+        sourceSha: canonicalArtifact.sourceSha,
+        runId: canonicalArtifact.runId,
+        runAttempt: canonicalArtifact.runAttempt
+      });
+      verifyConsumer(canonicalArtifact.tarball, "full", rootPackage, tempRoot);
+      verifyConsumer(canonicalArtifact.tarball, "omit-optional", rootPackage, tempRoot);
+      return;
+    }
+
     const packed = JSON.parse(
       runNpm(["pack", "--json", "--ignore-scripts", "--pack-destination", tempRoot], { cwd: ROOT })
     )?.[0];
@@ -333,14 +592,6 @@ export function runPackageConsumer() {
     assert.ok(packedPaths.has("package.json"), "npm tarball is missing package.json");
     assert.ok(packedPaths.has("dist/index.js"), "npm tarball is missing dist/index.js");
 
-    const rootPackage = JSON.parse(readFileSync(path.join(ROOT, "package.json"), "utf8"));
-    const rootLock = readFileSync(path.join(ROOT, "package-lock.json"), "utf8");
-    assert.doesNotMatch(
-      JSON.stringify(rootPackage),
-      /@modelcontextprotocol\/sdk/,
-      "source package.json retains the legacy MCP SDK dependency"
-    );
-    assert.doesNotMatch(rootLock, /@modelcontextprotocol\/sdk/, "source lockfile retains the legacy MCP SDK graph");
     assert.equal(packed.version, rootPackage.version, "npm tarball version differs from the checkout");
     const tarballPath = path.join(tempRoot, packed.filename);
     verifyConsumer(tarballPath, "full", rootPackage, tempRoot);
@@ -352,7 +603,7 @@ export function runPackageConsumer() {
 
 if (isEntrypoint(import.meta.url)) {
   try {
-    runPackageConsumer();
+    runPackageConsumer(process.argv.slice(2));
   } catch (error) {
     console.error(
       `[package-consumer] FAIL — ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`

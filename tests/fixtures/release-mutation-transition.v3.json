@@ -189,7 +189,7 @@
       "reason": "reviewed source bytes changed while catalogue identity stayed fixed",
       "witness": {
         "from": "sha256:ccccb48bf5cf1d24ae9c64d4bb8eac7b7ded90fcbb7453dbb72b3dea981e12ea",
-        "to": "sha256:3732f38cb8c472b27bf23861ba153f7c3137b81812c605c601a7c55d33d1bbd1"
+        "to": "sha256:9d4b3228126ddcd32c0a0ee73d54b377cb74000064f7a546079474d1fecf0eb9"
       }
     },
     {
@@ -1494,9 +1494,6 @@
       "id": "release.m476"
     },
     {
-      "id": "release.m477"
-    },
-    {
       "id": "release.m478"
     },
     {
@@ -2390,6 +2387,15 @@
       }
     },
     {
+      "oldId": "release.m477",
+      "newId": "release.m695",
+      "reason": "test fail-open mutation now binds the reviewed 20-minute full-suite boundary",
+      "witness": {
+        "from": "sha256:46d6c8c3c0863c7c28c343d14a461ac59bf350e5554e949f9412b50294fd1594",
+        "to": "sha256:5db77e350c1b028535f7e35d9d7b313ebfcf9ef6886ebf2c57c27c4affc87807"
+      }
+    },
+    {
       "oldId": "release.m504",
       "newId": "release.m684",
       "reason": "package consumer command mutation now uses the current exact command fragments",
@@ -2687,8 +2693,8 @@
     }
   ],
   "current": {
-    "matrixSourceSha256": "f991e52257e70b7419d32b45dccb1d0613ea78ba0b9d56a4ee1d583f3a9747c2",
-    "matrixSliceSha256": "91c6a9441c76195643e1b8d1990f6a088c0a417517bf1d2c820aba161b5b8756",
+    "matrixSourceSha256": "9e364b3fefe96958f8bd8785503c3990dd70c91678a3086d953628b79db6e012",
+    "matrixSliceSha256": "e6fbe3381884aa8c37d1baed8c7880b9ac9c53270ff1be425cafff03ba78b676",
     "legacyCount": 523,
     "declarativeCount": 94,
     "sourceCount": 33,

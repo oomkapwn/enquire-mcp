@@ -364,6 +364,7 @@ function ciCoverageProblems(source: string): string[] {
   }
   const jobs = asRecord(workflow.jobs);
   const testJob = asRecord(jobs?.test);
+  const testMacosJob = asRecord(jobs?.["test-macos"]);
   const coverageJob = asRecord(jobs?.coverage);
   const oiaJob = asRecord(jobs?.oia);
   if (testJob === undefined) {
@@ -373,7 +374,7 @@ function ciCoverageProblems(source: string): string[] {
       !recordHasExactKeys(testJob, ["name", "runs-on", "timeout-minutes", "env", "strategy", "steps"]) ||
       testJob.name !== `test (\${{ matrix.label }})` ||
       testJob["runs-on"] !== "ubuntu-latest" ||
-      testJob["timeout-minutes"] !== 10 ||
+      testJob["timeout-minutes"] !== 20 ||
       !isDeepStrictEqual(asRecord(testJob.env), { NPM_CONFIG_ENGINE_STRICT: "true" })
     ) {
       problems.push("CI test matrix must retain its exact fail-capable job boundary");
@@ -433,6 +434,10 @@ function ciCoverageProblems(source: string): string[] {
     ) {
       problems.push("each CI Node leg must end with one exact unfiltered fail-capable npm test");
     }
+  }
+
+  if (testMacosJob === undefined || testMacosJob["timeout-minutes"] !== 20) {
+    problems.push("CI macOS full suite must retain its exact advisory 20-minute job boundary");
   }
 
   if (coverageJob === undefined) {
@@ -966,7 +971,7 @@ function coverageIsolationProblems(input: CoverageIsolationInputs): string[] {
       "META-invariant: exact structural census + NEGATIVE control coverage",
       "beforeAll",
       undefined,
-      "480_000"
+      "720_000"
     ),
     ...registrationTimeoutProblems(
       requiredClosureSource(input.closureSources, "tests/release-integrity.test.ts"),
@@ -1223,6 +1228,30 @@ describe("Class A invariant — no test imports value from registration boilerpl
     expect(ciCoverageProblems(ciWithFailOpenTest)).toContain(
       "CI test matrix must retain its exact fail-capable job boundary"
     );
+    const ciWithStaleTestBreaker = mutableWorkflow(current.ciWorkflow, (workflow) => {
+      mutableWorkflowJob(workflow, "test")["timeout-minutes"] = 10;
+    });
+    expect(ciCoverageProblems(ciWithStaleTestBreaker)).toContain(
+      "CI test matrix must retain its exact fail-capable job boundary"
+    );
+    const ciWithRaisedTestBreaker = mutableWorkflow(current.ciWorkflow, (workflow) => {
+      mutableWorkflowJob(workflow, "test")["timeout-minutes"] = 21;
+    });
+    expect(ciCoverageProblems(ciWithRaisedTestBreaker)).toContain(
+      "CI test matrix must retain its exact fail-capable job boundary"
+    );
+    const ciWithStaleMacosBreaker = mutableWorkflow(current.ciWorkflow, (workflow) => {
+      mutableWorkflowJob(workflow, "test-macos")["timeout-minutes"] = 15;
+    });
+    expect(ciCoverageProblems(ciWithStaleMacosBreaker)).toContain(
+      "CI macOS full suite must retain its exact advisory 20-minute job boundary"
+    );
+    const ciWithRaisedMacosBreaker = mutableWorkflow(current.ciWorkflow, (workflow) => {
+      mutableWorkflowJob(workflow, "test-macos")["timeout-minutes"] = 21;
+    });
+    expect(ciCoverageProblems(ciWithRaisedMacosBreaker)).toContain(
+      "CI macOS full suite must retain its exact advisory 20-minute job boundary"
+    );
     const ciWithNoopTestShell = mutableWorkflow(current.ciWorkflow, (workflow) => {
       mutableRunStep(mutableWorkflowJob(workflow, "test"), "npm test").shell = "echo {0}";
     });
@@ -1452,25 +1481,37 @@ describe("Class A invariant — no test imports value from registration boilerpl
     const metaSource = requiredClosureSource(current.closureSources, "tests/meta-invariant-coverage.test.ts");
     const raisedMetaTimeout = replaceExactly(
       metaSource,
-      '  }, 480_000);\n\n  it("every *-invariant.test.ts file has NEGATIVE control OR explicit exempt marker",',
-      '  }, 481_000);\n\n  it("every *-invariant.test.ts file has NEGATIVE control OR explicit exempt marker",'
+      '  }, 720_000);\n\n  it("every *-invariant.test.ts file has NEGATIVE control OR explicit exempt marker",',
+      '  }, 721_000);\n\n  it("every *-invariant.test.ts file has NEGATIVE control OR explicit exempt marker",'
+    );
+    const staleMetaTimeout = replaceExactly(
+      metaSource,
+      '  }, 720_000);\n\n  it("every *-invariant.test.ts file has NEGATIVE control OR explicit exempt marker",',
+      '  }, 480_000);\n\n  it("every *-invariant.test.ts file has NEGATIVE control OR explicit exempt marker",'
+    );
+    const supersededMetaTimeout = replaceExactly(
+      metaSource,
+      '  }, 720_000);\n\n  it("every *-invariant.test.ts file has NEGATIVE control OR explicit exempt marker",',
+      '  }, 540_000);\n\n  it("every *-invariant.test.ts file has NEGATIVE control OR explicit exempt marker",'
     );
     const syntheticRaisedMetaRegistration =
       'describe("META-invariant: exact structural census + NEGATIVE control coverage", () => {\n' +
-      "  beforeAll(() => {}, 481_000);\n" +
+      "  beforeAll(() => {}, 721_000);\n" +
       "});";
-    expect(
+    const metaTimeoutProblems = (source: string): string[] =>
       registrationTimeoutProblems(
-        syntheticRaisedMetaRegistration,
+        source,
         "tests/meta-invariant-coverage.test.ts",
         "META-invariant: exact structural census + NEGATIVE control coverage",
         "beforeAll",
         undefined,
-        "480_000"
-      )
-    ).toContain(
-      "tests/meta-invariant-coverage.test.ts must retain one direct beforeAll registration with timeout 480_000"
-    );
+        "720_000"
+      );
+    const metaTimeoutDiagnostic =
+      "tests/meta-invariant-coverage.test.ts must retain one direct beforeAll registration with timeout 720_000";
+    expect(metaTimeoutProblems(syntheticRaisedMetaRegistration)).toContain(metaTimeoutDiagnostic);
+    expect(metaTimeoutProblems(staleMetaTimeout)).toContain(metaTimeoutDiagnostic);
+    expect(metaTimeoutProblems(supersededMetaTimeout)).toContain(metaTimeoutDiagnostic);
     const releaseSource = requiredClosureSource(current.closureSources, "tests/release-integrity.test.ts");
     const releaseTimeoutProblems = (source: string): string[] =>
       registrationTimeoutProblems(
@@ -1533,7 +1574,7 @@ describe("Class A invariant — no test imports value from registration boilerpl
       "each CI Node leg must end with one exact unfiltered fail-capable npm test",
       "the repository must retain one canonical vitest.config.ts",
       "vitest test config must retain its exact reviewed static key set",
-      "tests/meta-invariant-coverage.test.ts must retain one direct beforeAll registration with timeout 480_000",
+      "tests/meta-invariant-coverage.test.ts must retain one direct beforeAll registration with timeout 720_000",
       "tests/release-integrity.test.ts must retain one direct it registration with timeout 330_000",
       "tests/release-integrity.test.ts value-imports production path src/vault.js",
       "tests/helpers/exact-source-mutation.ts value-imports production path dist/index.js"

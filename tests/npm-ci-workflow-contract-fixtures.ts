@@ -16,9 +16,9 @@ export const NPM_CI_ENTRYPOINT_SOURCE_SHA256 = "31e3b1af3bf48c88149b20cd71fa948e
 /** Exact dependency-installing workflow jobs and their composed budgets. */
 export const NPM_CI_WORKFLOW_JOB_TIMEOUTS = [
   ["ci.yml", "lint", 5],
-  ["ci.yml", "test", 10],
+  ["ci.yml", "test", 20],
   ["ci.yml", "test-windows", 20],
-  ["ci.yml", "test-macos", 15],
+  ["ci.yml", "test-macos", 20],
   ["ci.yml", "coverage", 10],
   ["ci.yml", "docs", 10],
   ["ci.yml", "oia", 10],

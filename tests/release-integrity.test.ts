@@ -84,7 +84,7 @@ import {
 
 const SPLIT_FIXTURE_SHA256 = "8096105d1acb35f436f3f72f58addfba1a883c5f4f5f9fc6c3ef6eb953e8b93f";
 const SPLIT_PROJECTION_SHA256 = "30ddc2aa8a0bd0697b19ee2a62517347869c64214f52f1f1ab837272204a3c6d";
-const NPM_CI_CONTRACT_FIXTURE_SHA256 = "0bfb81d647a6c4049da171cd8c1c6830af42465450456088f581702ad3f6b853";
+const NPM_CI_CONTRACT_FIXTURE_SHA256 = "5e9f3bda1e7105d5d6bf4ea9fd5c28ef94c0409c9f3066e9d9fca94fe9d63034";
 
 interface WorkflowJob {
   id: number;
@@ -4897,6 +4897,18 @@ async function assertNpmCiWorkflowContract(): Promise<void> {
   expect(latchWaits).toEqual([]);
 
   expect(npmCiWorkflowProblems(workflowSources)).toEqual([]);
+  for (const [jobId, staleTimeout] of [
+    ["test", 10],
+    ["test-macos", 15]
+  ] as const) {
+    expect(
+      npmCiWorkflowProblems(
+        mutateNpmCiWorkflow(workflowSources, "ci.yml", (document) => {
+          mutableNpmCiJob(document, jobId)["timeout-minutes"] = staleTimeout;
+        })
+      )
+    ).toContain(`${NPM_CI_WORKFLOW_PROBLEM}: invalid ci.yml#${jobId}`);
+  }
   for (const jobId of ["npm_publish", "github_release", "mcp_registry"] as const) {
     expect(
       npmCiWorkflowProblems(
@@ -12070,7 +12082,7 @@ done`;
   // This mutation oracle intentionally exercises thousands of structural checks.
   // PR #443's first full coverage run completed the expanded 560-case oracle in
   // 217.8s, leaving too little headroom under the former 240s bound. Keep scoped
-  // 330s hang detection below the unchanged 10-minute job circuit breaker.
+  // 330s hang detection below the 20-minute full-suite job circuit breaker.
   it("keeps release.yml wired to the shared evaluator and an exact mirrored inventory", () => {
     assertMcpRegistryEvaluatorContract();
     assertNpmProvenanceEvaluatorContract();
@@ -22452,8 +22464,8 @@ done`;
       nodeFloorCiProblems(
         replaceExactly(
           ci,
-          "    timeout-minutes: 10\n    env:",
-          "    timeout-minutes: 10\n    continue-on-error: true\n    env:"
+          '    timeout-minutes: 20\n    env:\n      NPM_CONFIG_ENGINE_STRICT: "true"\n    strategy:',
+          '    timeout-minutes: 20\n    continue-on-error: true\n    env:\n      NPM_CONFIG_ENGINE_STRICT: "true"\n    strategy:'
         ),
         pkg.engines?.node
       )

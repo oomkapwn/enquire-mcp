@@ -441,6 +441,11 @@ const RELEASE_MUTATION_V3_SUCCESSOR_TRANSITIONS = [
     reason: "GitHub channel transaction now references the successor create-channel source identity"
   },
   {
+    oldId: "release.m477",
+    newId: "release.m695",
+    reason: "test fail-open mutation now binds the reviewed 20-minute full-suite boundary"
+  },
+  {
     oldId: "release.m504",
     newId: "release.m684",
     reason: "package consumer command mutation now uses the current exact command fragments"
@@ -697,6 +702,11 @@ const RELEASE_MUTATION_V3_SUCCESSOR_TARGET_WITNESSES: Readonly<
     logicalProjectionSha256: "d270076c2e8fc0ce6807a7e9cec3c6b676ceb4174193385a7998d4b6ed1dbffc",
     nodeSha256: "91c08ffe19bcc0e54c42116a7a3a6e2413589f47da9641870a9d49550a7f2de1"
   },
+  "release.m695": {
+    caseNodeSha256: "55ad31f20f9b6b1a18c2193945fb7bb6107b7bf97cab9d75982577cb3070f157",
+    logicalProjectionSha256: "ff1b993fee0b871200aafb062ac70c7a4e13da3b2645458754996f3730b5eb2b",
+    nodeSha256: "e091817974adf13d0d68a00e2e3584d6b2e4b9e44e56435a628604c85e8125a9"
+  },
   "release.m656": {
     caseNodeSha256: "392e6a79c144cbfa6358a8d607ec300fb91ac2a5b1b34a2f33f065eb25066ea1",
     logicalProjectionSha256: "9fe221c41c233679cb61a7bc09f2b8a822f6f80332dfcc9f93d0c255c19609f4",
@@ -845,7 +855,7 @@ export const RELEASE_MUTATION_V3_SUCCESSORS: readonly ReleaseMutationSuccessorPl
 
 const RELEASE_MUTATION_V3_SUCCESSOR_OLD_ID_SET = new Set(RELEASE_MUTATION_V3_SUCCESSORS.map((entry) => entry.oldId));
 
-/** Exhaustive 485-entry old-ID class whose logical projections must remain exactly equal. */
+/** Exhaustive 484-entry old-ID class whose logical projections must remain exactly equal. */
 export const RELEASE_MUTATION_V3_UNCHANGED_OLD_IDS: readonly string[] = Object.freeze(
   Array.from({ length: 560 }, (_, index) => `release.m${String(index + 1).padStart(3, "0")}`).filter(
     (id) => !RELEASE_MUTATION_V3_SUCCESSOR_OLD_ID_SET.has(id)

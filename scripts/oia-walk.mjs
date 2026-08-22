@@ -1228,9 +1228,9 @@ for (const docFile of DOCS_FILES_TO_SCAN) {
       "ci.yml",
       new Map([
         ["lint", 5],
-        ["test", 10],
+        ["test", 20],
         ["test-windows", 20],
-        ["test-macos", 15],
+        ["test-macos", 20],
         ["coverage", 10],
         ["docs", 10],
         ["oia", 10],

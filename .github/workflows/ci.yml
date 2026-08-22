@@ -43,7 +43,7 @@ jobs:
     # the PDF feature degrades to "not available" (consistent with how
     # other optional native deps behave).
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     env:
       NPM_CONFIG_ENGINE_STRICT: "true"
     strategy:
@@ -180,7 +180,7 @@ jobs:
     # floating image label, so the executable architecture assertion below
     # must fail if it no longer resolves to the arm64 lane claimed here.
     runs-on: macos-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     continue-on-error: true
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -209,10 +209,10 @@ jobs:
 
   coverage:
     runs-on: ubuntu-latest
-    # v3.11.0-rc.9 (audit I-COV-1 re-verify) — parity with the `test` job (10m). This
-    # job does strictly MORE (npm ci + retry backoff + build + V8-INSTRUMENTED
-    # test:coverage + changelog/per-file gates), so a 5m budget was a latent
-    # flake-blocks-release risk (the rc.7/rc.20 class) on a slow/contended runner.
+    # v3.11.0-rc.9 (audit I-COV-1 re-verify) — this instrumented lane retains
+    # its independently measured 10m budget. It excludes the two exhaustive
+    # transition-oracle files whose full-suite Node floor now owns a 20m job
+    # boundary, then runs changelog/per-file gates after the V8 measurement.
     timeout-minutes: 10
     needs: test
     steps:

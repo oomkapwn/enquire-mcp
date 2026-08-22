@@ -261,18 +261,21 @@ describe("release mutation schema-v3 transition authority", () => {
     expect(fixture.schemaVersion).toBe(2);
     expect(createHash("sha256").update(fixtureSource, "utf8").digest("hex")).toBe(HISTORICAL_FIXTURE_SHA256);
     expect(fixture.mutations).toHaveLength(560);
-    expect(new Set(successorOldIds).size).toBe(75);
+    expect(new Set(successorOldIds).size).toBe(76);
     expect(successorOldIds.every((id) => historicalMutationIds.has(id))).toBe(true);
-    expect(new Set(currentOnlyMutationIds).size).toBe(132);
+    expect(new Set(currentOnlyMutationIds).size).toBe(133);
     expect(currentOnlyMutationIds.some((id) => historicalMutationIds.has(id))).toBe(false);
-    expect(fixture.mutations.length - successorOldIds.length).toBe(485);
-    expect(RELEASE_MUTATION_V3_UNCHANGED_OLD_IDS).toHaveLength(485);
+    expect(fixture.mutations.length - successorOldIds.length).toBe(484);
+    expect(RELEASE_MUTATION_V3_UNCHANGED_OLD_IDS).toHaveLength(484);
     expect(new Set([...RELEASE_MUTATION_V3_UNCHANGED_OLD_IDS, ...successorOldIds])).toEqual(historicalMutationIds);
     expect(RELEASE_MUTATION_V3_UNCHANGED_OLD_IDS).toEqual(
       expect.arrayContaining(["release.m490", "release.m491", "release.m496", "release.m497"])
     );
     expect(RELEASE_MUTATION_V3_SUCCESSORS).toEqual(
-      expect.arrayContaining([expect.objectContaining({ oldId: "release.m290", newId: "release.m694" })])
+      expect.arrayContaining([
+        expect.objectContaining({ oldId: "release.m290", newId: "release.m694" }),
+        expect.objectContaining({ oldId: "release.m477", newId: "release.m695" })
+      ])
     );
     expect(
       RELEASE_MUTATION_V3_SUCCESSORS.some((entry) =>

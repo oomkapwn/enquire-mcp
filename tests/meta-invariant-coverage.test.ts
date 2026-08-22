@@ -34,7 +34,7 @@ import { releaseMutationVersionedTransitionAuditProblems } from "./release-mutat
 
 const repoRoot = path.resolve(__dirname, "..");
 const RELEASE_MUTATION_IDENTITY_FIXTURE_SHA256 = "8205d24e6d42dd4cb8986368611514131abe701434beb30150e33ea08f4b1288";
-const RELEASE_MUTATION_TRANSITION_FIXTURE_SHA256 = "24de9474a262dd9ebd683a482d73384c7ff91f46b3610e572b157572c7cb3627";
+const RELEASE_MUTATION_TRANSITION_FIXTURE_SHA256 = "93cf898bb05efd7d376c056974c3a9e4c4f8e4f695599251f584dd33af07d11a";
 const releaseMutationIdentityFixturePath = path.join(repoRoot, "tests/fixtures/release-mutation-identity.v2.json");
 const releaseMutationTransitionFixturePath = path.join(repoRoot, "tests/fixtures/release-mutation-transition.v3.json");
 const releaseIntegritySourcePath = path.join(repoRoot, "tests/release-integrity.test.ts");
@@ -2001,9 +2001,10 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
   // PR #443 raised hybrid candidate-audit invocations from 24 to 53; the m109-m110
   // migration adds 12 bounded candidates for 65 total, and m111, paired m112-m113, m114-m164,
   // plus the nested m108->m107, m140->m139, and m145->m144 dependency pairs reuse those exact
-  // candidate slots without adding another full matrix scan. The last
-  // measured 53-candidate run completed the synchronous work in 323.7s; remote CI must
-  // prove this exact candidate within the unchanged scoped 480s and 10-minute job circuit breakers.
+  // candidate slots without adding another full matrix scan. The current v3 workload is
+  // CPU-bound and the exact Node 22 floor proved the old 480s ceiling insufficient under
+  // full-suite contention (481.474s after a 327.383s run of the same source). Keep a finite
+  // 720s local breaker inside the 20-minute full-suite jobs without dropping work.
   beforeAll(async () => {
     const [matrixSource, fixtureBefore, transitionAuthority] = await Promise.all([
       fs.readFile(releaseIntegritySourcePath, "utf8"),
@@ -6517,7 +6518,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
     const finalHistoricalTelemetry = preparedAudit.telemetry();
     expect(finalHistoricalTelemetry.fixturePreparations).toBe(1);
     expect(finalHistoricalTelemetry.sourceCatalogueBypasses).toBeGreaterThan(0);
-  }, 480_000);
+  }, 720_000);
 
   it("every *-invariant.test.ts file has NEGATIVE control OR explicit exempt marker", async () => {
     const completeSet = new Set<string>(EXPECTED_STRUCTURAL_FILES);

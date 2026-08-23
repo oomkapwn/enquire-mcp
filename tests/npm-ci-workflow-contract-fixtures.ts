@@ -147,7 +147,12 @@ export const NPM_CI_SETUP_INPUTS = new Map<string, Readonly<Record<string, unkno
   ]
 ]);
 
-/** Reviewed semantic digests of every step before each bounded npm-ci helper. */
+/**
+ * Reviewed semantic digests of every step before each bounded npm-ci helper.
+ * The lint digest normalizes only the relational raw-receipt carrier value;
+ * the bootstrap receipt independently validates that value and all other
+ * preinstall bytes remain part of this digest.
+ */
 export const NPM_CI_PREINSTALL_DIGESTS = new Map<string, string>([
   ["ci.yml#lint", "559a7e13a198905e6ac358a1914d6e9fa087ad055f55b27c380ae171424f3d6b"],
   ["ci.yml#test", "0b00c055e9a2707a37043a75423ce6b68004d5750b872ce6cf40e3dcadd1c4db"],

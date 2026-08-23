@@ -7,6 +7,11 @@ import { load } from "js-yaml";
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
 import { expectedCoverageSourceFiles } from "../scripts/lib/coverage-policy.mjs";
+import {
+  ciWorkflowReceiptDigest,
+  EXPECTED_VITEST_BOOTSTRAP_FILES,
+  VITEST_BOOTSTRAP_MANIFEST
+} from "../scripts/lib/oia-vitest-bootstrap.mjs";
 // @ts-expect-error — dependency-free .mjs workflow helper has no declaration file.
 import { inspectReleaseProvenanceWorkflow } from "../scripts/lib/oia-release-claims.mjs";
 import { DEFAULT_RERANKER_ALIAS, EMBEDDING_MODELS } from "../src/embeddings.js";
@@ -32,6 +37,37 @@ const repoRoot = path.resolve(__dirname, "..");
 
 async function read(rel: string): Promise<string> {
   return fs.readFile(path.join(repoRoot, rel), "utf8");
+}
+
+async function refreshVitestBootstrapFixtureReceipt(root: string): Promise<void> {
+  const lines: string[] = [];
+  for (const filename of EXPECTED_VITEST_BOOTSTRAP_FILES) {
+    const absolute = path.join(root, ...filename.split("/"));
+    const digest =
+      filename === ".github/workflows/ci.yml"
+        ? ciWorkflowReceiptDigest(await fs.readFile(absolute, "utf8"))
+        : createHash("sha256").update(await fs.readFile(absolute)).digest("hex");
+    lines.push(`${digest}  ${filename}`);
+  }
+  const manifest = `${lines.join("\n")}\n`;
+  await fs.writeFile(path.join(root, ...VITEST_BOOTSTRAP_MANIFEST.split("/")), manifest);
+  const manifestDigest = createHash("sha256").update(manifest).digest("hex");
+  const ciPath = path.join(root, ".github", "workflows", "ci.yml");
+  const ciSource = await fs.readFile(ciPath, "utf8");
+  const carriers = [...ciSource.matchAll(/^          expected_manifest_sha=([0-9a-f]{64})$/gmu)];
+  const carrierDigest = carriers[0]?.[1];
+  if (carriers.length !== 1 || carrierDigest === undefined) {
+    throw new Error(`expected one bootstrap receipt carrier, found ${carriers.length}`);
+  }
+  const carrierToken = `expected_manifest_sha=${carrierDigest}`;
+  const carrierOffset = ciSource.indexOf(carrierToken);
+  if (carrierOffset < 0) throw new Error("expected bootstrap receipt carrier token");
+  await fs.writeFile(
+    ciPath,
+    ciSource.slice(0, carrierOffset) +
+      `expected_manifest_sha=${manifestDigest}` +
+      ciSource.slice(carrierOffset + carrierToken.length)
+  );
 }
 
 function registeredNames(src: string, fn: "registerTool" | "registerPrompt"): Set<string> {
@@ -3780,12 +3816,16 @@ export type NegativeMissingSubpath = typeof import("@oomkapwn/enquire-mcp/fts5-m
       // be reported alongside the unrelated currency mutations below.
       const ciFixture = path.join(fixtureRoot, ".github", "workflows", "ci.yml");
       const ciWorkflow = await fs.readFile(ciFixture, "utf8");
-      const ciWithLegacyInstall = replaceExactly(
-        ciWorkflow,
-        "        run: node scripts/npm-ci-with-retry.mjs",
-        "        run: npm ci",
-        14
-      );
+      const firstNonLintJob = ciWorkflow.indexOf("\n  test:");
+      expect(firstNonLintJob).toBeGreaterThan(0);
+      const ciWithLegacyInstall =
+        ciWorkflow.slice(0, firstNonLintJob) +
+        replaceExactly(
+          ciWorkflow.slice(firstNonLintJob),
+          "        run: node scripts/npm-ci-with-retry.mjs",
+          "        run: npm ci",
+          13
+        );
       await fs.writeFile(
         ciFixture,
         replaceExactly(
@@ -3794,8 +3834,8 @@ export type NegativeMissingSubpath = typeof import("@oomkapwn/enquire-mcp/fts5-m
             "        run: /usr/bin/timeout --kill-after=10s 300s npm run check:audit",
             "        run: npm run check:audit"
           ),
-          "  lint:\n    runs-on: ubuntu-latest\n    timeout-minutes: 5",
-          "  lint:\n    runs-on: ubuntu-latest\n    timeout-minutes: 5\n    continue-on-error: true"
+          "    runs-on: ubuntu-latest\n    timeout-minutes: 12\n    steps:",
+          "    runs-on: ubuntu-latest\n    timeout-minutes: 12\n    continue-on-error: true\n    steps:"
         )
       );
       const yamlBypassFixture = path.join(fixtureRoot, ".github", "workflows", "npm-ci-bypass.yaml");
@@ -4022,6 +4062,7 @@ export type NegativeMissingSubpath = typeof import("@oomkapwn/enquire-mcp/fts5-m
           "return false;"
         )
       );
+      await refreshVitestBootstrapFixtureReceipt(fixtureRoot);
       const oia = spawnSync(process.execPath, [path.join(fixtureRoot, "scripts/oia-walk.mjs"), "--skip-network"], {
         cwd: fixtureRoot,
         encoding: "utf8",
@@ -4148,9 +4189,6 @@ export type NegativeMissingSubpath = typeof import("@oomkapwn/enquire-mcp/fts5-m
       packageSource.scripts.postbuild = "node scripts/rewrite-vitest-config.mjs";
       packageSource.scripts.prepare = "node scripts/job-gated-vitest-rewrite.mjs";
       await fs.writeFile(packageFixture, `${JSON.stringify(packageSource, null, 2)}\n`);
-      await fs.writeFile(path.join(fixtureRoot, ".npmrc"), "node-options=--require=./scripts/filter-vitest.cjs\n");
-      await fs.writeFile(path.join(fixtureRoot, "binding.gyp"), "{}\n");
-      await fs.writeFile(path.join(fixtureRoot, "npm-shrinkwrap.json"), "{}\n");
       const ciFixtureSource = await fs.readFile(ciFixture, "utf8");
       await fs.writeFile(
         ciFixture,
@@ -4160,6 +4198,7 @@ export type NegativeMissingSubpath = typeof import("@oomkapwn/enquire-mcp/fts5-m
           "      - run: npm test -- tests/unit.test.ts\n        env:"
         )
       );
+      await refreshVitestBootstrapFixtureReceipt(fixtureRoot);
       const nonOverridableOia = spawnSync(
         process.execPath,
         [path.join(fixtureRoot, "scripts/oia-walk.mjs"), "--skip-network", "--allow"],
@@ -4180,12 +4219,42 @@ export type NegativeMissingSubpath = typeof import("@oomkapwn/enquire-mcp/fts5-m
       expect(nonOverridableOutput).toContain("[VITEST-RUNTIME-CONFIG] tests/focus-bypass.test.ts:");
       expect(nonOverridableOutput).toContain("[VITEST-SELECTION-CONFIG] vitest.config.ts:1");
       expect(nonOverridableOutput).toContain("[VITEST-SELECTION-PACKAGE] package.json:1");
-      expect(nonOverridableOutput).toContain("[VITEST-SELECTION-NPM-BOUNDARY] .npmrc:1");
-      expect(nonOverridableOutput).toContain("[VITEST-SELECTION-NPM-BOUNDARY] binding.gyp:1");
-      expect(nonOverridableOutput).toContain("[VITEST-SELECTION-NPM-BOUNDARY] npm-shrinkwrap.json:1");
       expect(nonOverridableOutput).toContain("[VITEST-SELECTION-CI] .github/workflows/ci.yml:1");
       expect(nonOverridableOutput).toContain(
         "[oia-walk] Vitest execution-control/scanner findings are non-overridable; --allow cannot suppress them."
+      );
+
+      await fs.writeFile(path.join(fixtureRoot, ".npmrc"), "node-options=--require=./scripts/filter-vitest.cjs\n");
+      await fs.writeFile(path.join(fixtureRoot, "binding.gyp"), "{}\n");
+      await fs.writeFile(path.join(fixtureRoot, "npm-shrinkwrap.json"), "{}\n");
+      const coveragePolicyFixture = path.join(fixtureRoot, "scripts", "lib", "coverage-policy.mjs");
+      const coveragePolicySource = await fs.readFile(coveragePolicyFixture, "utf8");
+      await fs.writeFile(
+        coveragePolicyFixture,
+        'process.stderr.write("BOOTSTRAP_SIDE_EFFECT_RAN\\n"); process.exit(0);\n' + coveragePolicySource
+      );
+      const earlyBootstrapOia = spawnSync(
+        process.execPath,
+        [path.join(fixtureRoot, "scripts/oia-walk.mjs"), "--skip-network", "--allow"],
+        {
+          cwd: fixtureRoot,
+          encoding: "utf8",
+          timeout: 30_000,
+          maxBuffer: 2 * 1024 * 1024
+        }
+      );
+      const earlyBootstrapOutput = `${earlyBootstrapOia.stdout ?? ""}${earlyBootstrapOia.stderr ?? ""}`;
+      expect(earlyBootstrapOia.error, earlyBootstrapOutput).toBeUndefined();
+      expect(earlyBootstrapOia.signal, earlyBootstrapOutput).toBeNull();
+      expect(earlyBootstrapOia.status, earlyBootstrapOutput).toBe(1);
+      expect(earlyBootstrapOutput).toContain("[VITEST-BOOTSTRAP-DIGEST] scripts/lib/coverage-policy.mjs:1");
+      expect(earlyBootstrapOutput).toContain("[VITEST-BOOTSTRAP-ROOT-INPUT] .npmrc:1");
+      expect(earlyBootstrapOutput).toContain("[VITEST-BOOTSTRAP-ROOT-INPUT] binding.gyp:1");
+      expect(earlyBootstrapOutput).toContain("[VITEST-BOOTSTRAP-ROOT-INPUT] npm-shrinkwrap.json:1");
+      expect(earlyBootstrapOutput).not.toContain("BOOTSTRAP_SIDE_EFFECT_RAN");
+      expect(earlyBootstrapOutput).not.toContain("[oia-walk] Report complete:");
+      expect(earlyBootstrapOutput).toContain(
+        "[oia-walk] bootstrap findings are non-overridable; --allow cannot suppress them."
       );
     } finally {
       await fs.rm(tempRoot, { recursive: true, force: true });

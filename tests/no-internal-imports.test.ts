@@ -7,6 +7,13 @@ import { load } from "js-yaml";
 import ts from "typescript";
 import { beforeAll, describe, expect, it } from "vitest";
 import {
+  ciWorkflowReceiptDigest,
+  EXPECTED_VITEST_BOOTSTRAP_FILES,
+  inspectRepositoryVitestBootstrap,
+  oiaVitestBootstrapWiringProblems,
+  VITEST_BOOTSTRAP_MANIFEST
+} from "../scripts/lib/oia-vitest-bootstrap.mjs";
+import {
   firstPartyVitestFocusSourceFiles,
   inspectRepositoryVitestFocusControls,
   inspectStaticVitestFocusControls
@@ -81,12 +88,15 @@ import { replaceExactly } from "./helpers/exact-source-mutation.js";
 //
 // Class C invariant (post-PR #518/#519 sibling sweeps) — Vitest focus and
 // pre-collection selection controls are enforced by OIA Check 12c in a
-// separate Node process. The focus analyzer scans the complete first-party
+// separate Node process. Check 12d additionally binds the complete first-party
+// bootstrap byte closure to a CI receipt verified before setup-node. The focus
+// analyzer scans the complete first-party
 // JavaScript/TypeScript executable-source census; the selection analyzer pins
 // the persistent canonical config, root npm execution inputs, install/build/test
 // commands and blocking CI test job. A persistent static selector can therefore
 // skip this oracle only by leaving a non-overridable OIA finding after the
-// unchanged OIA entrypoint starts.
+// unchanged OIA entrypoint starts. The CI receipt is an audited merge gate,
+// not a defense against a coordinated replacement of the workflow itself.
 
 const repoRoot = path.resolve(__dirname, "..");
 const EXECUTABLE_SOURCE_EXTENSIONS = new Set([".cjs", ".cts", ".js", ".jsx", ".mjs", ".mts", ".ts", ".tsx"]);
@@ -97,7 +107,8 @@ const COVERAGE_ONLY_TEST_EXCLUSIONS = [
   "tests/release-integrity.test.ts"
 ] as const;
 const EXPECTED_OIA_SCRIPT = "node scripts/oia-walk.mjs";
-const OIA_FOCUS_IMPORT = 'import { inspectRepositoryVitestFocusControls } from "./lib/oia-vitest-focus.mjs";';
+const OIA_FOCUS_IMPORT =
+  'const { inspectRepositoryVitestFocusControls } = await import("./lib/oia-vitest-focus.mjs");';
 const OIA_FOCUS_CALL = "for (const finding of inspectRepositoryVitestFocusControls(repoRoot))";
 const OIA_FOCUS_LOOP =
   `  ${OIA_FOCUS_CALL} {\n` +
@@ -144,6 +155,42 @@ const EXPECTED_COVERAGE_EXTERNAL_MODULES = new Set([
   "node:util",
   "typescript",
   "vitest"
+]);
+const EXPECTED_VITEST_BOOTSTRAP_RUNTIME_IMPORTS = new Map<string, readonly string[]>([
+  ["scripts/lib/coverage-policy.mjs", ["node:fs", "node:path"]],
+  ["scripts/lib/entrypoint.mjs", ["node:fs", "node:url"]],
+  ["scripts/lib/oia-offline-guard.mjs", ["typescript"]],
+  ["scripts/lib/oia-release-claims.mjs", []],
+  ["scripts/lib/oia-vitest-bootstrap.mjs", ["node:crypto", "node:fs", "node:path"]],
+  ["scripts/lib/oia-vitest-focus.mjs", ["node:fs", "node:path", "typescript"]],
+  [
+    "scripts/lib/oia-vitest-selection.mjs",
+    ["js-yaml", "node:crypto", "node:fs", "node:path", "node:util", "typescript"]
+  ],
+  ["scripts/npm-ci-with-retry.mjs", ["./lib/entrypoint.mjs", "node:child_process", "node:fs", "node:path"]],
+  [
+    "scripts/oia-walk.mjs",
+    [
+      "./lib/coverage-policy.mjs",
+      "./lib/oia-offline-guard.mjs",
+      "./lib/oia-release-claims.mjs",
+      "./lib/oia-vitest-bootstrap.mjs",
+      "./lib/oia-vitest-focus.mjs",
+      "./lib/oia-vitest-selection.mjs",
+      "./scope-completeness-audit.mjs",
+      "js-yaml",
+      "node:child_process",
+      "node:child_process",
+      "node:child_process",
+      "node:crypto",
+      "node:fs",
+      "node:path",
+      "node:url"
+    ]
+  ],
+  ["scripts/scope-completeness-audit.mjs", ["./lib/entrypoint.mjs", "node:fs", "node:path", "node:url"]],
+  ["tests/setup.ts", ["node:fs", "node:os", "node:path"]],
+  ["vitest.config.ts", ["./scripts/lib/coverage-policy.mjs", "vitest/config"]]
 ]);
 
 async function independentExecutableSourceCensus(root: string, relativeDirectory = ""): Promise<string[]> {
@@ -719,6 +766,168 @@ function runtimeModuleEdges(filename: string, source: string): RuntimeModuleEdge
   return { specifiers, problems };
 }
 
+function setupOptionalImportProblems(source: string): string[] {
+  const sourceFile = ts.createSourceFile("tests/setup.ts", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const problems: string[] = [];
+  const expectedOptionalDeps = [
+    "@huggingface/transformers",
+    "pdfjs-dist",
+    "tesseract.js",
+    "@napi-rs/canvas",
+    "hnswlib-node",
+    "better-sqlite3"
+  ];
+  const declarations: ts.VariableDeclaration[] = [];
+  const dynamicImports: ts.CallExpression[] = [];
+  const visit = (node: ts.Node): void => {
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.name.text === "optionalDeps") {
+      declarations.push(node);
+    }
+    if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) {
+      dynamicImports.push(node);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  const declaration = declarations[0];
+  const initializer = declaration?.initializer;
+  const actualOptionalDeps =
+    initializer !== undefined && ts.isArrayLiteralExpression(initializer)
+      ? initializer.elements.map((element) => stringLiteralValue(element as ts.Expression) ?? "<nonliteral>")
+      : [];
+  if (declarations.length !== 1 || !isDeepStrictEqual(actualOptionalDeps, expectedOptionalDeps)) {
+    problems.push("tests/setup.ts must retain the exact reviewed optional dependency import census");
+  }
+  const dynamicImport = dynamicImports[0];
+  const dynamicArgument = dynamicImport?.arguments[0];
+  const catchAccess = dynamicImport?.parent;
+  const catchCall = catchAccess?.parent;
+  const arrow = catchCall?.parent;
+  const parameter = arrow !== undefined && ts.isArrowFunction(arrow) ? arrow.parameters[0] : undefined;
+  const mapCall = arrow?.parent;
+  const mapAccess = mapCall !== undefined && ts.isCallExpression(mapCall) ? mapCall.expression : undefined;
+  const exactDynamicWarmup =
+    dynamicImports.length === 1 &&
+    dynamicArgument !== undefined &&
+    ts.isIdentifier(dynamicArgument) &&
+    dynamicArgument.text === "spec" &&
+    catchAccess !== undefined &&
+    ts.isPropertyAccessExpression(catchAccess) &&
+    catchAccess.expression === dynamicImport &&
+    catchAccess.name.text === "catch" &&
+    catchCall !== undefined &&
+    ts.isCallExpression(catchCall) &&
+    catchCall.expression === catchAccess &&
+    arrow !== undefined &&
+    ts.isArrowFunction(arrow) &&
+    arrow.body === catchCall &&
+    arrow.parameters.length === 1 &&
+    parameter !== undefined &&
+    ts.isIdentifier(parameter.name) &&
+    parameter.name.text === "spec" &&
+    mapCall !== undefined &&
+    ts.isCallExpression(mapCall) &&
+    mapCall.arguments.length === 1 &&
+    mapCall.arguments[0] === arrow &&
+    mapAccess !== undefined &&
+    ts.isPropertyAccessExpression(mapAccess) &&
+    ts.isIdentifier(mapAccess.expression) &&
+    mapAccess.expression.text === "optionalDeps" &&
+    mapAccess.name.text === "map";
+  if (!exactDynamicWarmup) {
+    problems.push("tests/setup.ts must retain one exact optionalDeps.map((spec) => import(spec)) loader");
+  }
+  return problems;
+}
+
+function vitestBootstrapImportClosureProblems(sources: ReadonlyMap<string, string>): string[] {
+  const problems: string[] = [];
+  const expectedExecutableFiles = EXPECTED_VITEST_BOOTSTRAP_FILES.filter(
+    (filename) => filename.endsWith(".mjs") || filename.endsWith(".ts")
+  ).sort();
+  const reviewedFiles = [...EXPECTED_VITEST_BOOTSTRAP_RUNTIME_IMPORTS.keys()].sort();
+  if (
+    !isDeepStrictEqual(reviewedFiles, expectedExecutableFiles) ||
+    !isDeepStrictEqual([...sources.keys()].sort(), reviewedFiles)
+  ) {
+    problems.push("trusted Vitest bootstrap runtime import source census must remain exact");
+  }
+  for (const [filename, expectedSpecifiers] of EXPECTED_VITEST_BOOTSTRAP_RUNTIME_IMPORTS) {
+    const source = sources.get(filename);
+    if (source === undefined) {
+      problems.push(`trusted Vitest bootstrap import closure is missing ${filename}`);
+      continue;
+    }
+    const edges = runtimeModuleEdges(filename, source);
+    const edgeProblems =
+      filename === "tests/setup.ts"
+        ? edges.problems.filter((problem) => problem !== "tests/setup.ts uses a nonliteral dynamic import loader")
+        : edges.problems;
+    problems.push(...edgeProblems);
+    if (!isDeepStrictEqual([...edges.specifiers].sort(), [...expectedSpecifiers].sort())) {
+      problems.push(`${filename} runtime import census must remain exact`);
+    }
+    for (const specifier of edges.specifiers.filter((candidate) => candidate.startsWith("."))) {
+      const normalized = path.posix.normalize(path.posix.join(path.posix.dirname(filename), specifier));
+      if (!EXPECTED_VITEST_BOOTSTRAP_FILES.includes(normalized)) {
+        problems.push(`${filename} runtime import escapes the trusted bootstrap receipt: ${specifier}`);
+      }
+    }
+    if (filename === "tests/setup.ts") problems.push(...setupOptionalImportProblems(source));
+  }
+  return problems;
+}
+
+async function readVitestBootstrapImportSources(root: string): Promise<Map<string, string>> {
+  const sources = new Map<string, string>();
+  for (const filename of EXPECTED_VITEST_BOOTSTRAP_RUNTIME_IMPORTS.keys()) {
+    sources.set(filename, await fs.readFile(path.join(root, ...filename.split("/")), "utf8"));
+  }
+  return sources;
+}
+
+async function copyVitestBootstrapFixture(sourceRoot: string, targetRoot: string): Promise<void> {
+  const files = [...EXPECTED_VITEST_BOOTSTRAP_FILES, VITEST_BOOTSTRAP_MANIFEST];
+  for (const filename of files) {
+    const target = path.join(targetRoot, ...filename.split("/"));
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    await fs.copyFile(path.join(sourceRoot, ...filename.split("/")), target);
+  }
+}
+
+async function writeVitestBootstrapManifest(root: string): Promise<string> {
+  const lines: string[] = [];
+  for (const filename of EXPECTED_VITEST_BOOTSTRAP_FILES) {
+    const absolute = path.join(root, ...filename.split("/"));
+    const digest =
+      filename === ".github/workflows/ci.yml"
+        ? ciWorkflowReceiptDigest(await fs.readFile(absolute, "utf8"))
+        : createHash("sha256").update(await fs.readFile(absolute)).digest("hex");
+    lines.push(`${digest}  ${filename}`);
+  }
+  const manifest = `${lines.join("\n")}\n`;
+  await fs.writeFile(path.join(root, ...VITEST_BOOTSTRAP_MANIFEST.split("/")), manifest);
+  return createHash("sha256").update(manifest).digest("hex");
+}
+
+async function updateVitestBootstrapCarrier(root: string, manifestDigest: string): Promise<void> {
+  const ciPath = path.join(root, ".github", "workflows", "ci.yml");
+  const ciSource = await fs.readFile(ciPath, "utf8");
+  const carriers = [...ciSource.matchAll(/^          expected_manifest_sha=([0-9a-f]{64})$/gmu)];
+  if (carriers.length !== 1) throw new Error(`expected one bootstrap receipt carrier, found ${carriers.length}`);
+  const carrier = carriers[0];
+  const carrierDigest = carrier?.[1];
+  if (carrierDigest === undefined) throw new Error("expected bootstrap receipt carrier digest");
+  await fs.writeFile(
+    ciPath,
+    replaceExactly(ciSource, `expected_manifest_sha=${carrierDigest}`, `expected_manifest_sha=${manifestDigest}`)
+  );
+}
+
+async function refreshVitestBootstrapReceipt(root: string): Promise<void> {
+  await updateVitestBootstrapCarrier(root, await writeVitestBootstrapManifest(root));
+}
+
 function isProductionPath(relativePath: string): boolean {
   return (
     relativePath === "src" ||
@@ -978,30 +1187,39 @@ function oiaFocusWiringProblems(source: string): string[] {
     if (ts.isIdentifier(name)) return name.text === target;
     return name.elements.some((element) => ts.isBindingElement(element) && bindingNameContains(element.name, target));
   };
-  const isExactImport = (node: ts.Node): node is ts.ImportDeclaration => {
+  const isExactImport = (node: ts.Node): node is ts.VariableStatement => {
     if (
-      !ts.isImportDeclaration(node) ||
-      !ts.isStringLiteral(node.moduleSpecifier) ||
-      node.moduleSpecifier.text !== "./lib/oia-vitest-focus.mjs"
+      !ts.isVariableStatement(node) ||
+      (node.declarationList.flags & ts.NodeFlags.Const) === 0 ||
+      node.declarationList.declarations.length !== 1
     ) {
       return false;
     }
-    const clause = node.importClause;
+    const declaration = node.declarationList.declarations[0];
+    const initializer = declaration?.initializer;
+    const importCall =
+      initializer !== undefined && ts.isAwaitExpression(initializer) ? initializer.expression : undefined;
+    const importArgument =
+      importCall !== undefined && ts.isCallExpression(importCall) ? importCall.arguments[0] : undefined;
     if (
-      clause === undefined ||
-      clause.isTypeOnly ||
-      clause.name !== undefined ||
-      clause.namedBindings === undefined ||
-      !ts.isNamedImports(clause.namedBindings) ||
-      clause.namedBindings.elements.length !== 1
+      declaration === undefined ||
+      !ts.isObjectBindingPattern(declaration.name) ||
+      declaration.name.elements.length !== 1 ||
+      importCall === undefined ||
+      !ts.isCallExpression(importCall) ||
+      importCall.expression.kind !== ts.SyntaxKind.ImportKeyword ||
+      importCall.arguments.length !== 1 ||
+      importArgument === undefined ||
+      !ts.isStringLiteral(importArgument) ||
+      importArgument.text !== "./lib/oia-vitest-focus.mjs"
     ) {
       return false;
     }
-    const binding = clause.namedBindings.elements[0];
+    const binding = declaration.name.elements[0];
     return (
       binding !== undefined &&
-      !binding.isTypeOnly &&
       binding.propertyName === undefined &&
+      ts.isIdentifier(binding.name) &&
       binding.name.text === "inspectRepositoryVitestFocusControls"
     );
   };
@@ -1206,8 +1424,11 @@ describe("Class A invariant — no test imports value from registration boilerpl
     expect(focusSourceFiles).toEqual(await independentExecutableSourceCensus(repoRoot));
     expect(focusSourceFiles).toContain("site/site.js");
     expect(focusSourceFiles).toContain("tests/fixtures/k1-invariant/good.ts");
+    expect(inspectRepositoryVitestBootstrap(repoRoot)).toEqual([]);
+    expect(vitestBootstrapImportClosureProblems(await readVitestBootstrapImportSources(repoRoot))).toEqual([]);
     expect(inspectRepositoryVitestSelectionControls(repoRoot)).toEqual([]);
     const oiaSource = await fs.readFile(path.join(repoRoot, "scripts/oia-walk.mjs"), "utf8");
+    expect(oiaVitestBootstrapWiringProblems(oiaSource)).toEqual([]);
     expect(oiaFocusWiringProblems(oiaSource)).toEqual([]);
     expect(oiaMarkedCheckInventoryProblems(oiaSource)).toEqual([]);
   }, 45_000);
@@ -1585,7 +1806,315 @@ describe("Class A invariant — no test imports value from registration boilerpl
       await fs.rm(parseScratch, { recursive: true, force: true });
     }
 
+    const bootstrapSources = await readVitestBootstrapImportSources(repoRoot);
+    const bootstrapWithUnreceiptedImport = new Map(bootstrapSources);
+    bootstrapWithUnreceiptedImport.set(
+      "scripts/oia-walk.mjs",
+      `${bootstrapSources.get("scripts/oia-walk.mjs") ?? ""}\nawait import("./lib/unreceipted.mjs");\n`
+    );
+    expect(vitestBootstrapImportClosureProblems(bootstrapWithUnreceiptedImport)).toContain(
+      "scripts/oia-walk.mjs runtime import census must remain exact"
+    );
+    expect(vitestBootstrapImportClosureProblems(bootstrapWithUnreceiptedImport)).toContain(
+      "scripts/oia-walk.mjs runtime import escapes the trusted bootstrap receipt: ./lib/unreceipted.mjs"
+    );
+    const bootstrapWithExtraAnalyzerImport = new Map(bootstrapSources);
+    bootstrapWithExtraAnalyzerImport.set(
+      "scripts/lib/oia-vitest-bootstrap.mjs",
+      `import { spawn } from "node:child_process";\n${bootstrapSources.get("scripts/lib/oia-vitest-bootstrap.mjs") ?? ""}`
+    );
+    expect(vitestBootstrapImportClosureProblems(bootstrapWithExtraAnalyzerImport)).toContain(
+      "scripts/lib/oia-vitest-bootstrap.mjs runtime import census must remain exact"
+    );
+    const setupSource = bootstrapSources.get("tests/setup.ts");
+    if (setupSource === undefined) throw new Error("expected tests/setup.ts bootstrap source");
+    const bootstrapWithLocalSetupLoader = new Map(bootstrapSources);
+    bootstrapWithLocalSetupLoader.set(
+      "tests/setup.ts",
+      replaceExactly(setupSource, '  "better-sqlite3"', '  "better-sqlite3",\n  "./local-bypass.mjs"')
+    );
+    expect(vitestBootstrapImportClosureProblems(bootstrapWithLocalSetupLoader)).toContain(
+      "tests/setup.ts must retain the exact reviewed optional dependency import census"
+    );
+
+    const bootstrapScratch = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-vitest-bootstrap-"));
+    try {
+      await copyVitestBootstrapFixture(repoRoot, bootstrapScratch);
+      expect(inspectRepositoryVitestBootstrap(bootstrapScratch)).toEqual([]);
+
+      for (const filename of EXPECTED_VITEST_BOOTSTRAP_FILES) {
+        const absolute = path.join(bootstrapScratch, ...filename.split("/"));
+        const baseline = await fs.readFile(absolute);
+        await fs.writeFile(absolute, Buffer.concat([baseline, Buffer.from(" ")]));
+        expect(inspectRepositoryVitestBootstrap(bootstrapScratch)).toContainEqual(
+          expect.objectContaining({ kind: "VITEST-BOOTSTRAP-DIGEST", file: filename })
+        );
+        await fs.writeFile(absolute, baseline);
+        expect(inspectRepositoryVitestBootstrap(bootstrapScratch)).toEqual([]);
+      }
+
+      const manifestPath = path.join(bootstrapScratch, ...VITEST_BOOTSTRAP_MANIFEST.split("/"));
+      const baselineManifest = await fs.readFile(manifestPath, "utf8");
+      await fs.writeFile(manifestPath, `A${baselineManifest.slice(1)}`);
+      expect(inspectRepositoryVitestBootstrap(bootstrapScratch)).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ kind: "VITEST-BOOTSTRAP-MANIFEST" }),
+          expect.objectContaining({ kind: "VITEST-BOOTSTRAP-CI-CARRIER" })
+        ])
+      );
+      await fs.writeFile(manifestPath, baselineManifest);
+
+      const unterminatedTrailerManifest = `${baselineManifest}TRAILER`;
+      await fs.writeFile(manifestPath, unterminatedTrailerManifest);
+      await updateVitestBootstrapCarrier(
+        bootstrapScratch,
+        createHash("sha256").update(unterminatedTrailerManifest).digest("hex")
+      );
+      expect(inspectRepositoryVitestBootstrap(bootstrapScratch)).toContainEqual(
+        expect.objectContaining({ kind: "VITEST-BOOTSTRAP-MANIFEST" })
+      );
+      await refreshVitestBootstrapReceipt(bootstrapScratch);
+
+      const orderedReceiptLines = baselineManifest.split("\n").filter(Boolean);
+      const firstReceiptLine = orderedReceiptLines[0];
+      const secondReceiptLine = orderedReceiptLines[1];
+      if (firstReceiptLine === undefined || secondReceiptLine === undefined) {
+        throw new Error("expected at least two bootstrap receipt lines");
+      }
+      const reorderedManifest = `${[
+        secondReceiptLine,
+        firstReceiptLine,
+        ...orderedReceiptLines.slice(2)
+      ].join("\n")}\n`;
+      await fs.writeFile(manifestPath, reorderedManifest);
+      await updateVitestBootstrapCarrier(
+        bootstrapScratch,
+        createHash("sha256").update(reorderedManifest).digest("hex")
+      );
+      expect(inspectRepositoryVitestBootstrap(bootstrapScratch)).toContainEqual(
+        expect.objectContaining({ kind: "VITEST-BOOTSTRAP-CENSUS" })
+      );
+      await refreshVitestBootstrapReceipt(bootstrapScratch);
+
+      const normalizedReceiptLines = (await fs.readFile(manifestPath, "utf8"))
+        .split("\n")
+        .filter(Boolean);
+      const workflowReceiptLine = normalizedReceiptLines.at(-1);
+      if (workflowReceiptLine === undefined) {
+        throw new Error("expected normalized CI workflow receipt line");
+      }
+      const ciFixturePath = path.join(bootstrapScratch, ".github", "workflows", "ci.yml");
+      const rawWorkflowDigest = createHash("sha256")
+        .update(await fs.readFile(ciFixturePath))
+        .digest("hex");
+      const rawWorkflowManifest = `${[
+        ...normalizedReceiptLines.slice(0, -1),
+        `${rawWorkflowDigest}  .github/workflows/ci.yml`
+      ].join("\n")}\n`;
+      await fs.writeFile(manifestPath, rawWorkflowManifest);
+      await updateVitestBootstrapCarrier(
+        bootstrapScratch,
+        createHash("sha256").update(rawWorkflowManifest).digest("hex")
+      );
+      expect(inspectRepositoryVitestBootstrap(bootstrapScratch)).toContainEqual(
+        expect.objectContaining({ kind: "VITEST-BOOTSTRAP-DIGEST", file: ".github/workflows/ci.yml" })
+      );
+      await refreshVitestBootstrapReceipt(bootstrapScratch);
+
+      const setupPath = path.join(bootstrapScratch, "tests", "setup.ts");
+      const baselineSetup = await fs.readFile(setupPath, "utf8");
+      await fs.writeFile(setupPath, `${baselineSetup}\n// reviewed receipt transition probe\n`);
+      const changedManifestDigest = await writeVitestBootstrapManifest(bootstrapScratch);
+      expect(inspectRepositoryVitestBootstrap(bootstrapScratch)).toContainEqual(
+        expect.objectContaining({ kind: "VITEST-BOOTSTRAP-CI-CARRIER" })
+      );
+      await updateVitestBootstrapCarrier(bootstrapScratch, changedManifestDigest);
+      expect(inspectRepositoryVitestBootstrap(bootstrapScratch)).toEqual([]);
+      await fs.writeFile(setupPath, baselineSetup);
+      await refreshVitestBootstrapReceipt(bootstrapScratch);
+
+      const analyzerPath = path.join(
+        bootstrapScratch,
+        "scripts",
+        "lib",
+        "oia-vitest-bootstrap.mjs"
+      );
+      const baselineAnalyzer = await fs.readFile(analyzerPath, "utf8");
+      await fs.writeFile(
+        analyzerPath,
+        'import {\n  spawn\n} from "node:child_process";\n' + baselineAnalyzer
+      );
+      await refreshVitestBootstrapReceipt(bootstrapScratch);
+      expect(inspectRepositoryVitestBootstrap(bootstrapScratch)).toContainEqual(
+        expect.objectContaining({ kind: "VITEST-BOOTSTRAP-ANALYZER" })
+      );
+      await fs.writeFile(analyzerPath, baselineAnalyzer);
+      await refreshVitestBootstrapReceipt(bootstrapScratch);
+
+      const oiaPath = path.join(bootstrapScratch, "scripts", "oia-walk.mjs");
+      const baselineOia = await fs.readFile(oiaPath, "utf8");
+      await fs.writeFile(
+        oiaPath,
+        replaceExactly(
+          baselineOia,
+          "const initialVitestBootstrapFindings = inspectRepositoryVitestBootstrap(repoRoot);",
+          "const initialVitestBootstrapFindings = [];"
+        )
+      );
+      await refreshVitestBootstrapReceipt(bootstrapScratch);
+      expect(inspectRepositoryVitestBootstrap(bootstrapScratch)).toContainEqual(
+        expect.objectContaining({ kind: "VITEST-BOOTSTRAP-OIA-WIRING" })
+      );
+      await fs.writeFile(oiaPath, baselineOia);
+      await refreshVitestBootstrapReceipt(bootstrapScratch);
+
+      const receiptLines = (await fs.readFile(manifestPath, "utf8")).split("\n").filter(Boolean);
+      const omittedManifest = `${receiptLines.slice(0, -1).join("\n")}\n`;
+      await fs.writeFile(manifestPath, omittedManifest);
+      await updateVitestBootstrapCarrier(
+        bootstrapScratch,
+        createHash("sha256").update(omittedManifest).digest("hex")
+      );
+      expect(inspectRepositoryVitestBootstrap(bootstrapScratch)).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ kind: "VITEST-BOOTSTRAP-MANIFEST" }),
+          expect.objectContaining({ kind: "VITEST-BOOTSTRAP-CENSUS" })
+        ])
+      );
+      await refreshVitestBootstrapReceipt(bootstrapScratch);
+
+      const ciPath = path.join(bootstrapScratch, ".github", "workflows", "ci.yml");
+      const baselineCi = await fs.readFile(ciPath, "utf8");
+      const baselineCarrier = /^          expected_manifest_sha=([0-9a-f]{64})$/mu.exec(
+        baselineCi
+      )?.[0];
+      if (baselineCarrier === undefined) throw new Error("expected baseline CI receipt carrier");
+      const alternateCarrier = baselineCarrier.endsWith("f".repeat(64))
+        ? `          expected_manifest_sha=${"e".repeat(64)}`
+        : `          expected_manifest_sha=${"f".repeat(64)}`;
+      await fs.writeFile(
+        ciPath,
+        replaceExactly(baselineCi, baselineCarrier, alternateCarrier)
+      );
+      const carrierOnlyFindings = inspectRepositoryVitestBootstrap(bootstrapScratch);
+      expect(carrierOnlyFindings).toContainEqual(
+        expect.objectContaining({ kind: "VITEST-BOOTSTRAP-CI-CARRIER", file: ".github/workflows/ci.yml" })
+      );
+      expect(carrierOnlyFindings).not.toContainEqual(
+        expect.objectContaining({ kind: "VITEST-BOOTSTRAP-DIGEST", file: ".github/workflows/ci.yml" })
+      );
+      await fs.writeFile(ciPath, baselineCi);
+      for (const invalidCarrier of [
+        baselineCarrier.replace(/^ {10}/u, "         "),
+        `${baselineCarrier}\n${baselineCarrier}`
+      ]) {
+        await fs.writeFile(ciPath, replaceExactly(baselineCi, baselineCarrier, invalidCarrier));
+        expect(inspectRepositoryVitestBootstrap(bootstrapScratch)).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              kind: "VITEST-BOOTSTRAP-DIGEST",
+              file: ".github/workflows/ci.yml"
+            }),
+            expect.objectContaining({
+              kind: "VITEST-BOOTSTRAP-CI-CARRIER",
+              file: ".github/workflows/ci.yml"
+            })
+          ])
+        );
+      }
+      const disabledTestCi = replaceExactly(
+        baselineCi,
+        "      - run: npm test\n        env:",
+        "      - run: true\n        env:"
+      );
+      await fs.writeFile(ciPath, disabledTestCi);
+      expect(inspectRepositoryVitestBootstrap(bootstrapScratch)).toContainEqual(
+        expect.objectContaining({ kind: "VITEST-BOOTSTRAP-DIGEST", file: ".github/workflows/ci.yml" })
+      );
+      const staleCarrierManifestLines = (await fs.readFile(manifestPath, "utf8"))
+        .split("\n")
+        .filter(Boolean);
+      const updatedWorkflowManifest = `${[
+        ...staleCarrierManifestLines.slice(0, -1),
+        `${ciWorkflowReceiptDigest(disabledTestCi)}  .github/workflows/ci.yml`
+      ].join("\n")}\n`;
+      await fs.writeFile(manifestPath, updatedWorkflowManifest);
+      expect(inspectRepositoryVitestBootstrap(bootstrapScratch)).toContainEqual(
+        expect.objectContaining({ kind: "VITEST-BOOTSTRAP-CI-CARRIER", file: ".github/workflows/ci.yml" })
+      );
+      await updateVitestBootstrapCarrier(
+        bootstrapScratch,
+        createHash("sha256").update(updatedWorkflowManifest).digest("hex")
+      );
+      expect(inspectRepositoryVitestBootstrap(bootstrapScratch)).toEqual([]);
+      expect(ciTestSelectionProblems(await fs.readFile(ciPath, "utf8"))).toContain(
+        "each CI Node leg must end with one exact unfiltered fail-capable npm test"
+      );
+      await fs.writeFile(ciPath, baselineCi);
+      await refreshVitestBootstrapReceipt(bootstrapScratch);
+      await fs.writeFile(
+        ciPath,
+        replaceExactly(baselineCi, "    timeout-minutes: 5", "    timeout-minutes: 4")
+      );
+      expect(inspectRepositoryVitestBootstrap(bootstrapScratch)).toContainEqual(
+        expect.objectContaining({ kind: "VITEST-BOOTSTRAP-CI-SHAPE" })
+      );
+      await fs.writeFile(ciPath, baselineCi);
+
+      await fs.writeFile(path.join(bootstrapScratch, ".env.example"), "inert=true\n");
+      await fs.writeFile(path.join(bootstrapScratch, "vite.config.ts"), "export default {};\n");
+      expect(inspectRepositoryVitestBootstrap(bootstrapScratch)).toEqual([]);
+      await fs.writeFile(path.join(bootstrapScratch, ".env.test"), "VITEST_BYPASS=true\n");
+      expect(inspectRepositoryVitestBootstrap(bootstrapScratch)).toContainEqual(
+        expect.objectContaining({ kind: "VITEST-BOOTSTRAP-ROOT-INPUT", file: ".env.test" })
+      );
+      await fs.rm(path.join(bootstrapScratch, ".env.test"));
+      await fs.writeFile(path.join(bootstrapScratch, "vitest.workspace.ts"), "export default [];\n");
+      expect(inspectRepositoryVitestBootstrap(bootstrapScratch)).toContainEqual(
+        expect.objectContaining({ kind: "VITEST-BOOTSTRAP-CONFIG-CENSUS" })
+      );
+      await fs.rm(path.join(bootstrapScratch, "vitest.workspace.ts"));
+
+      if (process.platform !== "win32") {
+        const focusPath = path.join(bootstrapScratch, "scripts", "lib", "oia-vitest-focus.mjs");
+        const focusBytes = await fs.readFile(focusPath);
+        await fs.rm(focusPath);
+        await fs.symlink("oia-vitest-selection.mjs", focusPath);
+        expect(inspectRepositoryVitestBootstrap(bootstrapScratch)).toContainEqual(
+          expect.objectContaining({ kind: "VITEST-BOOTSTRAP-PHYSICAL-PATH" })
+        );
+        await fs.rm(focusPath);
+        await fs.writeFile(focusPath, focusBytes);
+      }
+    } finally {
+      await fs.rm(bootstrapScratch, { recursive: true, force: true });
+    }
+
     const currentOiaSource = await fs.readFile(path.join(repoRoot, "scripts/oia-walk.mjs"), "utf8");
+    const oiaWithoutEarlyBootstrap = replaceExactly(
+      currentOiaSource,
+      "const initialVitestBootstrapFindings = inspectRepositoryVitestBootstrap(repoRoot);",
+      "const initialVitestBootstrapFindings = [];"
+    );
+    expect(oiaVitestBootstrapWiringProblems(oiaWithoutEarlyBootstrap)).toContain(
+      "OIA must retain one exact builtins-only bootstrap prologue before dynamic imports"
+    );
+    const oiaWithPreBootstrapImport = replaceExactly(
+      currentOiaSource,
+      'import { createHash } from "node:crypto";',
+      'import "./lib/unreceipted.mjs";\nimport { createHash } from "node:crypto";'
+    );
+    expect(oiaVitestBootstrapWiringProblems(oiaWithPreBootstrapImport)).toContain(
+      "OIA must retain one exact builtins-only bootstrap prologue before dynamic imports"
+    );
+    const oiaWithoutBootstrapTail = replaceExactly(
+      currentOiaSource,
+      '    "VITEST-BOOTSTRAP-SCAN-ERROR",',
+      '    "VITEST-BOOTSTRAP-SCAN-IGNORED",'
+    );
+    expect(oiaVitestBootstrapWiringProblems(oiaWithoutBootstrapTail)).toContain(
+      "OIA must retain one exact fail-closed post-walk bootstrap re-scan"
+    );
     const oiaWithoutFocusCall = replaceExactly(
       currentOiaSource,
       OIA_FOCUS_CALL,

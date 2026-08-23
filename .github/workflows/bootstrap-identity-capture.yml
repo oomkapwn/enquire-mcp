@@ -1,0 +1,231 @@
+name: Bootstrap identity capture
+
+on:
+  push:
+    branches: [codex/guard-vitest-bootstrap]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bootstrap-identity-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    defaults:
+      run:
+        shell: /bin/bash --noprofile --norc -e -o pipefail {0}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Assert exact pushed source and remove disposable workflow
+        run: |
+          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
+          mv .github/workflows/bootstrap-identity-capture.yml "$RUNNER_TEMP/bootstrap-identity-capture.yml"
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install declared dependencies with the reviewed bounded helper
+        run: node scripts/npm-ci-with-retry.mjs
+      - name: Apply the hosted formatter to changed code surfaces
+        run: |
+          ./node_modules/.bin/biome format --write \
+            scripts/lib/oia-vitest-bootstrap.mjs \
+            scripts/oia-walk.mjs \
+            tests/docs-consistency.test.ts \
+            tests/no-internal-imports.test.ts \
+            tests/npm-ci-workflow-contract-fixtures.ts \
+            tests/release-integrity.test.ts
+      - name: Freeze the finite workflow and bootstrap receipt relation
+        run: |
+          receipt="$RUNNER_TEMP/trusted-vitest-bootstrap.sha256"
+          for filename in \
+            package-lock.json \
+            package.json \
+            scripts/lib/coverage-policy.mjs \
+            scripts/lib/entrypoint.mjs \
+            scripts/lib/oia-offline-guard.mjs \
+            scripts/lib/oia-release-claims.mjs \
+            scripts/lib/oia-vitest-bootstrap.mjs \
+            scripts/lib/oia-vitest-focus.mjs \
+            scripts/lib/oia-vitest-selection.mjs \
+            scripts/npm-ci-with-retry.mjs \
+            scripts/oia-walk.mjs \
+            scripts/scope-completeness-audit.mjs \
+            tests/setup.ts \
+            tsconfig.json \
+            vitest.config.ts; do
+            /usr/bin/sha256sum "$filename" >> "$receipt"
+          done
+          workflow_sha=$(
+            /usr/bin/sed -E \
+              's/^          expected_manifest_sha=[0-9a-f]{64}$/          expected_manifest_sha=<normalized>/' \
+              .github/workflows/ci.yml |
+              /usr/bin/sha256sum
+          )
+          workflow_sha=${workflow_sha%% *}
+          /usr/bin/printf '%s  %s\n' "$workflow_sha" .github/workflows/ci.yml >> "$receipt"
+          mv "$receipt" .github/trusted-vitest-bootstrap.sha256
+          manifest_sha=$(/usr/bin/sha256sum .github/trusted-vitest-bootstrap.sha256)
+          manifest_sha=${manifest_sha%% *}
+          carrier_count=$(
+            /usr/bin/grep -Ec '^          expected_manifest_sha=[0-9a-f]{64}$' .github/workflows/ci.yml
+          )
+          [[ "$carrier_count" -eq 1 ]]
+          /usr/bin/sed -i -E \
+            "s/^          expected_manifest_sha=[0-9a-f]{64}$/          expected_manifest_sha=$manifest_sha/" \
+            .github/workflows/ci.yml
+          /usr/bin/printf '%s  %s\n' "$manifest_sha" .github/trusted-vitest-bootstrap.sha256 |
+            /usr/bin/sha256sum --check --strict
+          observed_workflow_sha=$(
+            /usr/bin/sed -E \
+              's/^          expected_manifest_sha=[0-9a-f]{64}$/          expected_manifest_sha=<normalized>/' \
+              .github/workflows/ci.yml |
+              /usr/bin/sha256sum
+          )
+          observed_workflow_sha=${observed_workflow_sha%% *}
+          [[ "$observed_workflow_sha" == "$workflow_sha" ]]
+      - name: Refresh stable workflow and release-mutation identities
+        run: |
+          node --input-type=module <<'NODE'
+          import { createHash } from "node:crypto";
+          import { readFileSync, writeFileSync } from "node:fs";
+          import { load } from "js-yaml";
+
+          const sha256 = (value) => createHash("sha256").update(value).digest("hex");
+          const stable = (value) => {
+            if (Array.isArray(value)) return value.map(stable);
+            if (value === null || typeof value !== "object") return value;
+            return Object.fromEntries(
+              Object.keys(value)
+                .sort()
+                .map((key) => [key, stable(value[key])])
+            );
+          };
+          const replaceOne = (source, pattern, replacement, label) => {
+            const matches = [...source.matchAll(pattern)];
+            if (matches.length !== 1) throw new Error(`${label}: expected one match, found ${matches.length}`);
+            return source.replace(pattern, replacement);
+          };
+
+          const ciSource = readFileSync(".github/workflows/ci.yml", "utf8");
+          const ci = load(ciSource);
+          const steps = ci?.jobs?.lint?.steps;
+          if (!Array.isArray(steps)) throw new Error("lint steps are unavailable");
+          const helperIndex = steps.findIndex((step) => step?.run === "node scripts/npm-ci-with-retry.mjs");
+          if (helperIndex < 0) throw new Error("lint install helper is unavailable");
+          let carrierCount = 0;
+          const normalizedPreinstall = steps.slice(0, helperIndex).map((step) => {
+            if (typeof step?.run !== "string") return step;
+            const matches = [...step.run.matchAll(/^expected_manifest_sha=[0-9a-f]{64}$/gmu)];
+            carrierCount += matches.length;
+            if (matches.length !== 1) return step;
+            return {
+              ...step,
+              run: step.run.replace(
+                /^expected_manifest_sha=[0-9a-f]{64}$/mu,
+                "expected_manifest_sha=<normalized>"
+              )
+            };
+          });
+          if (carrierCount !== 1) throw new Error(`expected one parsed lint carrier, found ${carrierCount}`);
+          const lintDigest = sha256(JSON.stringify(stable(normalizedPreinstall)));
+
+          const fixturePath = "tests/npm-ci-workflow-contract-fixtures.ts";
+          const fixtureSource = replaceOne(
+            readFileSync(fixturePath, "utf8"),
+            /(\["ci\.yml#lint", ")[0-9a-f]{64}("\])/gu,
+            `$1${lintDigest}$2`,
+            "lint preinstall fixture"
+          );
+          writeFileSync(fixturePath, fixtureSource);
+          const fixtureSha = sha256(readFileSync(fixturePath));
+
+          const releasePath = "tests/release-integrity.test.ts";
+          const releaseSource = replaceOne(
+            readFileSync(releasePath, "utf8"),
+            /const NPM_CI_CONTRACT_FIXTURE_SHA256 = "[0-9a-f]{64}";/gu,
+            `const NPM_CI_CONTRACT_FIXTURE_SHA256 = "${fixtureSha}";`,
+            "npm-ci fixture source pin"
+          );
+          writeFileSync(releasePath, releaseSource);
+          const releaseSha = sha256(readFileSync(releasePath));
+
+          const auditPath = "tests/release-mutation-identity-audit.ts";
+          const auditSource = replaceOne(
+            readFileSync(auditPath, "utf8"),
+            /const CURRENT_HYBRID_SOURCE_SHA256 = "[0-9a-f]{64}";/gu,
+            `const CURRENT_HYBRID_SOURCE_SHA256 = "${releaseSha}";`,
+            "current hybrid source pin"
+          );
+          writeFileSync(auditPath, auditSource);
+          NODE
+          transition="$RUNNER_TEMP/release-mutation-transition.v3.json"
+          node scripts/generate-release-mutation-transition.mjs --authority-current > "$transition"
+          mv "$transition" tests/fixtures/release-mutation-transition.v3.json
+          node --input-type=module <<'NODE'
+          import { createHash } from "node:crypto";
+          import { readFileSync, writeFileSync } from "node:fs";
+
+          const sha256 = (value) => createHash("sha256").update(value).digest("hex");
+          const replaceOne = (source, pattern, replacement, label) => {
+            const matches = [...source.matchAll(pattern)];
+            if (matches.length !== 1) throw new Error(`${label}: expected one match, found ${matches.length}`);
+            return source.replace(pattern, replacement);
+          };
+          const transitionSha = sha256(readFileSync("tests/fixtures/release-mutation-transition.v3.json"));
+          const metaPath = "tests/meta-invariant-coverage.test.ts";
+          writeFileSync(
+            metaPath,
+            replaceOne(
+              readFileSync(metaPath, "utf8"),
+              /const RELEASE_MUTATION_TRANSITION_FIXTURE_SHA256 = "[0-9a-f]{64}";/gu,
+              `const RELEASE_MUTATION_TRANSITION_FIXTURE_SHA256 = "${transitionSha}";`,
+              "transition fixture meta pin"
+            )
+          );
+          const changelogPath = "CHANGELOG.md";
+          writeFileSync(
+            changelogPath,
+            replaceOne(
+              readFileSync(changelogPath, "utf8"),
+              /transition v3 at SHA-256 `[0-9a-f]{64}`/gu,
+              `transition v3 at SHA-256 \`${transitionSha}\``,
+              "transition fixture changelog pin"
+            )
+          );
+          NODE
+      - name: Verify generated identities, format, and focused bootstrap controls
+        run: |
+          regenerated="$RUNNER_TEMP/release-mutation-transition.v3.json"
+          node scripts/generate-release-mutation-transition.mjs --authority-current > "$regenerated"
+          cmp tests/fixtures/release-mutation-transition.v3.json "$regenerated"
+          ./node_modules/.bin/biome check .
+          git diff --check
+          ./node_modules/.bin/vitest run tests/no-internal-imports.test.ts --reporter=verbose
+      - name: Upload exact reviewed transition
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: bootstrap-identity-${{ github.sha }}
+          if-no-files-found: error
+          retention-days: 1
+          path: |
+            .github/trusted-vitest-bootstrap.sha256
+            .github/workflows/ci.yml
+            CHANGELOG.md
+            scripts/lib/oia-vitest-bootstrap.mjs
+            scripts/oia-walk.mjs
+            tests/docs-consistency.test.ts
+            tests/fixtures/release-mutation-transition.v3.json
+            tests/meta-invariant-coverage.test.ts
+            tests/no-internal-imports.test.ts
+            tests/npm-ci-workflow-contract-fixtures.ts
+            tests/release-integrity.test.ts
+            tests/release-mutation-identity-audit.ts

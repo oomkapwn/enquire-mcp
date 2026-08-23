@@ -4,6 +4,16 @@ All notable changes to this project will be documented here. The format follows 
 
 ## [4.0.0-rc.4] — 2026-08-21
 
+### Vitest prefix-registration reachability follow-up
+
+> **TL;DR:** **The timeout guard now admits only inert direct calls to the already authenticated target registrar before the protected registration.** Unrelated registrar spellings and eager argument expressions can no longer make the target unreachable while the structural oracle reports a valid timeout.
+>
+> **Method note:** the mandatory post-merge sweep of PR #517 found a narrower structural false negative on exact green main `a4aed350d2ab48dc3dec8186813f1a321c93226f`: a local throwing `beforeEach()` call before the exact guarded `it(...)` was accepted only because its identifier appeared in a seven-name allowlist. Binding that prefix name alone was insufficient because even an authentic `it` can evaluate a throwing argument before registering the target. The corrective detector therefore permits only function declarations plus statically inert direct calls to the same binding-verified `it` or `beforeAll`: static title where applicable, zero-parameter block-arrow callback, and absent or numeric-literal timeout. A normal preceding sibling is the positive control; local-prefix and eager-IIFE mutations are causal negatives. This proves a structural-oracle false negative, not an independently demonstrated green-CI bypass. Under D-45, executable proof remains GitHub-hosted only.
+
+- **Reachability is derived from execution shape, not a registrar-name allowlist.** `afterAll`, `afterEach`, `beforeEach`, `describe`, and `test` are no longer accepted merely by spelling, while the existing real prefixes remain unchanged direct `it` registrations.
+- **Prefix arguments are inert by construction.** Computed titles, invoked callback expressions, optional calls, type arguments, and dynamic timeout expressions fail closed before the exact target timeout is accepted.
+- **Scope remains assurance-only.** Runtime code, workflows, dependencies, package version, tags, GitHub Releases, npm, and MCP Registry state are unchanged.
+
 ### Vitest timeout binding identity follow-up
 
 > **TL;DR:** **The timeout ceiling guard now proves that each protected `describe`, `it`, and `beforeAll` identifier is the direct unaliased Vitest binding, with no competing runtime binding anywhere in the source.** A local wrapper can no longer preserve the reviewed timeout literal while registering the callback with a larger timeout or suppressing the suite entirely.

@@ -42,24 +42,25 @@ export const FORBIDDEN_VITEST_BOOTSTRAP_ROOT_INPUTS = Object.freeze([
 ]);
 
 const CI_WORKFLOW = ".github/workflows/ci.yml";
-const MANIFEST_LINE = /^([0-9a-f]{64})  ([A-Za-z0-9._/-]+)$/u;
+const MANIFEST_LINE = /^([0-9a-f]{64}) {2}([A-Za-z0-9._/-]+)$/u;
 const SHA256 = /^[0-9a-f]{64}$/u;
 const NORMALIZED_CI_RECEIPT_CARRIER = "          expected_manifest_sha=<normalized>";
 const BOOTSTRAP_HINT =
   "Restore the reviewed Vitest bootstrap bytes, regenerate the exact receipt, and update its single CI carrier in the same reviewed change.";
+
+function literalDollarBraces(body) {
+  return "$" + "{" + body + "}";
+}
 
 const OIA_BOOTSTRAP_PROLOGUE = [
   'import { createHash } from "node:crypto";',
   'import { existsSync, readdirSync, readFileSync } from "node:fs";',
   'import { dirname, join, relative, resolve } from "node:path";',
   'import { fileURLToPath } from "node:url";',
-  'import {',
-  '  formatVitestBootstrapError,',
-  '  inspectRepositoryVitestBootstrap',
-  '} from "./lib/oia-vitest-bootstrap.mjs";',
+  'import { formatVitestBootstrapError, inspectRepositoryVitestBootstrap } from "./lib/oia-vitest-bootstrap.mjs";',
   "",
   "const __filename = fileURLToPath(import.meta.url);",
-  'const __dirname = dirname(__filename);',
+  "const __dirname = dirname(__filename);",
   'const repoRoot = resolve(__dirname, "..");',
   "",
   'const ALLOW_MODE = process.argv.includes("--allow");',
@@ -70,9 +71,7 @@ const OIA_BOOTSTRAP_PROLOGUE = [
   "}",
   "",
   'const { load } = await import("js-yaml");',
-  'const { expectedCoverageSourceFiles, normalizeCoverageReportedPath } = await import(',
-  '  "./lib/coverage-policy.mjs"',
-  ");",
+  'const { expectedCoverageSourceFiles, normalizeCoverageReportedPath } = await import("./lib/coverage-policy.mjs");',
   'const { inspectEmbeddingsOfflineGuards } = await import("./lib/oia-offline-guard.mjs");',
   'const { inspectReleaseProvenanceWorkflow } = await import("./lib/oia-release-claims.mjs");',
   'const { inspectRepositoryVitestFocusControls } = await import("./lib/oia-vitest-focus.mjs");',
@@ -89,7 +88,7 @@ const OIA_BOOTSTRAP_TAIL = [
   '    "VITEST-BOOTSTRAP-SCAN-ERROR",',
   '    "scripts/lib/oia-vitest-bootstrap.mjs",',
   "    1,",
-  "    error instanceof Error ? `${error.name}: ${error.message}` : String(error),",
+  "    error instanceof Error ? `" + literalDollarBraces("error.name") + ": " + literalDollarBraces("error.message") + "` : String(error),",
   '    "The trusted Vitest bootstrap re-scan did not complete. Treat this as a blocking unverified state."',
   "  );",
   "}"
@@ -119,15 +118,13 @@ function sha256(value) {
  * ciWorkflowReceiptDigest("...expected_manifest_sha=<64 lowercase hex>...");
  */
 export function ciWorkflowReceiptDigest(source) {
-  const matches = [...source.matchAll(/^          expected_manifest_sha=([0-9a-f]{64})$/gmu)];
+  const matches = [...source.matchAll(/^ {10}expected_manifest_sha=([0-9a-f]{64})$/gmu)];
   const match = matches[0];
   if (matches.length !== 1 || match?.index === undefined) {
     throw new Error(`expected one canonical receipt carrier, found ${matches.length}`);
   }
   const normalized =
-    source.slice(0, match.index) +
-    NORMALIZED_CI_RECEIPT_CARRIER +
-    source.slice(match.index + match[0].length);
+    source.slice(0, match.index) + NORMALIZED_CI_RECEIPT_CARRIER + source.slice(match.index + match[0].length);
   return sha256(normalized);
 }
 
@@ -176,9 +173,7 @@ function physicalPathFindings(root, relativePath, leafKind = "file") {
   }
   const stat = lstatOrUndefined(join(root, relativePath));
   const validLeaf =
-    stat !== undefined &&
-    !stat.isSymbolicLink() &&
-    (leafKind === "directory" ? stat.isDirectory() : stat.isFile());
+    stat !== undefined && !stat.isSymbolicLink() && (leafKind === "directory" ? stat.isDirectory() : stat.isFile());
   if (!validLeaf) {
     out.push(
       finding(
@@ -206,7 +201,7 @@ function expectedCiPrefix(manifestDigest) {
     "  contents: read",
     "",
     "concurrency:",
-    "  group: ci-${{ github.ref }}",
+    "  group: ci-" + literalDollarBraces("{ github.ref }"),
     "  cancel-in-progress: true",
     "",
     "jobs:",
@@ -217,7 +212,7 @@ function expectedCiPrefix(manifestDigest) {
     "      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7",
     "      - name: Verify trusted Vitest bootstrap",
     "        shell: /bin/bash --noprofile --norc -p -e -o pipefail {0}",
-    "        working-directory: ${{ github.workspace }}",
+    "        working-directory: " + literalDollarBraces("{ github.workspace }"),
     "        env:",
     '          BASH_ENV: ""',
     '          ENV: ""',
@@ -229,11 +224,11 @@ function expectedCiPrefix(manifestDigest) {
     `          expected_manifest_sha=${manifestDigest}`,
     "          expected_path_sha=5581eea048d9360a3fff43c79e1d55d40492a082ee468ee74c3738f60c2f82f9",
     `          workflow=${CI_WORKFLOW}`,
-    '          [[ -d .github && ! -L .github ]]',
-    '          [[ -d .github/workflows && ! -L .github/workflows ]]',
+    "          [[ -d .github && ! -L .github ]]",
+    "          [[ -d .github/workflows && ! -L .github/workflows ]]",
     '          [[ -f "$manifest" && ! -L "$manifest" ]]',
     '          [[ -f "$workflow" && ! -L "$workflow" ]]',
-    "          /usr/bin/printf '%s  %s\\n' \"$expected_manifest_sha\" \"$manifest\" |",
+    '          /usr/bin/printf \'%s  %s\\n\' "$expected_manifest_sha" "$manifest" |',
     "            /usr/bin/sha256sum --check --strict",
     '          last_byte_lf_count=$(/usr/bin/tail -c 1 "$manifest" | /usr/bin/wc -l)',
     '          [[ "$last_byte_lf_count" -eq 1 ]]',
@@ -241,24 +236,24 @@ function expectedCiPrefix(manifestDigest) {
     '          [[ "$line_count" -eq 16 ]]',
     "          paths=()",
     "          expected_workflow_sha=",
-    '          while IFS= read -r record; do',
+    "          while IFS= read -r record; do",
     '            [[ "$record" =~ ^[0-9a-f]{64}\\ \\ [^[:space:]].*$ ]]',
-    '            path=${record:66}',
+    "            path=" + literalDollarBraces("record:66"),
     '            paths+=("$path")',
     '            if [[ "$path" == "$workflow" ]]; then',
-    '              expected_workflow_sha=${record:0:64}',
+    "              expected_workflow_sha=" + literalDollarBraces("record:0:64"),
     "            fi",
     '            [[ -f "$path" && ! -L "$path" ]]',
-    '            parent=${path%/*}',
+    "            parent=" + literalDollarBraces("path%/*"),
     '            while [[ "$parent" != "$path" ]]; do',
     '              [[ -d "$parent" && ! -L "$parent" ]]',
-    '              path=$parent',
-    '              parent=${path%/*}',
+    "              path=$parent",
+    "              parent=" + literalDollarBraces("path%/*"),
     "            done",
     '          done < "$manifest"',
-    '          [[ ${#paths[@]} -eq 16 ]]',
-    "          actual_path_sha=$(/usr/bin/printf '%s\\n' \"${paths[@]}\" | /usr/bin/sha256sum)",
-    '          actual_path_sha=${actual_path_sha%% *}',
+    "          [[ " + literalDollarBraces("#paths[@]") + " -eq 16 ]]",
+    "          actual_path_sha=$(/usr/bin/printf '%s\\n' \"" + literalDollarBraces("paths[@]") + "\" | /usr/bin/sha256sum)",
+    "          actual_path_sha=" + literalDollarBraces("actual_path_sha%% *"),
     '          [[ "$actual_path_sha" == "$expected_path_sha" ]]',
     '          [[ -n "$expected_workflow_sha" ]]',
     "          carrier_count=$(/usr/bin/grep -Ec '^          expected_manifest_sha=[0-9a-f]{64}$' \"$workflow\")",
@@ -269,11 +264,11 @@ function expectedCiPrefix(manifestDigest) {
     '              "$workflow" |',
     "              /usr/bin/sha256sum",
     "          )",
-    '          actual_workflow_sha=${actual_workflow_sha%% *}',
+    "          actual_workflow_sha=" + literalDollarBraces("actual_workflow_sha%% *"),
     '          [[ "$actual_workflow_sha" == "$expected_workflow_sha" ]]',
     "          shopt -s nullglob",
     "          configs=(vitest.config.* vitest.projects.* vitest.workspace.*)",
-    '          [[ ${#configs[@]} -eq 1 && "${configs[0]}" == vitest.config.ts ]]',
+    "          [[ " + literalDollarBraces("#configs[@]") + ' -eq 1 && "' + literalDollarBraces("configs[0]") + '" == vitest.config.ts ]]',
     '          for forbidden in ".n""pmrc" binding.gyp "n""pm-shrinkwrap.json" .env .env.local .env.test .env.test.local; do',
     '            [[ ! -e "$forbidden" && ! -L "$forbidden" ]]',
     "          done",
@@ -308,12 +303,7 @@ export function ciVitestBootstrapProblems(source, manifestDigest) {
   }
   if (source.includes("\r") || source.includes("\t")) {
     out.push(
-      finding(
-        "VITEST-BOOTSTRAP-CI-SHAPE",
-        CI_WORKFLOW,
-        1,
-        "CI receipt carrier must remain LF-only and tab-free"
-      )
+      finding("VITEST-BOOTSTRAP-CI-SHAPE", CI_WORKFLOW, 1, "CI receipt carrier must remain LF-only and tab-free")
     );
   }
   const columnZeroLines = source
@@ -330,12 +320,8 @@ export function ciVitestBootstrapProblems(source, manifestDigest) {
       )
     );
   }
-  const twoSpaceMappings = source
-    .split("\n")
-    .filter((line) => /^  \S/u.test(line) && !/^  #/u.test(line));
-  if (
-    twoSpaceMappings.some((line) => !/^  [A-Za-z][A-Za-z0-9_-]*:\s*(?:[^&*].*)?$/u.test(line))
-  ) {
+  const twoSpaceMappings = source.split("\n").filter((line) => /^ {2}\S/u.test(line) && !/^ {2}#/u.test(line));
+  if (twoSpaceMappings.some((line) => !/^ {2}[A-Za-z][A-Za-z0-9_-]*:\s*(?:[^&*].*)?$/u.test(line))) {
     out.push(
       finding(
         "VITEST-BOOTSTRAP-CI-SHAPE",
@@ -346,7 +332,7 @@ export function ciVitestBootstrapProblems(source, manifestDigest) {
     );
   }
   const jobsCount = [...source.matchAll(/^jobs:\s*$/gmu)].length;
-  const lintCount = [...source.matchAll(/^  lint:\s*$/gmu)].length;
+  const lintCount = [...source.matchAll(/^ {2}lint:\s*$/gmu)].length;
   if (jobsCount !== 1 || lintCount !== 1 || /(^|\s)<<:|^[ \t]*\?/mu.test(source)) {
     out.push(
       finding(
@@ -357,7 +343,7 @@ export function ciVitestBootstrapProblems(source, manifestDigest) {
       )
     );
   }
-  const carrierMatches = [...source.matchAll(/^          expected_manifest_sha=([0-9a-f]{64})$/gmu)];
+  const carrierMatches = [...source.matchAll(/^ {10}expected_manifest_sha=([0-9a-f]{64})$/gmu)];
   const carrier = carrierMatches[0]?.[1];
   if (carrierMatches.length !== 1 || carrier !== manifestDigest) {
     out.push(
@@ -441,15 +427,9 @@ export function oiaVitestBootstrapWiringProblems(source) {
     'import { existsSync, readdirSync, readFileSync } from "node:fs";',
     'import { dirname, join, relative, resolve } from "node:path";',
     'import { fileURLToPath } from "node:url";',
-    "import {"
+    'import { formatVitestBootstrapError, inspectRepositoryVitestBootstrap } from "./lib/oia-vitest-bootstrap.mjs";'
   ];
-  const expectedFromSpecifiers = [
-    "node:crypto",
-    "node:fs",
-    "node:path",
-    "node:url",
-    "./lib/oia-vitest-bootstrap.mjs"
-  ];
+  const expectedFromSpecifiers = ["node:crypto", "node:fs", "node:path", "node:url", "./lib/oia-vitest-bootstrap.mjs"];
   if (
     prologueCount !== 1 ||
     !canonicalPrelude ||
@@ -595,9 +575,7 @@ export function inspectRepositoryVitestBootstrap(root) {
       )
     );
   }
-  const configs = rootEntries
-    .filter((name) => /^vitest\.(?:config|projects|workspace)\./u.test(name))
-    .sort();
+  const configs = rootEntries.filter((name) => /^vitest\.(?:config|projects|workspace)\./u.test(name)).sort();
   if (JSON.stringify(configs) !== JSON.stringify(["vitest.config.ts"])) {
     out.push(
       finding(

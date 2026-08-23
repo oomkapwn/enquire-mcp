@@ -106,10 +106,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import {
-  formatVitestBootstrapError,
-  inspectRepositoryVitestBootstrap
-} from "./lib/oia-vitest-bootstrap.mjs";
+import { formatVitestBootstrapError, inspectRepositoryVitestBootstrap } from "./lib/oia-vitest-bootstrap.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -123,9 +120,7 @@ if (initialVitestBootstrapFindings.length > 0) {
 }
 
 const { load } = await import("js-yaml");
-const { expectedCoverageSourceFiles, normalizeCoverageReportedPath } = await import(
-  "./lib/coverage-policy.mjs"
-);
+const { expectedCoverageSourceFiles, normalizeCoverageReportedPath } = await import("./lib/coverage-policy.mjs");
 const { inspectEmbeddingsOfflineGuards } = await import("./lib/oia-offline-guard.mjs");
 const { inspectReleaseProvenanceWorkflow } = await import("./lib/oia-release-claims.mjs");
 const { inspectRepositoryVitestFocusControls } = await import("./lib/oia-vitest-focus.mjs");

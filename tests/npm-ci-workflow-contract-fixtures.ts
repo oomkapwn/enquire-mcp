@@ -154,7 +154,7 @@ export const NPM_CI_SETUP_INPUTS = new Map<string, Readonly<Record<string, unkno
  * preinstall bytes remain part of this digest.
  */
 export const NPM_CI_PREINSTALL_DIGESTS = new Map<string, string>([
-  ["ci.yml#lint", "559a7e13a198905e6ac358a1914d6e9fa087ad055f55b27c380ae171424f3d6b"],
+  ["ci.yml#lint", "0acf2d9e58fa56c861244b4bfb0de4a2276e26c7bcca9603dd601d5eb5b98e90"],
   ["ci.yml#test", "0b00c055e9a2707a37043a75423ce6b68004d5750b872ce6cf40e3dcadd1c4db"],
   ["ci.yml#test-windows", "da943043234f9a375c085802079dc10cf411019cbc03b4747de9af178dc6a9ca"],
   ["ci.yml#test-macos", "bad0645f602426986294fd032eac707a60440bd897f27a5105c05d54f054cc4e"],

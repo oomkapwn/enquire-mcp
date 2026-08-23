@@ -7,13 +7,13 @@ import { load } from "js-yaml";
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
 import { expectedCoverageSourceFiles } from "../scripts/lib/coverage-policy.mjs";
+// @ts-expect-error — dependency-free .mjs workflow helper has no declaration file.
+import { inspectReleaseProvenanceWorkflow } from "../scripts/lib/oia-release-claims.mjs";
 import {
   ciWorkflowReceiptDigest,
   EXPECTED_VITEST_BOOTSTRAP_FILES,
   VITEST_BOOTSTRAP_MANIFEST
 } from "../scripts/lib/oia-vitest-bootstrap.mjs";
-// @ts-expect-error — dependency-free .mjs workflow helper has no declaration file.
-import { inspectReleaseProvenanceWorkflow } from "../scripts/lib/oia-release-claims.mjs";
 import { DEFAULT_RERANKER_ALIAS, EMBEDDING_MODELS } from "../src/embeddings.js";
 import { tierServeFlags } from "../src/mcp-config.js";
 import { TOOL_MANIFEST } from "../src/tool-manifest.js";
@@ -46,7 +46,9 @@ async function refreshVitestBootstrapFixtureReceipt(root: string): Promise<void>
     const digest =
       filename === ".github/workflows/ci.yml"
         ? ciWorkflowReceiptDigest(await fs.readFile(absolute, "utf8"))
-        : createHash("sha256").update(await fs.readFile(absolute)).digest("hex");
+        : createHash("sha256")
+            .update(await fs.readFile(absolute))
+            .digest("hex");
     lines.push(`${digest}  ${filename}`);
   }
   const manifest = `${lines.join("\n")}\n`;

@@ -107,8 +107,7 @@ const COVERAGE_ONLY_TEST_EXCLUSIONS = [
   "tests/release-integrity.test.ts"
 ] as const;
 const EXPECTED_OIA_SCRIPT = "node scripts/oia-walk.mjs";
-const OIA_FOCUS_IMPORT =
-  'const { inspectRepositoryVitestFocusControls } = await import("./lib/oia-vitest-focus.mjs");';
+const OIA_FOCUS_IMPORT = 'const { inspectRepositoryVitestFocusControls } = await import("./lib/oia-vitest-focus.mjs");';
 const OIA_FOCUS_CALL = "for (const finding of inspectRepositoryVitestFocusControls(repoRoot))";
 const OIA_FOCUS_LOOP =
   `  ${OIA_FOCUS_CALL} {\n` +
@@ -902,7 +901,9 @@ async function writeVitestBootstrapManifest(root: string): Promise<string> {
     const digest =
       filename === ".github/workflows/ci.yml"
         ? ciWorkflowReceiptDigest(await fs.readFile(absolute, "utf8"))
-        : createHash("sha256").update(await fs.readFile(absolute)).digest("hex");
+        : createHash("sha256")
+            .update(await fs.readFile(absolute))
+            .digest("hex");
     lines.push(`${digest}  ${filename}`);
   }
   const manifest = `${lines.join("\n")}\n`;
@@ -1881,11 +1882,9 @@ describe("Class A invariant — no test imports value from registration boilerpl
       if (firstReceiptLine === undefined || secondReceiptLine === undefined) {
         throw new Error("expected at least two bootstrap receipt lines");
       }
-      const reorderedManifest = `${[
-        secondReceiptLine,
-        firstReceiptLine,
-        ...orderedReceiptLines.slice(2)
-      ].join("\n")}\n`;
+      const reorderedManifest = `${[secondReceiptLine, firstReceiptLine, ...orderedReceiptLines.slice(2)].join(
+        "\n"
+      )}\n`;
       await fs.writeFile(manifestPath, reorderedManifest);
       await updateVitestBootstrapCarrier(
         bootstrapScratch,
@@ -1896,9 +1895,7 @@ describe("Class A invariant — no test imports value from registration boilerpl
       );
       await refreshVitestBootstrapReceipt(bootstrapScratch);
 
-      const normalizedReceiptLines = (await fs.readFile(manifestPath, "utf8"))
-        .split("\n")
-        .filter(Boolean);
+      const normalizedReceiptLines = (await fs.readFile(manifestPath, "utf8")).split("\n").filter(Boolean);
       const workflowReceiptLine = normalizedReceiptLines.at(-1);
       if (workflowReceiptLine === undefined) {
         throw new Error("expected normalized CI workflow receipt line");
@@ -1933,17 +1930,9 @@ describe("Class A invariant — no test imports value from registration boilerpl
       await fs.writeFile(setupPath, baselineSetup);
       await refreshVitestBootstrapReceipt(bootstrapScratch);
 
-      const analyzerPath = path.join(
-        bootstrapScratch,
-        "scripts",
-        "lib",
-        "oia-vitest-bootstrap.mjs"
-      );
+      const analyzerPath = path.join(bootstrapScratch, "scripts", "lib", "oia-vitest-bootstrap.mjs");
       const baselineAnalyzer = await fs.readFile(analyzerPath, "utf8");
-      await fs.writeFile(
-        analyzerPath,
-        'import {\n  spawn\n} from "node:child_process";\n' + baselineAnalyzer
-      );
+      await fs.writeFile(analyzerPath, 'import {\n  spawn\n} from "node:child_process";\n' + baselineAnalyzer);
       await refreshVitestBootstrapReceipt(bootstrapScratch);
       expect(inspectRepositoryVitestBootstrap(bootstrapScratch)).toContainEqual(
         expect.objectContaining({ kind: "VITEST-BOOTSTRAP-ANALYZER" })
@@ -1971,10 +1960,7 @@ describe("Class A invariant — no test imports value from registration boilerpl
       const receiptLines = (await fs.readFile(manifestPath, "utf8")).split("\n").filter(Boolean);
       const omittedManifest = `${receiptLines.slice(0, -1).join("\n")}\n`;
       await fs.writeFile(manifestPath, omittedManifest);
-      await updateVitestBootstrapCarrier(
-        bootstrapScratch,
-        createHash("sha256").update(omittedManifest).digest("hex")
-      );
+      await updateVitestBootstrapCarrier(bootstrapScratch, createHash("sha256").update(omittedManifest).digest("hex"));
       expect(inspectRepositoryVitestBootstrap(bootstrapScratch)).toEqual(
         expect.arrayContaining([
           expect.objectContaining({ kind: "VITEST-BOOTSTRAP-MANIFEST" }),
@@ -1985,17 +1971,12 @@ describe("Class A invariant — no test imports value from registration boilerpl
 
       const ciPath = path.join(bootstrapScratch, ".github", "workflows", "ci.yml");
       const baselineCi = await fs.readFile(ciPath, "utf8");
-      const baselineCarrier = /^          expected_manifest_sha=([0-9a-f]{64})$/mu.exec(
-        baselineCi
-      )?.[0];
+      const baselineCarrier = /^          expected_manifest_sha=([0-9a-f]{64})$/mu.exec(baselineCi)?.[0];
       if (baselineCarrier === undefined) throw new Error("expected baseline CI receipt carrier");
       const alternateCarrier = baselineCarrier.endsWith("f".repeat(64))
         ? `          expected_manifest_sha=${"e".repeat(64)}`
         : `          expected_manifest_sha=${"f".repeat(64)}`;
-      await fs.writeFile(
-        ciPath,
-        replaceExactly(baselineCi, baselineCarrier, alternateCarrier)
-      );
+      await fs.writeFile(ciPath, replaceExactly(baselineCi, baselineCarrier, alternateCarrier));
       const carrierOnlyFindings = inspectRepositoryVitestBootstrap(bootstrapScratch);
       expect(carrierOnlyFindings).toContainEqual(
         expect.objectContaining({ kind: "VITEST-BOOTSTRAP-CI-CARRIER", file: ".github/workflows/ci.yml" })
@@ -2031,9 +2012,7 @@ describe("Class A invariant — no test imports value from registration boilerpl
       expect(inspectRepositoryVitestBootstrap(bootstrapScratch)).toContainEqual(
         expect.objectContaining({ kind: "VITEST-BOOTSTRAP-DIGEST", file: ".github/workflows/ci.yml" })
       );
-      const staleCarrierManifestLines = (await fs.readFile(manifestPath, "utf8"))
-        .split("\n")
-        .filter(Boolean);
+      const staleCarrierManifestLines = (await fs.readFile(manifestPath, "utf8")).split("\n").filter(Boolean);
       const updatedWorkflowManifest = `${[
         ...staleCarrierManifestLines.slice(0, -1),
         `${ciWorkflowReceiptDigest(disabledTestCi)}  .github/workflows/ci.yml`
@@ -2052,10 +2031,7 @@ describe("Class A invariant — no test imports value from registration boilerpl
       );
       await fs.writeFile(ciPath, baselineCi);
       await refreshVitestBootstrapReceipt(bootstrapScratch);
-      await fs.writeFile(
-        ciPath,
-        replaceExactly(baselineCi, "    timeout-minutes: 5", "    timeout-minutes: 4")
-      );
+      await fs.writeFile(ciPath, replaceExactly(baselineCi, "    timeout-minutes: 5", "    timeout-minutes: 4"));
       expect(inspectRepositoryVitestBootstrap(bootstrapScratch)).toContainEqual(
         expect.objectContaining({ kind: "VITEST-BOOTSTRAP-CI-SHAPE" })
       );

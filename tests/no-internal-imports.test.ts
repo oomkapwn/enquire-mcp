@@ -1532,9 +1532,9 @@ describe("Class A invariant — no test imports value from registration boilerpl
     ]);
 
     const literalTemplateEvasion = [
-      'const focusKey = `on$' + '{"ly"}`;',
-      'const configKey = `set$' + '{"Config"}`;',
-      'const optionKey = `allow$' + '{"Only"}`;',
+      "const focusKey = `on$" + '{"ly"}`;',
+      "const configKey = `set$" + '{"Config"}`;',
+      "const optionKey = `allow$" + '{"Only"}`;',
       'registrar?.[focusKey]("passing decoy", () => {});',
       "runtime[configKey]({ [optionKey]: true });"
     ].join("\n");

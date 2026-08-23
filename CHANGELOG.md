@@ -4,6 +4,16 @@ All notable changes to this project will be documented here. The format follows 
 
 ## [4.0.0-rc.4] — 2026-08-21
 
+### Vitest timeout binding identity follow-up
+
+> **TL;DR:** **The timeout ceiling guard now proves that each protected `describe`, `it`, and `beforeAll` identifier is the direct unaliased Vitest binding, with no competing runtime binding anywhere in the source.** A local wrapper can no longer preserve the reviewed timeout literal while registering the callback with a larger timeout or suppressing the suite entirely.
+>
+> **Method note:** the mandatory post-merge sibling sweep of PR #516 reproduced the false green on exact main `20fcf3eddaff414901299b4575d7ced1b4bc4bd5`: an aliased `it` wrapper retained the visible `25_000` argument while forwarding the callback to Vitest with `86_400_000`, and an aliased no-op `describe` kept the same AST-shaped suite without registering it. The detector now performs a whole-source runtime-binding census over every guarded file. A clean direct-import fixture is the positive control; causal mutations cover aliased `it`, aliased `beforeAll`, a no-op `describe`, and a suite-local hoisted binding. Under D-45 no local install, build, lint, test, coverage, smoke, OIA, package/client runtime, benchmark, or evaluation workload ran; executable proof remains required from GitHub-hosted CI on the exact candidate and squash-main SHAs.
+
+- **Identifier spelling is no longer treated as authority.** Each guarded suite and registration callee must have exactly one direct, runtime, unaliased named import from `vitest`; default, namespace, aliased, type-only, missing, or duplicate bindings fail closed.
+- **Runtime shadows are rejected as a class.** Variable and destructuring declarations, parameters, functions, classes, enums, namespaces, and import-equals bindings are counted across the complete source, including hoisted declarations placed after the reviewed registration.
+- **Product and publication state are unchanged.** This correction changes only the repository-integrity oracle and its causal controls; it does not change runtime code, workflows, dependencies, package version, tags, GitHub Releases, npm, or MCP Registry state.
+
 ### Full-project audit closure and split publication authority
 
 > **TL;DR:** **The rc.4 candidate closes the confirmed runtime, persistence, shutdown, HNSW-generation, resource-bound, package-artifact, documentation, Docker-reproducibility, and publication-authority findings from the full-project audit.** Release verification is read-only; npm Trusted Publishing, GitHub Release writes, and stable-only MCP Registry OIDC now live in three separately protected jobs and environments. Each privileged job rejects checkout/product execution, long-lived npm credentials, unexpected handoff entries, transport-digest drift, and any reviewed executable whose immutable SHA-256 is not the one embedded in the workflow. npm publishes the exact CI-built tarball with lifecycle scripts disabled.

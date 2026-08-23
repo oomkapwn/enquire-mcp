@@ -80,10 +80,11 @@
 //       *artifact* (not just the stale import string) that ships to npm when a
 //       build doesn't purge dist/. Skips when dist/ is absent (CI oia job does
 //       not build). [added rc.36 — the L-3 class root cause]
-//   12c. VITEST FOCUS CONTROL — an independent Node scan rejects statically
-//       named `.only`, `allowOnly`, and `setConfig` controls across first-party
-//       JavaScript/TypeScript executable sources, so focus alone cannot skip
-//       the detector after OIA starts.
+//   12c. VITEST EXECUTION CONTROL — independent Node scans reject statically
+//       named focus/runtime controls across first-party executable sources and
+//       pin the exact persistent full-suite config, root npm execution inputs,
+//       install/build/test commands, and blocking CI test job, so focus or a
+//       pre-collection selector cannot skip every detector after OIA starts.
 //
 // NB: check 4d/4e/4f/4 appear after the 4b/4c sub-checks for historical-accretion
 // reasons; the numbering is kept stable because CHANGELOG entries reference
@@ -104,6 +105,7 @@ import { expectedCoverageSourceFiles, normalizeCoverageReportedPath } from "./li
 import { inspectEmbeddingsOfflineGuards } from "./lib/oia-offline-guard.mjs";
 import { inspectReleaseProvenanceWorkflow } from "./lib/oia-release-claims.mjs";
 import { inspectRepositoryVitestFocusControls } from "./lib/oia-vitest-focus.mjs";
+import { inspectRepositoryVitestSelectionControls } from "./lib/oia-vitest-selection.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -2049,12 +2051,14 @@ if (!SKIP_NETWORK) {
   }
 }
 
-// ─── Check 12c: independent Vitest focus-control scan ───────────────────
+// ─── Check 12c: independent Vitest execution-control scan ───────────────
 // This check is intentionally outside Vitest. A malicious or accidental
 // `vi.setConfig({ allowOnly: true })` + passing `.only` decoy can skip any
 // test-hosted oracle, but focus alone cannot skip this separate Node process
-// after OIA starts. The analyzer reads source text only; it never imports
-// scanned modules.
+// after OIA starts. Pre-collection file/name/project selectors can skip that
+// same oracle without focus syntax, so a second independent analyzer pins the
+// exact persistent config, root npm execution inputs, install/build/test
+// commands, and blocking CI test job. Neither analyzer imports scanned modules.
 try {
   for (const finding of inspectRepositoryVitestFocusControls(repoRoot)) {
     record(finding.kind, finding.file, finding.line, finding.evidence, finding.hint);
@@ -2066,6 +2070,20 @@ try {
     1,
     error instanceof Error ? `${error.name}: ${error.message}` : String(error),
     "The independent focus-control scan did not complete. Treat this as a blocking unverified state and repair the scanner or unreadable source before release."
+  );
+}
+
+try {
+  for (const finding of inspectRepositoryVitestSelectionControls(repoRoot)) {
+    record(finding.kind, finding.file, finding.line, finding.evidence, finding.hint);
+  }
+} catch (error) {
+  record(
+    "VITEST-SELECTION-SCAN-ERROR",
+    "scripts/lib/oia-vitest-selection.mjs",
+    1,
+    error instanceof Error ? `${error.name}: ${error.message}` : String(error),
+    "The independent Vitest selection scan did not complete. Treat this as a blocking unverified state and repair the scanner or unreadable policy input before release."
   );
 }
 
@@ -2086,7 +2104,7 @@ if (findings.length === 0) {
   }
   reportLines.push(
     hasNonOverridableFindings
-      ? "[oia-walk] Vitest focus-control/scanner findings are non-overridable; --allow cannot suppress them."
+      ? "[oia-walk] Vitest execution-control/scanner findings are non-overridable; --allow cannot suppress them."
       : ALLOW_MODE
         ? "[oia-walk] --allow flag set; exiting 0 despite findings."
         : "[oia-walk] Pass --allow to override (CHANGELOG must document why findings are acceptable)."

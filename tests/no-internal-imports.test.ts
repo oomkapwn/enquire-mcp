@@ -11,6 +11,17 @@ import {
   inspectRepositoryVitestFocusControls,
   inspectStaticVitestFocusControls
 } from "../scripts/lib/oia-vitest-focus.mjs";
+import {
+  ciTestSelectionProblems,
+  EXPECTED_BUILD_SCRIPT,
+  EXPECTED_COVERAGE_SCRIPT,
+  EXPECTED_PREPARE_SCRIPT,
+  FORBIDDEN_REQUIRED_RUN_LIFECYCLE_SCRIPTS,
+  forbiddenNpmProjectEntries,
+  inspectRepositoryVitestSelectionControls,
+  packageTestSelectionProblems,
+  vitestSelectionProblems
+} from "../scripts/lib/oia-vitest-selection.mjs";
 import { replaceExactly } from "./helpers/exact-source-mutation.js";
 
 // Class A invariant (v3.6.0-rc.4) — closes the "hardcoded paths to
@@ -68,11 +79,14 @@ import { replaceExactly } from "./helpers/exact-source-mutation.js";
 // a wildcard, third omission, filtered prerequisite or production import
 // makes this lightweight test fail before the coverage job can qualify.
 //
-// Class C invariant (post-PR #518 sibling sweep) — Vitest focus controls are
-// enforced by OIA Check 12c in a separate Node process. The analyzer scans the
-// complete first-party JavaScript/TypeScript executable-source census,
-// including this oracle file, so focus alone cannot skip the detector after
-// OIA starts.
+// Class C invariant (post-PR #518/#519 sibling sweeps) — Vitest focus and
+// pre-collection selection controls are enforced by OIA Check 12c in a
+// separate Node process. The focus analyzer scans the complete first-party
+// JavaScript/TypeScript executable-source census; the selection analyzer pins
+// the persistent canonical config, root npm execution inputs, install/build/test
+// commands and blocking CI test job. A persistent static selector can therefore
+// skip this oracle only by leaving a non-overridable OIA finding after the
+// unchanged OIA entrypoint starts.
 
 const repoRoot = path.resolve(__dirname, "..");
 const EXECUTABLE_SOURCE_EXTENSIONS = new Set([".cjs", ".cts", ".js", ".jsx", ".mjs", ".mts", ".ts", ".tsx"]);
@@ -82,12 +96,13 @@ const COVERAGE_ONLY_TEST_EXCLUSIONS = [
   "tests/meta-invariant-coverage.test.ts",
   "tests/release-integrity.test.ts"
 ] as const;
-const EXPECTED_COVERAGE_SCRIPT =
-  "vitest run --coverage --exclude tests/meta-invariant-coverage.test.ts " +
-  "--exclude tests/release-integrity.test.ts";
 const EXPECTED_OIA_SCRIPT = "node scripts/oia-walk.mjs";
 const OIA_FOCUS_IMPORT = 'import { inspectRepositoryVitestFocusControls } from "./lib/oia-vitest-focus.mjs";';
 const OIA_FOCUS_CALL = "for (const finding of inspectRepositoryVitestFocusControls(repoRoot))";
+const OIA_FOCUS_LOOP =
+  `  ${OIA_FOCUS_CALL} {\n` +
+  "    record(finding.kind, finding.file, finding.line, finding.evidence, finding.hint);\n" +
+  "  }";
 const EXPECTED_PREPUBLISH_ONLY_SCRIPT =
   "npm run lint && npm run build && npm test && node scripts/check-version-consistency.mjs && " +
   "node scripts/check-audit.mjs && npm run test:coverage --silent && " +
@@ -150,18 +165,8 @@ async function independentExecutableSourceCensus(root: string, relativeDirectory
 }
 
 const VITEST_RUNTIME_LOADERS = new Set(["doMock", "importActual", "importMock", "mock"]);
-const EXPECTED_VITEST_CONFIG_FILES = ["vitest.config.ts"] as const;
 // Canonical JSON SHA-256 pins keep every reviewed step exact without copying
 // multiline shell bodies into this invariant a second time.
-const EXPECTED_TEST_STEP_FINGERPRINTS = [
-  "3ef4af68ef144f12dd555f182fb78c286413a5c20503a3491c8a1a7ea3554af7",
-  "edca7cfed3ff243cb4a555e1d498c0aaf00c3beea661e07b0a4b29201526d909",
-  "d6afccf6f68cf1593c09c268ca358cc0def948d0f8b14ee047128a5a6e366627",
-  "338e29c470a015d92698b8184b65ee481976a1a24ad813eab912c20460a2a937",
-  "44d96178c110e1ceeaa809d554c1bc392079517800a7a155792ee34206ef2c0e",
-  "dbaf53cd3dfd2d8bc4d6f741915bc861d1ac27b5cf842aee668e9bef8e011843",
-  "59d90db08cea0405ca3033ef2e00b11406b56244d0007ed5c0423684052640bc"
-] as const;
 const EXPECTED_COVERAGE_STEP_FINGERPRINTS = [
   "3ef4af68ef144f12dd555f182fb78c286413a5c20503a3491c8a1a7ea3554af7",
   "2873c30795c24c8e23b779c04f85e269a194d6d7f89baddd3888d1f619855563",
@@ -179,7 +184,6 @@ const EXPECTED_OIA_STEP_FINGERPRINTS = [
   "1b0717ee04319d167e0837f827d565e709c377f5f7f126c52e74eb84391653ff",
   "6d17292384f49a212eddf1e626f36f87d22853089bdbd2218692cebbf0e84056"
 ] as const;
-const FORBIDDEN_TEST_LIFECYCLE_SCRIPTS = ["pretest", "posttest", "pretest:coverage", "posttest:coverage"] as const;
 const FORBIDDEN_OIA_LIFECYCLE_SCRIPTS = ["precheck:oia", "postcheck:oia"] as const;
 
 type UnknownRecord = Record<string, unknown>;
@@ -219,34 +223,6 @@ function workflowStepFingerprints(steps: readonly UnknownRecord[] | undefined): 
   });
 }
 
-function propertyNameText(name: ts.PropertyName): string | undefined {
-  if (ts.isIdentifier(name) || ts.isStringLiteral(name) || ts.isNumericLiteral(name)) return name.text;
-  return undefined;
-}
-
-function objectProperty(object: ts.ObjectLiteralExpression, name: string): ts.Expression | undefined {
-  const matches = object.properties.filter(
-    (property): property is ts.PropertyAssignment =>
-      ts.isPropertyAssignment(property) && propertyNameText(property.name) === name
-  );
-  return matches.length === 1 ? matches[0]?.initializer : undefined;
-}
-
-function objectHasDynamicProperty(object: ts.ObjectLiteralExpression): boolean {
-  return object.properties.some(
-    (property) => !ts.isPropertyAssignment(property) || propertyNameText(property.name) === undefined
-  );
-}
-
-function objectHasExactStaticKeys(object: ts.ObjectLiteralExpression, expected: readonly string[]): boolean {
-  if (objectHasDynamicProperty(object)) return false;
-  const actual = object.properties
-    .map((property) => (ts.isPropertyAssignment(property) ? propertyNameText(property.name) : undefined))
-    .filter((value): value is string => value !== undefined)
-    .sort();
-  return actual.length === object.properties.length && isDeepStrictEqual(actual, [...expected].sort());
-}
-
 function recordHasExactKeys(record: UnknownRecord, expected: readonly string[]): boolean {
   return isDeepStrictEqual(Object.keys(record).sort(), [...expected].sort());
 }
@@ -255,102 +231,17 @@ function stringLiteralValue(expression: ts.Expression | undefined): string | und
   return expression !== undefined && ts.isStringLiteralLike(expression) ? expression.text : undefined;
 }
 
-function stringLiteralArray(expression: ts.Expression | undefined): string[] | undefined {
-  if (expression === undefined || !ts.isArrayLiteralExpression(expression)) return undefined;
-  const values: string[] = [];
-  for (const element of expression.elements) {
-    if (!ts.isStringLiteralLike(element)) return undefined;
-    values.push(element.text);
-  }
-  return values;
-}
-
-function hasExactDefineConfigImport(statement: ts.Statement | undefined): boolean {
-  if (statement === undefined || !ts.isImportDeclaration(statement)) return false;
-  if (stringLiteralValue(statement.moduleSpecifier) !== "vitest/config" || statement.attributes !== undefined) {
-    return false;
-  }
-  const clause = statement.importClause;
-  if (
-    clause === undefined ||
-    clause.isTypeOnly ||
-    clause.name !== undefined ||
-    clause.namedBindings === undefined ||
-    !ts.isNamedImports(clause.namedBindings) ||
-    clause.namedBindings.elements.length !== 1
-  ) {
-    return false;
-  }
-  const binding = clause.namedBindings.elements[0];
-  return (
-    binding !== undefined &&
-    !binding.isTypeOnly &&
-    binding.propertyName === undefined &&
-    binding.name.text === "defineConfig"
-  );
-}
-
-function hasExactCoveragePolicyImport(statement: ts.Statement | undefined): boolean {
-  if (statement === undefined || !ts.isImportDeclaration(statement)) return false;
-  if (
-    stringLiteralValue(statement.moduleSpecifier) !== "./scripts/lib/coverage-policy.mjs" ||
-    statement.attributes !== undefined
-  ) {
-    return false;
-  }
-  const clause = statement.importClause;
-  if (
-    clause === undefined ||
-    clause.isTypeOnly ||
-    clause.name !== undefined ||
-    clause.namedBindings === undefined ||
-    !ts.isNamedImports(clause.namedBindings) ||
-    clause.namedBindings.elements.length !== 1
-  ) {
-    return false;
-  }
-  const binding = clause.namedBindings.elements[0];
-  return (
-    binding !== undefined &&
-    !binding.isTypeOnly &&
-    binding.propertyName === undefined &&
-    binding.name.text === "COVERAGE_EXCLUDE_PATTERNS"
-  );
-}
-
-function isExactCoveragePolicySpread(expression: ts.Expression | undefined): boolean {
-  if (expression === undefined || !ts.isArrayLiteralExpression(expression) || expression.elements.length !== 1) {
-    return false;
-  }
-  const element = expression.elements[0];
-  return (
-    element !== undefined &&
-    ts.isSpreadElement(element) &&
-    ts.isIdentifier(element.expression) &&
-    element.expression.text === "COVERAGE_EXCLUDE_PATTERNS"
-  );
-}
-
 function packageCoverageProblems(source: string): string[] {
-  const problems: string[] = [];
+  const problems = [...packageTestSelectionProblems(source)];
   let parsed: unknown;
   try {
     parsed = JSON.parse(source);
   } catch {
-    return ["package.json must remain valid JSON"];
+    return problems;
   }
   const scripts = asRecord(asRecord(parsed)?.scripts);
-  if (scripts?.test !== "vitest run") {
-    problems.push("package scripts.test must remain the exact unfiltered vitest run");
-  }
-  if (scripts?.["test:coverage"] !== EXPECTED_COVERAGE_SCRIPT) {
-    problems.push("package scripts.test:coverage must retain the exact two-file coverage-only exclusion");
-  }
   if (scripts?.["check:oia"] !== EXPECTED_OIA_SCRIPT) {
     problems.push("package scripts.check:oia must retain the exact independent Node entrypoint");
-  }
-  if (FORBIDDEN_TEST_LIFECYCLE_SCRIPTS.some((name) => Object.hasOwn(scripts ?? {}, name))) {
-    problems.push("package test lifecycle hooks must remain absent");
   }
   if (FORBIDDEN_OIA_LIFECYCLE_SCRIPTS.some((name) => Object.hasOwn(scripts ?? {}, name))) {
     problems.push("package check:oia lifecycle hooks must remain absent");
@@ -396,91 +287,19 @@ function jobHasOverride(job: UnknownRecord): boolean {
 }
 
 function ciCoverageProblems(source: string): string[] {
-  const problems: string[] = [];
+  const problems = [...ciTestSelectionProblems(source)];
   let parsed: unknown;
   try {
     parsed = load(source);
   } catch {
-    return ["CI workflow must remain valid YAML"];
+    return problems;
   }
   const workflow = asRecord(parsed);
-  if (workflow === undefined) return ["CI workflow must remain an object"];
-  if (Object.hasOwn(workflow, "env") || Object.hasOwn(workflow, "defaults")) {
-    problems.push("CI root may not override the test or coverage execution environment");
-  }
+  if (workflow === undefined) return problems;
   const jobs = asRecord(workflow.jobs);
-  const testJob = asRecord(jobs?.test);
   const testMacosJob = asRecord(jobs?.["test-macos"]);
   const coverageJob = asRecord(jobs?.coverage);
   const oiaJob = asRecord(jobs?.oia);
-  if (testJob === undefined) {
-    problems.push("CI must retain the blocking test matrix job");
-  } else {
-    if (
-      !recordHasExactKeys(testJob, ["name", "runs-on", "timeout-minutes", "env", "strategy", "steps"]) ||
-      testJob.name !== `test (\${{ matrix.label }})` ||
-      testJob["runs-on"] !== "ubuntu-latest" ||
-      testJob["timeout-minutes"] !== 20 ||
-      !isDeepStrictEqual(asRecord(testJob.env), { NPM_CONFIG_ENGINE_STRICT: "true" })
-    ) {
-      problems.push("CI test matrix must retain its exact fail-capable job boundary");
-    }
-    const strategy = asRecord(testJob.strategy);
-    const matrix = asRecord(strategy?.matrix);
-    const expectedMatrix = [
-      { label: "22", "node-version": "22.13.0", floor: true },
-      { label: "24", "node-version": "24", floor: false }
-    ];
-    if (
-      strategy === undefined ||
-      !recordHasExactKeys(strategy, ["fail-fast", "matrix"]) ||
-      strategy?.["fail-fast"] !== false ||
-      !isDeepStrictEqual(Object.keys(matrix ?? {}).sort(), ["include"]) ||
-      !isDeepStrictEqual(matrix?.include, expectedMatrix)
-    ) {
-      problems.push("CI test matrix must retain exact unfiltered Node 22.13 and Node 24 legs");
-    }
-    const steps = workflowSteps(testJob);
-    if (!isDeepStrictEqual(workflowStepFingerprints(steps), EXPECTED_TEST_STEP_FINGERPRINTS)) {
-      problems.push("CI test matrix must retain the exact reviewed step sequence");
-    }
-    const checkoutStep = steps?.[0];
-    if (
-      checkoutStep === undefined ||
-      !recordHasExactKeys(checkoutStep, ["uses"]) ||
-      checkoutStep.uses !== EXPECTED_CHECKOUT_ACTION
-    ) {
-      problems.push("CI test matrix must begin with the exact pinned checkout step");
-    }
-    const setupNodeStep = steps?.[1];
-    if (
-      setupNodeStep === undefined ||
-      !recordHasExactKeys(setupNodeStep, ["uses", "with"]) ||
-      setupNodeStep.uses !== EXPECTED_SETUP_NODE_ACTION ||
-      !isDeepStrictEqual(asRecord(setupNodeStep.with), {
-        "node-version": `\${{ matrix.node-version }}`,
-        cache: "npm",
-        "cache-dependency-path": "package-lock.json"
-      })
-    ) {
-      problems.push("CI test matrix must bind the exact pinned setup-node step to each matrix runtime");
-    }
-    const testSteps =
-      steps?.filter(
-        (step) => typeof step.run === "string" && (step.run === "npm test" || step.run.startsWith("npm test "))
-      ) ?? [];
-    const finalStep = steps === undefined ? undefined : steps[steps.length - 1];
-    if (
-      testSteps.length !== 1 ||
-      testSteps[0]?.run !== "npm test" ||
-      testSteps[0] !== finalStep ||
-      finalStep === undefined ||
-      !recordHasExactKeys(finalStep, ["run", "env"]) ||
-      !isDeepStrictEqual(asRecord(finalStep.env), { GH_TOKEN: `\${{ github.token }}` })
-    ) {
-      problems.push("each CI Node leg must end with one exact unfiltered fail-capable npm test");
-    }
-  }
 
   if (testMacosJob === undefined || testMacosJob["timeout-minutes"] !== 20) {
     problems.push("CI macOS full suite must retain its exact advisory 20-minute job boundary");
@@ -626,105 +445,7 @@ function ciCoverageProblems(source: string): string[] {
 }
 
 function vitestCoverageProblems(source: string, configFiles: readonly string[]): string[] {
-  const problems: string[] = [];
-  if (!isDeepStrictEqual([...configFiles].sort(), [...EXPECTED_VITEST_CONFIG_FILES])) {
-    problems.push("the repository must retain one canonical vitest.config.ts");
-  }
-  const sourceFile = ts.createSourceFile("vitest.config.ts", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
-  if (!hasExactDefineConfigImport(sourceFile.statements[0])) {
-    problems.push("vitest config must retain the exact unaliased defineConfig import");
-  }
-  if (sourceFile.statements.length !== 3 || !hasExactCoveragePolicyImport(sourceFile.statements[1])) {
-    problems.push("vitest config must retain the exact centralized coverage-policy import");
-  }
-  const exportAssignments = sourceFile.statements.filter(ts.isExportAssignment);
-  const exportAssignment = exportAssignments.length === 1 ? exportAssignments[0] : undefined;
-  const exported = exportAssignment?.expression;
-  const configArgument = exported !== undefined && ts.isCallExpression(exported) ? exported.arguments[0] : undefined;
-  if (
-    exportAssignment?.isExportEquals === true ||
-    exported === undefined ||
-    !ts.isCallExpression(exported) ||
-    !ts.isIdentifier(exported.expression) ||
-    exported.expression.text !== "defineConfig" ||
-    exported.arguments.length !== 1 ||
-    configArgument === undefined ||
-    !ts.isObjectLiteralExpression(configArgument)
-  ) {
-    return [...problems, "vitest config must remain one static default defineConfig object"];
-  }
-  const config = configArgument;
-  if (!objectHasExactStaticKeys(config, ["test"])) {
-    problems.push("vitest root config must retain the exact static test-only shape");
-  }
-  const testExpression = objectProperty(config, "test");
-  if (testExpression === undefined || !ts.isObjectLiteralExpression(testExpression)) {
-    return [...problems, "vitest config must retain one static test object"];
-  }
-  const testConfig = testExpression;
-  if (!objectHasExactStaticKeys(testConfig, ["include", "environment", "testTimeout", "setupFiles", "coverage"])) {
-    problems.push("vitest test config must retain its exact reviewed static key set");
-  }
-  if (!isDeepStrictEqual(stringLiteralArray(objectProperty(testConfig, "include")), ["tests/**/*.test.ts"])) {
-    problems.push("vitest test.include must remain the exact full test-file glob");
-  }
-  if (stringLiteralValue(objectProperty(testConfig, "environment")) !== "node") {
-    problems.push("vitest test.environment must remain node");
-  }
-  if (objectProperty(testConfig, "testTimeout")?.getText(sourceFile) !== "15_000") {
-    problems.push("vitest testTimeout must remain 15_000");
-  }
-  if (!isDeepStrictEqual(stringLiteralArray(objectProperty(testConfig, "setupFiles")), ["./tests/setup.ts"])) {
-    problems.push("vitest setupFiles must retain the exact tests/setup.ts bootstrap");
-  }
-
-  const coverageExpression = objectProperty(testConfig, "coverage");
-  if (coverageExpression === undefined || !ts.isObjectLiteralExpression(coverageExpression)) {
-    return [...problems, "vitest config must retain one static coverage object"];
-  }
-  const coverage = coverageExpression;
-  if (!objectHasExactStaticKeys(coverage, ["provider", "reporter", "include", "exclude", "thresholds"])) {
-    problems.push("vitest coverage config must retain its exact reviewed static key set");
-  }
-  if (stringLiteralValue(objectProperty(coverage, "provider")) !== "v8") {
-    problems.push("vitest coverage provider must remain v8");
-  }
-  if (
-    !isDeepStrictEqual(stringLiteralArray(objectProperty(coverage, "reporter")), [
-      "text",
-      "html",
-      "lcov",
-      "json-summary"
-    ])
-  ) {
-    problems.push("vitest coverage reporters must retain text, html, lcov and json-summary");
-  }
-  if (!isDeepStrictEqual(stringLiteralArray(objectProperty(coverage, "include")), ["src/**/*.ts"])) {
-    problems.push("vitest coverage.include must remain exact src/**/*.ts");
-  }
-  if (!isExactCoveragePolicySpread(objectProperty(coverage, "exclude"))) {
-    problems.push("vitest production coverage exclusions must use the exact centralized policy spread");
-  }
-  const thresholdsExpression = objectProperty(coverage, "thresholds");
-  if (thresholdsExpression === undefined || !ts.isObjectLiteralExpression(thresholdsExpression)) {
-    problems.push("vitest coverage thresholds must remain a static object");
-  } else {
-    const expectedThresholds: Readonly<Record<string, string>> = {
-      lines: "86",
-      statements: "82",
-      functions: "75",
-      branches: "74"
-    };
-    if (!objectHasExactStaticKeys(thresholdsExpression, Object.keys(expectedThresholds))) {
-      problems.push("vitest coverage thresholds must retain the exact four global floors");
-    }
-    for (const [name, value] of Object.entries(expectedThresholds)) {
-      if (objectProperty(thresholdsExpression, name)?.getText(sourceFile) !== value) {
-        problems.push(`vitest coverage threshold ${name} must remain ${value}`);
-      }
-    }
-  }
-  return problems;
+  return vitestSelectionProblems(source, configFiles);
 }
 
 type RegistrationVitestBinding = "beforeAll" | "describe" | "it";
@@ -1170,7 +891,7 @@ async function readCoverageIsolationInputs(): Promise<CoverageIsolationInputs> {
     closureSources.set(filename, await fs.readFile(realCandidate, "utf8"));
   }
   const rootEntries = await fs.readdir(repoRoot);
-  const vitestConfigFiles = rootEntries.filter((name) => /^vitest\.(?:config|workspace)\./u.test(name)).sort();
+  const vitestConfigFiles = rootEntries.filter((name) => /^vitest\.(?:config|projects|workspace)\./u.test(name)).sort();
   const [packageJson, ciWorkflow, vitestConfig, docsConsistencySource, k1ClassSource, releaseMutationTransitionSource] =
     await Promise.all([
       fs.readFile(path.join(repoRoot, "package.json"), "utf8"),
@@ -1362,6 +1083,14 @@ function oiaFocusWiringProblems(source: string): string[] {
       return [];
     }
     const loop = candidate;
+    const iterable = loop.expression;
+    if (
+      !ts.isCallExpression(iterable) ||
+      !ts.isIdentifier(iterable.expression) ||
+      iterable.expression.text !== "inspectRepositoryVitestFocusControls"
+    ) {
+      return [];
+    }
     const initializer = loop.initializer;
     const declaration =
       ts.isVariableDeclarationList(initializer) && initializer.declarations.length === 1
@@ -1477,6 +1206,7 @@ describe("Class A invariant — no test imports value from registration boilerpl
     expect(focusSourceFiles).toEqual(await independentExecutableSourceCensus(repoRoot));
     expect(focusSourceFiles).toContain("site/site.js");
     expect(focusSourceFiles).toContain("tests/fixtures/k1-invariant/good.ts");
+    expect(inspectRepositoryVitestSelectionControls(repoRoot)).toEqual([]);
     const oiaSource = await fs.readFile(path.join(repoRoot, "scripts/oia-walk.mjs"), "utf8");
     expect(oiaFocusWiringProblems(oiaSource)).toEqual([]);
     expect(oiaMarkedCheckInventoryProblems(oiaSource)).toEqual([]);
@@ -1866,8 +1596,8 @@ describe("Class A invariant — no test imports value from registration boilerpl
     );
     const oiaWithoutFindingSink = replaceExactly(
       currentOiaSource,
-      "    record(finding.kind, finding.file, finding.line, finding.evidence, finding.hint);",
-      "    void finding;"
+      OIA_FOCUS_LOOP,
+      `  ${OIA_FOCUS_CALL} {\n    void finding;\n  }`
     );
     expect(oiaFocusWiringProblems(oiaWithoutFindingSink)).toContain(
       "OIA focus-control analyzer findings must flow into the exact record sink"
@@ -1912,6 +1642,44 @@ describe("Class A invariant — no test imports value from registration boilerpl
     const current = await currentCoverageIsolationInputs();
     const currentVitestProblems = (source: string): string[] =>
       vitestCoverageProblems(source, current.vitestConfigFiles);
+    expect(packageTestSelectionProblems("{")).toEqual(["package.json must remain valid JSON"]);
+    expect(ciTestSelectionProblems("jobs: [")).toEqual(["CI workflow must remain valid YAML"]);
+    expect(vitestSelectionProblems("export default {", ["vitest.config.ts"])).toEqual([
+      expect.stringMatching(/^vitest config must parse without diagnostics:/u)
+    ]);
+    expect(forbiddenNpmProjectEntries([])).toEqual([]);
+    expect(forbiddenNpmProjectEntries(["package.json", "npm-shrinkwrap.json", ".npmrc", "binding.gyp"])).toEqual([
+      ".npmrc",
+      "binding.gyp",
+      "npm-shrinkwrap.json"
+    ]);
+    const selectionCensusScratch = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-selection-census-"));
+    try {
+      await fs.mkdir(path.join(selectionCensusScratch, "vitest.config.ts"));
+      expect(() => inspectRepositoryVitestSelectionControls(selectionCensusScratch)).toThrow(
+        "Vitest config census refuses non-regular entry vitest.config.ts"
+      );
+    } finally {
+      await fs.rm(selectionCensusScratch, { recursive: true, force: true });
+    }
+    const exactBuildEntry = `"build": "${EXPECTED_BUILD_SCRIPT}"`;
+    const packageWithFilteredBuild = replaceExactly(
+      current.packageJson,
+      exactBuildEntry,
+      `"build": "${EXPECTED_BUILD_SCRIPT} && node scripts/rewrite-vitest-config.mjs"`
+    );
+    expect(packageCoverageProblems(packageWithFilteredBuild)).toContain(
+      "package scripts.build must remain the exact reviewed pre-test build"
+    );
+    const exactPrepareEntry = `"prepare": "${EXPECTED_PREPARE_SCRIPT}"`;
+    const packageWithJobFilteredPrepare = replaceExactly(
+      current.packageJson,
+      exactPrepareEntry,
+      `"prepare": "${EXPECTED_PREPARE_SCRIPT} && node scripts/rewrite-vitest-config.mjs"`
+    );
+    expect(packageCoverageProblems(packageWithJobFilteredPrepare)).toContain(
+      "package scripts.prepare must remain the exact reviewed install bootstrap"
+    );
     const exactCoverageEntry = `"test:coverage": "${EXPECTED_COVERAGE_SCRIPT}"`;
     const packageWithThirdExclusion = replaceExactly(
       current.packageJson,
@@ -1939,14 +1707,14 @@ describe("Class A invariant — no test imports value from registration boilerpl
         "package check:oia lifecycle hooks must remain absent"
       );
     }
-    for (const lifecycle of FORBIDDEN_TEST_LIFECYCLE_SCRIPTS) {
+    for (const lifecycle of FORBIDDEN_REQUIRED_RUN_LIFECYCLE_SCRIPTS) {
       const packageWithLifecycleHook = replaceExactly(
         current.packageJson,
         '    "test": "vitest run",',
         `    "${lifecycle}": "printf fail-open",\n    "test": "vitest run",`
       );
       expect(packageCoverageProblems(packageWithLifecycleHook)).toContain(
-        "package test lifecycle hooks must remain absent"
+        "package install/build/test lifecycle hooks must remain absent"
       );
     }
     const packageWithWildcard = replaceExactly(
@@ -2196,6 +1964,26 @@ describe("Class A invariant — no test imports value from registration boilerpl
     ]);
     expect(vitestProblems).toContain("vitest test config must retain its exact reviewed static key set");
     expect(vitestProblems).toContain("the repository must retain one canonical vitest.config.ts");
+    const vitestWithNameFilter = replaceExactly(
+      current.vitestConfig,
+      '    include: ["tests/**/*.test.ts"],\n',
+      '    include: ["tests/**/*.test.ts"],\n' +
+        "    testNamePattern: /^(?!Class A invariant — no test imports value from registration boilerplate)/,\n"
+    );
+    expect(currentVitestProblems(vitestWithNameFilter)).toContain(
+      "vitest test config must retain its exact reviewed static key set"
+    );
+    const vitestWithNarrowedInclude = replaceExactly(
+      current.vitestConfig,
+      '    include: ["tests/**/*.test.ts"],',
+      '    include: ["tests/unit.test.ts"],'
+    );
+    expect(currentVitestProblems(vitestWithNarrowedInclude)).toContain(
+      "vitest test.include must remain the exact full test-file glob"
+    );
+    expect(
+      vitestSelectionProblems(current.vitestConfig, [...current.vitestConfigFiles, "vitest.projects.ts"])
+    ).toContain("the repository must retain one canonical vitest.config.ts");
     const vitestWithBrowserEnvironment = replaceExactly(
       current.vitestConfig,
       '    environment: "node",',
@@ -2290,6 +2078,14 @@ describe("Class A invariant — no test imports value from registration boilerpl
     );
     expect(currentVitestProblems(vitestWithCoverageSpread)).toContain(
       "vitest coverage config must retain its exact reviewed static key set"
+    );
+    const vitestWithExecutableCoverageInitializer = replaceExactly(
+      replaceExactly(current.vitestConfig, "    coverage: {\n", "    coverage: (jobGatedSideEffect(), {\n"),
+      "      }\n    }\n  }\n});\n",
+      "      }\n    })\n  }\n});\n"
+    );
+    expect(vitestSelectionProblems(vitestWithExecutableCoverageInitializer, current.vitestConfigFiles)).toContain(
+      "vitest config must retain one static coverage object"
     );
     const vitestWithThresholdSpread = replaceExactly(
       current.vitestConfig,

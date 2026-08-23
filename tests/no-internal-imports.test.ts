@@ -1477,9 +1477,6 @@ describe("Class A invariant — no test imports value from registration boilerpl
     expect(focusSourceFiles).toEqual(await independentExecutableSourceCensus(repoRoot));
     expect(focusSourceFiles).toContain("site/site.js");
     expect(focusSourceFiles).toContain("tests/fixtures/k1-invariant/good.ts");
-    expect(inspectRepositoryVitestFocusControls(repoRoot), "OIA focus-control source census must stay clean").toEqual(
-      []
-    );
     const oiaSource = await fs.readFile(path.join(repoRoot, "scripts/oia-walk.mjs"), "utf8");
     expect(oiaFocusWiringProblems(oiaSource)).toEqual([]);
     expect(oiaMarkedCheckInventoryProblems(oiaSource)).toEqual([]);

@@ -1988,7 +1988,7 @@ function focusTimeoutVitestBindingProblems(sourceFile: ts.SourceFile): string[] 
   });
 }
 
-/** Independently pin the reachable 45-second registration for the full-repository focus scan. */
+/** Independently pin the reachable 45-second focus-census and OIA-wiring hook. */
 function focusTimeoutRegistrationProblems(source: string): string[] {
   const sourceFile = ts.createSourceFile(
     FOCUS_TIMEOUT_FILENAME,

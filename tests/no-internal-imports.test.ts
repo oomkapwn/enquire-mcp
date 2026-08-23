@@ -1807,6 +1807,10 @@ describe("Class A invariant — no test imports value from registration boilerpl
     ].join("\n");
     expect(findingKindsAndLines(inertFocusText)).toEqual([]);
     expect(findingKindsAndLines("export const only: true;", "types/focus-controls.d.ts")).toEqual([]);
+    expect(inspectStaticVitestFocusControls("const broken = ;", "types/malformed.d.ts")).toEqual([]);
+    expect(() =>
+      inspectStaticVitestFocusControls("const broken = ;", "tests/fixtures/malformed-source.ts")
+    ).toThrow(/focus-control parse failure in tests\/fixtures\/malformed-source\.ts:1:\d+: TS\d+: .+/u);
     expect(findingKindsAndLines('void import("only"); require("setConfig");')).toEqual([
       ["VITEST-FOCUS-ONLY", 1],
       ["VITEST-RUNTIME-CONFIG", 1]
@@ -1835,6 +1839,20 @@ describe("Class A invariant — no test imports value from registration boilerpl
       );
     } finally {
       await fs.rm(symlinkScratch, { recursive: true, force: true });
+    }
+
+    const parseScratch = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-focus-parse-"));
+    try {
+      const fixtureDirectory = path.join(parseScratch, "tests", "fixtures");
+      await fs.mkdir(fixtureDirectory, { recursive: true });
+      await fs.writeFile(path.join(fixtureDirectory, "valid.ts"), "export const value = 1;\n");
+      expect(inspectRepositoryVitestFocusControls(parseScratch)).toEqual([]);
+      await fs.writeFile(path.join(fixtureDirectory, "malformed.ts"), "const broken = ;\n");
+      expect(() => inspectRepositoryVitestFocusControls(parseScratch)).toThrow(
+        /focus-control parse failure in tests\/fixtures\/malformed\.ts:1:\d+: TS\d+: .+/u
+      );
+    } finally {
+      await fs.rm(parseScratch, { recursive: true, force: true });
     }
 
     const currentOiaSource = await fs.readFile(path.join(repoRoot, "scripts/oia-walk.mjs"), "utf8");

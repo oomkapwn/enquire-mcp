@@ -213,7 +213,9 @@ function findingFor(name, source, sourceFile, filename, node) {
  * exports from escaping per-file resolution. Same-file or cross-file
  * composition through identifiers holding individually non-reserved fragments,
  * runtime-computed keys, non-executable data-file indirection, and generated/eval
- * code are intentionally outside scope.
+ * code are intentionally outside scope. Declaration files remain excluded, but
+ * any parse diagnostic in an executable source throws so TypeScript's recovery
+ * AST cannot silently turn an unparsed control surface into a clean result.
  *
  * @param {string} source Source text to inspect.
  * @param {string} filename Repository-relative diagnostic filename.
@@ -222,6 +224,16 @@ function findingFor(name, source, sourceFile, filename, node) {
 export function inspectStaticVitestFocusControls(source, filename) {
   const sourceFile = ts.createSourceFile(filename, source, ts.ScriptTarget.Latest, true, scriptKindFor(filename));
   if (sourceFile.isDeclarationFile) return [];
+  const parseDiagnostic = sourceFile.parseDiagnostics[0];
+  if (parseDiagnostic !== undefined) {
+    const position = Math.min(Math.max(parseDiagnostic.start ?? 0, 0), source.length);
+    const location = sourceFile.getLineAndCharacterOfPosition(position);
+    const message = ts.flattenDiagnosticMessageText(parseDiagnostic.messageText, " ").trim();
+    throw new SyntaxError(
+      `focus-control parse failure in ${filename}:${location.line + 1}:${location.character + 1}: ` +
+        `TS${parseDiagnostic.code}: ${message}`
+    );
+  }
   const hits = new Map();
   const staticStringCache = new WeakMap();
   const record = (name, node) => {

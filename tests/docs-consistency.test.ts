@@ -994,7 +994,7 @@ async function assertCoverageOiaEvidenceContract(): Promise<void> {
       )
     );
 
-    const runOia = (): string => {
+    const runOia = (expectedStatus = 0): string => {
       const result = spawnSync(
         process.execPath,
         [path.join(fixtureRoot, "scripts", "oia-walk.mjs"), "--skip-network", "--allow"],
@@ -1008,7 +1008,7 @@ async function assertCoverageOiaEvidenceContract(): Promise<void> {
       const output = `${result.stdout ?? ""}${result.stderr ?? ""}`;
       expect(result.error, output).toBeUndefined();
       expect(result.signal, output).toBeNull();
-      expect(result.status, output).toBe(0);
+      expect(result.status, output).toBe(expectedStatus);
       return output;
     };
 
@@ -1107,9 +1107,18 @@ async function assertCoverageOiaEvidenceContract(): Promise<void> {
         }
       })
     );
-    const staleCommentOutput = runOia();
+    const malformedSource = path.join(fixtureRoot, "tests", "fixtures", "oia-malformed-source.ts");
+    await fs.writeFile(malformedSource, "const broken = ;\n");
+    const staleCommentOutput = runOia(1);
     expect(staleCommentOutput).toContain("[STALE-COVERAGE-COMMENT]");
     expect(staleCommentOutput).toContain("coverage-summary.json says 75.00%");
+    expect(staleCommentOutput).toContain("[VITEST-FOCUS-SCAN-ERROR] scripts/lib/oia-vitest-focus.mjs:1");
+    expect(staleCommentOutput).toMatch(
+      /focus-control parse failure in tests\/fixtures\/oia-malformed-source\.ts:1:\d+: TS\d+: .+/u
+    );
+    expect(staleCommentOutput).toContain(
+      "[oia-walk] Vitest focus-control/scanner findings are non-overridable; --allow cannot suppress them."
+    );
   } finally {
     await fs.rm(tempRoot, { recursive: true, force: true });
   }

@@ -16,6 +16,7 @@ const ONLY_CONTROL = ["on", "ly"].join("");
 const ALLOW_ONLY_CONTROL = ["allow", "Only"].join("");
 const SET_CONFIG_CONTROL = ["set", "Config"].join("");
 const TARGET_CONTROLS = new Set([ALLOW_ONLY_CONTROL, ONLY_CONTROL, SET_CONFIG_CONTROL]);
+const MAX_TARGET_CONTROL_LENGTH = Math.max(...[...TARGET_CONTROLS].map((control) => control.length));
 const GENERATED_TOP_LEVEL_DIRS = new Set([".git", "coverage", "dist", "node_modules"]);
 const FOCUS_CONTROL_HINT =
   "A reserved Vitest focus/runtime-config spelling appears on a guarded executable surface. Remove the control " +
@@ -50,36 +51,50 @@ function unwrapStaticExpression(expression) {
   return current;
 }
 
-function staticString(expression) {
+function staticString(expression, cache) {
   if (!expression) return undefined;
   const current = unwrapStaticExpression(expression);
-  if (ts.isStringLiteralLike(current)) return current.text;
+  if (cache.has(current)) return cache.get(current);
+  let value;
+  if (ts.isStringLiteralLike(current)) {
+    value = current.text.length <= MAX_TARGET_CONTROL_LENGTH ? current.text : undefined;
+  }
   if (ts.isBinaryExpression(current) && current.operatorToken.kind === ts.SyntaxKind.PlusToken) {
-    const left = staticString(current.left);
-    const right = staticString(current.right);
-    return left === undefined || right === undefined ? undefined : `${left}${right}`;
+    const left = staticString(current.left, cache);
+    if (left !== undefined) {
+      const right = staticString(current.right, cache);
+      if (right !== undefined && left.length + right.length <= MAX_TARGET_CONTROL_LENGTH) {
+        value = `${left}${right}`;
+      }
+    }
   }
   if (ts.isTemplateExpression(current)) {
-    let value = current.head.text;
-    for (const span of current.templateSpans) {
-      const part = staticString(span.expression);
-      if (part === undefined) return undefined;
-      value += part + span.literal.text;
+    value = current.head.text.length <= MAX_TARGET_CONTROL_LENGTH ? current.head.text : undefined;
+    if (value !== undefined) {
+      for (const span of current.templateSpans) {
+        const part = staticString(span.expression, cache);
+        const suffix = span.literal.text;
+        if (part === undefined || value.length + part.length + suffix.length > MAX_TARGET_CONTROL_LENGTH) {
+          value = undefined;
+          break;
+        }
+        value += part + suffix;
+      }
     }
-    return value;
   }
-  return undefined;
+  cache.set(current, value);
+  return value;
 }
 
-function staticPropertyName(name) {
+function staticPropertyName(name, cache) {
   if (!name) return undefined;
   if (ts.isIdentifier(name) || ts.isStringLiteralLike(name) || ts.isNumericLiteral(name)) return name.text;
-  return ts.isComputedPropertyName(name) ? staticString(name.expression) : undefined;
+  return ts.isComputedPropertyName(name) ? staticString(name.expression, cache) : undefined;
 }
 
-function bindingPropertyName(binding) {
+function bindingPropertyName(binding, cache) {
   if (!ts.isObjectBindingPattern(binding.parent)) return undefined;
-  if (binding.propertyName) return staticPropertyName(binding.propertyName);
+  if (binding.propertyName) return staticPropertyName(binding.propertyName, cache);
   return ts.isIdentifier(binding.name) ? binding.name.text : undefined;
 }
 
@@ -208,6 +223,7 @@ export function inspectStaticVitestFocusControls(source, filename) {
   const sourceFile = ts.createSourceFile(filename, source, ts.ScriptTarget.Latest, true, scriptKindFor(filename));
   if (sourceFile.isDeclarationFile) return [];
   const hits = new Map();
+  const staticStringCache = new WeakMap();
   const record = (name, node) => {
     if (!TARGET_CONTROLS.has(name)) return;
     if (!hits.has(name)) hits.set(name, findingFor(name, source, sourceFile, filename, node));
@@ -292,18 +308,18 @@ export function inspectStaticVitestFocusControls(source, filename) {
       (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.PlusToken) ||
       ts.isTemplateExpression(node)
     ) {
-      record(staticString(node), node);
+      record(staticString(node, staticStringCache), node);
     }
     if (ts.isPropertyAccessExpression(node)) {
       record(node.name.text, node.name);
     } else if (ts.isBindingElement(node)) {
-      record(bindingPropertyName(node), node);
+      record(bindingPropertyName(node, staticStringCache), node);
     } else if (ts.isObjectLiteralExpression(node)) {
       for (const property of node.properties) {
         if (ts.isSpreadAssignment(property)) continue;
         const name = ts.isShorthandPropertyAssignment(property)
           ? property.name.text
-          : staticPropertyName(property.name);
+          : staticPropertyName(property.name, staticStringCache);
         record(name, property);
       }
     }

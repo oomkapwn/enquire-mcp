@@ -1550,6 +1550,17 @@ describe("Class A invariant — no test imports value from registration boilerpl
       ["VITEST-FOCUS-ONLY", 1],
       ["VITEST-RUNTIME-CONFIG", 1]
     ]);
+    const memoizedStaticEvasion =
+      `const focusKey = ${Array.from({ length: 128 }, () => "\"\"").join(" + ")} + \"on\" + \"ly\";`;
+    expect(findingKindsAndLines(memoizedStaticEvasion)).toEqual([["VITEST-FOCUS-ONLY", 1]]);
+    expect(findingKindsAndLines('const inertKey = "0123456789" + "on" + "ly";')).toEqual([]);
+    expect(findingKindsAndLines('const mixedKey = "0123456789" + "only";')).toEqual([
+      ["VITEST-FOCUS-ONLY", 1]
+    ]);
+    expect(findingKindsAndLines('const inertTemplate = `0123456789${"on"}${"ly"}`;')).toEqual([]);
+    expect(findingKindsAndLines('const mixedTemplate = `0123456789${"only"}`;')).toEqual([
+      ["VITEST-FOCUS-ONLY", 1]
+    ]);
 
     const crossFileStaticKeyExports = [
       'export const focusKey = "only";',

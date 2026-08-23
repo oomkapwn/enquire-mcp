@@ -1892,9 +1892,11 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
   // said "8 OIA checks" while the canonical count had reached 10 (Check 9 rc.14,
   // Check 10 rc.20). Pin every surface that states the count to oia-walk.mjs's
   // self-declared canonical number, so adding a check forces a docs sync.
-  // Hosted Node 22/24 and V8 measured the expanded repo-copy + eight-child-OIA
-  // contract at 11.149s/7.682s/9.644s; full local Node 25 measured 15.332s.
-  // Keep its finite 25s budget local while ordinary tests retain the global 15s.
+  // Before Check 12c, hosted Node 22/24 and V8 measured this repo-copy plus
+  // eight-child-OIA contract at 11.149s/7.682s/9.644s; local Node 25 took 15.332s.
+  // The first full-census candidate 5f7c023 took 26.387s/26.970s on hosted Linux
+  // and exposed the superlinear literal folder. Retain 25s as the optimized-SHA
+  // acceptance ceiling while ordinary tests keep the global 15s budget.
   it("OIA check count is consistent across oia-walk.mjs, AGENTS.md, ROADMAP.md (rc.22)", async () => {
     await assertCoverageOiaEvidenceContract();
     const oia = await read("scripts/oia-walk.mjs");

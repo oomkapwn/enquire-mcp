@@ -5,7 +5,7 @@ import * as path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { load } from "js-yaml";
 import ts from "typescript";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import {
   firstPartyVitestFocusSourceFiles,
   inspectRepositoryVitestFocusControls,
@@ -1472,6 +1472,19 @@ function oiaMarkedCheckInventoryProblems(source: string): string[] {
 }
 
 describe("Class A invariant — no test imports value from registration boilerplate", () => {
+  beforeAll(async () => {
+    const focusSourceFiles = firstPartyVitestFocusSourceFiles(repoRoot);
+    expect(focusSourceFiles).toEqual(await independentExecutableSourceCensus(repoRoot));
+    expect(focusSourceFiles).toContain("site/site.js");
+    expect(focusSourceFiles).toContain("tests/fixtures/k1-invariant/good.ts");
+    expect(inspectRepositoryVitestFocusControls(repoRoot), "OIA focus-control source census must stay clean").toEqual(
+      []
+    );
+    const oiaSource = await fs.readFile(path.join(repoRoot, "scripts/oia-walk.mjs"), "utf8");
+    expect(oiaFocusWiringProblems(oiaSource)).toEqual([]);
+    expect(oiaMarkedCheckInventoryProblems(oiaSource)).toEqual([]);
+  }, 45_000);
+
   it("keeps test imports and the exact coverage-only isolation boundary closed", async () => {
     const testFiles = await collectTestFiles(path.join(repoRoot, "tests"));
     const violations: string[] = [];
@@ -1484,16 +1497,6 @@ describe("Class A invariant — no test imports value from registration boilerpl
       coverageIsolationProblems(await currentCoverageIsolationInputs()),
       "Coverage isolation must remain exact, prerequisite-bound and production-import-free"
     ).toEqual([]);
-    const focusSourceFiles = firstPartyVitestFocusSourceFiles(repoRoot);
-    expect(focusSourceFiles).toEqual(await independentExecutableSourceCensus(repoRoot));
-    expect(focusSourceFiles).toContain("site/site.js");
-    expect(focusSourceFiles).toContain("tests/fixtures/k1-invariant/good.ts");
-    expect(inspectRepositoryVitestFocusControls(repoRoot), "OIA focus-control source census must stay clean").toEqual(
-      []
-    );
-    const oiaSource = await fs.readFile(path.join(repoRoot, "scripts/oia-walk.mjs"), "utf8");
-    expect(oiaFocusWiringProblems(oiaSource)).toEqual([]);
-    expect(oiaMarkedCheckInventoryProblems(oiaSource)).toEqual([]);
   });
 
   it("NEGATIVE control: restricted imports and coverage isolation drift are rejected", async () => {

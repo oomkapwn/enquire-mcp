@@ -1902,6 +1902,176 @@ function directRegistrations(body: ts.SourceFile | ts.ArrowFunction | ts.Functio
   return [];
 }
 
+type FocusTimeoutVitestBinding = "beforeAll" | "describe";
+
+const FOCUS_TIMEOUT_FILENAME = "tests/no-internal-imports.test.ts";
+const FOCUS_TIMEOUT_SUITE_TITLE = "Class A invariant — no test imports value from registration boilerplate";
+const FOCUS_TIMEOUT_SUITE_PROBLEM =
+  `${FOCUS_TIMEOUT_FILENAME} must retain one direct top-level suite ${FOCUS_TIMEOUT_SUITE_TITLE}`;
+const FOCUS_TIMEOUT_REGISTRATION_PROBLEM =
+  `${FOCUS_TIMEOUT_FILENAME} must retain one first direct beforeAll hook with exact timeout 45_000`;
+
+/** Require the exact Vitest bindings that give the timeout registration authority. */
+function focusTimeoutVitestBindingProblems(sourceFile: ts.SourceFile): string[] {
+  const requiredBindings: readonly FocusTimeoutVitestBinding[] = ["beforeAll", "describe"];
+  const directCounts = new Map<FocusTimeoutVitestBinding, number>();
+  const competingCounts = new Map<FocusTimeoutVitestBinding, number>();
+  for (const binding of requiredBindings) {
+    directCounts.set(binding, 0);
+    competingCounts.set(binding, 0);
+  }
+
+  const recordCompetingBinding = (name: ts.BindingName): void => {
+    if (ts.isIdentifier(name)) {
+      const binding = requiredBindings.find((candidate) => candidate === name.text);
+      if (binding !== undefined) {
+        competingCounts.set(binding, (competingCounts.get(binding) ?? 0) + 1);
+      }
+      return;
+    }
+    for (const element of name.elements) {
+      if (ts.isBindingElement(element)) recordCompetingBinding(element.name);
+    }
+  };
+
+  const visitRuntimeBindings = (node: ts.Node): void => {
+    if (ts.isImportDeclaration(node)) {
+      const clause = node.importClause;
+      if (clause === undefined || clause.isTypeOnly) return;
+      if (clause.name !== undefined) recordCompetingBinding(clause.name);
+      const bindings = clause.namedBindings;
+      if (bindings === undefined) return;
+      if (ts.isNamespaceImport(bindings)) {
+        recordCompetingBinding(bindings.name);
+        return;
+      }
+      const isVitestImport = ts.isStringLiteral(node.moduleSpecifier) && node.moduleSpecifier.text === "vitest";
+      for (const element of bindings.elements) {
+        if (element.isTypeOnly) continue;
+        const binding = requiredBindings.find((candidate) => candidate === element.name.text);
+        if (isVitestImport && element.propertyName === undefined && binding !== undefined) {
+          directCounts.set(binding, (directCounts.get(binding) ?? 0) + 1);
+        } else {
+          recordCompetingBinding(element.name);
+        }
+      }
+      return;
+    }
+    if (ts.isImportEqualsDeclaration(node)) {
+      if (!node.isTypeOnly) recordCompetingBinding(node.name);
+      return;
+    }
+    if (ts.isVariableDeclaration(node) || ts.isParameter(node)) {
+      recordCompetingBinding(node.name);
+    } else if (
+      ts.isFunctionDeclaration(node) ||
+      ts.isFunctionExpression(node) ||
+      ts.isClassDeclaration(node) ||
+      ts.isClassExpression(node) ||
+      ts.isEnumDeclaration(node)
+    ) {
+      if (node.name !== undefined) recordCompetingBinding(node.name);
+    } else if (ts.isModuleDeclaration(node) && ts.isIdentifier(node.name)) {
+      recordCompetingBinding(node.name);
+    }
+    ts.forEachChild(node, visitRuntimeBindings);
+  };
+  visitRuntimeBindings(sourceFile);
+
+  return requiredBindings.flatMap((binding) => {
+    const direct = directCounts.get(binding) ?? 0;
+    const competing = competingCounts.get(binding) ?? 0;
+    return direct === 1 && competing === 0
+      ? []
+      : [
+          `${FOCUS_TIMEOUT_FILENAME} must bind ${binding} through one direct unaliased runtime vitest named import ` +
+            `and no competing runtime bindings; found direct ${direct}, competing ${competing}`
+        ];
+  });
+}
+
+/** Independently pin the reachable 45-second registration for the full-repository focus scan. */
+function focusTimeoutRegistrationProblems(source: string): string[] {
+  const sourceFile = ts.createSourceFile(
+    FOCUS_TIMEOUT_FILENAME,
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TS
+  );
+  const internalSourceFile = sourceFile as ts.SourceFile & {
+    readonly parseDiagnostics?: readonly ts.Diagnostic[];
+  };
+  const parseDiagnostic = internalSourceFile.parseDiagnostics?.[0];
+  if (parseDiagnostic !== undefined) {
+    return [`${FOCUS_TIMEOUT_FILENAME} must remain parseable (TS${parseDiagnostic.code})`];
+  }
+
+  const bindingProblems = focusTimeoutVitestBindingProblems(sourceFile);
+  const suites = sourceFile.statements.flatMap((statement) => {
+    if (!ts.isExpressionStatement(statement) || !ts.isCallExpression(statement.expression)) return [];
+    const call = statement.expression;
+    const title = call.arguments[0];
+    if (
+      !ts.isIdentifier(call.expression) ||
+      call.expression.text !== "describe" ||
+      title === undefined ||
+      !ts.isStringLiteral(title) ||
+      title.text !== FOCUS_TIMEOUT_SUITE_TITLE
+    ) {
+      return [];
+    }
+    return [call];
+  });
+  const suite = suites.length === 1 ? suites[0] : undefined;
+  const suiteCallback = suite?.arguments[1];
+  if (
+    suite === undefined ||
+    suite.questionDotToken !== undefined ||
+    suite.typeArguments !== undefined ||
+    suite.arguments.length !== 2 ||
+    suiteCallback === undefined ||
+    !ts.isArrowFunction(suiteCallback) ||
+    suiteCallback.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.AsyncKeyword) === true ||
+    suiteCallback.typeParameters !== undefined ||
+    suiteCallback.parameters.length !== 0 ||
+    !ts.isBlock(suiteCallback.body)
+  ) {
+    return [...bindingProblems, FOCUS_TIMEOUT_SUITE_PROBLEM];
+  }
+
+  const registrations = suiteCallback.body.statements.flatMap((statement, statementIndex) => {
+    if (!ts.isExpressionStatement(statement) || !ts.isCallExpression(statement.expression)) return [];
+    const call = statement.expression;
+    if (!ts.isIdentifier(call.expression) || call.expression.text !== "beforeAll") return [];
+    return [{ call, statementIndex }];
+  });
+  const registrationEntry = registrations.length === 1 ? registrations[0] : undefined;
+  const registration = registrationEntry?.call;
+  const callback = registration?.arguments[0];
+  const timeout = registration?.arguments[1];
+  const callbackModifiers = callback !== undefined && ts.isArrowFunction(callback) ? callback.modifiers : undefined;
+  const registrationIsExact =
+    registration !== undefined &&
+    registrationEntry?.statementIndex === 0 &&
+    registration.questionDotToken === undefined &&
+    registration.typeArguments === undefined &&
+    registration.arguments.length === 2 &&
+    callback !== undefined &&
+    ts.isArrowFunction(callback) &&
+    callbackModifiers?.length === 1 &&
+    callbackModifiers[0]?.kind === ts.SyntaxKind.AsyncKeyword &&
+    callback.typeParameters === undefined &&
+    callback.parameters.length === 0 &&
+    ts.isBlock(callback.body) &&
+    timeout !== undefined &&
+    ts.isNumericLiteral(timeout) &&
+    timeout.getText(sourceFile) === "45_000";
+  return registrationIsExact
+    ? bindingProblems
+    : [...bindingProblems, FOCUS_TIMEOUT_REGISTRATION_PROBLEM];
+}
+
 /** A negative `describe` owns assertions only through direct nested registrations. */
 function describeCallbackHasAssertion(callback: ts.ArrowFunction | ts.FunctionExpression): boolean {
   return directRegistrations(callback).some((call) => {
@@ -6521,6 +6691,77 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
   }, 720_000);
 
   it("every *-invariant.test.ts file has NEGATIVE control OR explicit exempt marker", async () => {
+    const focusTimeoutSource = await fs.readFile(path.join(repoRoot, FOCUS_TIMEOUT_FILENAME), "utf8");
+    const focusTimeoutProblems = focusTimeoutRegistrationProblems(focusTimeoutSource);
+    expect(focusTimeoutProblems, focusTimeoutProblems.join("\n")).toEqual([]);
+
+    const exactSource = [
+      'import { beforeAll, describe } from "vitest";',
+      `describe(${JSON.stringify(FOCUS_TIMEOUT_SUITE_TITLE)}, () => {`,
+      "  beforeAll(async () => {}, 45_000);",
+      "});"
+    ].join("\n");
+    expect(focusTimeoutRegistrationProblems(exactSource)).toEqual([]);
+
+    const inheritedTimeout = replaceExactly(exactSource, "45_000", "15_000");
+    const underBufferedTimeout = replaceExactly(exactSource, "45_000", "30_000");
+    const missingTimeout = replaceExactly(exactSource, ", 45_000);", ");");
+    const raisedTimeout = replaceExactly(exactSource, "45_000", "45_001");
+    const synchronousCallback = replaceExactly(exactSource, "beforeAll(async () =>", "beforeAll(() =>");
+    const registrationAfterReturn = replaceExactly(exactSource, "  beforeAll(", "  return;\n  beforeAll(");
+    const eagerPrefixArgument = replaceExactly(
+      exactSource,
+      "  beforeAll(",
+      '  (() => { throw new Error("abort collection"); })();\n  beforeAll('
+    );
+    for (const candidate of [
+      inheritedTimeout,
+      underBufferedTimeout,
+      missingTimeout,
+      raisedTimeout,
+      synchronousCallback,
+      registrationAfterReturn,
+      eagerPrefixArgument
+    ]) {
+      expect(focusTimeoutRegistrationProblems(candidate)).toContain(FOCUS_TIMEOUT_REGISTRATION_PROBLEM);
+    }
+
+    const aliasedBeforeAll = replaceExactly(
+      exactSource,
+      'import { beforeAll, describe } from "vitest";',
+      'import { beforeAll as authenticBeforeAll, describe } from "vitest";\nconst beforeAll = authenticBeforeAll;'
+    );
+    expect(focusTimeoutRegistrationProblems(aliasedBeforeAll)).toContain(
+      `${FOCUS_TIMEOUT_FILENAME} must bind beforeAll through one direct unaliased runtime vitest named import ` +
+        "and no competing runtime bindings; found direct 0, competing 1"
+    );
+
+    const shadowedBeforeAll = replaceExactly(
+      exactSource,
+      "\n});",
+      "\n  function beforeAll(..._args: unknown[]): void {}\n});"
+    );
+    expect(focusTimeoutRegistrationProblems(shadowedBeforeAll)).toContain(
+      `${FOCUS_TIMEOUT_FILENAME} must bind beforeAll through one direct unaliased runtime vitest named import ` +
+        "and no competing runtime bindings; found direct 1, competing 1"
+    );
+
+    const aliasedDescribe = replaceExactly(
+      exactSource,
+      'import { beforeAll, describe } from "vitest";',
+      'import { beforeAll, describe as authenticDescribe } from "vitest";\nconst describe = authenticDescribe;'
+    );
+    expect(focusTimeoutRegistrationProblems(aliasedDescribe)).toContain(
+      `${FOCUS_TIMEOUT_FILENAME} must bind describe through one direct unaliased runtime vitest named import ` +
+        "and no competing runtime bindings; found direct 0, competing 1"
+    );
+
+    const shadowedDescribe = `${exactSource}\nfunction describe(..._args: unknown[]): void {}`;
+    expect(focusTimeoutRegistrationProblems(shadowedDescribe)).toContain(
+      `${FOCUS_TIMEOUT_FILENAME} must bind describe through one direct unaliased runtime vitest named import ` +
+        "and no competing runtime bindings; found direct 1, competing 1"
+    );
+
     const completeSet = new Set<string>(EXPECTED_STRUCTURAL_FILES);
     const missingReleaseIntegrity = new Set(completeSet);
     missingReleaseIntegrity.delete("release-integrity.test.ts");

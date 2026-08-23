@@ -1906,10 +1906,8 @@ type FocusTimeoutVitestBinding = "beforeAll" | "describe";
 
 const FOCUS_TIMEOUT_FILENAME = "tests/no-internal-imports.test.ts";
 const FOCUS_TIMEOUT_SUITE_TITLE = "Class A invariant — no test imports value from registration boilerplate";
-const FOCUS_TIMEOUT_SUITE_PROBLEM =
-  `${FOCUS_TIMEOUT_FILENAME} must retain one direct top-level suite ${FOCUS_TIMEOUT_SUITE_TITLE}`;
-const FOCUS_TIMEOUT_REGISTRATION_PROBLEM =
-  `${FOCUS_TIMEOUT_FILENAME} must retain one first direct beforeAll hook with exact timeout 45_000`;
+const FOCUS_TIMEOUT_SUITE_PROBLEM = `${FOCUS_TIMEOUT_FILENAME} must retain one direct top-level suite ${FOCUS_TIMEOUT_SUITE_TITLE}`;
+const FOCUS_TIMEOUT_REGISTRATION_PROBLEM = `${FOCUS_TIMEOUT_FILENAME} must retain one first direct beforeAll hook with exact timeout 45_000`;
 
 /** Require the exact Vitest bindings that give the timeout registration authority. */
 function focusTimeoutVitestBindingProblems(sourceFile: ts.SourceFile): string[] {
@@ -2067,9 +2065,7 @@ function focusTimeoutRegistrationProblems(source: string): string[] {
     timeout !== undefined &&
     ts.isNumericLiteral(timeout) &&
     timeout.getText(sourceFile) === "45_000";
-  return registrationIsExact
-    ? bindingProblems
-    : [...bindingProblems, FOCUS_TIMEOUT_REGISTRATION_PROBLEM];
+  return registrationIsExact ? bindingProblems : [...bindingProblems, FOCUS_TIMEOUT_REGISTRATION_PROBLEM];
 }
 
 /** A negative `describe` owns assertions only through direct nested registrations. */

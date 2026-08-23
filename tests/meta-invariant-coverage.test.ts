@@ -224,7 +224,7 @@ const DOCS_CONSISTENCY_CONVERTED_RAW_MUTATIONS = [
 const EXPECTED_REPOSITORY_MUTATION_HELPER_CALLS = new Map<string, number>([
   // Seven pre-AH-3 controls plus the two exact shared-write delegate controls above.
   ["abs-path-leak-invariant.test.ts", 7 + ABS_PATH_SHARED_WRITE_DELEGATE_MUTATIONS.length],
-  ["docs-consistency.test.ts", 51],
+  ["docs-consistency.test.ts", 53],
   ["write-lifecycle-invariant.test.ts", 20]
 ]);
 const EXPECTED_REPOSITORY_MUTATION_HELPER_IMPORTS = new Map<string, readonly string[]>([

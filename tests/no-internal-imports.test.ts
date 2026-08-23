@@ -1554,9 +1554,9 @@ describe("Class A invariant — no test imports value from registration boilerpl
     expect(findingKindsAndLines(memoizedStaticEvasion)).toEqual([["VITEST-FOCUS-ONLY", 1]]);
     expect(findingKindsAndLines('const inertKey = "0123456789" + "on" + "ly";')).toEqual([]);
     expect(findingKindsAndLines('const mixedKey = "0123456789" + "only";')).toEqual([["VITEST-FOCUS-ONLY", 1]]);
-    const inertOverlengthTemplate = 'const inertTemplate = `0123456789$' + '{"on"}$' + '{"ly"}`;';
+    const inertOverlengthTemplate = "const inertTemplate = `0123456789$" + '{"on"}$' + '{"ly"}`;';
     expect(findingKindsAndLines(inertOverlengthTemplate)).toEqual([]);
-    const mixedOverlengthTemplate = 'const mixedTemplate = `0123456789$' + '{"only"}`;';
+    const mixedOverlengthTemplate = "const mixedTemplate = `0123456789$" + '{"only"}`;';
     expect(findingKindsAndLines(mixedOverlengthTemplate)).toEqual([["VITEST-FOCUS-ONLY", 1]]);
 
     const crossFileStaticKeyExports = [

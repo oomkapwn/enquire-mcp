@@ -994,7 +994,7 @@ async function assertCoverageOiaEvidenceContract(): Promise<void> {
       )
     );
 
-    const runOia = (): string => {
+    const runOia = (expectedStatus = 0): string => {
       const result = spawnSync(
         process.execPath,
         [path.join(fixtureRoot, "scripts", "oia-walk.mjs"), "--skip-network", "--allow"],
@@ -1008,12 +1008,15 @@ async function assertCoverageOiaEvidenceContract(): Promise<void> {
       const output = `${result.stdout ?? ""}${result.stderr ?? ""}`;
       expect(result.error, output).toBeUndefined();
       expect(result.signal, output).toBeNull();
-      expect(result.status, output).toBe(0);
+      expect(result.status, output).toBe(expectedStatus);
       return output;
     };
 
     const missingOutput = runOia();
     expect(missingOutput).toContain("[COVERAGE-SUMMARY-MISSING] coverage/coverage-summary.json:1");
+    expect(missingOutput, "OIA --allow must retain its explicit override receipt").toContain(
+      "[oia-walk] --allow flag set; exiting 0 despite findings."
+    );
 
     const coverageEntry = (pct: number) => ({
       lines: { total: 1, covered: 1, skipped: 0, pct },
@@ -1104,9 +1107,18 @@ async function assertCoverageOiaEvidenceContract(): Promise<void> {
         }
       })
     );
-    const staleCommentOutput = runOia();
+    const malformedSource = path.join(fixtureRoot, "tests", "fixtures", "oia-malformed-source.ts");
+    await fs.writeFile(malformedSource, "const broken = ;\n");
+    const staleCommentOutput = runOia(1);
     expect(staleCommentOutput).toContain("[STALE-COVERAGE-COMMENT]");
     expect(staleCommentOutput).toContain("coverage-summary.json says 75.00%");
+    expect(staleCommentOutput).toContain("[VITEST-FOCUS-SCAN-ERROR] scripts/lib/oia-vitest-focus.mjs:1");
+    expect(staleCommentOutput).toMatch(
+      /focus-control parse failure in tests\/fixtures\/oia-malformed-source\.ts:1:\d+: TS\d+: .+/u
+    );
+    expect(staleCommentOutput).toContain(
+      "[oia-walk] Vitest focus-control/scanner findings are non-overridable; --allow cannot suppress them."
+    );
   } finally {
     await fs.rm(tempRoot, { recursive: true, force: true });
   }
@@ -1889,9 +1901,13 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
   // said "8 OIA checks" while the canonical count had reached 10 (Check 9 rc.14,
   // Check 10 rc.20). Pin every surface that states the count to oia-walk.mjs's
   // self-declared canonical number, so adding a check forces a docs sync.
-  // Hosted Node 22/24 and V8 measured the expanded repo-copy + eight-child-OIA
-  // contract at 11.149s/7.682s/9.644s; full local Node 25 measured 15.332s.
-  // Keep its finite 25s budget local while ordinary tests retain the global 15s.
+  // Before Check 12c, hosted Node 22/24 and V8 measured this repo-copy plus
+  // eight-child-OIA contract at 11.149s/7.682s/9.644s; local Node 25 took 15.332s.
+  // The first full-census candidate 5f7c023 took 26.387s/26.970s on hosted Linux
+  // and exposed the superlinear literal folder. Optimized SHA 4bf9043 still hit
+  // 25s; provisional 45s SHA 43c60b7 completed in 38.279s/30.605s, exposing the
+  // full cold-start/parse cost. Keep a finite 60s local budget (56.7% over the
+  // hosted maximum); global 15s and every child OIA's 30s deadline stay intact.
   it("OIA check count is consistent across oia-walk.mjs, AGENTS.md, ROADMAP.md (rc.22)", async () => {
     await assertCoverageOiaEvidenceContract();
     const oia = await read("scripts/oia-walk.mjs");
@@ -1909,7 +1925,7 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
     const rm = /(\d+)\s+state-driven OIA drift checks/.exec(roadmap);
     expect(rm, "ROADMAP.md must state the OIA check count").not.toBeNull();
     expect(Number.parseInt(rm?.[1] ?? "0", 10), "ROADMAP.md OIA count must match oia-walk canonical").toBe(n);
-  }, 25_000);
+  }, 60_000);
 
   it("package.json description tool-count matches actual count", async () => {
     const pkgRaw = await read("package.json");
@@ -4099,7 +4115,15 @@ export type NegativeMissingSubpath = typeof import("@oomkapwn/enquire-mcp/fts5-m
         "[NPM-CI-ENTRYPOINT-IDENTITY] scripts/lib/entrypoint.mjs:"
       );
 
-      const allowedOia = spawnSync(
+      await fs.writeFile(
+        path.join(fixtureRoot, "tests", "focus-bypass.test.ts"),
+        [
+          'import { it, vi } from "vitest";',
+          "vi.setConfig({ allowOnly: true });",
+          'it.only("passing decoy", () => {});'
+        ].join("\n")
+      );
+      const nonOverridableOia = spawnSync(
         process.execPath,
         [path.join(fixtureRoot, "scripts/oia-walk.mjs"), "--skip-network", "--allow"],
         {
@@ -4109,13 +4133,16 @@ export type NegativeMissingSubpath = typeof import("@oomkapwn/enquire-mcp/fts5-m
           maxBuffer: 2 * 1024 * 1024
         }
       );
-      const allowedOutput = `${allowedOia.stdout ?? ""}${allowedOia.stderr ?? ""}`;
-      expect(allowedOia.error, allowedOutput).toBeUndefined();
-      expect(allowedOia.signal, allowedOutput).toBeNull();
-      expect(allowedOia.status, allowedOutput).toBe(0);
-      expect(oiaFindingReportProblems(allowedOia.stderr ?? "", 0), allowedOutput).toEqual([]);
-      expect(allowedOutput, "OIA --allow must retain its explicit override receipt").toContain(
-        "[oia-walk] --allow flag set; exiting 0 despite findings."
+      const nonOverridableOutput = `${nonOverridableOia.stdout ?? ""}${nonOverridableOia.stderr ?? ""}`;
+      expect(nonOverridableOia.error, nonOverridableOutput).toBeUndefined();
+      expect(nonOverridableOia.signal, nonOverridableOutput).toBeNull();
+      expect(nonOverridableOia.status, nonOverridableOutput).toBe(1);
+      expect(oiaFindingReportProblems(nonOverridableOia.stderr ?? "", 1), nonOverridableOutput).toEqual([]);
+      expect(nonOverridableOutput).toContain("[VITEST-FOCUS-ONLY] tests/focus-bypass.test.ts:");
+      expect(nonOverridableOutput).toContain("[VITEST-ALLOW-ONLY] tests/focus-bypass.test.ts:");
+      expect(nonOverridableOutput).toContain("[VITEST-RUNTIME-CONFIG] tests/focus-bypass.test.ts:");
+      expect(nonOverridableOutput).toContain(
+        "[oia-walk] Vitest focus-control/scanner findings are non-overridable; --allow cannot suppress them."
       );
     } finally {
       await fs.rm(tempRoot, { recursive: true, force: true });

@@ -132,7 +132,7 @@ node scripts/check-per-file-coverage.mjs  # enforce per-file floors
 # On dirty dev trees with stale summary, it false-positives. Always run
 # coverage IMMEDIATELY BEFORE OIA locally (rule since v3.8.0-rc.18 L-OIA-1):
 npm run test:coverage && npm run check:oia   # local dev order
-node scripts/oia-walk.mjs --allow   # always exit 0 (override for documented deferrals)
+node scripts/oia-walk.mjs --allow   # override documented deferrals; Vitest focus/scan findings still fail
 
 # Version consistency
 node scripts/check-version-consistency.mjs  # checks 8 surfaces

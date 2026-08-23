@@ -3893,10 +3893,7 @@ function npmCiPreinstallDigest(identity: string, steps: readonly YamlRecord[]): 
     if (matches.length !== 1) return step;
     return {
       ...step,
-      run: step.run.replace(
-        /^expected_manifest_sha=[0-9a-f]{64}$/mu,
-        "expected_manifest_sha=<normalized>"
-      )
+      run: step.run.replace(/^expected_manifest_sha=[0-9a-f]{64}$/mu, "expected_manifest_sha=<normalized>")
     };
   });
   return npmCiWorkflowValueDigest(carrierCount === 1 ? normalizedSteps : steps);
@@ -4032,8 +4029,7 @@ function npmCiWorkflowProblems(workflows: ReadonlyMap<string, string>): string[]
     const helper = helperSteps[0];
     const helperIndex = helper === undefined ? -1 : steps.indexOf(helper);
     const identity = `${filename}#${jobId}`;
-    const preinstallDigest =
-      helperIndex < 0 ? "" : npmCiPreinstallDigest(identity, steps.slice(0, helperIndex));
+    const preinstallDigest = helperIndex < 0 ? "" : npmCiPreinstallDigest(identity, steps.slice(0, helperIndex));
     const setupIndexes = steps
       .map((step, index) =>
         typeof step.uses === "string" && /^actions\/setup-node@[0-9a-f]{40}$/u.test(step.uses) ? index : -1
@@ -4919,20 +4915,13 @@ async function assertNpmCiWorkflowContract(): Promise<void> {
   expect(npmCiWorkflowProblems(workflowSources)).toEqual([]);
   const ciWorkflowSource = workflowSources.get("ci.yml");
   if (ciWorkflowSource === undefined) throw new Error("missing ci.yml workflow source");
-  const receiptCarrier = /^ {10}expected_manifest_sha=([0-9a-f]{64})$/mu.exec(
-    ciWorkflowSource
-  )?.[0];
+  const receiptCarrier = /^ {10}expected_manifest_sha=([0-9a-f]{64})$/mu.exec(ciWorkflowSource)?.[0];
   if (receiptCarrier === undefined) throw new Error("missing lint receipt carrier");
-  const replacementDigest = receiptCarrier.endsWith("f".repeat(64))
-    ? "e".repeat(64)
-    : "f".repeat(64);
+  const replacementDigest = receiptCarrier.endsWith("f".repeat(64)) ? "e".repeat(64) : "f".repeat(64);
   const rekeyedReceiptCarrier = `          expected_manifest_sha=${replacementDigest}`;
   expect(
     npmCiWorkflowProblems(
-      new Map(workflowSources).set(
-        "ci.yml",
-        mutateSourceOnce(ciWorkflowSource, receiptCarrier, rekeyedReceiptCarrier)
-      )
+      new Map(workflowSources).set("ci.yml", mutateSourceOnce(ciWorkflowSource, receiptCarrier, rekeyedReceiptCarrier))
     )
   ).toEqual([]);
   for (const invalidReceiptCarrier of [

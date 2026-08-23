@@ -88,7 +88,11 @@ const OIA_BOOTSTRAP_TAIL = [
   '    "VITEST-BOOTSTRAP-SCAN-ERROR",',
   '    "scripts/lib/oia-vitest-bootstrap.mjs",',
   "    1,",
-  "    error instanceof Error ? `" + literalDollarBraces("error.name") + ": " + literalDollarBraces("error.message") + "` : String(error),",
+  "    error instanceof Error ? `" +
+    literalDollarBraces("error.name") +
+    ": " +
+    literalDollarBraces("error.message") +
+    "` : String(error),",
   '    "The trusted Vitest bootstrap re-scan did not complete. Treat this as a blocking unverified state."',
   "  );",
   "}"
@@ -252,7 +256,9 @@ function expectedCiPrefix(manifestDigest) {
     "            done",
     '          done < "$manifest"',
     `          [[ ${literalDollarBraces("#paths[@]")} -eq 16 ]]`,
-    "          actual_path_sha=$(/usr/bin/printf '%s\\n' \"" + literalDollarBraces("paths[@]") + "\" | /usr/bin/sha256sum)",
+    "          actual_path_sha=$(/usr/bin/printf '%s\\n' \"" +
+      literalDollarBraces("paths[@]") +
+      '" | /usr/bin/sha256sum)',
     `          actual_path_sha=${literalDollarBraces("actual_path_sha%% *")}`,
     '          [[ "$actual_path_sha" == "$expected_path_sha" ]]',
     '          [[ -n "$expected_workflow_sha" ]]',
@@ -268,7 +274,11 @@ function expectedCiPrefix(manifestDigest) {
     '          [[ "$actual_workflow_sha" == "$expected_workflow_sha" ]]',
     "          shopt -s nullglob",
     "          configs=(vitest.config.* vitest.projects.* vitest.workspace.*)",
-    "          [[ " + literalDollarBraces("#configs[@]") + ' -eq 1 && "' + literalDollarBraces("configs[0]") + '" == vitest.config.ts ]]',
+    "          [[ " +
+      literalDollarBraces("#configs[@]") +
+      ' -eq 1 && "' +
+      literalDollarBraces("configs[0]") +
+      '" == vitest.config.ts ]]',
     '          for forbidden in ".n""pmrc" binding.gyp "n""pm-shrinkwrap.json" .env .env.local .env.test .env.test.local; do',
     '            [[ ! -e "$forbidden" && ! -L "$forbidden" ]]',
     "          done",

@@ -56,7 +56,7 @@ async function refreshVitestBootstrapFixtureReceipt(root: string): Promise<void>
   const manifestDigest = createHash("sha256").update(manifest).digest("hex");
   const ciPath = path.join(root, ".github", "workflows", "ci.yml");
   const ciSource = await fs.readFile(ciPath, "utf8");
-  const carriers = [...ciSource.matchAll(/^          expected_manifest_sha=([0-9a-f]{64})$/gmu)];
+  const carriers = [...ciSource.matchAll(/^ {10}expected_manifest_sha=([0-9a-f]{64})$/gmu)];
   const carrierDigest = carriers[0]?.[1];
   if (carriers.length !== 1 || carrierDigest === undefined) {
     throw new Error(`expected one bootstrap receipt carrier, found ${carriers.length}`);
@@ -4233,7 +4233,7 @@ export type NegativeMissingSubpath = typeof import("@oomkapwn/enquire-mcp/fts5-m
       const coveragePolicySource = await fs.readFile(coveragePolicyFixture, "utf8");
       await fs.writeFile(
         coveragePolicyFixture,
-        'process.stderr.write("BOOTSTRAP_SIDE_EFFECT_RAN\\n"); process.exit(0);\n' + coveragePolicySource
+        `process.stderr.write("BOOTSTRAP_SIDE_EFFECT_RAN\\n"); process.exit(0);\n${coveragePolicySource}`
       );
       const earlyBootstrapOia = spawnSync(
         process.execPath,

@@ -914,11 +914,12 @@ async function writeVitestBootstrapManifest(root: string): Promise<string> {
 async function updateVitestBootstrapCarrier(root: string, manifestDigest: string): Promise<void> {
   const ciPath = path.join(root, ".github", "workflows", "ci.yml");
   const ciSource = await fs.readFile(ciPath, "utf8");
-  const carriers = [...ciSource.matchAll(/^          expected_manifest_sha=([0-9a-f]{64})$/gmu)];
+  const carriers = [...ciSource.matchAll(/^ {10}expected_manifest_sha=([0-9a-f]{64})$/gmu)];
   if (carriers.length !== 1) throw new Error(`expected one bootstrap receipt carrier, found ${carriers.length}`);
   const carrier = carriers[0];
   const carrierDigest = carrier?.[1];
   if (carrierDigest === undefined) throw new Error("expected bootstrap receipt carrier digest");
+  if (carrierDigest === manifestDigest) return;
   await fs.writeFile(
     ciPath,
     replaceExactly(ciSource, `expected_manifest_sha=${carrierDigest}`, `expected_manifest_sha=${manifestDigest}`)
@@ -1932,7 +1933,7 @@ describe("Class A invariant — no test imports value from registration boilerpl
 
       const analyzerPath = path.join(bootstrapScratch, "scripts", "lib", "oia-vitest-bootstrap.mjs");
       const baselineAnalyzer = await fs.readFile(analyzerPath, "utf8");
-      await fs.writeFile(analyzerPath, 'import {\n  spawn\n} from "node:child_process";\n' + baselineAnalyzer);
+      await fs.writeFile(analyzerPath, `import {\n  spawn\n} from "node:child_process";\n${baselineAnalyzer}`);
       await refreshVitestBootstrapReceipt(bootstrapScratch);
       expect(inspectRepositoryVitestBootstrap(bootstrapScratch)).toContainEqual(
         expect.objectContaining({ kind: "VITEST-BOOTSTRAP-ANALYZER" })
@@ -1971,7 +1972,7 @@ describe("Class A invariant — no test imports value from registration boilerpl
 
       const ciPath = path.join(bootstrapScratch, ".github", "workflows", "ci.yml");
       const baselineCi = await fs.readFile(ciPath, "utf8");
-      const baselineCarrier = /^          expected_manifest_sha=([0-9a-f]{64})$/mu.exec(baselineCi)?.[0];
+      const baselineCarrier = /^ {10}expected_manifest_sha=([0-9a-f]{64})$/mu.exec(baselineCi)?.[0];
       if (baselineCarrier === undefined) throw new Error("expected baseline CI receipt carrier");
       const alternateCarrier = baselineCarrier.endsWith("f".repeat(64))
         ? `          expected_manifest_sha=${"e".repeat(64)}`

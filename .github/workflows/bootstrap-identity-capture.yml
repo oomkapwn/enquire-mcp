@@ -206,7 +206,7 @@ jobs:
           regenerated="$RUNNER_TEMP/release-mutation-transition.v3.json"
           node scripts/generate-release-mutation-transition.mjs --authority-current > "$regenerated"
           cmp tests/fixtures/release-mutation-transition.v3.json "$regenerated"
-          ./node_modules/.bin/biome check . --max-diagnostics=200
+          ./node_modules/.bin/biome check . --max-diagnostics=200 --error-on-warnings
           git diff --check
           ./node_modules/.bin/vitest run tests/no-internal-imports.test.ts --reporter=verbose
       - name: Upload exact reviewed transition

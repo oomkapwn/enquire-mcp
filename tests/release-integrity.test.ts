@@ -4919,7 +4919,7 @@ async function assertNpmCiWorkflowContract(): Promise<void> {
   expect(npmCiWorkflowProblems(workflowSources)).toEqual([]);
   const ciWorkflowSource = workflowSources.get("ci.yml");
   if (ciWorkflowSource === undefined) throw new Error("missing ci.yml workflow source");
-  const receiptCarrier = /^          expected_manifest_sha=([0-9a-f]{64})$/mu.exec(
+  const receiptCarrier = /^ {10}expected_manifest_sha=([0-9a-f]{64})$/mu.exec(
     ciWorkflowSource
   )?.[0];
   if (receiptCarrier === undefined) throw new Error("missing lint receipt carrier");

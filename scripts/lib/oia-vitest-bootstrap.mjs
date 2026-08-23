@@ -49,7 +49,7 @@ const BOOTSTRAP_HINT =
   "Restore the reviewed Vitest bootstrap bytes, regenerate the exact receipt, and update its single CI carrier in the same reviewed change.";
 
 function literalDollarBraces(body) {
-  return "$" + "{" + body + "}";
+  return `\${${body}}`;
 }
 
 const OIA_BOOTSTRAP_PROLOGUE = [
@@ -201,7 +201,7 @@ function expectedCiPrefix(manifestDigest) {
     "  contents: read",
     "",
     "concurrency:",
-    "  group: ci-" + literalDollarBraces("{ github.ref }"),
+    `  group: ci-${literalDollarBraces("{ github.ref }")}`,
     "  cancel-in-progress: true",
     "",
     "jobs:",
@@ -212,7 +212,7 @@ function expectedCiPrefix(manifestDigest) {
     "      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7",
     "      - name: Verify trusted Vitest bootstrap",
     "        shell: /bin/bash --noprofile --norc -p -e -o pipefail {0}",
-    "        working-directory: " + literalDollarBraces("{ github.workspace }"),
+    `        working-directory: ${literalDollarBraces("{ github.workspace }")}`,
     "        env:",
     '          BASH_ENV: ""',
     '          ENV: ""',
@@ -238,22 +238,22 @@ function expectedCiPrefix(manifestDigest) {
     "          expected_workflow_sha=",
     "          while IFS= read -r record; do",
     '            [[ "$record" =~ ^[0-9a-f]{64}\\ \\ [^[:space:]].*$ ]]',
-    "            path=" + literalDollarBraces("record:66"),
+    `            path=${literalDollarBraces("record:66")}`,
     '            paths+=("$path")',
     '            if [[ "$path" == "$workflow" ]]; then',
-    "              expected_workflow_sha=" + literalDollarBraces("record:0:64"),
+    `              expected_workflow_sha=${literalDollarBraces("record:0:64")}`,
     "            fi",
     '            [[ -f "$path" && ! -L "$path" ]]',
-    "            parent=" + literalDollarBraces("path%/*"),
+    `            parent=${literalDollarBraces("path%/*")}`,
     '            while [[ "$parent" != "$path" ]]; do',
     '              [[ -d "$parent" && ! -L "$parent" ]]',
     "              path=$parent",
-    "              parent=" + literalDollarBraces("path%/*"),
+    `              parent=${literalDollarBraces("path%/*")}`,
     "            done",
     '          done < "$manifest"',
-    "          [[ " + literalDollarBraces("#paths[@]") + " -eq 16 ]]",
+    `          [[ ${literalDollarBraces("#paths[@]")} -eq 16 ]]`,
     "          actual_path_sha=$(/usr/bin/printf '%s\\n' \"" + literalDollarBraces("paths[@]") + "\" | /usr/bin/sha256sum)",
-    "          actual_path_sha=" + literalDollarBraces("actual_path_sha%% *"),
+    `          actual_path_sha=${literalDollarBraces("actual_path_sha%% *")}`,
     '          [[ "$actual_path_sha" == "$expected_path_sha" ]]',
     '          [[ -n "$expected_workflow_sha" ]]',
     "          carrier_count=$(/usr/bin/grep -Ec '^          expected_manifest_sha=[0-9a-f]{64}$' \"$workflow\")",
@@ -264,7 +264,7 @@ function expectedCiPrefix(manifestDigest) {
     '              "$workflow" |',
     "              /usr/bin/sha256sum",
     "          )",
-    "          actual_workflow_sha=" + literalDollarBraces("actual_workflow_sha%% *"),
+    `          actual_workflow_sha=${literalDollarBraces("actual_workflow_sha%% *")}`,
     '          [[ "$actual_workflow_sha" == "$expected_workflow_sha" ]]',
     "          shopt -s nullglob",
     "          configs=(vitest.config.* vitest.projects.* vitest.workspace.*)",

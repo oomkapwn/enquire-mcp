@@ -1808,9 +1808,9 @@ describe("Class A invariant — no test imports value from registration boilerpl
     expect(findingKindsAndLines(inertFocusText)).toEqual([]);
     expect(findingKindsAndLines("export const only: true;", "types/focus-controls.d.ts")).toEqual([]);
     expect(inspectStaticVitestFocusControls("const broken = ;", "types/malformed.d.ts")).toEqual([]);
-    expect(() =>
-      inspectStaticVitestFocusControls("const broken = ;", "tests/fixtures/malformed-source.ts")
-    ).toThrow(/focus-control parse failure in tests\/fixtures\/malformed-source\.ts:1:\d+: TS\d+: .+/u);
+    expect(() => inspectStaticVitestFocusControls("const broken = ;", "tests/fixtures/malformed-source.ts")).toThrow(
+      /focus-control parse failure in tests\/fixtures\/malformed-source\.ts:1:\d+: TS\d+: .+/u
+    );
     expect(findingKindsAndLines('void import("only"); require("setConfig");')).toEqual([
       ["VITEST-FOCUS-ONLY", 1],
       ["VITEST-RUNTIME-CONFIG", 1]

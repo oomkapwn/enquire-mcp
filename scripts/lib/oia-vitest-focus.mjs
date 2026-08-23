@@ -100,9 +100,7 @@ function isErasedAbstractMember(node) {
 function isErasedSignature(node) {
   return (
     ts.isIndexSignatureDeclaration(node) ||
-    ((ts.isFunctionDeclaration(node) ||
-      ts.isMethodDeclaration(node) ||
-      ts.isConstructorDeclaration(node)) &&
+    ((ts.isFunctionDeclaration(node) || ts.isMethodDeclaration(node) || ts.isConstructorDeclaration(node)) &&
       node.body === undefined)
   );
 }
@@ -207,13 +205,7 @@ function findingFor(name, source, sourceFile, filename, node) {
  * @returns {Array<{evidence: string, file: string, hint: string, kind: string, line: number}>} Findings.
  */
 export function inspectStaticVitestFocusControls(source, filename) {
-  const sourceFile = ts.createSourceFile(
-    filename,
-    source,
-    ts.ScriptTarget.Latest,
-    true,
-    scriptKindFor(filename)
-  );
+  const sourceFile = ts.createSourceFile(filename, source, ts.ScriptTarget.Latest, true, scriptKindFor(filename));
   if (sourceFile.isDeclarationFile) return [];
   const hits = new Map();
   const record = (name, node) => {

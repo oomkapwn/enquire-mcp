@@ -75,16 +75,7 @@ import { replaceExactly } from "./helpers/exact-source-mutation.js";
 // OIA starts.
 
 const repoRoot = path.resolve(__dirname, "..");
-const EXECUTABLE_SOURCE_EXTENSIONS = new Set([
-  ".cjs",
-  ".cts",
-  ".js",
-  ".jsx",
-  ".mjs",
-  ".mts",
-  ".ts",
-  ".tsx"
-]);
+const EXECUTABLE_SOURCE_EXTENSIONS = new Set([".cjs", ".cts", ".js", ".jsx", ".mjs", ".mts", ".ts", ".tsx"]);
 const GENERATED_EXECUTABLE_ROOTS = new Set([".git", "coverage", "dist", "node_modules"]);
 const RESTRICTED_MODULES = ["cli", "server", "tool-registry", "prompts"];
 const COVERAGE_ONLY_TEST_EXCLUSIONS = [
@@ -140,10 +131,7 @@ const EXPECTED_COVERAGE_EXTERNAL_MODULES = new Set([
   "vitest"
 ]);
 
-async function independentExecutableSourceCensus(
-  root: string,
-  relativeDirectory = ""
-): Promise<string[]> {
+async function independentExecutableSourceCensus(root: string, relativeDirectory = ""): Promise<string[]> {
   const absoluteDirectory = relativeDirectory === "" ? root : path.join(root, relativeDirectory);
   const files: string[] = [];
   for (const entry of await fs.readdir(absoluteDirectory, { withFileTypes: true })) {
@@ -1267,9 +1255,7 @@ function oiaFocusWiringProblems(source: string): string[] {
   const problems: string[] = [];
   const bindingNameContains = (name: ts.BindingName, target: string): boolean => {
     if (ts.isIdentifier(name)) return name.text === target;
-    return name.elements.some(
-      (element) => ts.isBindingElement(element) && bindingNameContains(element.name, target)
-    );
+    return name.elements.some((element) => ts.isBindingElement(element) && bindingNameContains(element.name, target));
   };
   const isExactImport = (node: ts.Node): node is ts.ImportDeclaration => {
     if (
@@ -1475,7 +1461,7 @@ function oiaMarkedCheckInventoryProblems(source: string): string[] {
   const problems: string[] = [];
   const declarations = [...source.matchAll(/so (\d+) explicitly/gmu)].map((match) => Number(match[1]));
   const markerIds = [...source.matchAll(/^\/\/ ─── Check (\d+[a-z]?):/gmu)].map((match) => match[1]);
-  const proseIds = [...source.matchAll(/^\/\/   (\d+[a-z]?)\.\s/gmu)].map((match) => match[1]);
+  const proseIds = [...source.matchAll(/^\/\/ {3}(\d+[a-z]?)\.\s/gmu)].map((match) => match[1]);
   if (declarations.length !== 1 || declarations[0] !== markerIds.length) {
     problems.push("OIA declared marked-check count must equal the executable marker census");
   }
@@ -1532,17 +1518,13 @@ describe("Class A invariant — no test imports value from registration boilerpl
       ["VITEST-RUNTIME-CONFIG", 2],
       ["VITEST-FOCUS-ONLY", 3]
     ]);
-    expect(findingKindsAndLines('it.only("passing decoy", () => {});')).toEqual([
-      ["VITEST-FOCUS-ONLY", 1]
-    ]);
+    expect(findingKindsAndLines('it.only("passing decoy", () => {});')).toEqual([["VITEST-FOCUS-ONLY", 1]]);
     expect(findingKindsAndLines("vi.setConfig({ allowOnly: true });")).toEqual([
       ["VITEST-ALLOW-ONLY", 1],
       ["VITEST-RUNTIME-CONFIG", 1]
     ]);
     expect(
-      findingKindsAndLines(
-        'registrar?.["only"]("decoy", () => {}); runtime?.["setConfig"]({ ["allowOnly"]: true });'
-      )
+      findingKindsAndLines('registrar?.["only"]("decoy", () => {}); runtime?.["setConfig"]({ ["allowOnly"]: true });')
     ).toEqual([
       ["VITEST-ALLOW-ONLY", 1],
       ["VITEST-FOCUS-ONLY", 1],
@@ -1550,9 +1532,9 @@ describe("Class A invariant — no test imports value from registration boilerpl
     ]);
 
     const literalTemplateEvasion = [
-      'const focusKey = `on${"ly"}`;',
-      'const configKey = `set${"Config"}`;',
-      'const optionKey = `allow${"Only"}`;',
+      'const focusKey = `on$' + '{"ly"}`;',
+      'const configKey = `set$' + '{"Config"}`;',
+      'const optionKey = `allow$' + '{"Only"}`;',
       'registrar?.[focusKey]("passing decoy", () => {});',
       "runtime[configKey]({ [optionKey]: true });"
     ].join("\n");
@@ -1681,17 +1663,16 @@ describe("Class A invariant — no test imports value from registration boilerpl
       ["VITEST-FOCUS-ONLY", 2]
     ]);
     expect(findingKindsAndLines("const view = <Key> only </Key>; void view;", "tests/inert-text.tsx")).toEqual([]);
-    expect(
-      findingKindsAndLines("const view = <Key> only\n</Key>; void view;", "tests/inert-leading-text.tsx")
-    ).toEqual([]);
+    expect(findingKindsAndLines("const view = <Key> only\n</Key>; void view;", "tests/inert-leading-text.tsx")).toEqual(
+      []
+    );
     expect(
       findingKindsAndLines("const view = <Key>\nonly </Key>; void view;", "tests/inert-trailing-text.tsx")
     ).toEqual([]);
     const inertJsxEntities =
-      'const view = <Keys><Key>&nbsp;only</Key><Key>&#X6f;nly</Key><Key>&unknown;only</Key></Keys>;';
+      "const view = <Keys><Key>&nbsp;only</Key><Key>&#X6f;nly</Key><Key>&unknown;only</Key></Keys>;";
     expect(findingKindsAndLines(inertJsxEntities, "tests/inert-entities.tsx")).toEqual([]);
-    const inertJsxAttributeEntities =
-      'const view = <Keys first="&#32;only" second="&nbsp;only" third="&#X6f;nly" />;';
+    const inertJsxAttributeEntities = 'const view = <Keys first="&#32;only" second="&nbsp;only" third="&#X6f;nly" />;';
     expect(findingKindsAndLines(inertJsxAttributeEntities, "tests/inert-attribute-entities.tsx")).toEqual([]);
     const decoratedDeclareFieldBypass =
       'class FocusDecoy { @observe(vi.setConfig({ allowOnly: true }), it.only("decoy", () => {})) declare field: string; }';
@@ -1785,9 +1766,7 @@ describe("Class A invariant — no test imports value from registration boilerpl
       ["VITEST-RUNTIME-CONFIG", 4],
       ["VITEST-FOCUS-ONLY", 5]
     ]);
-    expect(findingKindsAndLines('it("passing decoy", { only: true }, () => {});')).toEqual([
-      ["VITEST-FOCUS-ONLY", 1]
-    ]);
+    expect(findingKindsAndLines('it("passing decoy", { only: true }, () => {});')).toEqual([["VITEST-FOCUS-ONLY", 1]]);
     expect(findingKindsAndLines('describe("passing decoy", { ["only"]: true }, () => {});')).toEqual([
       ["VITEST-FOCUS-ONLY", 1]
     ]);

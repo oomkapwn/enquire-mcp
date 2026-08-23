@@ -684,6 +684,87 @@ function vitestCoverageProblems(source: string, configFiles: readonly string[]):
   return problems;
 }
 
+type RegistrationVitestBinding = "beforeAll" | "describe" | "it";
+
+function registrationVitestBindingProblems(
+  sourceFile: ts.SourceFile,
+  filename: string,
+  requiredBindings: readonly RegistrationVitestBinding[]
+): string[] {
+  // A matching identifier is not registration authority: an alias plus a local
+  // wrapper can keep the reviewed literal while changing or suppressing the test.
+  const directCounts = new Map<RegistrationVitestBinding, number>();
+  const otherCounts = new Map<RegistrationVitestBinding, number>();
+  for (const binding of requiredBindings) {
+    directCounts.set(binding, 0);
+    otherCounts.set(binding, 0);
+  }
+  const recordOtherBinding = (name: ts.BindingName): void => {
+    if (ts.isIdentifier(name)) {
+      const binding = requiredBindings.find((candidate) => candidate === name.text);
+      if (binding !== undefined) {
+        otherCounts.set(binding, (otherCounts.get(binding) ?? 0) + 1);
+      }
+      return;
+    }
+    for (const element of name.elements) {
+      if (ts.isBindingElement(element)) recordOtherBinding(element.name);
+    }
+  };
+  const visitRuntimeBindings = (node: ts.Node): void => {
+    if (ts.isImportDeclaration(node)) {
+      const moduleName = stringLiteralValue(node.moduleSpecifier);
+      const clause = node.importClause;
+      if (clause === undefined || clause.isTypeOnly) return;
+      if (clause.name !== undefined) recordOtherBinding(clause.name);
+      const bindings = clause.namedBindings;
+      if (bindings === undefined) return;
+      if (ts.isNamespaceImport(bindings)) {
+        recordOtherBinding(bindings.name);
+        return;
+      }
+      for (const element of bindings.elements) {
+        if (element.isTypeOnly) continue;
+        const binding = requiredBindings.find((candidate) => candidate === element.name.text);
+        if (moduleName === "vitest" && element.propertyName === undefined && binding !== undefined) {
+          directCounts.set(binding, (directCounts.get(binding) ?? 0) + 1);
+        } else {
+          recordOtherBinding(element.name);
+        }
+      }
+      return;
+    }
+    if (ts.isImportEqualsDeclaration(node)) {
+      if (!node.isTypeOnly) recordOtherBinding(node.name);
+      return;
+    }
+    if (ts.isVariableDeclaration(node) || ts.isParameter(node)) {
+      recordOtherBinding(node.name);
+    } else if (
+      ts.isFunctionDeclaration(node) ||
+      ts.isFunctionExpression(node) ||
+      ts.isClassDeclaration(node) ||
+      ts.isClassExpression(node) ||
+      ts.isEnumDeclaration(node)
+    ) {
+      if (node.name !== undefined) recordOtherBinding(node.name);
+    } else if (ts.isModuleDeclaration(node) && ts.isIdentifier(node.name)) {
+      recordOtherBinding(node.name);
+    }
+    ts.forEachChild(node, visitRuntimeBindings);
+  };
+  visitRuntimeBindings(sourceFile);
+  return requiredBindings.flatMap((binding) => {
+    const direct = directCounts.get(binding) ?? 0;
+    const other = otherCounts.get(binding) ?? 0;
+    return direct === 1 && other === 0
+      ? []
+      : [
+          `${filename} must bind ${binding} through one direct unaliased vitest named import and no other runtime bindings; found direct ${direct}, other ${other}`
+        ];
+  });
+}
+
 function registrationTimeoutProblems(
   source: string,
   filename: string,
@@ -693,6 +774,7 @@ function registrationTimeoutProblems(
   expectedTimeout: string
 ): string[] {
   const sourceFile = ts.createSourceFile(filename, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const bindingProblems = registrationVitestBindingProblems(sourceFile, filename, ["describe", callee]);
   const suites = sourceFile.statements.flatMap((statement) => {
     if (!ts.isExpressionStatement(statement) || !ts.isCallExpression(statement.expression)) return [];
     const call = statement.expression;
@@ -715,7 +797,7 @@ function registrationTimeoutProblems(
     suiteCallback.parameters.length !== 0 ||
     !ts.isBlock(suiteCallback.body)
   ) {
-    return [`${filename} must retain one direct top-level suite ${suiteTitle}`];
+    return [...bindingProblems, `${filename} must retain one direct top-level suite ${suiteTitle}`];
   }
   const registrations = suiteCallback.body.statements.flatMap((statement, statementIndex) => {
     if (!ts.isExpressionStatement(statement) || !ts.isCallExpression(statement.expression)) return [];
@@ -766,9 +848,10 @@ function registrationTimeoutProblems(
     timeout !== undefined
       ? [timeout.getText(sourceFile)]
       : ["<invalid-registration>"];
-  return isDeepStrictEqual(timeouts, [expectedTimeout])
+  const timeoutProblems = isDeepStrictEqual(timeouts, [expectedTimeout])
     ? []
     : [`${filename} must retain one direct ${callee} registration with timeout ${expectedTimeout}`];
+  return [...bindingProblems, ...timeoutProblems];
 }
 
 function importClauseHasRuntimeValue(clause: ts.ImportClause | undefined): boolean {
@@ -1557,11 +1640,22 @@ describe("Class A invariant — no test imports value from registration boilerpl
       );
     const metaTimeoutDiagnostic =
       "tests/meta-invariant-coverage.test.ts must retain one direct beforeAll registration with timeout 720_000";
+    const metaBindingDiagnostic =
+      "tests/meta-invariant-coverage.test.ts must bind beforeAll through one direct unaliased vitest named import and no other runtime bindings; found direct 0, other 1";
+    const aliasedMetaCallee = replaceExactly(
+      metaSource,
+      'import { beforeAll, describe, expect, it } from "vitest";',
+      'import { beforeAll as authenticBeforeAll, describe, expect, it } from "vitest";\n' +
+        "const beforeAll = (callback: () => void, _timeout: number): void => {\n" +
+        "  authenticBeforeAll(callback, 86_400_000);\n" +
+        "};"
+    );
     const shadowedMetaRegistration =
       'describe("META-invariant: exact structural census + NEGATIVE control coverage", () => {\n' +
       "  beforeAll(() => {}, 720_000);\n" +
       "  function beforeAll(..._args: unknown[]): void {}\n" +
       "});";
+    expect(metaTimeoutProblems(aliasedMetaCallee)).toContain(metaBindingDiagnostic);
     expect(metaTimeoutProblems(syntheticRaisedMetaRegistration)).toContain(metaTimeoutDiagnostic);
     expect(metaTimeoutProblems(shadowedMetaRegistration)).toContain(metaTimeoutDiagnostic);
     expect(metaTimeoutProblems(staleMetaTimeout)).toContain(metaTimeoutDiagnostic);
@@ -1671,6 +1765,44 @@ describe("Class A invariant — no test imports value from registration boilerpl
       );
     const docsTimeoutDiagnostic =
       "tests/docs-consistency.test.ts must retain one direct it registration with timeout 25_000";
+    const docsItBindingDiagnostic =
+      "tests/docs-consistency.test.ts must bind it through one direct unaliased vitest named import and no other runtime bindings; found direct 0, other 1";
+    const docsDescribeBindingDiagnostic =
+      "tests/docs-consistency.test.ts must bind describe through one direct unaliased vitest named import and no other runtime bindings; found direct 0, other 1";
+    const exactDocsRegistration =
+      'import { describe, it } from "vitest";\n' +
+      'describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () => {\n' +
+      '  it("OIA check count is consistent across oia-walk.mjs, AGENTS.md, ROADMAP.md (rc.22)", () => {}, 25_000);\n' +
+      "});";
+    expect(docsTimeoutProblems(exactDocsRegistration)).toEqual([]);
+    const aliasedDocsCallee = replaceExactly(
+      current.docsConsistencySource,
+      'import { describe, expect, it } from "vitest";',
+      'import { describe, expect, it as authenticIt } from "vitest";\n' +
+        "const it = (name: string, callback: () => void, _timeout: number): void => {\n" +
+        "  authenticIt(name, callback, 86_400_000);\n" +
+        "};"
+    );
+    const aliasedDocsSuite = replaceExactly(
+      current.docsConsistencySource,
+      'import { describe, expect, it } from "vitest";',
+      'import { describe as authenticDescribe, expect, it } from "vitest";\n' +
+        "void authenticDescribe;\n" +
+        "const describe = (_name: string, _callback: () => void): void => undefined;"
+    );
+    const suiteLocalOptionalVarShadow =
+      'import { describe, it } from "vitest";\n' +
+      "const authenticIt = it;\n" +
+      'describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () => {\n' +
+      '  it?.("OIA check count is consistent across oia-walk.mjs, AGENTS.md, ROADMAP.md (rc.22)", () => {}, 25_000);\n' +
+      "  var it = authenticIt;\n" +
+      '  it("sibling remains registered", () => {}, 25_000);\n' +
+      "});";
+    expect(docsTimeoutProblems(aliasedDocsCallee)).toContain(docsItBindingDiagnostic);
+    expect(docsTimeoutProblems(aliasedDocsSuite)).toContain(docsDescribeBindingDiagnostic);
+    expect(docsTimeoutProblems(suiteLocalOptionalVarShadow)).toContain(
+      docsItBindingDiagnostic.replace("found direct 0, other 1", "found direct 1, other 1")
+    );
     const docsTimeoutNeedle = '  }, 25_000);\n\n  it("package.json description tool-count matches actual count"';
     const staleDocsTimeout = replaceExactly(
       current.docsConsistencySource,

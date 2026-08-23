@@ -808,31 +808,40 @@ function registrationTimeoutProblems(
   });
   const registrationEntry = registrations.length === 1 ? registrations[0] : undefined;
   const registration = registrationEntry?.call;
-  const safeRegistrationCallees = new Set([
-    "afterAll",
-    "afterEach",
-    "beforeAll",
-    "beforeEach",
-    "describe",
-    "it",
-    "test"
-  ]);
-  const shadowsRegistrationCallee = suiteCallback.body.statements.some(
-    (statement) =>
-      ts.isFunctionDeclaration(statement) &&
-      statement.name !== undefined &&
-      safeRegistrationCallees.has(statement.name.text)
+  const shadowsTargetCallee = suiteCallback.body.statements.some(
+    (statement) => ts.isFunctionDeclaration(statement) && statement.name !== undefined && statement.name.text === callee
   );
+  const inertPrefixRegistration = (statement: ts.Statement): boolean => {
+    if (ts.isFunctionDeclaration(statement)) return true;
+    if (!ts.isExpressionStatement(statement) || !ts.isCallExpression(statement.expression)) return false;
+    const call = statement.expression;
+    if (
+      !ts.isIdentifier(call.expression) ||
+      call.expression.text !== callee ||
+      call.questionDotToken !== undefined ||
+      call.typeArguments !== undefined
+    ) {
+      return false;
+    }
+    const callbackIndex = callee === "beforeAll" ? 0 : 1;
+    const timeoutIndex = callee === "beforeAll" ? 1 : 2;
+    const callback = call.arguments[callbackIndex];
+    const timeout = call.arguments[timeoutIndex];
+    const minimumArgumentCount = callee === "beforeAll" ? 1 : 2;
+    return (
+      (call.arguments.length === minimumArgumentCount || call.arguments.length === minimumArgumentCount + 1) &&
+      (callee === "beforeAll" || stringLiteralValue(call.arguments[0]) !== undefined) &&
+      callback !== undefined &&
+      ts.isArrowFunction(callback) &&
+      callback.parameters.length === 0 &&
+      ts.isBlock(callback.body) &&
+      (timeout === undefined || ts.isNumericLiteral(timeout))
+    );
+  };
   const registrationIsReachable =
     registrationEntry !== undefined &&
-    !shadowsRegistrationCallee &&
-    suiteCallback.body.statements.slice(0, registrationEntry.statementIndex + 1).every((statement) => {
-      if (ts.isFunctionDeclaration(statement)) return true;
-      if (!ts.isExpressionStatement(statement) || !ts.isCallExpression(statement.expression)) return false;
-      return ts.isIdentifier(statement.expression.expression)
-        ? safeRegistrationCallees.has(statement.expression.expression.text)
-        : false;
-    });
+    !shadowsTargetCallee &&
+    suiteCallback.body.statements.slice(0, registrationEntry.statementIndex).every(inertPrefixRegistration);
   const callbackIndex = title === undefined ? 0 : 1;
   const timeoutIndex = title === undefined ? 1 : 2;
   const callback = registration?.arguments[callbackIndex];
@@ -1772,6 +1781,7 @@ describe("Class A invariant — no test imports value from registration boilerpl
     const exactDocsRegistration =
       'import { describe, it } from "vitest";\n' +
       'describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () => {\n' +
+      '  it("sibling registration remains inert", () => {});\n' +
       '  it("OIA check count is consistent across oia-walk.mjs, AGENTS.md, ROADMAP.md (rc.22)", () => {}, 25_000);\n' +
       "});";
     expect(docsTimeoutProblems(exactDocsRegistration)).toEqual([]);
@@ -1798,11 +1808,26 @@ describe("Class A invariant — no test imports value from registration boilerpl
       "  var it = authenticIt;\n" +
       '  it("sibling remains registered", () => {}, 25_000);\n' +
       "});";
+    const localPrefixRegistrar =
+      'import { describe, it } from "vitest";\n' +
+      'const beforeEach = (): void => { throw new Error("abort collection"); };\n' +
+      'describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () => {\n' +
+      "  beforeEach();\n" +
+      '  it("OIA check count is consistent across oia-walk.mjs, AGENTS.md, ROADMAP.md (rc.22)", () => {}, 25_000);\n' +
+      "});";
+    const eagerPrefixArgument =
+      'import { describe, it } from "vitest";\n' +
+      'describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () => {\n' +
+      '  it("sibling", (() => { throw new Error("abort collection"); })());\n' +
+      '  it("OIA check count is consistent across oia-walk.mjs, AGENTS.md, ROADMAP.md (rc.22)", () => {}, 25_000);\n' +
+      "});";
     expect(docsTimeoutProblems(aliasedDocsCallee)).toContain(docsItBindingDiagnostic);
     expect(docsTimeoutProblems(aliasedDocsSuite)).toContain(docsDescribeBindingDiagnostic);
     expect(docsTimeoutProblems(suiteLocalOptionalVarShadow)).toContain(
       docsItBindingDiagnostic.replace("found direct 0, other 1", "found direct 1, other 1")
     );
+    expect(docsTimeoutProblems(localPrefixRegistrar)).toContain(docsTimeoutDiagnostic);
+    expect(docsTimeoutProblems(eagerPrefixArgument)).toContain(docsTimeoutDiagnostic);
     const docsTimeoutNeedle = '  }, 25_000);\n\n  it("package.json description tool-count matches actual count"';
     const staleDocsTimeout = replaceExactly(
       current.docsConsistencySource,

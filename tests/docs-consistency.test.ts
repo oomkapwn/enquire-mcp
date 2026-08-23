@@ -1117,7 +1117,7 @@ async function assertCoverageOiaEvidenceContract(): Promise<void> {
       /focus-control parse failure in tests\/fixtures\/oia-malformed-source\.ts:1:\d+: TS\d+: .+/u
     );
     expect(staleCommentOutput).toContain(
-      "[oia-walk] Vitest focus-control/scanner findings are non-overridable; --allow cannot suppress them."
+      "[oia-walk] Vitest execution-control/scanner findings are non-overridable; --allow cannot suppress them."
     );
   } finally {
     await fs.rm(tempRoot, { recursive: true, force: true });
@@ -4037,7 +4037,10 @@ export type NegativeMissingSubpath = typeof import("@oomkapwn/enquire-mcp/fts5-m
       const footerStart = failureStderr.lastIndexOf("\n[oia-walk] Report complete:");
       expect(footerStart, "OIA failure output must expose a removable completion footer").toBeGreaterThan(0);
       const finalFindingStart = failureStderr.lastIndexOf("\n  • [", footerStart);
-      const guidanceStart = failureStderr.lastIndexOf("\n[oia-walk] Pass --allow", footerStart);
+      const guidanceStart = Math.max(
+        failureStderr.lastIndexOf("\n[oia-walk] Pass --allow", footerStart),
+        failureStderr.lastIndexOf("\n[oia-walk] Vitest execution-control/scanner findings", footerStart)
+      );
       expect(finalFindingStart, "OIA failure output must expose a final finding record").toBeGreaterThan(0);
       expect(guidanceStart, "OIA failure output must expose its terminal guidance").toBeGreaterThan(finalFindingStart);
       const missingFindingStderr = failureStderr.slice(0, finalFindingStart) + failureStderr.slice(guidanceStart);
@@ -4123,6 +4126,42 @@ export type NegativeMissingSubpath = typeof import("@oomkapwn/enquire-mcp/fts5-m
           'it.only("passing decoy", () => {});'
         ].join("\n")
       );
+      const vitestConfigFixture = path.join(fixtureRoot, "vitest.config.ts");
+      const vitestConfigSource = await fs.readFile(vitestConfigFixture, "utf8");
+      await fs.writeFile(
+        vitestConfigFixture,
+        replaceExactly(
+          vitestConfigSource,
+          '    include: ["tests/**/*.test.ts"],\n',
+          '    include: ["tests/**/*.test.ts"],\n' +
+            '    testNamePattern: /^(?!Class A invariant — no test imports value from registration boilerplate)/,\n'
+        )
+      );
+      const packageFixture = path.join(fixtureRoot, "package.json");
+      const packageSource = JSON.parse(await fs.readFile(packageFixture, "utf8")) as {
+        scripts?: Record<string, string>;
+      };
+      if (packageSource.scripts === undefined) throw new Error("expected package scripts in OIA fixture");
+      packageSource.scripts.test = "vitest run tests/unit.test.ts";
+      packageSource.scripts["test:coverage"] =
+        "vitest run --coverage --exclude tests/no-internal-imports.test.ts";
+      packageSource.scripts.pretest = "true";
+      packageSource.scripts.postbuild = "node scripts/rewrite-vitest-config.mjs";
+      packageSource.scripts.prepare = "node scripts/job-gated-vitest-rewrite.mjs";
+      await fs.writeFile(packageFixture, `${JSON.stringify(packageSource, null, 2)}\n`);
+      await fs.writeFile(path.join(fixtureRoot, ".npmrc"), "node-options=--require=./scripts/filter-vitest.cjs\n");
+      await fs.writeFile(path.join(fixtureRoot, "binding.gyp"), "{}\n");
+      await fs.writeFile(path.join(fixtureRoot, "npm-shrinkwrap.json"), "{}\n");
+      const ciFixture = path.join(fixtureRoot, ".github", "workflows", "ci.yml");
+      const ciFixtureSource = await fs.readFile(ciFixture, "utf8");
+      await fs.writeFile(
+        ciFixture,
+        replaceExactly(
+          ciFixtureSource,
+          "      - run: npm test\n        env:",
+          "      - run: npm test -- tests/unit.test.ts\n        env:"
+        )
+      );
       const nonOverridableOia = spawnSync(
         process.execPath,
         [path.join(fixtureRoot, "scripts/oia-walk.mjs"), "--skip-network", "--allow"],
@@ -4141,8 +4180,14 @@ export type NegativeMissingSubpath = typeof import("@oomkapwn/enquire-mcp/fts5-m
       expect(nonOverridableOutput).toContain("[VITEST-FOCUS-ONLY] tests/focus-bypass.test.ts:");
       expect(nonOverridableOutput).toContain("[VITEST-ALLOW-ONLY] tests/focus-bypass.test.ts:");
       expect(nonOverridableOutput).toContain("[VITEST-RUNTIME-CONFIG] tests/focus-bypass.test.ts:");
+      expect(nonOverridableOutput).toContain("[VITEST-SELECTION-CONFIG] vitest.config.ts:1");
+      expect(nonOverridableOutput).toContain("[VITEST-SELECTION-PACKAGE] package.json:1");
+      expect(nonOverridableOutput).toContain("[VITEST-SELECTION-NPM-BOUNDARY] .npmrc:1");
+      expect(nonOverridableOutput).toContain("[VITEST-SELECTION-NPM-BOUNDARY] binding.gyp:1");
+      expect(nonOverridableOutput).toContain("[VITEST-SELECTION-NPM-BOUNDARY] npm-shrinkwrap.json:1");
+      expect(nonOverridableOutput).toContain("[VITEST-SELECTION-CI] .github/workflows/ci.yml:1");
       expect(nonOverridableOutput).toContain(
-        "[oia-walk] Vitest focus-control/scanner findings are non-overridable; --allow cannot suppress them."
+        "[oia-walk] Vitest execution-control/scanner findings are non-overridable; --allow cannot suppress them."
       );
     } finally {
       await fs.rm(tempRoot, { recursive: true, force: true });

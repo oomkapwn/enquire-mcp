@@ -809,10 +809,7 @@ function registrationTimeoutProblems(
   const registrationEntry = registrations.length === 1 ? registrations[0] : undefined;
   const registration = registrationEntry?.call;
   const shadowsTargetCallee = suiteCallback.body.statements.some(
-    (statement) =>
-      ts.isFunctionDeclaration(statement) &&
-      statement.name !== undefined &&
-      statement.name.text === callee
+    (statement) => ts.isFunctionDeclaration(statement) && statement.name !== undefined && statement.name.text === callee
   );
   const inertPrefixRegistration = (statement: ts.Statement): boolean => {
     if (ts.isFunctionDeclaration(statement)) return true;

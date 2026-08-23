@@ -18,14 +18,14 @@
 //
 // Usage:
 //   node scripts/oia-walk.mjs            # walk, print findings, exit 1 if any
-//   node scripts/oia-walk.mjs --allow    # walk, print findings, always exit 0
+//   node scripts/oia-walk.mjs --allow    # allow documented deferrals; focus/scanner findings still exit 1
 //
 // Checks (all evidence-based — each finding includes file:line and the
 // matched fragment). v3.9.0-rc.8 (audit S3): this enumeration was stale —
 // it listed only checks 1–5 while the code grew to 11 distinct walks. The
 // canonical count is "12" (the top-level numbered checks 1–12), but check 4
-// has historically accreted sub-checks (4b/4c/4d/4e/4f), so 15 distinct walks
-// actually run. Full honest list below:
+// has historically accreted sub-checks (4b/4c/4d/4e/4f), so 21 explicitly
+// marked checks/sub-checks actually run. Full honest list below:
 //
 //   1.  STALE VERSION TOMBSTONES — `vX.Y.Z` / `X.Y.Z-rc.N` in src/*.ts
 //       file-header docstrings (first 30 lines) not tagged as history.
@@ -72,6 +72,7 @@
 //       and missing inventory entries fail closed. [added rc.20; class-fixed rc.3]
 //   11. MCP-REGISTRY VERSION DRIFT — canonical registry version vs npm
 //       `@latest` (non-fatal advisory; remediation is maintainer-gated). [rc.32]
+//   11b. NPM RC DRIFT — npm `@rc` must not trail the current main RC line.
 //   12. STALE-DIST-TOOLS-IMPORT — scripts/*.mjs must not import the pre-split
 //       `dist/tools.js` (TypeScript now emits `dist/tools/index.js`). [rc.35]
 //   12b. ORPHAN-DIST-FILE — every emitted `dist/<p>.{js,d.ts}` must have a
@@ -79,16 +80,20 @@
 //       *artifact* (not just the stale import string) that ships to npm when a
 //       build doesn't purge dist/. Skips when dist/ is absent (CI oia job does
 //       not build). [added rc.36 — the L-3 class root cause]
+//   12c. VITEST FOCUS CONTROL — an independent Node scan rejects statically
+//       named `.only`, `allowOnly`, and `setConfig` controls across first-party
+//       JavaScript/TypeScript executable sources, so focus alone cannot skip
+//       the detector after OIA starts.
 //
-// NB: the on-disk marker order is 1,2,3,4b,4c,4d,4e,4,5,6,7,8,9,9b,10,11,12,12b —
-// check 4d/4e/4 appear after the 4b/4c sub-checks for historical-accretion
+// NB: check 4d/4e/4f/4 appear after the 4b/4c sub-checks for historical-accretion
 // reasons; the numbering is kept stable because CHANGELOG entries reference
-// these IDs. The canonical top-level count stays 12 (12b is a sub-check of the
-// dist-split / L-3 class, mirroring 4b–4e under check 4).
+// these IDs. The canonical top-level count stays 12: 12b remains the dist-split
+// / L-3 sub-check, and the independent assurance follow-up is appended as 12c
+// rather than renumbering historical IDs.
 //
 // Exit codes:
-//   0 — no findings (or --allow flag passed)
-//   1 — at least one finding (full diagnostic to stderr)
+//   0 — no findings, or only overridable findings with --allow
+//   1 — at least one unoverridden finding (full diagnostic to stderr)
 
 import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
@@ -98,6 +103,7 @@ import { load } from "js-yaml";
 import { expectedCoverageSourceFiles, normalizeCoverageReportedPath } from "./lib/coverage-policy.mjs";
 import { inspectEmbeddingsOfflineGuards } from "./lib/oia-offline-guard.mjs";
 import { inspectReleaseProvenanceWorkflow } from "./lib/oia-release-claims.mjs";
+import { inspectRepositoryVitestFocusControls } from "./lib/oia-vitest-focus.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -2043,8 +2049,29 @@ if (!SKIP_NETWORK) {
   }
 }
 
+// ─── Check 12c: independent Vitest focus-control scan ───────────────────
+// This check is intentionally outside Vitest. A malicious or accidental
+// `vi.setConfig({ allowOnly: true })` + passing `.only` decoy can skip any
+// test-hosted oracle, but focus alone cannot skip this separate Node process
+// after OIA starts. The analyzer reads source text only; it never imports
+// scanned modules.
+try {
+  for (const finding of inspectRepositoryVitestFocusControls(repoRoot)) {
+    record(finding.kind, finding.file, finding.line, finding.evidence, finding.hint);
+  }
+} catch (error) {
+  record(
+    "VITEST-FOCUS-SCAN-ERROR",
+    "scripts/lib/oia-vitest-focus.mjs",
+    1,
+    error instanceof Error ? `${error.name}: ${error.message}` : String(error),
+    "The independent focus-control scan did not complete. Treat this as a blocking unverified state and repair the scanner or unreadable source before release."
+  );
+}
+
 // ─── Report ─────────────────────────────────────────────────────────────
-const reportExitCode = findings.length > 0 && !ALLOW_MODE ? 1 : 0;
+const hasNonOverridableFindings = findings.some((finding) => finding.kind.startsWith("VITEST-"));
+const reportExitCode = findings.length > 0 && (!ALLOW_MODE || hasNonOverridableFindings) ? 1 : 0;
 const reportLines = [];
 
 if (findings.length === 0) {
@@ -2058,9 +2085,11 @@ if (findings.length === 0) {
     reportLines.push(`    hint: ${f.hint}`, "");
   }
   reportLines.push(
-    ALLOW_MODE
-      ? "[oia-walk] --allow flag set; exiting 0 despite findings."
-      : "[oia-walk] Pass --allow to override (CHANGELOG must document why findings are acceptable)."
+    hasNonOverridableFindings
+      ? "[oia-walk] Vitest focus-control/scanner findings are non-overridable; --allow cannot suppress them."
+      : ALLOW_MODE
+        ? "[oia-walk] --allow flag set; exiting 0 despite findings."
+        : "[oia-walk] Pass --allow to override (CHANGELOG must document why findings are acceptable)."
   );
 }
 

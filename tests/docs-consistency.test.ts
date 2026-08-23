@@ -1014,6 +1014,9 @@ async function assertCoverageOiaEvidenceContract(): Promise<void> {
 
     const missingOutput = runOia();
     expect(missingOutput).toContain("[COVERAGE-SUMMARY-MISSING] coverage/coverage-summary.json:1");
+    expect(missingOutput, "OIA --allow must retain its explicit override receipt").toContain(
+      "[oia-walk] --allow flag set; exiting 0 despite findings."
+    );
 
     const coverageEntry = (pct: number) => ({
       lines: { total: 1, covered: 1, skipped: 0, pct },
@@ -4099,7 +4102,15 @@ export type NegativeMissingSubpath = typeof import("@oomkapwn/enquire-mcp/fts5-m
         "[NPM-CI-ENTRYPOINT-IDENTITY] scripts/lib/entrypoint.mjs:"
       );
 
-      const allowedOia = spawnSync(
+      await fs.writeFile(
+        path.join(fixtureRoot, "tests", "focus-bypass.test.ts"),
+        [
+          'import { it, vi } from "vitest";',
+          "vi.setConfig({ allowOnly: true });",
+          'it.only("passing decoy", () => {});'
+        ].join("\n")
+      );
+      const nonOverridableOia = spawnSync(
         process.execPath,
         [path.join(fixtureRoot, "scripts/oia-walk.mjs"), "--skip-network", "--allow"],
         {
@@ -4109,13 +4120,16 @@ export type NegativeMissingSubpath = typeof import("@oomkapwn/enquire-mcp/fts5-m
           maxBuffer: 2 * 1024 * 1024
         }
       );
-      const allowedOutput = `${allowedOia.stdout ?? ""}${allowedOia.stderr ?? ""}`;
-      expect(allowedOia.error, allowedOutput).toBeUndefined();
-      expect(allowedOia.signal, allowedOutput).toBeNull();
-      expect(allowedOia.status, allowedOutput).toBe(0);
-      expect(oiaFindingReportProblems(allowedOia.stderr ?? "", 0), allowedOutput).toEqual([]);
-      expect(allowedOutput, "OIA --allow must retain its explicit override receipt").toContain(
-        "[oia-walk] --allow flag set; exiting 0 despite findings."
+      const nonOverridableOutput = `${nonOverridableOia.stdout ?? ""}${nonOverridableOia.stderr ?? ""}`;
+      expect(nonOverridableOia.error, nonOverridableOutput).toBeUndefined();
+      expect(nonOverridableOia.signal, nonOverridableOutput).toBeNull();
+      expect(nonOverridableOia.status, nonOverridableOutput).toBe(1);
+      expect(oiaFindingReportProblems(nonOverridableOia.stderr ?? "", 1), nonOverridableOutput).toEqual([]);
+      expect(nonOverridableOutput).toContain("[VITEST-FOCUS-ONLY] tests/focus-bypass.test.ts:");
+      expect(nonOverridableOutput).toContain("[VITEST-ALLOW-ONLY] tests/focus-bypass.test.ts:");
+      expect(nonOverridableOutput).toContain("[VITEST-RUNTIME-CONFIG] tests/focus-bypass.test.ts:");
+      expect(nonOverridableOutput).toContain(
+        "[oia-walk] Vitest focus-control/scanner findings are non-overridable; --allow cannot suppress them."
       );
     } finally {
       await fs.rm(tempRoot, { recursive: true, force: true });

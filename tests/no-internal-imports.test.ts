@@ -1,10 +1,16 @@
 import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { load } from "js-yaml";
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
+import {
+  firstPartyVitestFocusSourceFiles,
+  inspectRepositoryVitestFocusControls,
+  inspectStaticVitestFocusControls
+} from "../scripts/lib/oia-vitest-focus.mjs";
 import { replaceExactly } from "./helpers/exact-source-mutation.js";
 
 // Class A invariant (v3.6.0-rc.4) — closes the "hardcoded paths to
@@ -61,8 +67,25 @@ import { replaceExactly } from "./helpers/exact-source-mutation.js";
 // value-import closure are one fail-closed contract:
 // a wildcard, third omission, filtered prerequisite or production import
 // makes this lightweight test fail before the coverage job can qualify.
+//
+// Class C invariant (post-PR #518 sibling sweep) — Vitest focus controls are
+// enforced by OIA Check 12c in a separate Node process. The analyzer scans the
+// complete first-party JavaScript/TypeScript executable-source census,
+// including this oracle file, so focus alone cannot skip the detector after
+// OIA starts.
 
 const repoRoot = path.resolve(__dirname, "..");
+const EXECUTABLE_SOURCE_EXTENSIONS = new Set([
+  ".cjs",
+  ".cts",
+  ".js",
+  ".jsx",
+  ".mjs",
+  ".mts",
+  ".ts",
+  ".tsx"
+]);
+const GENERATED_EXECUTABLE_ROOTS = new Set([".git", "coverage", "dist", "node_modules"]);
 const RESTRICTED_MODULES = ["cli", "server", "tool-registry", "prompts"];
 const COVERAGE_ONLY_TEST_EXCLUSIONS = [
   "tests/meta-invariant-coverage.test.ts",
@@ -71,6 +94,9 @@ const COVERAGE_ONLY_TEST_EXCLUSIONS = [
 const EXPECTED_COVERAGE_SCRIPT =
   "vitest run --coverage --exclude tests/meta-invariant-coverage.test.ts " +
   "--exclude tests/release-integrity.test.ts";
+const EXPECTED_OIA_SCRIPT = "node scripts/oia-walk.mjs";
+const OIA_FOCUS_IMPORT = 'import { inspectRepositoryVitestFocusControls } from "./lib/oia-vitest-focus.mjs";';
+const OIA_FOCUS_CALL = "for (const finding of inspectRepositoryVitestFocusControls(repoRoot))";
 const EXPECTED_PREPUBLISH_ONLY_SCRIPT =
   "npm run lint && npm run build && npm test && node scripts/check-version-consistency.mjs && " +
   "node scripts/check-audit.mjs && npm run test:coverage --silent && " +
@@ -113,6 +139,28 @@ const EXPECTED_COVERAGE_EXTERNAL_MODULES = new Set([
   "typescript",
   "vitest"
 ]);
+
+async function independentExecutableSourceCensus(
+  root: string,
+  relativeDirectory = ""
+): Promise<string[]> {
+  const absoluteDirectory = relativeDirectory === "" ? root : path.join(root, relativeDirectory);
+  const files: string[] = [];
+  for (const entry of await fs.readdir(absoluteDirectory, { withFileTypes: true })) {
+    const relativeEntry = relativeDirectory === "" ? entry.name : `${relativeDirectory}/${entry.name}`;
+    if (relativeDirectory === "" && GENERATED_EXECUTABLE_ROOTS.has(entry.name)) continue;
+    if (entry.isSymbolicLink()) {
+      throw new Error(`independent executable-source census refuses symbolic link ${relativeEntry}`);
+    }
+    if (entry.isDirectory()) {
+      files.push(...(await independentExecutableSourceCensus(root, relativeEntry)));
+    } else if (entry.isFile() && EXECUTABLE_SOURCE_EXTENSIONS.has(path.extname(entry.name))) {
+      files.push(relativeEntry);
+    }
+  }
+  return files.sort();
+}
+
 const VITEST_RUNTIME_LOADERS = new Set(["doMock", "importActual", "importMock", "mock"]);
 const EXPECTED_VITEST_CONFIG_FILES = ["vitest.config.ts"] as const;
 // Canonical JSON SHA-256 pins keep every reviewed step exact without copying
@@ -144,6 +192,7 @@ const EXPECTED_OIA_STEP_FINGERPRINTS = [
   "6d17292384f49a212eddf1e626f36f87d22853089bdbd2218692cebbf0e84056"
 ] as const;
 const FORBIDDEN_TEST_LIFECYCLE_SCRIPTS = ["pretest", "posttest", "pretest:coverage", "posttest:coverage"] as const;
+const FORBIDDEN_OIA_LIFECYCLE_SCRIPTS = ["precheck:oia", "postcheck:oia"] as const;
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -309,8 +358,14 @@ function packageCoverageProblems(source: string): string[] {
   if (scripts?.["test:coverage"] !== EXPECTED_COVERAGE_SCRIPT) {
     problems.push("package scripts.test:coverage must retain the exact two-file coverage-only exclusion");
   }
+  if (scripts?.["check:oia"] !== EXPECTED_OIA_SCRIPT) {
+    problems.push("package scripts.check:oia must retain the exact independent Node entrypoint");
+  }
   if (FORBIDDEN_TEST_LIFECYCLE_SCRIPTS.some((name) => Object.hasOwn(scripts ?? {}, name))) {
     problems.push("package test lifecycle hooks must remain absent");
+  }
+  if (FORBIDDEN_OIA_LIFECYCLE_SCRIPTS.some((name) => Object.hasOwn(scripts ?? {}, name))) {
+    problems.push("package check:oia lifecycle hooks must remain absent");
   }
 
   const prepublishOnly = scripts?.prepublishOnly;
@@ -1201,6 +1256,235 @@ function restrictedImportViolations(relFile: string, src: string): string[] {
   return out;
 }
 
+function oiaFocusWiringProblems(source: string): string[] {
+  const sourceFile = ts.createSourceFile(
+    "scripts/oia-walk.mjs",
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.JS
+  );
+  const problems: string[] = [];
+  const bindingNameContains = (name: ts.BindingName, target: string): boolean => {
+    if (ts.isIdentifier(name)) return name.text === target;
+    return name.elements.some(
+      (element) => ts.isBindingElement(element) && bindingNameContains(element.name, target)
+    );
+  };
+  const isExactImport = (node: ts.Node): node is ts.ImportDeclaration => {
+    if (
+      !ts.isImportDeclaration(node) ||
+      !ts.isStringLiteral(node.moduleSpecifier) ||
+      node.moduleSpecifier.text !== "./lib/oia-vitest-focus.mjs"
+    ) {
+      return false;
+    }
+    const clause = node.importClause;
+    if (
+      clause === undefined ||
+      clause.isTypeOnly ||
+      clause.name !== undefined ||
+      clause.namedBindings === undefined ||
+      !ts.isNamedImports(clause.namedBindings) ||
+      clause.namedBindings.elements.length !== 1
+    ) {
+      return false;
+    }
+    const binding = clause.namedBindings.elements[0];
+    return (
+      binding !== undefined &&
+      !binding.isTypeOnly &&
+      binding.propertyName === undefined &&
+      binding.name.text === "inspectRepositoryVitestFocusControls"
+    );
+  };
+  const exactImports = sourceFile.statements.filter(isExactImport);
+  let competingBindings = 0;
+  const recordImportBindings = (clause: ts.ImportClause | undefined): void => {
+    if (clause === undefined || clause.isTypeOnly) return;
+    if (clause.name?.text === "inspectRepositoryVitestFocusControls") competingBindings += 1;
+    const bindings = clause.namedBindings;
+    if (bindings === undefined) return;
+    if (ts.isNamespaceImport(bindings)) {
+      if (bindings.name.text === "inspectRepositoryVitestFocusControls") competingBindings += 1;
+      return;
+    }
+    for (const binding of bindings.elements) {
+      if (!binding.isTypeOnly && binding.name.text === "inspectRepositoryVitestFocusControls") {
+        competingBindings += 1;
+      }
+    }
+  };
+  const visitBindings = (node: ts.Node): void => {
+    if (isExactImport(node)) return;
+    if (ts.isImportDeclaration(node)) {
+      recordImportBindings(node.importClause);
+      return;
+    }
+    if (ts.isImportEqualsDeclaration(node)) {
+      if (!node.isTypeOnly && node.name.text === "inspectRepositoryVitestFocusControls") competingBindings += 1;
+      return;
+    }
+    if (
+      (ts.isVariableDeclaration(node) || ts.isParameter(node)) &&
+      bindingNameContains(node.name, "inspectRepositoryVitestFocusControls")
+    ) {
+      competingBindings += 1;
+    } else if (
+      (ts.isFunctionDeclaration(node) ||
+        ts.isFunctionExpression(node) ||
+        ts.isClassDeclaration(node) ||
+        ts.isClassExpression(node) ||
+        ts.isEnumDeclaration(node)) &&
+      node.name?.text === "inspectRepositoryVitestFocusControls"
+    ) {
+      competingBindings += 1;
+    } else if (
+      ts.isModuleDeclaration(node) &&
+      ts.isIdentifier(node.name) &&
+      node.name.text === "inspectRepositoryVitestFocusControls"
+    ) {
+      competingBindings += 1;
+    }
+    ts.forEachChild(node, visitBindings);
+  };
+  visitBindings(sourceFile);
+  if (exactImports.length !== 1 || competingBindings !== 0) {
+    problems.push("OIA must retain one exact independent focus-control analyzer import");
+  }
+
+  const calls: ts.CallExpression[] = [];
+  const visitCalls = (node: ts.Node): void => {
+    if (
+      ts.isCallExpression(node) &&
+      ts.isIdentifier(node.expression) &&
+      node.expression.text === "inspectRepositoryVitestFocusControls"
+    ) {
+      calls.push(node);
+    }
+    ts.forEachChild(node, visitCalls);
+  };
+  visitCalls(sourceFile);
+  const loopEntries = sourceFile.statements.flatMap((statement) => {
+    const candidate = ts.isTryStatement(statement) ? statement.tryBlock.statements[0] : undefined;
+    if (
+      !ts.isTryStatement(statement) ||
+      statement.tryBlock.statements.length !== 1 ||
+      candidate === undefined ||
+      !ts.isForOfStatement(candidate)
+    ) {
+      return [];
+    }
+    const loop = candidate;
+    const initializer = loop.initializer;
+    const declaration =
+      ts.isVariableDeclarationList(initializer) && initializer.declarations.length === 1
+        ? initializer.declarations[0]
+        : undefined;
+    if (
+      !ts.isVariableDeclarationList(initializer) ||
+      (initializer.flags & ts.NodeFlags.Const) === 0 ||
+      declaration === undefined ||
+      !ts.isIdentifier(declaration.name) ||
+      declaration.name.text !== "finding" ||
+      declaration.initializer !== undefined
+    ) {
+      return [];
+    }
+    return [{ loop, statement }];
+  });
+  const loopEntry = loopEntries.length === 1 ? loopEntries[0] : undefined;
+  const iterable = loopEntry?.loop.expression;
+  const analyzerArgument =
+    iterable !== undefined && ts.isCallExpression(iterable) && iterable.arguments.length === 1
+      ? iterable.arguments[0]
+      : undefined;
+  const directAnalyzerCall =
+    iterable !== undefined &&
+    ts.isCallExpression(iterable) &&
+    ts.isIdentifier(iterable.expression) &&
+    iterable.expression.text === "inspectRepositoryVitestFocusControls" &&
+    analyzerArgument !== undefined &&
+    ts.isIdentifier(analyzerArgument) &&
+    analyzerArgument.text === "repoRoot";
+  if (!directAnalyzerCall || calls.length !== 1 || calls[0] !== iterable) {
+    problems.push("OIA must retain one exact independent focus-control analyzer call");
+  }
+
+  const isFindingProperty = (expression: ts.Expression | undefined, name: string): boolean =>
+    expression !== undefined &&
+    ts.isPropertyAccessExpression(expression) &&
+    ts.isIdentifier(expression.expression) &&
+    expression.expression.text === "finding" &&
+    expression.name.text === name;
+  const loopBody = loopEntry?.loop.statement;
+  const sinkStatement =
+    loopBody !== undefined && ts.isBlock(loopBody) && loopBody.statements.length === 1
+      ? loopBody.statements[0]
+      : undefined;
+  const sinkCall =
+    sinkStatement !== undefined &&
+    ts.isExpressionStatement(sinkStatement) &&
+    ts.isCallExpression(sinkStatement.expression)
+      ? sinkStatement.expression
+      : undefined;
+  if (
+    sinkCall === undefined ||
+    !ts.isIdentifier(sinkCall.expression) ||
+    sinkCall.expression.text !== "record" ||
+    sinkCall.arguments.length !== 5 ||
+    !isFindingProperty(sinkCall.arguments[0], "kind") ||
+    !isFindingProperty(sinkCall.arguments[1], "file") ||
+    !isFindingProperty(sinkCall.arguments[2], "line") ||
+    !isFindingProperty(sinkCall.arguments[3], "evidence") ||
+    !isFindingProperty(sinkCall.arguments[4], "hint")
+  ) {
+    problems.push("OIA focus-control analyzer findings must flow into the exact record sink");
+  }
+
+  const focusTry = loopEntry?.statement;
+  const catchClause = focusTry?.catchClause;
+  const catchStatement =
+    catchClause !== undefined && catchClause.block.statements.length === 1
+      ? catchClause.block.statements[0]
+      : undefined;
+  const catchCall =
+    catchStatement !== undefined &&
+    ts.isExpressionStatement(catchStatement) &&
+    ts.isCallExpression(catchStatement.expression)
+      ? catchStatement.expression
+      : undefined;
+  if (
+    focusTry === undefined ||
+    focusTry.finallyBlock !== undefined ||
+    catchClause?.variableDeclaration === undefined ||
+    !ts.isIdentifier(catchClause.variableDeclaration.name) ||
+    catchClause.variableDeclaration.name.text !== "error" ||
+    catchCall === undefined ||
+    !ts.isIdentifier(catchCall.expression) ||
+    catchCall.expression.text !== "record" ||
+    catchCall.arguments.length !== 5 ||
+    stringLiteralValue(catchCall.arguments[0]) !== "VITEST-FOCUS-SCAN-ERROR"
+  ) {
+    problems.push("OIA focus-control analyzer errors must flow into the fail-closed record sink");
+  }
+  return problems;
+}
+
+function oiaMarkedCheckInventoryProblems(source: string): string[] {
+  const problems: string[] = [];
+  const declarations = [...source.matchAll(/so (\d+) explicitly/gmu)].map((match) => Number(match[1]));
+  const markerIds = [...source.matchAll(/^\/\/ ─── Check (\d+[a-z]?):/gmu)].map((match) => match[1]);
+  const proseIds = [...source.matchAll(/^\/\/   (\d+[a-z]?)\.\s/gmu)].map((match) => match[1]);
+  if (declarations.length !== 1 || declarations[0] !== markerIds.length) {
+    problems.push("OIA declared marked-check count must equal the executable marker census");
+  }
+  if (!isDeepStrictEqual(proseIds, markerIds)) {
+    problems.push("OIA prose check inventory must match executable marker IDs and order");
+  }
+  return problems;
+}
+
 describe("Class A invariant — no test imports value from registration boilerplate", () => {
   it("keeps test imports and the exact coverage-only isolation boundary closed", async () => {
     const testFiles = await collectTestFiles(path.join(repoRoot, "tests"));
@@ -1214,6 +1498,16 @@ describe("Class A invariant — no test imports value from registration boilerpl
       coverageIsolationProblems(await currentCoverageIsolationInputs()),
       "Coverage isolation must remain exact, prerequisite-bound and production-import-free"
     ).toEqual([]);
+    const focusSourceFiles = firstPartyVitestFocusSourceFiles(repoRoot);
+    expect(focusSourceFiles).toEqual(await independentExecutableSourceCensus(repoRoot));
+    expect(focusSourceFiles).toContain("site/site.js");
+    expect(focusSourceFiles).toContain("tests/fixtures/k1-invariant/good.ts");
+    expect(inspectRepositoryVitestFocusControls(repoRoot), "OIA focus-control source census must stay clean").toEqual(
+      []
+    );
+    const oiaSource = await fs.readFile(path.join(repoRoot, "scripts/oia-walk.mjs"), "utf8");
+    expect(oiaFocusWiringProblems(oiaSource)).toEqual([]);
+    expect(oiaMarkedCheckInventoryProblems(oiaSource)).toEqual([]);
   });
 
   it("NEGATIVE control: restricted imports and coverage isolation drift are rejected", async () => {
@@ -1225,6 +1519,390 @@ describe("Class A invariant — no test imports value from registration boilerpl
     expect(flagged.join(" ")).toMatch(/server\.js.*restricted|restricted.*server\.js/);
     const good = `import { searchHybrid } from "../src/tools/index.js";\nimport { Vault } from "../src/vault.js";`;
     expect(restrictedImportViolations("tests/synthetic.test.ts", good)).toEqual([]);
+
+    const findingKindsAndLines = (source: string, filename = "tests/synthetic-focus.test.ts") =>
+      inspectStaticVitestFocusControls(source, filename).map(({ kind, line }) => [kind, line]);
+    const combinedFocusBypass = [
+      'import { it, vi } from "vitest";',
+      "vi.setConfig({ allowOnly: true });",
+      'it.only("passing decoy", () => {});'
+    ].join("\n");
+    expect(findingKindsAndLines(combinedFocusBypass)).toEqual([
+      ["VITEST-ALLOW-ONLY", 2],
+      ["VITEST-RUNTIME-CONFIG", 2],
+      ["VITEST-FOCUS-ONLY", 3]
+    ]);
+    expect(findingKindsAndLines('it.only("passing decoy", () => {});')).toEqual([
+      ["VITEST-FOCUS-ONLY", 1]
+    ]);
+    expect(findingKindsAndLines("vi.setConfig({ allowOnly: true });")).toEqual([
+      ["VITEST-ALLOW-ONLY", 1],
+      ["VITEST-RUNTIME-CONFIG", 1]
+    ]);
+    expect(
+      findingKindsAndLines(
+        'registrar?.["only"]("decoy", () => {}); runtime?.["setConfig"]({ ["allowOnly"]: true });'
+      )
+    ).toEqual([
+      ["VITEST-ALLOW-ONLY", 1],
+      ["VITEST-FOCUS-ONLY", 1],
+      ["VITEST-RUNTIME-CONFIG", 1]
+    ]);
+
+    const literalTemplateEvasion = [
+      'const focusKey = `on${"ly"}`;',
+      'const configKey = `set${"Config"}`;',
+      'const optionKey = `allow${"Only"}`;',
+      'registrar?.[focusKey]("passing decoy", () => {});',
+      "runtime[configKey]({ [optionKey]: true });"
+    ].join("\n");
+    expect(findingKindsAndLines(literalTemplateEvasion)).toEqual([
+      ["VITEST-FOCUS-ONLY", 1],
+      ["VITEST-RUNTIME-CONFIG", 2],
+      ["VITEST-ALLOW-ONLY", 3]
+    ]);
+    const concatenatedStaticEvasion =
+      'it["on" + "ly"]("decoy", () => {}); vi["set" + "Config"]({ ["allow" + "Only"]: true });';
+    expect(findingKindsAndLines(concatenatedStaticEvasion)).toEqual([
+      ["VITEST-ALLOW-ONLY", 1],
+      ["VITEST-FOCUS-ONLY", 1],
+      ["VITEST-RUNTIME-CONFIG", 1]
+    ]);
+
+    const crossFileStaticKeyExports = [
+      'export const focusKey = "only";',
+      'export const configKey = "setConfig";',
+      'export const optionKey = "allowOnly";'
+    ].join("\n");
+    expect(findingKindsAndLines(crossFileStaticKeyExports, "tests/focus-keys.ts")).toEqual([
+      ["VITEST-FOCUS-ONLY", 1],
+      ["VITEST-RUNTIME-CONFIG", 2],
+      ["VITEST-ALLOW-ONLY", 3]
+    ]);
+    const runtimeImportCarriers =
+      'import { focused as only, configure as setConfig, enabled as allowOnly } from "./adapter.js";';
+    expect(findingKindsAndLines(runtimeImportCarriers)).toEqual([
+      ["VITEST-ALLOW-ONLY", 1],
+      ["VITEST-FOCUS-ONLY", 1],
+      ["VITEST-RUNTIME-CONFIG", 1]
+    ]);
+    const runtimeImportAttributeCarriers =
+      'import Adapter from "./adapter.json" with { only: "allowOnly", setConfig: "json" }; void Adapter;';
+    expect(findingKindsAndLines(runtimeImportAttributeCarriers)).toEqual([
+      ["VITEST-ALLOW-ONLY", 1],
+      ["VITEST-FOCUS-ONLY", 1],
+      ["VITEST-RUNTIME-CONFIG", 1]
+    ]);
+    const runtimeExportCarriers = [
+      "export const allowOnly = true;",
+      "export { focused as only, configure as setConfig };"
+    ].join("\n");
+    expect(findingKindsAndLines(runtimeExportCarriers)).toEqual([
+      ["VITEST-ALLOW-ONLY", 1],
+      ["VITEST-FOCUS-ONLY", 2],
+      ["VITEST-RUNTIME-CONFIG", 2]
+    ]);
+    const runtimeClassCarriers = "class Adapter { only = focused; setConfig = configure; allowOnly = true; }";
+    expect(findingKindsAndLines(runtimeClassCarriers)).toEqual([
+      ["VITEST-ALLOW-ONLY", 1],
+      ["VITEST-FOCUS-ONLY", 1],
+      ["VITEST-RUNTIME-CONFIG", 1]
+    ]);
+    const runtimeParameterPropertyCarriers =
+      "class Adapter { constructor(public only = focused, public setConfig = configure, public allowOnly = true) {} }";
+    expect(findingKindsAndLines(runtimeParameterPropertyCarriers)).toEqual([
+      ["VITEST-ALLOW-ONLY", 1],
+      ["VITEST-FOCUS-ONLY", 1],
+      ["VITEST-RUNTIME-CONFIG", 1]
+    ]);
+    const runtimeJsxCarriers = "const view = <Focus only allowOnly setConfig />; void view;";
+    expect(findingKindsAndLines(runtimeJsxCarriers, "tests/focus-carriers.tsx")).toEqual([
+      ["VITEST-ALLOW-ONLY", 1],
+      ["VITEST-FOCUS-ONLY", 1],
+      ["VITEST-RUNTIME-CONFIG", 1]
+    ]);
+    const runtimeJsxTextCarriers =
+      "const view = <Keys><Key>only</Key><Key>allowOnly</Key><Key>setConfig</Key></Keys>; void view;";
+    expect(findingKindsAndLines(runtimeJsxTextCarriers, "tests/focus-text.tsx")).toEqual([
+      ["VITEST-ALLOW-ONLY", 1],
+      ["VITEST-FOCUS-ONLY", 1],
+      ["VITEST-RUNTIME-CONFIG", 1]
+    ]);
+    const multilineJsxTextCarriers = [
+      "const view = <Keys>",
+      "  <Key>",
+      "    only",
+      "  </Key>",
+      "  <Key>",
+      "    allowOnly",
+      "  </Key>",
+      "  <Key>",
+      "    setConfig",
+      "  </Key>",
+      "</Keys>; void view;"
+    ].join("\n");
+    expect(findingKindsAndLines(multilineJsxTextCarriers, "tests/focus-multiline.tsx")).toEqual([
+      ["VITEST-FOCUS-ONLY", 3],
+      ["VITEST-ALLOW-ONLY", 6],
+      ["VITEST-RUNTIME-CONFIG", 9]
+    ]);
+    const entityJsxTextCarriers = [
+      "const view = <Keys>",
+      "  <Key>on&#108;y</Key>",
+      "  <Key>allow&#x4f;nly</Key>",
+      "  <Key>set&#67;onfig</Key>",
+      "</Keys>; void view;"
+    ].join("\n");
+    expect(findingKindsAndLines(entityJsxTextCarriers, "tests/focus-entities.tsx")).toEqual([
+      ["VITEST-FOCUS-ONLY", 2],
+      ["VITEST-ALLOW-ONLY", 3],
+      ["VITEST-RUNTIME-CONFIG", 4]
+    ]);
+    const entityJsxAttributeCarriers =
+      'const view = <Keys focus="&#111;nly" option="allow&#x4f;nly" config="set&#x43;onfig" />; void view;';
+    expect(findingKindsAndLines(entityJsxAttributeCarriers, "tests/focus-attributes.tsx")).toEqual([
+      ["VITEST-ALLOW-ONLY", 1],
+      ["VITEST-FOCUS-ONLY", 1],
+      ["VITEST-RUNTIME-CONFIG", 1]
+    ]);
+    const unicodeLineBreakJsx = "const view = <Key>\u2028\t only \u2029</Key>; void view;";
+    const unicodeLineBreakFindings = inspectStaticVitestFocusControls(
+      unicodeLineBreakJsx,
+      "tests/focus-unicode-lines.tsx"
+    );
+    expect(unicodeLineBreakFindings.map(({ kind, line }) => [kind, line])).toEqual([["VITEST-FOCUS-ONLY", 2]]);
+    expect(unicodeLineBreakFindings[0]?.evidence).toBe(["on", "ly"].join(""));
+    const extendedWhitespaceJsx = [
+      "const view = <Key>",
+      "\t\v\f\u0085\u00a0\u1680\u200b only \t\v\f\u0085\u00a0\u1680\u200b",
+      "</Key>; void view;"
+    ].join("\n");
+    expect(findingKindsAndLines(extendedWhitespaceJsx, "tests/focus-whitespace.tsx")).toEqual([
+      ["VITEST-FOCUS-ONLY", 2]
+    ]);
+    expect(findingKindsAndLines("const view = <Key> only </Key>; void view;", "tests/inert-text.tsx")).toEqual([]);
+    expect(
+      findingKindsAndLines("const view = <Key> only\n</Key>; void view;", "tests/inert-leading-text.tsx")
+    ).toEqual([]);
+    expect(
+      findingKindsAndLines("const view = <Key>\nonly </Key>; void view;", "tests/inert-trailing-text.tsx")
+    ).toEqual([]);
+    const inertJsxEntities =
+      'const view = <Keys><Key>&nbsp;only</Key><Key>&#X6f;nly</Key><Key>&unknown;only</Key></Keys>;';
+    expect(findingKindsAndLines(inertJsxEntities, "tests/inert-entities.tsx")).toEqual([]);
+    const inertJsxAttributeEntities =
+      'const view = <Keys first="&#32;only" second="&nbsp;only" third="&#X6f;nly" />;';
+    expect(findingKindsAndLines(inertJsxAttributeEntities, "tests/inert-attribute-entities.tsx")).toEqual([]);
+    const decoratedDeclareFieldBypass =
+      'class FocusDecoy { @observe(vi.setConfig({ allowOnly: true }), it.only("decoy", () => {})) declare field: string; }';
+    expect(findingKindsAndLines(decoratedDeclareFieldBypass)).toEqual([
+      ["VITEST-ALLOW-ONLY", 1],
+      ["VITEST-FOCUS-ONLY", 1],
+      ["VITEST-RUNTIME-CONFIG", 1]
+    ]);
+    const runtimeClassExtendsBypass =
+      'class FocusDecoy extends (vi.setConfig({ allowOnly: true }), it.only("passing decoy", () => {}), class {}) {}';
+    expect(findingKindsAndLines(runtimeClassExtendsBypass)).toEqual([
+      ["VITEST-ALLOW-ONLY", 1],
+      ["VITEST-FOCUS-ONLY", 1],
+      ["VITEST-RUNTIME-CONFIG", 1]
+    ]);
+    const runtimeInstantiationCarriers = [
+      "const focus = (it as unknown as { only<T>(): void }).only<void>;",
+      "const configure = (vi as unknown as { setConfig<T>(): void }).setConfig<void>;",
+      "const option = (config as unknown as { allowOnly<T>(): void }).allowOnly<void>;",
+      "focus(); configure(); option();"
+    ].join("\n");
+    expect(findingKindsAndLines(runtimeInstantiationCarriers)).toEqual([
+      ["VITEST-FOCUS-ONLY", 1],
+      ["VITEST-RUNTIME-CONFIG", 2],
+      ["VITEST-ALLOW-ONLY", 3]
+    ]);
+    const inertInstantiationTypes = [
+      "type only = unknown;",
+      "const typed = adapter<only>;",
+      "class Derived extends Adapter<only> {}",
+      "class Implemented implements Adapter<only> {}",
+      "interface Extended extends Adapter<only> {}",
+      "void typed;"
+    ].join("\n");
+    expect(findingKindsAndLines(inertInstantiationTypes)).toEqual([]);
+    const staticContainerEvasion =
+      'const keys = { focus: "only", config: "setConfig", option: "allowOnly" } as const; ' +
+      'vi[keys.config]({ [keys.option]: true }); it[keys.focus]("decoy", () => {});';
+    expect(findingKindsAndLines(staticContainerEvasion)).toEqual([
+      ["VITEST-ALLOW-ONLY", 1],
+      ["VITEST-FOCUS-ONLY", 1],
+      ["VITEST-RUNTIME-CONFIG", 1]
+    ]);
+    const reservedObjectKeys =
+      "const adapter = { only: focused, setConfig: configure, allowOnly: true }; void adapter;";
+    expect(findingKindsAndLines(reservedObjectKeys)).toEqual([
+      ["VITEST-ALLOW-ONLY", 1],
+      ["VITEST-FOCUS-ONLY", 1],
+      ["VITEST-RUNTIME-CONFIG", 1]
+    ]);
+    const concatenatedContainerEvasion =
+      'const keys = { focus: "on" + "ly", config: "set" + "Config", option: "allow" + "Only" } as const; ' +
+      'vi[keys.config]({ [keys.option]: true }); it[keys.focus]("decoy", () => {});';
+    expect(findingKindsAndLines(concatenatedContainerEvasion)).toEqual([
+      ["VITEST-ALLOW-ONLY", 1],
+      ["VITEST-FOCUS-ONLY", 1],
+      ["VITEST-RUNTIME-CONFIG", 1]
+    ]);
+
+    const aliasAndReflectionEvasion = [
+      "const { only: focused } = registrar;",
+      "const { setConfig: configure } = runtime;",
+      'Reflect.set(config, "allowOnly", true);',
+      "void focused;",
+      "void configure;"
+    ].join("\n");
+    expect(findingKindsAndLines(aliasAndReflectionEvasion)).toEqual([
+      ["VITEST-FOCUS-ONLY", 1],
+      ["VITEST-RUNTIME-CONFIG", 2],
+      ["VITEST-ALLOW-ONLY", 3]
+    ]);
+    expect(
+      findingKindsAndLines(
+        "let focused; let configure; let option; " +
+          "({ only: focused, setConfig: configure, allowOnly: option } = runtime);"
+      )
+    ).toEqual([
+      ["VITEST-ALLOW-ONLY", 1],
+      ["VITEST-FOCUS-ONLY", 1],
+      ["VITEST-RUNTIME-CONFIG", 1]
+    ]);
+    const aliasedReflectionEvasion = [
+      "const get = Reflect.get;",
+      'const set = globalThis.Reflect["set"];',
+      'set(config, "allowOnly", true);',
+      'get(runtime, "setConfig")(config);',
+      'get(registrar, "only")("passing decoy", () => {});'
+    ].join("\n");
+    expect(findingKindsAndLines(aliasedReflectionEvasion)).toEqual([
+      ["VITEST-ALLOW-ONLY", 3],
+      ["VITEST-RUNTIME-CONFIG", 4],
+      ["VITEST-FOCUS-ONLY", 5]
+    ]);
+    expect(findingKindsAndLines('it("passing decoy", { only: true }, () => {});')).toEqual([
+      ["VITEST-FOCUS-ONLY", 1]
+    ]);
+    expect(findingKindsAndLines('describe("passing decoy", { ["only"]: true }, () => {});')).toEqual([
+      ["VITEST-FOCUS-ONLY", 1]
+    ]);
+    expect(
+      findingKindsAndLines(
+        'const view = <button onClick={() => it?.["only"]("decoy", () => {})} />; void view;',
+        "tests/synthetic-focus.tsx"
+      )
+    ).toEqual([["VITEST-FOCUS-ONLY", 1]]);
+
+    const inertFocusText = [
+      "// vi.setConfig({ allowOnly: true }); it.only is documentation",
+      'const documentation = "vi.setConfig({ allowOnly: true }); it.only";',
+      "type FocusShape = { only: true; allowOnly: true; setConfig(): void };",
+      'import type { Config as setConfig } from "vitest";',
+      'export type { Config as allowOnly } from "vitest";',
+      'import type only = require("./focus-types.js");',
+      'import Adapter from "only"; export { Adapter } from "setConfig";',
+      "function identity<only>(value: only): only { return value; }",
+      "abstract class AbstractOptions { abstract allowOnly: boolean; }",
+      "class IndexedShape { [only: string]: unknown }",
+      "interface TypeLineage extends only, setConfig, allowOnly {}",
+      "class ImplementedShape implements only, setConfig, allowOnly {}",
+      "function overload(only: string): void; function overload(value: string): void {}",
+      "class Overloaded { constructor(allowOnly: string); constructor(value: string) {} }",
+      "class DeclaredFields { declare only: true; declare allowOnly: true; declare setConfig: () => void; }",
+      "declare class TypeOnlyAdapter { only: true; setConfig(): void; allowOnly: true }",
+      'log("mode=only"); expect(mode).toBe("setConfig documentation"); it("allowOnly example", () => {});',
+      'it("ordinary test", () => {});'
+    ].join("\n");
+    expect(findingKindsAndLines(inertFocusText)).toEqual([]);
+    expect(findingKindsAndLines("export const only: true;", "types/focus-controls.d.ts")).toEqual([]);
+    expect(findingKindsAndLines('void import("only"); require("setConfig");')).toEqual([
+      ["VITEST-FOCUS-ONLY", 1],
+      ["VITEST-RUNTIME-CONFIG", 1]
+    ]);
+    const reservedTokenBoundary = [
+      'const mode = "only";',
+      'function format(mode = "setConfig"): string { return mode; }',
+      'translate(label, "allowOnly");'
+    ].join("\n");
+    expect(findingKindsAndLines(reservedTokenBoundary)).toEqual([
+      ["VITEST-FOCUS-ONLY", 1],
+      ["VITEST-RUNTIME-CONFIG", 2],
+      ["VITEST-ALLOW-ONLY", 3]
+    ]);
+    const symlinkScratch = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-focus-census-"));
+    try {
+      const realDirectory = path.join(symlinkScratch, "real");
+      await fs.mkdir(realDirectory);
+      await fs.symlink(
+        realDirectory,
+        path.join(symlinkScratch, "linked"),
+        process.platform === "win32" ? "junction" : "dir"
+      );
+      expect(() => firstPartyVitestFocusSourceFiles(symlinkScratch)).toThrow(
+        "focus-control source census refuses symbolic link linked"
+      );
+    } finally {
+      await fs.rm(symlinkScratch, { recursive: true, force: true });
+    }
+
+    const currentOiaSource = await fs.readFile(path.join(repoRoot, "scripts/oia-walk.mjs"), "utf8");
+    const oiaWithoutFocusCall = replaceExactly(
+      currentOiaSource,
+      OIA_FOCUS_CALL,
+      "for (const finding of inspectRepositoryVitestFocusControlsSkipped(repoRoot))"
+    );
+    expect(oiaFocusWiringProblems(oiaWithoutFocusCall)).toContain(
+      "OIA must retain one exact independent focus-control analyzer call"
+    );
+    const oiaWithoutFindingSink = replaceExactly(
+      currentOiaSource,
+      "    record(finding.kind, finding.file, finding.line, finding.evidence, finding.hint);",
+      "    void finding;"
+    );
+    expect(oiaFocusWiringProblems(oiaWithoutFindingSink)).toContain(
+      "OIA focus-control analyzer findings must flow into the exact record sink"
+    );
+    const oiaWithFailOpenCatch = replaceExactly(
+      currentOiaSource,
+      '    "VITEST-FOCUS-SCAN-ERROR",',
+      '    "VITEST-FOCUS-SCAN-IGNORED",'
+    );
+    expect(oiaFocusWiringProblems(oiaWithFailOpenCatch)).toContain(
+      "OIA focus-control analyzer errors must flow into the fail-closed record sink"
+    );
+    const commentAndStringDecoys = [
+      `// ${OIA_FOCUS_IMPORT}`,
+      `const focusCallDocumentation = ${JSON.stringify(OIA_FOCUS_CALL)};`
+    ].join("\n");
+    expect(oiaFocusWiringProblems(commentAndStringDecoys)).toEqual(
+      expect.arrayContaining([
+        "OIA must retain one exact independent focus-control analyzer import",
+        "OIA must retain one exact independent focus-control analyzer call"
+      ])
+    );
+    const declaredMarkedCount = /so (\d+) explicitly/u.exec(currentOiaSource)?.[1];
+    if (declaredMarkedCount === undefined) throw new Error("expected OIA marked-check count declaration");
+    const staleMarkedCount = replaceExactly(
+      currentOiaSource,
+      `so ${declaredMarkedCount} explicitly`,
+      `so ${Number(declaredMarkedCount) - 1} explicitly`
+    );
+    expect(oiaMarkedCheckInventoryProblems(staleMarkedCount)).toContain(
+      "OIA declared marked-check count must equal the executable marker census"
+    );
+    const missingProseInventoryEntry = replaceExactly(
+      currentOiaSource,
+      "//   11b. NPM RC DRIFT — npm `@rc` must not trail the current main RC line.\n",
+      ""
+    );
+    expect(oiaMarkedCheckInventoryProblems(missingProseInventoryEntry)).toContain(
+      "OIA prose check inventory must match executable marker IDs and order"
+    );
 
     const current = await currentCoverageIsolationInputs();
     const currentVitestProblems = (source: string): string[] =>
@@ -1238,6 +1916,24 @@ describe("Class A invariant — no test imports value from registration boilerpl
     expect(packageCoverageProblems(packageWithThirdExclusion)).toContain(
       "package scripts.test:coverage must retain the exact two-file coverage-only exclusion"
     );
+    const packageWithDisabledOia = replaceExactly(
+      current.packageJson,
+      `"check:oia": "${EXPECTED_OIA_SCRIPT}"`,
+      '"check:oia": "true"'
+    );
+    expect(packageCoverageProblems(packageWithDisabledOia)).toContain(
+      "package scripts.check:oia must retain the exact independent Node entrypoint"
+    );
+    for (const lifecycle of FORBIDDEN_OIA_LIFECYCLE_SCRIPTS) {
+      const packageWithOiaLifecycleHook = replaceExactly(
+        current.packageJson,
+        `"check:oia": "${EXPECTED_OIA_SCRIPT}",`,
+        `"${lifecycle}": "true",\n    "check:oia": "${EXPECTED_OIA_SCRIPT}",`
+      );
+      expect(packageCoverageProblems(packageWithOiaLifecycleHook)).toContain(
+        "package check:oia lifecycle hooks must remain absent"
+      );
+    }
     for (const lifecycle of FORBIDDEN_TEST_LIFECYCLE_SCRIPTS) {
       const packageWithLifecycleHook = replaceExactly(
         current.packageJson,

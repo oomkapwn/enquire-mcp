@@ -3890,10 +3890,15 @@ function npmCiPreinstallDigest(identity: string, steps: readonly YamlRecord[]): 
     if (typeof step.run !== "string") return step;
     const matches = [...step.run.matchAll(/^expected_manifest_sha=[0-9a-f]{64}$/gmu)];
     carrierCount += matches.length;
-    if (matches.length !== 1) return step;
+    const carrierMatch = matches[0];
+    const carrier = carrierMatch?.[0];
+    const carrierIndex = carrierMatch?.index;
+    if (matches.length !== 1 || carrier === undefined || carrierIndex === undefined) return step;
+    const carrierPrefix = step.run.slice(0, carrierIndex);
+    const carrierSuffix = step.run.slice(carrierIndex + carrier.length);
     return {
       ...step,
-      run: step.run.replace(/^expected_manifest_sha=[0-9a-f]{64}$/mu, "expected_manifest_sha=<normalized>")
+      run: `${carrierPrefix}expected_manifest_sha=<normalized>${carrierSuffix}`
     };
   });
   return npmCiWorkflowValueDigest(carrierCount === 1 ? normalizedSteps : steps);

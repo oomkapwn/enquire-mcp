@@ -1149,7 +1149,7 @@ function coverageIsolationProblems(input: CoverageIsolationInputs): string[] {
       "docs/code consistency — numeric claims (v3.5.1 audit-driven)",
       "it",
       "OIA check count is consistent across oia-walk.mjs, AGENTS.md, ROADMAP.md (rc.22)",
-      "45_000"
+      "60_000"
     ),
     ...coverageImportClosureProblems(input.closureSources)
   ];
@@ -2453,10 +2453,10 @@ describe("Class A invariant — no test imports value from registration boilerpl
         "docs/code consistency — numeric claims (v3.5.1 audit-driven)",
         "it",
         "OIA check count is consistent across oia-walk.mjs, AGENTS.md, ROADMAP.md (rc.22)",
-        "45_000"
+        "60_000"
       );
     const docsTimeoutDiagnostic =
-      "tests/docs-consistency.test.ts must retain one direct it registration with timeout 45_000";
+      "tests/docs-consistency.test.ts must retain one direct it registration with timeout 60_000";
     const docsItBindingDiagnostic =
       "tests/docs-consistency.test.ts must bind it through one direct unaliased vitest named import and no other runtime bindings; found direct 0, other 1";
     const docsDescribeBindingDiagnostic =
@@ -2465,7 +2465,7 @@ describe("Class A invariant — no test imports value from registration boilerpl
       'import { describe, it } from "vitest";\n' +
       'describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () => {\n' +
       '  it("sibling registration remains inert", () => {});\n' +
-      '  it("OIA check count is consistent across oia-walk.mjs, AGENTS.md, ROADMAP.md (rc.22)", () => {}, 45_000);\n' +
+      '  it("OIA check count is consistent across oia-walk.mjs, AGENTS.md, ROADMAP.md (rc.22)", () => {}, 60_000);\n' +
       "});";
     expect(docsTimeoutProblems(exactDocsRegistration)).toEqual([]);
     const aliasedDocsCallee = replaceExactly(
@@ -2487,22 +2487,22 @@ describe("Class A invariant — no test imports value from registration boilerpl
       'import { describe, it } from "vitest";\n' +
       "const authenticIt = it;\n" +
       'describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () => {\n' +
-      '  it?.("OIA check count is consistent across oia-walk.mjs, AGENTS.md, ROADMAP.md (rc.22)", () => {}, 45_000);\n' +
+      '  it?.("OIA check count is consistent across oia-walk.mjs, AGENTS.md, ROADMAP.md (rc.22)", () => {}, 60_000);\n' +
       "  var it = authenticIt;\n" +
-      '  it("sibling remains registered", () => {}, 45_000);\n' +
+      '  it("sibling remains registered", () => {}, 60_000);\n' +
       "});";
     const localPrefixRegistrar =
       'import { describe, it } from "vitest";\n' +
       'const beforeEach = (): void => { throw new Error("abort collection"); };\n' +
       'describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () => {\n' +
       "  beforeEach();\n" +
-      '  it("OIA check count is consistent across oia-walk.mjs, AGENTS.md, ROADMAP.md (rc.22)", () => {}, 45_000);\n' +
+      '  it("OIA check count is consistent across oia-walk.mjs, AGENTS.md, ROADMAP.md (rc.22)", () => {}, 60_000);\n' +
       "});";
     const eagerPrefixArgument =
       'import { describe, it } from "vitest";\n' +
       'describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () => {\n' +
       '  it("sibling", (() => { throw new Error("abort collection"); })());\n' +
-      '  it("OIA check count is consistent across oia-walk.mjs, AGENTS.md, ROADMAP.md (rc.22)", () => {}, 45_000);\n' +
+      '  it("OIA check count is consistent across oia-walk.mjs, AGENTS.md, ROADMAP.md (rc.22)", () => {}, 60_000);\n' +
       "});";
     expect(docsTimeoutProblems(aliasedDocsCallee)).toContain(docsItBindingDiagnostic);
     expect(docsTimeoutProblems(aliasedDocsSuite)).toContain(docsDescribeBindingDiagnostic);
@@ -2511,40 +2511,46 @@ describe("Class A invariant — no test imports value from registration boilerpl
     );
     expect(docsTimeoutProblems(localPrefixRegistrar)).toContain(docsTimeoutDiagnostic);
     expect(docsTimeoutProblems(eagerPrefixArgument)).toContain(docsTimeoutDiagnostic);
-    const docsTimeoutNeedle = '  }, 45_000);\n\n  it("package.json description tool-count matches actual count"';
+    const docsTimeoutNeedle = '  }, 60_000);\n\n  it("package.json description tool-count matches actual count"';
     const inheritedDocsTimeout = replaceExactly(
       current.docsConsistencySource,
       docsTimeoutNeedle,
-      docsTimeoutNeedle.replace("45_000", "15_000")
+      docsTimeoutNeedle.replace("60_000", "15_000")
     );
     const provenInsufficientDocsTimeout = replaceExactly(
       current.docsConsistencySource,
       docsTimeoutNeedle,
-      docsTimeoutNeedle.replace("45_000", "25_000")
+      docsTimeoutNeedle.replace("60_000", "25_000")
+    );
+    const underBufferedDocsTimeout = replaceExactly(
+      current.docsConsistencySource,
+      docsTimeoutNeedle,
+      docsTimeoutNeedle.replace("60_000", "45_000")
     );
     const missingDocsTimeout = replaceExactly(
       current.docsConsistencySource,
       docsTimeoutNeedle,
-      docsTimeoutNeedle.replace("}, 45_000);", "});")
+      docsTimeoutNeedle.replace("}, 60_000);", "});")
     );
     const raisedDocsTimeout = replaceExactly(
       current.docsConsistencySource,
       docsTimeoutNeedle,
-      docsTimeoutNeedle.replace("45_000", "45_001")
+      docsTimeoutNeedle.replace("60_000", "60_001")
     );
     const unreachableDocsRegistration =
       'describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () => {\n' +
       "  function declarationIsSafe(): void {}\n" +
       "  return;\n" +
-      '  it("OIA check count is consistent across oia-walk.mjs, AGENTS.md, ROADMAP.md (rc.22)", () => {}, 45_000);\n' +
+      '  it("OIA check count is consistent across oia-walk.mjs, AGENTS.md, ROADMAP.md (rc.22)", () => {}, 60_000);\n' +
       "});";
     const shadowedDocsRegistration =
       'describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () => {\n' +
-      '  it("OIA check count is consistent across oia-walk.mjs, AGENTS.md, ROADMAP.md (rc.22)", () => {}, 45_000);\n' +
+      '  it("OIA check count is consistent across oia-walk.mjs, AGENTS.md, ROADMAP.md (rc.22)", () => {}, 60_000);\n' +
       "  function it(..._args: unknown[]): void {}\n" +
       "});";
     expect(docsTimeoutProblems(inheritedDocsTimeout)).toContain(docsTimeoutDiagnostic);
     expect(docsTimeoutProblems(provenInsufficientDocsTimeout)).toContain(docsTimeoutDiagnostic);
+    expect(docsTimeoutProblems(underBufferedDocsTimeout)).toContain(docsTimeoutDiagnostic);
     expect(docsTimeoutProblems(missingDocsTimeout)).toContain(docsTimeoutDiagnostic);
     expect(docsTimeoutProblems(raisedDocsTimeout)).toContain(docsTimeoutDiagnostic);
     expect(docsTimeoutProblems(unreachableDocsRegistration)).toContain(docsTimeoutDiagnostic);
@@ -2575,7 +2581,7 @@ describe("Class A invariant — no test imports value from registration boilerpl
       ciWorkflow: ciWithFilteredTest,
       vitestConfig: vitestWithGlobalExclusion,
       vitestConfigFiles: [...current.vitestConfigFiles, "vitest.workspace.ts"],
-      docsConsistencySource: provenInsufficientDocsTimeout,
+      docsConsistencySource: underBufferedDocsTimeout,
       k1ClassSource: staleK1Timeout,
       releaseMutationTransitionSource: staleTransitionTimeout,
       closureSources: aggregateClosureSources
@@ -2590,7 +2596,7 @@ describe("Class A invariant — no test imports value from registration boilerpl
       "tests/release-integrity.test.ts must retain one direct it registration with timeout 330_000",
       "tests/k1-class-invariant.test.ts must retain one direct it registration with timeout 30_000",
       "tests/release-mutation-transition.test.ts must retain one direct it registration with timeout 60_000",
-      "tests/docs-consistency.test.ts must retain one direct it registration with timeout 45_000",
+      "tests/docs-consistency.test.ts must retain one direct it registration with timeout 60_000",
       "tests/release-integrity.test.ts value-imports production path src/vault.js",
       "tests/helpers/exact-source-mutation.ts value-imports production path dist/index.js"
     ]);

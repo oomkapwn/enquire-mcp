@@ -274,7 +274,7 @@ export function ciTestSelectionProblems(source) {
   }
   if (
     !recordHasExactKeys(testJob, ["name", "runs-on", "timeout-minutes", "env", "strategy", "steps"]) ||
-    testJob.name !== "test (${{ matrix.label }})" ||
+    testJob.name !== `test (\${{ matrix.label }})` ||
     testJob["runs-on"] !== "ubuntu-latest" ||
     testJob["timeout-minutes"] !== 20 ||
     !isDeepStrictEqual(asRecord(testJob.env), { NPM_CONFIG_ENGINE_STRICT: "true" })
@@ -314,7 +314,7 @@ export function ciTestSelectionProblems(source) {
     !recordHasExactKeys(setupNodeStep, ["uses", "with"]) ||
     setupNodeStep.uses !== EXPECTED_SETUP_NODE_ACTION ||
     !isDeepStrictEqual(asRecord(setupNodeStep.with), {
-      "node-version": "${{ matrix.node-version }}",
+      "node-version": `\${{ matrix.node-version }}`,
       cache: "npm",
       "cache-dependency-path": "package-lock.json"
     })
@@ -332,7 +332,7 @@ export function ciTestSelectionProblems(source) {
     testSteps[0] !== finalStep ||
     finalStep === undefined ||
     !recordHasExactKeys(finalStep, ["run", "env"]) ||
-    !isDeepStrictEqual(asRecord(finalStep.env), { GH_TOKEN: "${{ github.token }}" })
+    !isDeepStrictEqual(asRecord(finalStep.env), { GH_TOKEN: `\${{ github.token }}` })
   ) {
     problems.push("each CI Node leg must end with one exact unfiltered fail-capable npm test");
   }
@@ -361,11 +361,7 @@ export function vitestSelectionProblems(source, configFiles) {
   }
   if (
     sourceFile.statements.length !== 3 ||
-    !hasExactNamedImport(
-      sourceFile.statements[1],
-      "./scripts/lib/coverage-policy.mjs",
-      "COVERAGE_EXCLUDE_PATTERNS"
-    )
+    !hasExactNamedImport(sourceFile.statements[1], "./scripts/lib/coverage-policy.mjs", "COVERAGE_EXCLUDE_PATTERNS")
   ) {
     problems.push("vitest config must retain the exact centralized coverage-policy import");
   }
@@ -481,9 +477,7 @@ export function inspectRepositoryVitestSelectionControls(repoRoot) {
     }
   }
   const configFiles = configEntries.map((entry) => entry.name).sort();
-  const configSource = configFiles.includes(VITEST_CONFIG_FILE)
-    ? readRegularFile(repoRoot, VITEST_CONFIG_FILE)
-    : "";
+  const configSource = configFiles.includes(VITEST_CONFIG_FILE) ? readRegularFile(repoRoot, VITEST_CONFIG_FILE) : "";
   return [
     ...findings(
       "VITEST-SELECTION-CONFIG",
@@ -498,12 +492,9 @@ export function inspectRepositoryVitestSelectionControls(repoRoot) {
       packageTestSelectionProblems(readRegularFile(repoRoot, "package.json"))
     ),
     ...forbiddenNpmProjectEntries(rootEntryNames).flatMap((filename) =>
-      findings(
-        "VITEST-SELECTION-NPM-BOUNDARY",
-        filename,
-        NPM_BOUNDARY_HINT,
-        [`the repository root must not contain ${filename}`]
-      )
+      findings("VITEST-SELECTION-NPM-BOUNDARY", filename, NPM_BOUNDARY_HINT, [
+        `the repository root must not contain ${filename}`
+      ])
     ),
     ...findings(
       "VITEST-SELECTION-CI",

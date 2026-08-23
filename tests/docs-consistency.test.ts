@@ -4134,7 +4134,7 @@ export type NegativeMissingSubpath = typeof import("@oomkapwn/enquire-mcp/fts5-m
           vitestConfigSource,
           '    include: ["tests/**/*.test.ts"],\n',
           '    include: ["tests/**/*.test.ts"],\n' +
-            '    testNamePattern: /^(?!Class A invariant — no test imports value from registration boilerplate)/,\n'
+            "    testNamePattern: /^(?!Class A invariant — no test imports value from registration boilerplate)/,\n"
         )
       );
       const packageFixture = path.join(fixtureRoot, "package.json");
@@ -4143,8 +4143,7 @@ export type NegativeMissingSubpath = typeof import("@oomkapwn/enquire-mcp/fts5-m
       };
       if (packageSource.scripts === undefined) throw new Error("expected package scripts in OIA fixture");
       packageSource.scripts.test = "vitest run tests/unit.test.ts";
-      packageSource.scripts["test:coverage"] =
-        "vitest run --coverage --exclude tests/no-internal-imports.test.ts";
+      packageSource.scripts["test:coverage"] = "vitest run --coverage --exclude tests/no-internal-imports.test.ts";
       packageSource.scripts.pretest = "true";
       packageSource.scripts.postbuild = "node scripts/rewrite-vitest-config.mjs";
       packageSource.scripts.prepare = "node scripts/job-gated-vitest-rewrite.mjs";
@@ -4152,7 +4151,6 @@ export type NegativeMissingSubpath = typeof import("@oomkapwn/enquire-mcp/fts5-m
       await fs.writeFile(path.join(fixtureRoot, ".npmrc"), "node-options=--require=./scripts/filter-vitest.cjs\n");
       await fs.writeFile(path.join(fixtureRoot, "binding.gyp"), "{}\n");
       await fs.writeFile(path.join(fixtureRoot, "npm-shrinkwrap.json"), "{}\n");
-      const ciFixture = path.join(fixtureRoot, ".github", "workflows", "ci.yml");
       const ciFixtureSource = await fs.readFile(ciFixture, "utf8");
       await fs.writeFile(
         ciFixture,

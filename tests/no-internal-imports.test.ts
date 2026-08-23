@@ -12,11 +12,11 @@ import {
   inspectStaticVitestFocusControls
 } from "../scripts/lib/oia-vitest-focus.mjs";
 import {
+  ciTestSelectionProblems,
   EXPECTED_BUILD_SCRIPT,
   EXPECTED_COVERAGE_SCRIPT,
   EXPECTED_PREPARE_SCRIPT,
   FORBIDDEN_REQUIRED_RUN_LIFECYCLE_SCRIPTS,
-  ciTestSelectionProblems,
   forbiddenNpmProjectEntries,
   inspectRepositoryVitestSelectionControls,
   packageTestSelectionProblems,
@@ -1648,9 +1648,11 @@ describe("Class A invariant — no test imports value from registration boilerpl
       expect.stringMatching(/^vitest config must parse without diagnostics:/u)
     ]);
     expect(forbiddenNpmProjectEntries([])).toEqual([]);
-    expect(
-      forbiddenNpmProjectEntries(["package.json", "npm-shrinkwrap.json", ".npmrc", "binding.gyp"])
-    ).toEqual([".npmrc", "binding.gyp", "npm-shrinkwrap.json"]);
+    expect(forbiddenNpmProjectEntries(["package.json", "npm-shrinkwrap.json", ".npmrc", "binding.gyp"])).toEqual([
+      ".npmrc",
+      "binding.gyp",
+      "npm-shrinkwrap.json"
+    ]);
     const selectionCensusScratch = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-selection-census-"));
     try {
       await fs.mkdir(path.join(selectionCensusScratch, "vitest.config.ts"));
@@ -1966,7 +1968,7 @@ describe("Class A invariant — no test imports value from registration boilerpl
       current.vitestConfig,
       '    include: ["tests/**/*.test.ts"],\n',
       '    include: ["tests/**/*.test.ts"],\n' +
-        '    testNamePattern: /^(?!Class A invariant — no test imports value from registration boilerplate)/,\n'
+        "    testNamePattern: /^(?!Class A invariant — no test imports value from registration boilerplate)/,\n"
     );
     expect(currentVitestProblems(vitestWithNameFilter)).toContain(
       "vitest test config must retain its exact reviewed static key set"
@@ -2078,11 +2080,7 @@ describe("Class A invariant — no test imports value from registration boilerpl
       "vitest coverage config must retain its exact reviewed static key set"
     );
     const vitestWithExecutableCoverageInitializer = replaceExactly(
-      replaceExactly(
-        current.vitestConfig,
-        "    coverage: {\n",
-        "    coverage: (jobGatedSideEffect(), {\n"
-      ),
+      replaceExactly(current.vitestConfig, "    coverage: {\n", "    coverage: (jobGatedSideEffect(), {\n"),
       "      }\n    }\n  }\n});\n",
       "      }\n    })\n  }\n});\n"
     );

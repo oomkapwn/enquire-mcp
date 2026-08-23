@@ -84,7 +84,7 @@ import {
 
 const SPLIT_FIXTURE_SHA256 = "8096105d1acb35f436f3f72f58addfba1a883c5f4f5f9fc6c3ef6eb953e8b93f";
 const SPLIT_PROJECTION_SHA256 = "30ddc2aa8a0bd0697b19ee2a62517347869c64214f52f1f1ab837272204a3c6d";
-const NPM_CI_CONTRACT_FIXTURE_SHA256 = "5e9f3bda1e7105d5d6bf4ea9fd5c28ef94c0409c9f3066e9d9fca94fe9d63034";
+const NPM_CI_CONTRACT_FIXTURE_SHA256 = "cca2875787c2d3772532a11910337d00b212e7c89ffbeb138ebc62c219d2223c";
 
 interface WorkflowJob {
   id: number;
@@ -3883,6 +3883,27 @@ function npmCiWorkflowValueDigest(value: unknown): string {
   return createHash("sha256").update(json, "utf8").digest("hex");
 }
 
+function npmCiPreinstallDigest(identity: string, steps: readonly YamlRecord[]): string {
+  if (identity !== "ci.yml#lint") return npmCiWorkflowValueDigest(steps);
+  let carrierCount = 0;
+  const normalizedSteps = steps.map((step) => {
+    if (typeof step.run !== "string") return step;
+    const matches = [...step.run.matchAll(/^expected_manifest_sha=[0-9a-f]{64}$/gmu)];
+    carrierCount += matches.length;
+    const carrierMatch = matches[0];
+    const carrier = carrierMatch?.[0];
+    const carrierIndex = carrierMatch?.index;
+    if (matches.length !== 1 || carrier === undefined || carrierIndex === undefined) return step;
+    const carrierPrefix = step.run.slice(0, carrierIndex);
+    const carrierSuffix = step.run.slice(carrierIndex + carrier.length);
+    return {
+      ...step,
+      run: `${carrierPrefix}expected_manifest_sha=<normalized>${carrierSuffix}`
+    };
+  });
+  return npmCiWorkflowValueDigest(carrierCount === 1 ? normalizedSteps : steps);
+}
+
 function npmCiHelperNumericPolicyProblems(source: string): string[] {
   const match =
     /export const NPM_CI_RETRY_POLICY = Object\.freeze\(\{\s*attempts:\s*([0-9_]+),\s*attemptTimeoutMs:\s*([0-9_]+),\s*windowsAttempts:\s*([0-9_]+),\s*windowsAttemptTimeoutMs:\s*([0-9_]+),\s*killGraceMs:\s*([0-9_]+),\s*retryDelayMs:\s*([0-9_]+),?\s*\}\);/u.exec(
@@ -4012,14 +4033,14 @@ function npmCiWorkflowProblems(workflows: ReadonlyMap<string, string>): string[]
     const helperSteps = steps.filter((step) => step.run === NPM_CI_HELPER_COMMAND);
     const helper = helperSteps[0];
     const helperIndex = helper === undefined ? -1 : steps.indexOf(helper);
-    const preinstallDigest = helperIndex < 0 ? "" : npmCiWorkflowValueDigest(steps.slice(0, helperIndex));
+    const identity = `${filename}#${jobId}`;
+    const preinstallDigest = helperIndex < 0 ? "" : npmCiPreinstallDigest(identity, steps.slice(0, helperIndex));
     const setupIndexes = steps
       .map((step, index) =>
         typeof step.uses === "string" && /^actions\/setup-node@[0-9a-f]{40}$/u.test(step.uses) ? index : -1
       )
       .filter((index) => index >= 0);
     const setupStep = setupIndexes.length === 1 ? steps[setupIndexes[0] ?? -1] : undefined;
-    const identity = `${filename}#${jobId}`;
     const defaults = yamlRecord(job.defaults);
     const defaultRun = yamlRecord(defaults?.run);
     const expectsBashDefault = NPM_CI_BASH_DEFAULT_JOBS.has(identity);
@@ -4897,6 +4918,30 @@ async function assertNpmCiWorkflowContract(): Promise<void> {
   expect(latchWaits).toEqual([]);
 
   expect(npmCiWorkflowProblems(workflowSources)).toEqual([]);
+  const ciWorkflowSource = workflowSources.get("ci.yml");
+  if (ciWorkflowSource === undefined) throw new Error("missing ci.yml workflow source");
+  const receiptCarrier = /^ {10}expected_manifest_sha=([0-9a-f]{64})$/mu.exec(ciWorkflowSource)?.[0];
+  if (receiptCarrier === undefined) throw new Error("missing lint receipt carrier");
+  const replacementDigest = receiptCarrier.endsWith("f".repeat(64)) ? "e".repeat(64) : "f".repeat(64);
+  const rekeyedReceiptCarrier = `          expected_manifest_sha=${replacementDigest}`;
+  expect(
+    npmCiWorkflowProblems(
+      new Map(workflowSources).set("ci.yml", mutateSourceOnce(ciWorkflowSource, receiptCarrier, rekeyedReceiptCarrier))
+    )
+  ).toEqual([]);
+  for (const invalidReceiptCarrier of [
+    "          expected_manifest_sha=missing",
+    `${receiptCarrier}\n${receiptCarrier}`
+  ]) {
+    expect(
+      npmCiWorkflowProblems(
+        new Map(workflowSources).set(
+          "ci.yml",
+          mutateSourceOnce(ciWorkflowSource, receiptCarrier, invalidReceiptCarrier)
+        )
+      )
+    ).toContain(`${NPM_CI_WORKFLOW_PROBLEM}: invalid ci.yml#lint`);
+  }
   for (const [jobId, staleTimeout] of [
     ["test", 10],
     ["test-macos", 15]

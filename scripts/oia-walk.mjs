@@ -24,7 +24,7 @@
 // matched fragment). v3.9.0-rc.8 (audit S3): this enumeration was stale —
 // it listed only checks 1–5 while the code grew to 11 distinct walks. The
 // canonical count is "12" (the top-level numbered checks 1–12), but check 4
-// has historically accreted sub-checks (4b/4c/4d/4e/4f), so 21 explicitly
+// has historically accreted sub-checks (4b/4c/4d/4e/4f), so 22 explicitly
 // marked checks/sub-checks actually run. Full honest list below:
 //
 //   1.  STALE VERSION TOMBSTONES — `vX.Y.Z` / `X.Y.Z-rc.N` in src/*.ts
@@ -85,12 +85,18 @@
 //       pin the exact persistent full-suite config, root npm execution inputs,
 //       install/build/test commands, and blocking CI test job, so focus or a
 //       pre-collection selector cannot skip every detector after OIA starts.
+//   12d. VITEST TRUSTED BOOTSTRAP — the required lint job verifies a
+//       CI-anchored 16-entry receipt before setup-node: 15 raw bootstrap files
+//       plus the complete workflow with only its receipt-SHA carrier normalized.
+//       OIA verifies the same relationship before any other repository or
+//       third-party import and again after the walk, plus exact config,
+//       implicit-input, and physical-path census.
 //
 // NB: check 4d/4e/4f/4 appear after the 4b/4c sub-checks for historical-accretion
 // reasons; the numbering is kept stable because CHANGELOG entries reference
 // these IDs. The canonical top-level count stays 12: 12b remains the dist-split
-// / L-3 sub-check, and the independent assurance follow-up is appended as 12c
-// rather than renumbering historical IDs.
+// / L-3 sub-check, and the independent assurance follow-ups are appended as
+// 12c/12d rather than renumbering historical IDs.
 //
 // Exit codes:
 //   0 — no findings, or only overridable findings with --allow
@@ -100,18 +106,25 @@ import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { load } from "js-yaml";
-import { expectedCoverageSourceFiles, normalizeCoverageReportedPath } from "./lib/coverage-policy.mjs";
-import { inspectEmbeddingsOfflineGuards } from "./lib/oia-offline-guard.mjs";
-import { inspectReleaseProvenanceWorkflow } from "./lib/oia-release-claims.mjs";
-import { inspectRepositoryVitestFocusControls } from "./lib/oia-vitest-focus.mjs";
-import { inspectRepositoryVitestSelectionControls } from "./lib/oia-vitest-selection.mjs";
+import { formatVitestBootstrapError, inspectRepositoryVitestBootstrap } from "./lib/oia-vitest-bootstrap.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const repoRoot = resolve(__dirname, "..");
 
 const ALLOW_MODE = process.argv.includes("--allow");
+
+const initialVitestBootstrapFindings = inspectRepositoryVitestBootstrap(repoRoot);
+if (initialVitestBootstrapFindings.length > 0) {
+  throw new Error(formatVitestBootstrapError(initialVitestBootstrapFindings));
+}
+
+const { load } = await import("js-yaml");
+const { expectedCoverageSourceFiles, normalizeCoverageReportedPath } = await import("./lib/coverage-policy.mjs");
+const { inspectEmbeddingsOfflineGuards } = await import("./lib/oia-offline-guard.mjs");
+const { inspectReleaseProvenanceWorkflow } = await import("./lib/oia-release-claims.mjs");
+const { inspectRepositoryVitestFocusControls } = await import("./lib/oia-vitest-focus.mjs");
+const { inspectRepositoryVitestSelectionControls } = await import("./lib/oia-vitest-selection.mjs");
 
 /** All findings as a flat array. Each entry: { file, line, kind, evidence, hint }. */
 const findings = [];
@@ -1334,7 +1347,6 @@ for (const docFile of DOCS_FILES_TO_SCAN) {
     ]
   ]);
   const expectedPreinstallDigests = new Map([
-    ["ci.yml#lint", "559a7e13a198905e6ac358a1914d6e9fa087ad055f55b27c380ae171424f3d6b"],
     ["ci.yml#test", "0b00c055e9a2707a37043a75423ce6b68004d5750b872ce6cf40e3dcadd1c4db"],
     ["ci.yml#test-windows", "da943043234f9a375c085802079dc10cf411019cbc03b4747de9af178dc6a9ca"],
     ["ci.yml#test-macos", "bad0645f602426986294fd032eac707a60440bd897f27a5105c05d54f054cc4e"],
@@ -1717,7 +1729,10 @@ for (const docFile of DOCS_FILES_TO_SCAN) {
           "The bounded helper requires exactly one SHA-pinned setup-node step earlier in the same job."
         );
       }
-      if (preinstallDigest !== expectedPreinstallDigests.get(identity)) {
+      // The lint preinstall boundary carries the receipt SHA, so freezing its
+      // raw digest here would create manifest -> OIA -> CI -> manifest recursion.
+      // Check 12d instead validates that job's complete shape relationally.
+      if (identity !== "ci.yml#lint" && preinstallDigest !== expectedPreinstallDigests.get(identity)) {
         record(
           "NPM-CI-PREINSTALL-BOUNDARY",
           rel,
@@ -2084,6 +2099,26 @@ try {
     1,
     error instanceof Error ? `${error.name}: ${error.message}` : String(error),
     "The independent Vitest selection scan did not complete. Treat this as a blocking unverified state and repair the scanner or unreadable policy input before release."
+  );
+}
+
+// ─── Check 12d: CI-anchored trusted Vitest bootstrap receipt ────────────
+// The first scan ran before every other repository/third-party import. This
+// second scan catches post-start drift and routes it through the ordinary
+// complete OIA reporter. The required lint workflow independently checks the
+// same byte receipt before setup-node, so an unchanged, honestly executed lint
+// verifier blocks unilateral protected-file drift before it can disable OIA.
+try {
+  for (const finding of inspectRepositoryVitestBootstrap(repoRoot)) {
+    record(finding.kind, finding.file, finding.line, finding.evidence, finding.hint);
+  }
+} catch (error) {
+  record(
+    "VITEST-BOOTSTRAP-SCAN-ERROR",
+    "scripts/lib/oia-vitest-bootstrap.mjs",
+    1,
+    error instanceof Error ? `${error.name}: ${error.message}` : String(error),
+    "The trusted Vitest bootstrap re-scan did not complete. Treat this as a blocking unverified state."
   );
 }
 

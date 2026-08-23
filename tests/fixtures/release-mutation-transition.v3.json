@@ -189,7 +189,7 @@
       "reason": "reviewed source bytes changed while catalogue identity stayed fixed",
       "witness": {
         "from": "sha256:ccccb48bf5cf1d24ae9c64d4bb8eac7b7ded90fcbb7453dbb72b3dea981e12ea",
-        "to": "sha256:9d4b3228126ddcd32c0a0ee73d54b377cb74000064f7a546079474d1fecf0eb9"
+        "to": "sha256:c2e36f6079694ca6b6e6a54072c0246f78e96380ee8db7e682edc6dd3a089f0e"
       }
     },
     {
@@ -2693,7 +2693,7 @@
     }
   ],
   "current": {
-    "matrixSourceSha256": "9e364b3fefe96958f8bd8785503c3990dd70c91678a3086d953628b79db6e012",
+    "matrixSourceSha256": "91a3d2ecb1169329769b61ec02efb888c71155e9c5a398c57cff931b85fc6f71",
     "matrixSliceSha256": "e6fbe3381884aa8c37d1baed8c7880b9ac9c53270ff1be425cafff03ba78b676",
     "legacyCount": 523,
     "declarativeCount": 94,

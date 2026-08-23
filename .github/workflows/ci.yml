@@ -19,6 +19,69 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Verify trusted Vitest bootstrap
+        shell: /bin/bash --noprofile --norc -p -e -o pipefail {0}
+        working-directory: ${{ github.workspace }}
+        env:
+          BASH_ENV: ""
+          ENV: ""
+          LC_ALL: C
+          LD_PRELOAD: ""
+        run: |
+          set -u
+          manifest=.github/trusted-vitest-bootstrap.sha256
+          expected_manifest_sha=7334875f48cbefdbc794ccdb0a857eb334640658d5e39e9efbdbcd75364b0193
+          expected_path_sha=5581eea048d9360a3fff43c79e1d55d40492a082ee468ee74c3738f60c2f82f9
+          workflow=.github/workflows/ci.yml
+          [[ -d .github && ! -L .github ]]
+          [[ -d .github/workflows && ! -L .github/workflows ]]
+          [[ -f "$manifest" && ! -L "$manifest" ]]
+          [[ -f "$workflow" && ! -L "$workflow" ]]
+          /usr/bin/printf '%s  %s\n' "$expected_manifest_sha" "$manifest" |
+            /usr/bin/sha256sum --check --strict
+          last_byte_lf_count=$(/usr/bin/tail -c 1 "$manifest" | /usr/bin/wc -l)
+          [[ "$last_byte_lf_count" -eq 1 ]]
+          line_count=$(/usr/bin/wc -l < "$manifest")
+          [[ "$line_count" -eq 16 ]]
+          paths=()
+          expected_workflow_sha=
+          while IFS= read -r record; do
+            [[ "$record" =~ ^[0-9a-f]{64}\ \ [^[:space:]].*$ ]]
+            path=${record:66}
+            paths+=("$path")
+            if [[ "$path" == "$workflow" ]]; then
+              expected_workflow_sha=${record:0:64}
+            fi
+            [[ -f "$path" && ! -L "$path" ]]
+            parent=${path%/*}
+            while [[ "$parent" != "$path" ]]; do
+              [[ -d "$parent" && ! -L "$parent" ]]
+              path=$parent
+              parent=${path%/*}
+            done
+          done < "$manifest"
+          [[ ${#paths[@]} -eq 16 ]]
+          actual_path_sha=$(/usr/bin/printf '%s\n' "${paths[@]}" | /usr/bin/sha256sum)
+          actual_path_sha=${actual_path_sha%% *}
+          [[ "$actual_path_sha" == "$expected_path_sha" ]]
+          [[ -n "$expected_workflow_sha" ]]
+          carrier_count=$(/usr/bin/grep -Ec '^          expected_manifest_sha=[0-9a-f]{64}$' "$workflow")
+          [[ "$carrier_count" -eq 1 ]]
+          actual_workflow_sha=$(
+            /usr/bin/sed -E \
+              's/^          expected_manifest_sha=[0-9a-f]{64}$/          expected_manifest_sha=<normalized>/' \
+              "$workflow" |
+              /usr/bin/sha256sum
+          )
+          actual_workflow_sha=${actual_workflow_sha%% *}
+          [[ "$actual_workflow_sha" == "$expected_workflow_sha" ]]
+          shopt -s nullglob
+          configs=(vitest.config.* vitest.projects.* vitest.workspace.*)
+          [[ ${#configs[@]} -eq 1 && "${configs[0]}" == vitest.config.ts ]]
+          for forbidden in ".n""pmrc" binding.gyp "n""pm-shrinkwrap.json" .env .env.local .env.test .env.test.local; do
+            [[ ! -e "$forbidden" && ! -L "$forbidden" ]]
+          done
+          /usr/bin/head -n 15 "$manifest" | /usr/bin/sha256sum --check --strict
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: 22

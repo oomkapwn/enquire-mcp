@@ -140,7 +140,7 @@ jobs:
           const fixturePath = "tests/npm-ci-workflow-contract-fixtures.ts";
           const fixtureSource = replaceOne(
             readFileSync(fixturePath, "utf8"),
-            /(\["ci\.yml#lint", ")[0-9a-f]{64}("\])/gu,
+            /(export const NPM_CI_PREINSTALL_DIGESTS = new Map<string, string>\(\[\n  \["ci\.yml#lint", ")[0-9a-f]{64}("\],)/gu,
             `$1${lintDigest}$2`,
             "lint preinstall fixture"
           );

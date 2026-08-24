@@ -265,11 +265,11 @@ const EXPECTED_REPOSITORY_MUTATION_HELPER_CALL_ENTRIES = [
   ],
   [
     "meta-invariant-coverage.test.ts",
-    { count: 241, sha256: "4f70e79f24393c876b2519909060e4e005d404530c9fa846cb6a001f7d3b859e" }
+    { count: 246, sha256: "448f506710382ce86186a253eaf1ee0f12b091d7944a89c8c5db1c2698c8b448" }
   ],
   [
     "no-internal-imports.test.ts",
-    { count: 79, sha256: "bcfbdcbb53f29bafaee23ea6f846317426c84a01e5f7bb4c0050d723b118fdac" }
+    { count: 79, sha256: "2d72dcd050c19d5112e4f1d2e4abfdaa699dd0a1dfe70c4e97b9761e3e4ab51e" }
   ],
   [
     "release-mutation-transition.test.ts",
@@ -2853,24 +2853,22 @@ function isValueBindingIdentifier(node: ts.Identifier): boolean {
 /** Whether one source imports the shared exact-mutation module at runtime. */
 function importsExactMutationHelperModule(filename: string, source: string): boolean {
   const sourceFile = ts.createSourceFile(filename, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
-  return sourceFile.statements.some(
-    (statement) => {
-      if (
-        !ts.isImportDeclaration(statement) ||
-        !ts.isStringLiteral(statement.moduleSpecifier) ||
-        statement.moduleSpecifier.text !== "./helpers/exact-source-mutation.js"
-      ) {
-        return false;
-      }
-      const clause = statement.importClause;
-      if (clause === undefined) return true;
-      if (clause.isTypeOnly) return false;
-      if (clause.name !== undefined) return true;
-      const bindings = clause.namedBindings;
-      if (bindings === undefined || ts.isNamespaceImport(bindings)) return true;
-      return bindings.elements.length === 0 || bindings.elements.some((element) => !element.isTypeOnly);
+  return sourceFile.statements.some((statement) => {
+    if (
+      !ts.isImportDeclaration(statement) ||
+      !ts.isStringLiteral(statement.moduleSpecifier) ||
+      statement.moduleSpecifier.text !== "./helpers/exact-source-mutation.js"
+    ) {
+      return false;
     }
-  );
+    const clause = statement.importClause;
+    if (clause === undefined) return true;
+    if (clause.isTypeOnly) return false;
+    if (clause.name !== undefined) return true;
+    const bindings = clause.namedBindings;
+    if (bindings === undefined || ts.isNamespaceImport(bindings)) return true;
+    return bindings.elements.length === 0 || bindings.elements.some((element) => !element.isTypeOnly);
+  });
 }
 
 /** Require direct, unaliased helper imports and reject every local binding that can shadow them. */
@@ -3017,11 +3015,7 @@ function exactMutationHelperMemberSurfaceProblems(filename: string, source: stri
       !isTypeOnlyAccess(node)
     ) {
       reportAll(helperNamesFromProperty(node.name), node.name);
-    } else if (
-      ts.isImportSpecifier(node) &&
-      node.propertyName !== undefined &&
-      !isErasedRuntimeNode(node)
-    ) {
+    } else if (ts.isImportSpecifier(node) && node.propertyName !== undefined && !isErasedRuntimeNode(node)) {
       reportAll(helperNamesFromProperty(node.propertyName), node.propertyName);
     } else if (ts.isExportSpecifier(node) && !isErasedRuntimeNode(node)) {
       const names = [node.propertyName, node.name].filter(
@@ -3622,15 +3616,13 @@ function focusTimeoutRegistrationProblems(source: string): string[] {
       if (!ts.isExpressionStatement(statement) || !ts.isCallExpression(statement.expression)) return [];
       const call = statement.expression;
       const title = call.arguments[0];
-      return (
-        ts.isIdentifier(call.expression) &&
+      return ts.isIdentifier(call.expression) &&
         call.expression.text === "it" &&
         title !== undefined &&
         ts.isStringLiteral(title) &&
         title.text === expectedTitle
-          ? [{ call, statementIndex }]
-          : []
-      );
+        ? [{ call, statementIndex }]
+        : [];
     });
     const testRegistrationEntry = matches.length === 1 ? matches[0] : undefined;
     const testRegistration = testRegistrationEntry?.call;
@@ -8299,26 +8291,14 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
     ].join("\n");
     expect(focusTimeoutRegistrationProblems(exactSource)).toEqual([]);
 
-    const inheritedTimeout = replaceExactly(
-      exactSource,
-      exactHookRegistration,
-      "  beforeAll(async () => {}, 15_000);"
-    );
+    const inheritedTimeout = replaceExactly(exactSource, exactHookRegistration, "  beforeAll(async () => {}, 15_000);");
     const underBufferedTimeout = replaceExactly(
       exactSource,
       exactHookRegistration,
       "  beforeAll(async () => {}, 30_000);"
     );
-    const missingTimeout = replaceExactly(
-      exactSource,
-      exactHookRegistration,
-      "  beforeAll(async () => {});"
-    );
-    const raisedTimeout = replaceExactly(
-      exactSource,
-      exactHookRegistration,
-      "  beforeAll(async () => {}, 45_001);"
-    );
+    const missingTimeout = replaceExactly(exactSource, exactHookRegistration, "  beforeAll(async () => {});");
+    const raisedTimeout = replaceExactly(exactSource, exactHookRegistration, "  beforeAll(async () => {}, 45_001);");
     const synchronousCallback = replaceExactly(exactSource, "beforeAll(async () =>", "beforeAll(() =>");
     const registrationAfterReturn = replaceExactly(
       exactSource,
@@ -8356,11 +8336,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
         const candidate = replaceExactly(exactSource, exactTestRegistration, candidateRegistration);
         expect(focusTimeoutRegistrationProblems(candidate)).toContain(testProblem);
       }
-      const unreachable = replaceExactly(
-        exactSource,
-        exactTestRegistration,
-        `  return;\n${exactTestRegistration}`
-      );
+      const unreachable = replaceExactly(exactSource, exactTestRegistration, `  return;\n${exactTestRegistration}`);
       expect(focusTimeoutRegistrationProblems(unreachable)).toContain(testProblem);
       const eagerPrefix = replaceExactly(
         exactSource,
@@ -8416,11 +8392,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
         "and no competing runtime bindings; found direct 0, competing 1"
     );
 
-    const shadowedIt = replaceExactly(
-      exactSource,
-      "\n});",
-      "\n  function it(..._args: unknown[]): void {}\n});"
-    );
+    const shadowedIt = replaceExactly(exactSource, "\n});", "\n  function it(..._args: unknown[]): void {}\n});");
     expect(focusTimeoutRegistrationProblems(shadowedIt)).toContain(
       `${FOCUS_TIMEOUT_FILENAME} must bind it through one direct unaliased runtime vitest named import ` +
         "and no competing runtime bindings; found direct 1, competing 1"
@@ -8552,10 +8524,10 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       'import { replaceExactly } from "./helpers/exact-source-mutation.js";\n' +
         'replaceExactly.call(undefined, "alpha", "alpha", "omega");'
     ]) {
-      expect(
-        exactMutationHelperBindingProblems("abs-path-leak-invariant.test.ts", escapedHelperReference)
-      ).toEqual(
-        expect.arrayContaining([expect.stringMatching(/uses exact mutation helper replaceExactly outside a direct censused call/)])
+      expect(exactMutationHelperBindingProblems("abs-path-leak-invariant.test.ts", escapedHelperReference)).toEqual(
+        expect.arrayContaining([
+          expect.stringMatching(/uses exact mutation helper replaceExactly outside a direct censused call/)
+        ])
       );
     }
     const erasedHelperReference =
@@ -8591,9 +8563,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
     );
     expect(
       repositoryMutationHelperSurfaceProblems(unmappedHelperFilename, 'replaceExactly("alpha", "alpha", "omega");')
-    ).toEqual([
-      expect.stringMatching(/1 direct exact mutation-helper call\(s\).*absent from their call census/)
-    ]);
+    ).toEqual([expect.stringMatching(/1 direct exact mutation-helper call\(s\).*absent from their call census/)]);
     expect(
       repositoryMutationHelperSurfaceProblems(
         unmappedHelperFilename,
@@ -8614,24 +8584,24 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
     );
     const constKeyMemberHelper =
       'const helperKey = "replaceExactly";\n' +
-      'const weak = { [helperKey]: (source: string): string => source.slice(0) };\n' +
+      "const weak = { [helperKey]: (source: string): string => source.slice(0) };\n" +
       'void weak[helperKey]("alpha");';
     expect(repositoryMutationHelperSurfaceProblems(unmappedHelperFilename, constKeyMemberHelper)).toEqual(
       expect.arrayContaining([expect.stringMatching(/exposes exact mutation helper replaceExactly/)])
     );
     const safeConstKeyMember =
       'const helperKey = "documentMutation";\n' +
-      'const ordinary = { [helperKey]: (source: string): string => source };\n' +
+      "const ordinary = { [helperKey]: (source: string): string => source };\n" +
       'void ordinary[helperKey]("alpha");';
     expect(repositoryMutationHelperSurfaceProblems(unmappedHelperFilename, safeConstKeyMember)).toEqual([]);
     const unresolvedComposedHelperKey =
-      'const weak = { replaceExactly: (source: string): string => source.slice(0) };\n' +
+      "const weak = { replaceExactly: (source: string): string => source.slice(0) };\n" +
       'void weak[(0, "replaceExactly")]("alpha");';
     expect(repositoryMutationOracleProblems(unmappedHelperFilename, unresolvedComposedHelperKey)).toEqual(
-      expect.arrayContaining([expect.stringMatching(/unclassified dynamic computed method access/)]),
+      expect.arrayContaining([expect.stringMatching(/unclassified dynamic computed method access/)])
     );
     const helperExportLabel =
-      'const safe = (source: string): string => source.slice(0); export { safe as replaceExactly };';
+      "const safe = (source: string): string => source.slice(0); export { safe as replaceExactly };";
     expect(repositoryMutationHelperSurfaceProblems(unmappedHelperFilename, helperExportLabel)).toEqual(
       expect.arrayContaining([expect.stringMatching(/exposes exact mutation helper replaceExactly/)])
     );
@@ -8670,11 +8640,9 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
     );
     const localAuthorityFilename = "release-integrity.test.ts";
     const unexpectedLocalAuthorityHelper =
-      'function replaceIntegerAllExactly(source: string): string { return source.slice(0); }\n' +
+      "function replaceIntegerAllExactly(source: string): string { return source.slice(0); }\n" +
       'void replaceIntegerAllExactly("alpha");';
-    expect(
-      repositoryMutationHelperSurfaceProblems(localAuthorityFilename, unexpectedLocalAuthorityHelper)
-    ).toEqual(
+    expect(repositoryMutationHelperSurfaceProblems(localAuthorityFilename, unexpectedLocalAuthorityHelper)).toEqual(
       expect.arrayContaining([
         expect.stringMatching(/binds unreviewed local exact mutation helper replaceIntegerAllExactly/),
         expect.stringMatching(/calls unreviewed local exact mutation helper replaceIntegerAllExactly/)
@@ -9299,9 +9267,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       ["release-integrity.test.ts", ["replaceAllExactly", "replaceExactly"]]
     ]);
     expect(
-      [...LOCAL_EXACT_MUTATION_HELPER_AUTHORITIES.keys()].filter(
-        (filename) => !rawMutationInventorySet.has(filename)
-      )
+      [...LOCAL_EXACT_MUTATION_HELPER_AUTHORITIES.keys()].filter((filename) => !rawMutationInventorySet.has(filename))
     ).toEqual([]);
     expect(
       EXPECTED_REPOSITORY_MUTATION_HELPER_IMPORTS.has(EXACT_MUTATION_HELPER_IMPLEMENTATION_FILE) ||

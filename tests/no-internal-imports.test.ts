@@ -224,14 +224,7 @@ const MODULE_RUNTIME_LOADER_MEMBERS = new Set([
   "parent",
   "require"
 ]);
-const GLOBAL_THIS_RUNTIME_CAPABILITIES = new Set([
-  "global",
-  "globalThis",
-  "module",
-  "process",
-  "require",
-  "vi"
-]);
+const GLOBAL_THIS_RUNTIME_CAPABILITIES = new Set(["global", "globalThis", "module", "process", "require", "vi"]);
 const PROCESS_RUNTIME_LOADER_MEMBERS = new Set(["getBuiltinModule", "mainModule"]);
 // Canonical JSON SHA-256 pins keep every reviewed step exact without copying
 // multiline shell bodies into this invariant a second time.
@@ -641,18 +634,14 @@ function registrationTimeoutProblems(
   const registrationEntry = registrations.length === 1 ? registrations[0] : undefined;
   const registration = registrationEntry?.call;
   const prefixStatements =
-    registrationEntry === undefined
-      ? []
-      : suiteCallback.body.statements.slice(0, registrationEntry.statementIndex);
+    registrationEntry === undefined ? [] : suiteCallback.body.statements.slice(0, registrationEntry.statementIndex);
   const prefixRegistrationBindings = prefixStatements.flatMap((statement): RegistrationVitestBinding[] => {
     if (!ts.isExpressionStatement(statement) || !ts.isCallExpression(statement.expression)) return [];
     const expression = statement.expression.expression;
     if (!ts.isIdentifier(expression)) return [];
     return expression.text === "beforeAll" || expression.text === "it" ? [expression.text] : [];
   });
-  const requiredBindings = [
-    ...new Set<RegistrationVitestBinding>(["describe", callee, ...prefixRegistrationBindings])
-  ];
+  const requiredBindings = [...new Set<RegistrationVitestBinding>(["describe", callee, ...prefixRegistrationBindings])];
   const bindingProblems = registrationVitestBindingProblems(sourceFile, filename, requiredBindings);
   const shadowsTargetCallee = suiteCallback.body.statements.some(
     (statement) => ts.isFunctionDeclaration(statement) && statement.name !== undefined && statement.name.text === callee
@@ -856,7 +845,11 @@ interface BoundRuntimeModuleSource {
   readonly sourceFile: ts.SourceFile;
 }
 
-function bindRuntimeModuleSource(filename: string, source: string, scriptKind: ts.ScriptKind): BoundRuntimeModuleSource {
+function bindRuntimeModuleSource(
+  filename: string,
+  source: string,
+  scriptKind: ts.ScriptKind
+): BoundRuntimeModuleSource {
   const virtualFilename = `/__runtime_module_edges__/${filename}`;
   const options: ts.CompilerOptions = {
     allowJs: true,
@@ -946,8 +939,7 @@ function isRuntimeLoaderIdentifierReference(identifier: ts.Identifier): boolean 
     const declaration = parent.parent.parent;
     if (
       parent.isTypeOnly ||
-      (ts.isExportDeclaration(declaration) &&
-        (declaration.isTypeOnly || declaration.moduleSpecifier !== undefined))
+      (ts.isExportDeclaration(declaration) && (declaration.isTypeOnly || declaration.moduleSpecifier !== undefined))
     ) {
       return false;
     }
@@ -958,10 +950,7 @@ function isRuntimeLoaderIdentifierReference(identifier: ts.Identifier): boolean 
 
 type RuntimeCapabilityKind = "globalThis" | "module" | "process" | "vi";
 
-function directVitestRuntimeRootSymbols(
-  sourceFile: ts.SourceFile,
-  checker: ts.TypeChecker
-): ReadonlySet<ts.Symbol> {
+function directVitestRuntimeRootSymbols(sourceFile: ts.SourceFile, checker: ts.TypeChecker): ReadonlySet<ts.Symbol> {
   const symbols = new Set<ts.Symbol>();
   for (const statement of sourceFile.statements) {
     if (
@@ -975,11 +964,7 @@ function directVitestRuntimeRootSymbols(
       continue;
     }
     for (const element of statement.importClause.namedBindings.elements) {
-      if (
-        !element.isTypeOnly &&
-        element.propertyName === undefined &&
-        VITEST_RUNTIME_ROOTS.has(element.name.text)
-      ) {
+      if (!element.isTypeOnly && element.propertyName === undefined && VITEST_RUNTIME_ROOTS.has(element.name.text)) {
         const symbol = runtimeValueSymbolAt(checker, element.name);
         if (symbol !== undefined) symbols.add(symbol);
       }
@@ -1069,10 +1054,7 @@ function runtimeCapabilityKind(
     if (memberName === "globalThis") return "globalThis";
     return memberName === "module" || memberName === "process" || memberName === "vi" ? memberName : undefined;
   }
-  if (
-    memberName === "mainModule" &&
-    receiverCapability === "process"
-  ) {
+  if (memberName === "mainModule" && receiverCapability === "process") {
     return "module";
   }
   return undefined;
@@ -1095,11 +1077,7 @@ function runtimeCapabilityDestructuringMembers(
 ): readonly RuntimeCapabilityDestructuringMember[] | undefined {
   const envelope = runtimeExpressionEnvelope(expression);
   const parent = envelope.parent;
-  if (
-    ts.isVariableDeclaration(parent) &&
-    parent.initializer === envelope &&
-    ts.isObjectBindingPattern(parent.name)
-  ) {
+  if (ts.isVariableDeclaration(parent) && parent.initializer === envelope && ts.isObjectBindingPattern(parent.name)) {
     return parent.name.elements.map((element) => ({
       rest: element.dotDotDotToken !== undefined,
       staticName:
@@ -1152,10 +1130,7 @@ function capabilityDestructuringAssignmentResultIsDiscarded(expression: ts.Expre
   );
 }
 
-function safeObjectDestructuringFromCapability(
-  expression: ts.Expression,
-  capability: RuntimeCapabilityKind
-): boolean {
+function safeObjectDestructuringFromCapability(expression: ts.Expression, capability: RuntimeCapabilityKind): boolean {
   const members = runtimeCapabilityDestructuringMembers(expression);
   if (!capabilityDestructuringAssignmentResultIsDiscarded(expression)) return false;
   return (
@@ -1205,8 +1180,7 @@ function runtimeLoaderImportProblems(filename: string, declaration: ts.ImportDec
           element.name.text === importedName;
         if (
           !element.isTypeOnly &&
-          ((VITEST_RUNTIME_ROOTS.has(importedName) && !directRuntimeRoot) ||
-            VITEST_RUNTIME_LOADERS.has(importedName))
+          ((VITEST_RUNTIME_ROOTS.has(importedName) && !directRuntimeRoot) || VITEST_RUNTIME_LOADERS.has(importedName))
         ) {
           problems.push(
             `${filename} acquires Vitest runtime loader ${importedName} outside the reviewed static import graph`
@@ -1269,19 +1243,13 @@ function runtimeModuleEdges(filename: string, source: string): RuntimeModuleEdge
             runtimeCapabilityKind(receiver, checker, vitestRuntimeRootSymbols) === "globalThis" &&
             runtimeMemberName(callee) === "require";
           const capability =
-            receiver === undefined
-              ? undefined
-              : runtimeCapabilityKind(receiver, checker, vitestRuntimeRootSymbols);
+            receiver === undefined ? undefined : runtimeCapabilityKind(receiver, checker, vitestRuntimeRootSymbols);
           const memberName = runtimeMemberName(callee);
           if (directGlobalRequire) {
             rejectLoaderNamespace(addLiteral(node.arguments[0], "globalThis.require"), "globalThis.require");
           } else if (capability === "module" && memberName === "require") {
             rejectLoaderNamespace(addLiteral(node.arguments[0], "module.require"), "module.require");
-          } else if (
-            capability === "vi" &&
-            memberName !== undefined &&
-            VITEST_RUNTIME_LOADERS.has(memberName)
-          ) {
+          } else if (capability === "vi" && memberName !== undefined && VITEST_RUNTIME_LOADERS.has(memberName)) {
             addLiteral(node.arguments[0], `vi.${memberName}`);
           }
         }
@@ -1369,10 +1337,7 @@ function runtimeModuleEdges(filename: string, source: string): RuntimeModuleEdge
         sourceExpression === undefined
           ? undefined
           : runtimeCapabilityKind(sourceExpression, checker, vitestRuntimeRootSymbols);
-      if (
-        sourceCapability !== undefined &&
-        node.dotDotDotToken !== undefined
-      ) {
+      if (sourceCapability !== undefined && node.dotDotDotToken !== undefined) {
         problems.push(`${filename} dynamically destructures a runtime capability outside the static import graph`);
       } else if (
         sourceCapability !== undefined &&
@@ -1384,10 +1349,7 @@ function runtimeModuleEdges(filename: string, source: string): RuntimeModuleEdge
         problems.push(`${filename} dynamically destructures a runtime capability outside the static import graph`);
       }
     }
-    if (
-      ts.isBinaryExpression(node) &&
-      node.operatorToken.kind === ts.SyntaxKind.EqualsToken
-    ) {
+    if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
       const sourceCapability = runtimeCapabilityKind(node.right, checker, vitestRuntimeRootSymbols);
       const members = runtimeCapabilityDestructuringMembers(node.right);
       if (sourceCapability !== undefined && members !== undefined) {
@@ -3641,8 +3603,7 @@ describe("Class A invariant — no test imports value from registration boilerpl
     const directVitestRootLoader =
       'import { vitest } from "vitest";\nvoid vitest.importActual("./helpers/exact-source-mutation.js");';
     expect(moduleProblems("tests/release-integrity.test.ts", directVitestRootLoader)).toEqual([]);
-    const vitestRootProductionImport =
-      'import { vitest } from "vitest";\nvoid vitest.importActual("../src/vault.js");';
+    const vitestRootProductionImport = 'import { vitest } from "vitest";\nvoid vitest.importActual("../src/vault.js");';
     expect(moduleProblems("tests/release-integrity.test.ts", vitestRootProductionImport)).toContain(
       "tests/release-integrity.test.ts value-imports production path src/vault.js"
     );
@@ -3704,8 +3665,7 @@ describe("Class A invariant — no test imports value from registration boilerpl
     expect(moduleProblems("tests/release-integrity.test.ts", concatenatedProcessLoader)).toContain(
       "tests/release-integrity.test.ts uses process.getBuiltinModule outside the reviewed static import graph"
     );
-    const aliasedProcessLoader =
-      'const runtimeProcess = process; void runtimeProcess.getBuiltinModule("node:module");';
+    const aliasedProcessLoader = 'const runtimeProcess = process; void runtimeProcess.getBuiltinModule("node:module");';
     expect(moduleProblems("tests/release-integrity.test.ts", aliasedProcessLoader)).toContain(
       "tests/release-integrity.test.ts acquires first-class process runtime capability outside the static graph"
     );
@@ -3723,7 +3683,16 @@ describe("Class A invariant — no test imports value from registration boilerpl
     expect(moduleProblems("tests/release-integrity.test.ts", moduleConstructorLoader)).toContain(
       "tests/release-integrity.test.ts acquires module runtime loader member constructor outside the static graph"
     );
-    for (const memberName of ["__proto__", "_compile", "_load", "children", "constructor", "createRequire", "load", "parent"]) {
+    for (const memberName of [
+      "__proto__",
+      "_compile",
+      "_load",
+      "children",
+      "constructor",
+      "createRequire",
+      "load",
+      "parent"
+    ]) {
       const memberProblems = moduleProblems(
         "tests/release-integrity.test.ts",
         `const hiddenLoader = module[${JSON.stringify(memberName)}]; void hiddenLoader;`
@@ -3734,7 +3703,7 @@ describe("Class A invariant — no test imports value from registration boilerpl
           : `tests/release-integrity.test.ts acquires module runtime loader member ${memberName} outside the static graph`
       );
     }
-    const assignedModuleLoader = 'let hiddenRequire: unknown; ({ require: hiddenRequire } = module);';
+    const assignedModuleLoader = "let hiddenRequire: unknown; ({ require: hiddenRequire } = module);";
     expect(moduleProblems("tests/release-integrity.test.ts", assignedModuleLoader)).toContain(
       "tests/release-integrity.test.ts acquires first-class module runtime capability outside the static graph"
     );
@@ -3828,8 +3797,7 @@ describe("Class A invariant — no test imports value from registration boilerpl
     expect(moduleProblems("tests/release-integrity.test.ts", destructuredProcessLoader)).toContain(
       "tests/release-integrity.test.ts destructures a runtime loader outside the reviewed static import graph"
     );
-    const destructuredGlobalProcessLoader =
-      "const { getBuiltinModule: loader } = globalThis.process; void loader;";
+    const destructuredGlobalProcessLoader = "const { getBuiltinModule: loader } = globalThis.process; void loader;";
     expect(moduleProblems("tests/release-integrity.test.ts", destructuredGlobalProcessLoader)).toContain(
       "tests/release-integrity.test.ts destructures a runtime loader outside the reviewed static import graph"
     );
@@ -3837,18 +3805,17 @@ describe("Class A invariant — no test imports value from registration boilerpl
     expect(moduleProblems("tests/release-integrity.test.ts", destructuredModuleLoader)).toContain(
       "tests/release-integrity.test.ts destructures a runtime loader outside the reviewed static import graph"
     );
-    const destructuredVitestLoader =
-      'import { vi } from "vitest";\nconst { importActual: loader } = vi; void loader;';
+    const destructuredVitestLoader = 'import { vi } from "vitest";\nconst { importActual: loader } = vi; void loader;';
     expect(moduleProblems("tests/release-integrity.test.ts", destructuredVitestLoader)).toContain(
       "tests/release-integrity.test.ts destructures a runtime loader outside the reviewed static import graph"
     );
     const assignedGlobalProcessLoader =
-      'let runtimeProcess: unknown; ({ process: runtimeProcess } = globalThis); void runtimeProcess;';
+      "let runtimeProcess: unknown; ({ process: runtimeProcess } = globalThis); void runtimeProcess;";
     expect(moduleProblems("tests/release-integrity.test.ts", assignedGlobalProcessLoader)).toContain(
       "tests/release-integrity.test.ts destructures a runtime loader outside the reviewed static import graph"
     );
     const assignedGlobalRequireLoader =
-      'let runtimeRequire: unknown; ({ require: runtimeRequire } = globalThis); void runtimeRequire;';
+      "let runtimeRequire: unknown; ({ require: runtimeRequire } = globalThis); void runtimeRequire;";
     expect(moduleProblems("tests/release-integrity.test.ts", assignedGlobalRequireLoader)).toContain(
       "tests/release-integrity.test.ts destructures a runtime loader outside the reviewed static import graph"
     );
@@ -3892,10 +3859,7 @@ describe("Class A invariant — no test imports value from registration boilerpl
     );
     const ambientShorthandLoaders =
       "const requireHolder = { require }; const processHolder = { process }; void requireHolder; void processHolder;";
-    const ambientShorthandProblems = moduleProblems(
-      "tests/release-integrity.test.ts",
-      ambientShorthandLoaders
-    );
+    const ambientShorthandProblems = moduleProblems("tests/release-integrity.test.ts", ambientShorthandLoaders);
     expect(ambientShorthandProblems).toContain(
       "tests/release-integrity.test.ts uses require as a first-class loader value outside the reviewed static graph"
     );
@@ -3903,12 +3867,12 @@ describe("Class A invariant — no test imports value from registration boilerpl
       "tests/release-integrity.test.ts acquires first-class process runtime capability outside the static graph"
     );
     const invokedLocalLoaderShadows = [
-      'const process = { getBuiltinModule: (name: string): string => name };',
+      "const process = { getBuiltinModule: (name: string): string => name };",
       'const module = { require: (name: string): string => name, createRequire: (): string => "safe" };',
-      'const require = (name: string): string => name;',
+      "const require = (name: string): string => name;",
       'const createRequire = (): string => "safe";',
-      'const vi = { importActual: (name: string): string => name };',
-      'const vitest = { importActual: (name: string): string => name };',
+      "const vi = { importActual: (name: string): string => name };",
+      "const vitest = { importActual: (name: string): string => name };",
       'const ordinary = { createRequire: (): string => "safe" };',
       'void process.getBuiltinModule("node:module"); void module.require("safe");',
       'void module.createRequire(); void require("safe"); void createRequire();',
@@ -3921,12 +3885,12 @@ describe("Class A invariant — no test imports value from registration boilerpl
     ].join("\n");
     expect(moduleProblems("tests/release-integrity.test.ts", localShorthandLoaders)).toEqual([]);
     const invokedLocalGlobalShadow = [
-      'const globalThis = { globalThis: { Array }, require: (name: string): string => name, process: { getBuiltinModule: (name: string): string => name } };',
+      "const globalThis = { globalThis: { Array }, require: (name: string): string => name, process: { getBuiltinModule: (name: string): string => name } };",
       'void globalThis.globalThis.Array; void globalThis.require("safe"); void globalThis.process.getBuiltinModule("safe");'
     ].join("\n");
     expect(moduleProblems("tests/release-integrity.test.ts", invokedLocalGlobalShadow)).toEqual([]);
     const invokedLocalNodeGlobalShadow = [
-      'const global = { global: { Array }, process: { getBuiltinModule: (name: string): string => name } };',
+      "const global = { global: { Array }, process: { getBuiltinModule: (name: string): string => name } };",
       'void global.global.Array; void global.process.getBuiltinModule("safe");'
     ].join("\n");
     expect(moduleProblems("tests/release-integrity.test.ts", invokedLocalNodeGlobalShadow)).toEqual([]);
@@ -3945,17 +3909,13 @@ describe("Class A invariant — no test imports value from registration boilerpl
     );
     expect(
       moduleProblems("tests/release-integrity.test.ts", 'import ModuleApi = require("node:module"); void ModuleApi;')
-    ).toContain(
-      "tests/release-integrity.test.ts acquires runtime loader namespace node:module through import-equals"
-    );
+    ).toContain("tests/release-integrity.test.ts acquires runtime loader namespace node:module through import-equals");
     expect(
       moduleProblems("tests/release-integrity.test.ts", 'import type ModuleApi = require("node:module");')
     ).toEqual([]);
     expect(
       moduleProblems("tests/release-integrity.test.ts", 'export { createRequire as hidden } from "node:module";')
-    ).toContain(
-      "tests/release-integrity.test.ts acquires runtime loader namespace node:module through re-export"
-    );
+    ).toContain("tests/release-integrity.test.ts acquires runtime loader namespace node:module through re-export");
     const inertLoaderNames = [
       'const documentation = "require createRequire process.getBuiltinModule vi.importActual";',
       "const ordinary = { require: documentation, createRequire: documentation, getBuiltinModule: documentation };",

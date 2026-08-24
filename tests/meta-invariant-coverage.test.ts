@@ -1552,6 +1552,34 @@ function runtimeValueSymbolAt(
     );
 }
 
+/** True when a script-level lexical declaration shadows an intrinsic-spelled global. */
+function hasTopLevelLexicalValueBinding(sourceFile: ts.SourceFile, name: string): boolean {
+  const bindingContains = (binding: ts.BindingName): boolean =>
+    ts.isIdentifier(binding)
+      ? binding.text === name
+      : binding.elements.some(
+          (element) => !ts.isOmittedExpression(element) && bindingContains(element.name)
+        );
+  const isDeclared = (node: ts.Node): boolean =>
+    ts.canHaveModifiers(node) &&
+    (ts.getModifiers(node)?.some((modifier) => modifier.kind === ts.SyntaxKind.DeclareKeyword) ?? false);
+
+  return sourceFile.statements.some((statement) => {
+    if (
+      ts.isVariableStatement(statement) &&
+      !isDeclared(statement) &&
+      (statement.declarationList.flags & ts.NodeFlags.BlockScoped) !== 0
+    ) {
+      return statement.declarationList.declarations.some((declaration) => bindingContains(declaration.name));
+    }
+    return (
+      ts.isClassDeclaration(statement) &&
+      !isDeclared(statement) &&
+      statement.name?.text === name
+    );
+  });
+}
+
 /**
  * Resolve computed-property strings by lexical symbol identity.
  * Only one direct `const` initializer is followed, so a same-spelled shadow or
@@ -1838,10 +1866,13 @@ function reflectiveOperationResolver(
     if (ts.isPropertyAccessExpression(current) || ts.isElementAccessExpression(current)) {
       const owner = unwrapStaticExpression(current.expression);
       const ownerSymbol = ts.isIdentifier(owner) ? runtimeValueSymbolAt(checker, owner) : undefined;
+      const ownerHasRuntimeBinding =
+        ownerSymbol !== undefined ||
+        (ts.isIdentifier(owner) && hasTopLevelLexicalValueBinding(sourceFile, owner.text));
       if (
         !ts.isIdentifier(owner) ||
         owner.text !== "globalThis" ||
-        ownerSymbol !== undefined
+        ownerHasRuntimeBinding
       ) {
         return new Set();
       }

@@ -617,6 +617,34 @@ function replaceRuntimeMemberExactly(
   return replaceExactly(source, body, replaceExactly(body, needle, replacement));
 }
 
+/** Replace the sole final ASCII identifier, or use the reviewed no-identifier fallback, without a no-op. */
+function replaceFinalAsciiIdentifierOrFallbackExactly(source: string, replacement: string): string {
+  if (!/^[A-Za-z_$][A-Za-z0-9_$]*$/u.test(replacement)) {
+    throw new Error(`final ASCII identifier replacement is invalid: ${replacement}`);
+  }
+  const matches = [
+    ...source.matchAll(/(^|[^A-Za-z0-9_$])([A-Za-z_$][A-Za-z0-9_$]*)(?=[^A-Za-z0-9_$]*$)/gu)
+  ];
+  if (matches.length === 0) {
+    const fallback = `void ${replacement};`;
+    if (fallback === source) throw new Error("final ASCII identifier fallback did not change its source");
+    return fallback;
+  }
+  if (matches.length > 1) {
+    throw new Error(`expected at most one final ASCII identifier, found ${matches.length}`);
+  }
+  const match = matches[0];
+  const prefix = match?.[1];
+  const identifier = match?.[2];
+  if (match?.index === undefined || prefix === undefined || identifier === undefined) {
+    throw new Error("final ASCII identifier match lost its required capture");
+  }
+  const offset = match.index + prefix.length;
+  const mutated = `${source.slice(0, offset)}${replacement}${source.slice(offset + identifier.length)}`;
+  if (mutated === source) throw new Error("final ASCII identifier replacement did not change its source");
+  return mutated;
+}
+
 interface ProductionTypeScriptSource {
   file: string;
   source: string;
@@ -4632,15 +4660,17 @@ describe("erasure-completeness invariant (rc.36, P-2 class)", () => {
     it.each(PUBLISHER_INVENTORY_MUTANTS)(
       "inventory rejects $id when occurrence $occurrenceNumber/$expectedOccurrences of its $role route $file#$member is removed",
       ({ id, role, file, member, needle, occurrenceIndex, expectedOccurrences }) => {
+        expect(replaceFinalAsciiIdentifierOrFallbackExactly("foo(bar);", "__erasure_mutant__")).toBe(
+          "foo(__erasure_mutant__);"
+        );
+        expect(replaceFinalAsciiIdentifierOrFallbackExactly("x += 1;", "__erasure_mutant__")).toBe(
+          "void __erasure_mutant__;"
+        );
         const source = readFileSync(path.join(repoRoot, file), "utf8");
         const bodies = runtimeMemberBodies(source, file, member);
         expect(bodies).toHaveLength(1);
         const body = bodies[0] ?? "";
-        const identifierReplacement = needle.replace(
-          /[A-Za-z_$][A-Za-z0-9_$]*(?=[^A-Za-z0-9_$]*$)/,
-          "__erasure_mutant__"
-        );
-        const replacement = identifierReplacement === needle ? "void __erasure_mutant__;" : identifierReplacement;
+        const replacement = replaceFinalAsciiIdentifierOrFallbackExactly(needle, "__erasure_mutant__");
         const offsets: number[] = [];
         for (let offset = body.indexOf(needle); offset >= 0; offset = body.indexOf(needle, offset + needle.length)) {
           offsets.push(offset);
@@ -4672,7 +4702,7 @@ describe("erasure-completeness invariant (rc.36, P-2 class)", () => {
       const source = readFileSync(path.join(repoRoot, "src/cache-prune.ts"), "utf8");
       const route = "await planCachePruneOnDisk(canonicalDir, entries, keepHash)";
       expect(source.split(route)).toHaveLength(3);
-      const mutant = source.replace(route, "await planCachePrune(entries, keepHash)");
+      const mutant = replaceExactly(source, route, "await planCachePrune(entries, keepHash)", 2);
       expect(mutant.split(route)).toHaveLength(2);
     });
 
@@ -4680,7 +4710,7 @@ describe("erasure-completeness invariant (rc.36, P-2 class)", () => {
       const cliSource = readFileSync(path.join(repoRoot, "src/cli.ts"), "utf8");
       const claim = `<hash>.{json,fts5.db,embed.db,${legacySuffix},hnsw.meta.json,feedback.json}`;
       expect(cliSource).toContain(claim);
-      expect(replaceExactly(cliSource, claim, claim.replace(`${legacySuffix},`, ""))).not.toContain(claim);
+      expect(replaceExactly(cliSource, claim, replaceExactly(claim, `${legacySuffix},`, ""))).not.toContain(claim);
     });
   });
 

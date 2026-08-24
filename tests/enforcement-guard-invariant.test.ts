@@ -22,7 +22,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { replaceExactly } from "./helpers/exact-source-mutation.js";
+import { replaceAllExactly, replaceExactly } from "./helpers/exact-source-mutation.js";
 
 const repoRoot = path.resolve(__dirname, "..");
 
@@ -739,10 +739,10 @@ describe("enforcement-guarantee → code-guard invariant (rc.3, overclaim #15/#1
     const ftsMask = "(receipts) => idx.currentSourceReceiptMask(receipts)";
     expect(search).toContain(ftsReceipt);
     expect(search).toContain(ftsMask);
-    expect(persistedEgressGuardViolations(search.replace(ftsReceipt, "(match) => undefined,"))).toContain(
+    expect(persistedEgressGuardViolations(replaceExactly(search, ftsReceipt, "(match) => undefined,"))).toContain(
       `diagnostic FTS: missing ${ftsReceipt}`
     );
-    expect(persistedEgressGuardViolations(search.replace(ftsMask, "() => []"))).toContain(
+    expect(persistedEgressGuardViolations(replaceExactly(search, ftsMask, "() => []"))).toContain(
       `diagnostic FTS: missing ${ftsMask}`
     );
 
@@ -761,7 +761,8 @@ describe("enforcement-guarantee → code-guard invariant (rc.3, overclaim #15/#1
 
     const authoritativeHydration = "let h = hnswResultsToReceiptHits({ labels, distances }, hydratedRows);";
     expect(search).toContain(authoritativeHydration);
-    const legacyHnswEgress = search.replace(
+    const legacyHnswEgress = replaceExactly(
+      search,
       authoritativeHydration,
       "let h = hnswResultsToHits({ labels, distances }, usableHnsw.rowByLabel);"
     );
@@ -772,54 +773,75 @@ describe("enforcement-guarantee → code-guard invariant (rc.3, overclaim #15/#1
       "standalone embeddings plus current DB hydration: forbidden legacy receipt egress via hnswResultsToHits({ labels, distances }"
     );
 
-    const removeSearchAdmissionAfter = (marker: string, replacement: string): string => {
-      const start = search.indexOf(marker);
-      expect(start).toBeGreaterThanOrEqual(0);
-      return `${search.slice(0, start)}${search
-        .slice(start)
-        .replace("if (ctx.embedFile !== null) assertEmbedDbFilePath(ctx.embedFile);", replacement)}`;
+    const searchHybridStart = search.indexOf("export async function searchHybrid(");
+    const searchHybridEnd = search.indexOf("export const MAX_FANOUT_QUERIES = 8;", searchHybridStart);
+    const searchHybridMultiStart = search.indexOf("export async function searchHybridMulti(");
+    const searchHybridMultiEnd = search.indexOf("export function foldWithMap(", searchHybridMultiStart);
+    expect(searchHybridStart).toBeGreaterThanOrEqual(0);
+    expect(searchHybridEnd).toBeGreaterThan(searchHybridStart);
+    expect(searchHybridMultiStart).toBeGreaterThan(searchHybridEnd);
+    expect(searchHybridMultiEnd).toBeGreaterThan(searchHybridMultiStart);
+    const searchHybridBlock = search.slice(searchHybridStart, searchHybridEnd);
+    const searchHybridMultiBlock = search.slice(searchHybridMultiStart, searchHybridMultiEnd);
+    const removeSearchAdmissionWithin = (block: string, replacement: string): string => {
+      const mutantBlock = replaceExactly(
+        block,
+        "if (ctx.embedFile !== null) assertEmbedDbFilePath(ctx.embedFile);",
+        replacement
+      );
+      return replaceExactly(search, block, mutantBlock);
     };
     const directAdmissionMutants = [
       {
         ...{ search, meta, doctor, evalSource },
-        search: search.replace("if (embedFile !== null) assertEmbedDbFilePath(embedFile);", "// admission removed")
-      },
-      {
-        ...{ search, meta, doctor, evalSource },
-        search: removeSearchAdmissionAfter("export async function searchHybrid(", "// searchHybrid admission removed")
-      },
-      {
-        ...{ search, meta, doctor, evalSource },
-        search: removeSearchAdmissionAfter(
-          "export async function searchHybridMulti(",
-          "// searchHybridMulti admission removed"
+        search: replaceExactly(
+          search,
+          "if (embedFile !== null) assertEmbedDbFilePath(embedFile);",
+          "// admission removed"
         )
       },
       {
         ...{ search, meta, doctor, evalSource },
-        meta: meta.replace("if (ctx.embedFile !== null) assertEmbedDbFilePath(ctx.embedFile);", "// admission removed")
+        search: removeSearchAdmissionWithin(searchHybridBlock, "// searchHybrid admission removed")
       },
       {
         ...{ search, meta, doctor, evalSource },
-        doctor: doctor.replace(
+        search: removeSearchAdmissionWithin(searchHybridMultiBlock, "// searchHybridMulti admission removed")
+      },
+      {
+        ...{ search, meta, doctor, evalSource },
+        meta: replaceExactly(
+          meta,
+          "if (ctx.embedFile !== null) assertEmbedDbFilePath(ctx.embedFile);",
+          "// admission removed"
+        )
+      },
+      {
+        ...{ search, meta, doctor, evalSource },
+        doctor: replaceExactly(
+          doctor,
           "if (opts.embedFile !== undefined) assertEmbedDbFilePath(opts.embedFile);",
           "// admission removed"
         )
       },
       {
         ...{ search, meta, doctor, evalSource },
-        evalSource: evalSource.replace("assertEmbedDbFilePath(opts.embedFile);", "// admission removed")
+        evalSource: replaceExactly(evalSource, "assertEmbedDbFilePath(opts.embedFile);", "// admission removed")
       }
     ];
     for (const mutant of directAdmissionMutants) {
       expect(embedNamespaceAdmissionViolations(mutant)).not.toEqual([]);
     }
 
+    const discoveryStart = fts.indexOf("export async function discoverFtsIndexConfig(");
     const peekStart = fts.indexOf("export async function peekFtsMetaSafe(");
+    expect(discoveryStart).toBeGreaterThanOrEqual(0);
     expect(peekStart).toBeGreaterThanOrEqual(0);
-    const peekMutant = `${fts.slice(0, peekStart)}${fts
-      .slice(peekStart)
-      .replace("assertFtsIndexFilePath(file);", "// peek admission removed")}`;
+    expect(peekStart).toBeGreaterThan(discoveryStart);
+    const discoveryBlock = fts.slice(discoveryStart, peekStart);
+    const peekBlock = fts.slice(peekStart);
+    const peekMutantBlock = replaceExactly(peekBlock, "assertFtsIndexFilePath(file);", "// peek admission removed");
+    const peekMutant = replaceExactly(fts, peekBlock, peekMutantBlock);
     const discoveryAfterFamilyPreflight = replaceExactly(
       fts,
       "  assertFtsIndexFilePath(file);\n" +
@@ -846,19 +868,26 @@ describe("enforcement-guarantee → code-guard invariant (rc.3, overclaim #15/#1
     expect(ftsNamespaceAdmissionViolations({ fts: peekAfterFamilyPreflight, doctor })).toContain(
       "peekFtsMetaSafe: namespace admission occurs after await preflightSqliteArtifactFamily(file)"
     );
+    const discoveryAdmissionMutantBlock = replaceExactly(
+      discoveryBlock,
+      "assertFtsIndexFilePath(file);",
+      "// discovery admission removed"
+    );
+    const discoveryAdmissionMutant = replaceExactly(fts, discoveryBlock, discoveryAdmissionMutantBlock);
     for (const mutant of [
       {
-        fts: fts.replace("assertFtsIndexFilePath(opts.file);", "// constructor admission removed"),
+        fts: replaceExactly(fts, "assertFtsIndexFilePath(opts.file);", "// constructor admission removed"),
         doctor
       },
       {
-        fts: fts.replace("assertFtsIndexFilePath(file);", "// discovery admission removed"),
+        fts: discoveryAdmissionMutant,
         doctor
       },
       { fts: peekMutant, doctor },
       {
         fts,
-        doctor: doctor.replace(
+        doctor: replaceExactly(
+          doctor,
           "if (opts.indexFile !== undefined) assertFtsIndexFilePath(opts.indexFile);",
           "// doctor FTS admission removed"
         )
@@ -871,39 +900,48 @@ describe("enforcement-guarantee → code-guard invariant (rc.3, overclaim #15/#1
     const parentModeMutants = [
       {
         ...writerSources,
-        vault: vault.replace(
+        vault: replaceExactly(
+          vault,
           "await this.mkdirSafe(cacheDir",
           "const parentExisted = true;\n    await this.mkdirSafe(cacheDir"
         )
       },
       {
         ...writerSources,
-        feedback: feedback.replace(
+        feedback: replaceExactly(
+          feedback,
           "const lifetime = await acquirePersistenceFamilyLease({",
           "const lifetime = await acquirePersistenceFamilyLeaseInScopes({"
         )
       },
       {
         ...writerSources,
-        hnsw: hnsw.replace(
+        hnsw: replaceExactly(
+          hnsw,
           "await fs.mkdir(parentDir",
           "await fs.chmod(parentDir, 0o700);\n          await fs.mkdir(parentDir"
         )
       },
       {
         ...writerSources,
-        fts: fts.replace("await fs.mkdir(parentDir", "const parentExisted = true;\n      await fs.mkdir(parentDir")
+        fts: replaceExactly(
+          fts,
+          "await fs.mkdir(parentDir",
+          "const parentExisted = true;\n      await fs.mkdir(parentDir"
+        )
       },
       {
         ...writerSources,
-        embed: embed.replace(
+        embed: replaceExactly(
+          embed,
           ": await acquirePersistenceFamilyLease({",
           ": await acquirePersistenceFamilyLeaseInScopes({"
         )
       },
       {
         ...writerSources,
-        persistenceCoordination: persistenceCoordination.replace(
+        persistenceCoordination: replaceExactly(
+          persistenceCoordination,
           "await fs.mkdir(path.dirname(path.resolve(options.targetPath)), { recursive: true, mode: 0o700 });",
           "await fs.stat(path.dirname(path.resolve(options.targetPath)));\n    " +
             "await fs.mkdir(path.dirname(path.resolve(options.targetPath)), { recursive: true, mode: 0o700 });"
@@ -911,7 +949,8 @@ describe("enforcement-guarantee → code-guard invariant (rc.3, overclaim #15/#1
       },
       {
         ...writerSources,
-        watcherGuard: watcherGuard.replace(
+        watcherGuard: replaceExactly(
+          watcherGuard,
           "await fs.mkdir(guardPath",
           "await fs.chmod(guardPath, 0o700);\n    await fs.mkdir(guardPath"
         )
@@ -948,67 +987,78 @@ describe("enforcement-guarantee → code-guard invariant (rc.3, overclaim #15/#1
       ]
     ] as const) {
       expect(search).toContain(receiptCall);
-      const legacyRoute = search.replace(receiptCall, legacyCall);
+      const legacyRoute = replaceExactly(search, receiptCall, legacyCall);
       expect(persistedEgressGuardViolations(legacyRoute)).toContain(`${label}: missing ${receiptCall}`);
       expect(persistedEgressGuardViolations(legacyRoute)).toContain(
         `${label}: forbidden legacy receipt egress via ${forbiddenCall}`
       );
     }
 
+    const embeddingsSearchStart = search.indexOf("export async function embeddingsSearch(");
+    const embeddingsSearchEnd = search.indexOf("async function openHybridEmbedReceiptReader(", embeddingsSearchStart);
+    expect(embeddingsSearchStart).toBeGreaterThanOrEqual(0);
+    expect(embeddingsSearchEnd).toBeGreaterThan(embeddingsSearchStart);
+    const embeddingsSearchBlock = search.slice(embeddingsSearchStart, embeddingsSearchEnd);
     const setRevision = "indexed_revision: h.indexed_revision";
-    expect(search).toContain(setRevision);
-    expect(persistedEgressGuardViolations(search.replace(setRevision, ""))).toContain(
+    expect(embeddingsSearchBlock).toContain(setRevision);
+    const withoutSetRevisionBlock = replaceExactly(embeddingsSearchBlock, setRevision, "");
+    const withoutSetRevision = replaceExactly(search, embeddingsSearchBlock, withoutSetRevisionBlock);
+    expect(persistedEgressGuardViolations(withoutSetRevision)).toContain(
       `standalone embeddings plus current DB hydration: missing ${setRevision}`
     );
     const setReceipt = "embedHitReceipts.set(match, {";
-    expect(search).toContain(setReceipt);
-    expect(persistedEgressGuardViolations(search.replace(setReceipt, "void ({"))).toContain(
+    expect(embeddingsSearchBlock).toContain(setReceipt);
+    const withoutSetReceiptBlock = replaceExactly(embeddingsSearchBlock, setReceipt, "void ({");
+    const withoutSetReceipt = replaceExactly(search, embeddingsSearchBlock, withoutSetReceiptBlock);
+    expect(persistedEgressGuardViolations(withoutSetReceipt)).toContain(
       `standalone embeddings plus current DB hydration: missing ${setReceipt}`
     );
     const getReceipt = "const receipt = embedHitReceipts.get(m);";
     expect(search).toContain(getReceipt);
-    expect(persistedEgressGuardViolations(search.replaceAll(getReceipt, "const receipt = undefined;"))).toContain(
-      `hybrid embeddings receipt propagation: missing ${getReceipt}`
-    );
+    expect(
+      persistedEgressGuardViolations(replaceAllExactly(search, getReceipt, "const receipt = undefined;", 2))
+    ).toContain(`hybrid embeddings receipt propagation: missing ${getReceipt}`);
 
     const finalEmbedMask = "embedReceiptReader.currentSourceReceiptMask(embedEntries.map((e) => e.receipt))";
     expect(search).toContain(finalEmbedMask);
-    expect(persistedEgressGuardViolations(search.replace(finalEmbedMask, "[]"))).toContain(
+    expect(persistedEgressGuardViolations(replaceExactly(search, finalEmbedMask, "[]"))).toContain(
       `hybrid final receipt association and atomic masks: missing ${finalEmbedMask}`
     );
 
     const sharedMaskUse = "mask[index] === true";
     expect(search).toContain(sharedMaskUse);
-    expect(persistedEgressGuardViolations(search.replace(sharedMaskUse, "true"))).toContain(
+    expect(persistedEgressGuardViolations(replaceExactly(search, sharedMaskUse, "true"))).toContain(
       "shared persisted-hit admission: terminal order broken"
     );
 
     const ftsMaskUse = "if (ftsMask[index] !== true) stale.add(hit);";
     expect(search).toContain(ftsMaskUse);
-    expect(persistedEgressGuardViolations(search.replace(ftsMaskUse, "void ftsMask[index];"))).toContain(
+    expect(persistedEgressGuardViolations(replaceExactly(search, ftsMaskUse, "void ftsMask[index];"))).toContain(
       `hybrid final receipt association and atomic masks: missing ${ftsMaskUse}`
     );
     const embedMaskUse = "if (embedMask[index] !== true) stale.add(hit);";
     expect(search).toContain(embedMaskUse);
-    expect(persistedEgressGuardViolations(search.replace(embedMaskUse, "void embedMask[index];"))).toContain(
+    expect(persistedEgressGuardViolations(replaceExactly(search, embedMaskUse, "void embedMask[index];"))).toContain(
       `hybrid final receipt association and atomic masks: missing ${embedMaskUse}`
     );
 
     const readerOpen = "return await openEmbedReceiptReader(embedFile, vault.root);";
     expect(search).toContain(readerOpen);
-    expect(persistedEgressGuardViolations(search.replace(readerOpen, "return null;"))).toContain(
+    expect(persistedEgressGuardViolations(replaceExactly(search, readerOpen, "return null;"))).toContain(
       `hybrid read-only embed receipt reader: missing ${readerOpen}`
     );
 
     const chunkValidator = "!idx.isCurrentSourceReceipt(";
     expect(search).toContain(chunkValidator);
-    expect(persistedEgressGuardViolations(search.replace(chunkValidator, "!true || ("))).toContain(
+    expect(persistedEgressGuardViolations(replaceExactly(search, chunkValidator, "!true || ("))).toContain(
       `chunk resource: missing ${chunkValidator}`
     );
 
     const copyReceipts = "if (receipts) hybridHitGenerationReceipts.set(cloned, receipts);";
     expect(search).toContain(copyReceipts);
-    expect(persistedEgressGuardViolations(search.replace(copyReceipts, "if (receipts) void receipts;"))).toContain(
+    expect(
+      persistedEgressGuardViolations(replaceExactly(search, copyReceipts, "if (receipts) void receipts;"))
+    ).toContain(
       `multi hybrid terminal generation admission: missing hybridHitGenerationReceipts.set(cloned, receipts);`
     );
 
@@ -1032,17 +1082,20 @@ describe("enforcement-guarantee → code-guard invariant (rc.3, overclaim #15/#1
     const diagnosticMap = registry.slice(diagnosticMapStart, diagnosticMapEnd);
     expect(diagnosticMap).not.toContain("indexed_mtime_ms");
     expect(diagnosticMap).not.toContain("indexed_revision");
-    const leakedRegistry = registry.replace(
+    const leakedDiagnosticMap = replaceExactly(
+      diagnosticMap,
       "score: match.score,",
       "score: match.score,\n        indexed_mtime_ms: match.indexed_mtime_ms,\n        indexed_revision: match.indexed_revision,"
     );
+    const leakedRegistry = replaceExactly(registry, diagnosticMap, leakedDiagnosticMap);
     expect(publicReceiptLeakViolations(search, leakedRegistry)).toEqual(
       expect.arrayContaining([
         "diagnostic FTS map: leaked indexed_mtime_ms",
         "diagnostic FTS map: leaked indexed_revision"
       ])
     );
-    const leakedDiagnosticHelper = search.replace(
+    const leakedDiagnosticHelper = replaceExactly(
+      search,
       "    score: match.score,\n    kind: match.kind",
       "    score: match.score,\n    indexed_mtime_ms: match.indexed_mtime_ms,\n    indexed_revision: match.indexed_revision,\n    kind: match.kind"
     );

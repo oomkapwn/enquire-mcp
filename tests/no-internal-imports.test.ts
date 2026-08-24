@@ -1987,7 +1987,11 @@ describe("Class A invariant — no test imports value from registration boilerpl
       );
       await fs.writeFile(ciPath, baselineCi);
       for (const invalidCarrier of [
-        baselineCarrier.replace(/^ {10}/u, "         "),
+        replaceExactly(
+          baselineCarrier,
+          "          expected_manifest_sha=",
+          "         expected_manifest_sha="
+        ),
         `${baselineCarrier}\n${baselineCarrier}`
       ]) {
         await fs.writeFile(ciPath, replaceExactly(baselineCi, baselineCarrier, invalidCarrier));
@@ -2745,17 +2749,17 @@ describe("Class A invariant — no test imports value from registration boilerpl
     const staleTransitionTimeout = replaceExactly(
       current.releaseMutationTransitionSource,
       transitionTimeoutNeedle,
-      transitionTimeoutNeedle.replace("60_000", "35_000")
+      replaceExactly(transitionTimeoutNeedle, "60_000", "35_000")
     );
     const missingTransitionTimeout = replaceExactly(
       current.releaseMutationTransitionSource,
       transitionTimeoutNeedle,
-      transitionTimeoutNeedle.replace("}, 60_000);", "});")
+      replaceExactly(transitionTimeoutNeedle, "}, 60_000);", "});")
     );
     const raisedTransitionTimeout = replaceExactly(
       current.releaseMutationTransitionSource,
       transitionTimeoutNeedle,
-      transitionTimeoutNeedle.replace("60_000", "60_001")
+      replaceExactly(transitionTimeoutNeedle, "60_000", "60_001")
     );
     const unreachableTransitionRegistration =
       'describe("release mutation schema-v3 transition authority", () => {\n' +
@@ -2781,6 +2785,8 @@ describe("Class A invariant — no test imports value from registration boilerpl
       "tests/docs-consistency.test.ts must bind it through one direct unaliased vitest named import and no other runtime bindings; found direct 0, other 1";
     const docsDescribeBindingDiagnostic =
       "tests/docs-consistency.test.ts must bind describe through one direct unaliased vitest named import and no other runtime bindings; found direct 0, other 1";
+    const docsSuiteLocalItBindingDiagnostic =
+      "tests/docs-consistency.test.ts must bind it through one direct unaliased vitest named import and no other runtime bindings; found direct 1, other 1";
     const exactDocsRegistration =
       'import { describe, it } from "vitest";\n' +
       'describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () => {\n' +
@@ -2826,36 +2832,34 @@ describe("Class A invariant — no test imports value from registration boilerpl
       "});";
     expect(docsTimeoutProblems(aliasedDocsCallee)).toContain(docsItBindingDiagnostic);
     expect(docsTimeoutProblems(aliasedDocsSuite)).toContain(docsDescribeBindingDiagnostic);
-    expect(docsTimeoutProblems(suiteLocalOptionalVarShadow)).toContain(
-      docsItBindingDiagnostic.replace("found direct 0, other 1", "found direct 1, other 1")
-    );
+    expect(docsTimeoutProblems(suiteLocalOptionalVarShadow)).toContain(docsSuiteLocalItBindingDiagnostic);
     expect(docsTimeoutProblems(localPrefixRegistrar)).toContain(docsTimeoutDiagnostic);
     expect(docsTimeoutProblems(eagerPrefixArgument)).toContain(docsTimeoutDiagnostic);
     const docsTimeoutNeedle = '  }, 60_000);\n\n  it("package.json description tool-count matches actual count"';
     const inheritedDocsTimeout = replaceExactly(
       current.docsConsistencySource,
       docsTimeoutNeedle,
-      docsTimeoutNeedle.replace("60_000", "15_000")
+      replaceExactly(docsTimeoutNeedle, "60_000", "15_000")
     );
     const provenInsufficientDocsTimeout = replaceExactly(
       current.docsConsistencySource,
       docsTimeoutNeedle,
-      docsTimeoutNeedle.replace("60_000", "25_000")
+      replaceExactly(docsTimeoutNeedle, "60_000", "25_000")
     );
     const underBufferedDocsTimeout = replaceExactly(
       current.docsConsistencySource,
       docsTimeoutNeedle,
-      docsTimeoutNeedle.replace("60_000", "45_000")
+      replaceExactly(docsTimeoutNeedle, "60_000", "45_000")
     );
     const missingDocsTimeout = replaceExactly(
       current.docsConsistencySource,
       docsTimeoutNeedle,
-      docsTimeoutNeedle.replace("}, 60_000);", "});")
+      replaceExactly(docsTimeoutNeedle, "}, 60_000);", "});")
     );
     const raisedDocsTimeout = replaceExactly(
       current.docsConsistencySource,
       docsTimeoutNeedle,
-      docsTimeoutNeedle.replace("60_000", "60_001")
+      replaceExactly(docsTimeoutNeedle, "60_000", "60_001")
     );
     const unreachableDocsRegistration =
       'describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () => {\n' +

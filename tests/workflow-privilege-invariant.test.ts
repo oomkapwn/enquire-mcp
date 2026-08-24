@@ -502,16 +502,46 @@ function replaceOnce(source: string, needle: string, replacement: string): strin
   if (first < 0 || source.indexOf(needle, first + needle.length) >= 0) {
     throw new Error(`test mutation target must occur exactly once: ${needle}`);
   }
-  return `${source.slice(0, first)}${replacement}${source.slice(first + needle.length)}`;
+  const mutated = `${source.slice(0, first)}${replacement}${source.slice(first + needle.length)}`;
+  if (mutated === source) throw new Error("test mutation did not change its source");
+  return mutated;
 }
 
-function replaceOccurrence(source: string, needle: string, replacement: string, occurrence: number): string {
-  const offsets = [...source.matchAll(new RegExp(needle.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"), "gu"))].map(
-    (match) => match.index
-  );
+function replaceOccurrence(
+  source: string,
+  needle: string,
+  replacement: string,
+  occurrence: number,
+  expectedOccurrences: number
+): string {
+  if (needle.length === 0) throw new Error("test mutation target must not be empty");
+  if (!Number.isSafeInteger(occurrence) || occurrence < 1) {
+    throw new Error(`test mutation occurrence must be a positive safe integer: ${occurrence}`);
+  }
+  if (!Number.isSafeInteger(expectedOccurrences) || expectedOccurrences < 1) {
+    throw new Error(`test mutation expected occurrences must be a positive safe integer: ${expectedOccurrences}`);
+  }
+  if (occurrence > expectedOccurrences) {
+    throw new Error(`test mutation occurrence ${occurrence} exceeds expected census ${expectedOccurrences}`);
+  }
+  const offsets: number[] = [];
+  let searchFrom = 0;
+  while (searchFrom <= source.length) {
+    const offset = source.indexOf(needle, searchFrom);
+    if (offset < 0) break;
+    offsets.push(offset);
+    searchFrom = offset + needle.length;
+  }
+  if (offsets.length !== expectedOccurrences) {
+    throw new Error(
+      `test mutation target expected ${expectedOccurrences} occurrence(s), found ${offsets.length}: ${needle}`
+    );
+  }
   const offset = offsets[occurrence - 1];
   if (offset === undefined) throw new Error(`test mutation occurrence ${occurrence} is missing: ${needle}`);
-  return `${source.slice(0, offset)}${replacement}${source.slice(offset + needle.length)}`;
+  const mutated = `${source.slice(0, offset)}${replacement}${source.slice(offset + needle.length)}`;
+  if (mutated === source) throw new Error(`test mutation occurrence ${occurrence} did not change its source`);
+  return mutated;
 }
 
 describe("npm dist-tag maintenance policy", () => {
@@ -684,6 +714,16 @@ describe("privileged maintenance workflow invariants", () => {
   });
 
   it("detects release privilege, secret and unreviewed-code regressions", () => {
+    expect(() => replaceOnce("alpha", "alpha", "alpha")).toThrow(/did not change its source/);
+    expect(() => replaceOccurrence("alpha", "alpha", "alpha", 1, 1)).toThrow(/did not change its source/);
+    expect(() => replaceOccurrence("alpha", "alpha", "omega", 0, 1)).toThrow(/positive safe integer/);
+    expect(() => replaceOccurrence("alpha", "alpha", "omega", 1, 0)).toThrow(/positive safe integer/);
+    expect(() => replaceOccurrence("alpha alpha", "alpha", "omega", 1, 1)).toThrow(
+      /expected 1 occurrence\(s\), found 2/
+    );
+    expect(() => replaceOccurrence("alpha", "alpha", "omega", 1, 2)).toThrow(
+      /expected 2 occurrence\(s\), found 1/
+    );
     expect(
       releaseWorkflowProblems(replaceOnce(release, "permissions: {}", "permissions:\n  contents: write"))
     ).toContain("release-root-permissions");
@@ -702,7 +742,8 @@ describe("privileged maintenance workflow invariants", () => {
           release,
           "      - name: Assert reviewed privileged code identity",
           "      - name: Assert reviewed privileged code identity\n        env:\n          SOURCE: $GITHUB_WORKSPACE",
-          1
+          1,
+          3
         )
       )
     ).toContain("release-privileged-untrusted-code");
@@ -770,7 +811,8 @@ describe("privileged maintenance workflow invariants", () => {
           release,
           '"$ACTUAL_HANDOFF_DIGEST" != "$EXPECTED_HANDOFF_DIGEST"',
           '"$ACTUAL_HANDOFF_DIGEST" = "$EXPECTED_HANDOFF_DIGEST"',
-          1
+          1,
+          3
         )
       )
     ).toContain("release-npm-exact-handoff");
@@ -780,7 +822,8 @@ describe("privileged maintenance workflow invariants", () => {
           release,
           'ACTUAL_HANDOFF_DIGEST="$(sha256sum "$HANDOFF_ZIP"',
           'ACTUAL_HANDOFF_DIGEST="sha256:$(sha256sum "$HANDOFF_ZIP"',
-          1
+          1,
+          3
         )
       )
     ).toContain("release-npm-exact-handoff");
@@ -790,7 +833,8 @@ describe("privileged maintenance workflow invariants", () => {
           release,
           '[[ ! "$EXPECTED_HANDOFF_DIGEST" =~ ^[0-9a-f]{64}$ ]]',
           '[[ -z "$EXPECTED_HANDOFF_DIGEST" ]]',
-          1
+          1,
+          3
         )
       )
     ).toContain("release-npm-exact-handoff");
@@ -825,10 +869,14 @@ describe("privileged maintenance workflow invariants", () => {
       )
     ).toContain("release-mcp-oidc-boundary");
     expect(
-      releaseWorkflowProblems(replaceOccurrence(release, "    timeout-minutes: 120", "    timeout-minutes: 60", 1))
+      releaseWorkflowProblems(
+        replaceOccurrence(release, "    timeout-minutes: 120", "    timeout-minutes: 60", 1, 2)
+      )
     ).toContain("release-npm-trusted-publishing");
     expect(
-      releaseWorkflowProblems(replaceOccurrence(release, "    timeout-minutes: 120", "    timeout-minutes: 60", 2))
+      releaseWorkflowProblems(
+        replaceOccurrence(release, "    timeout-minutes: 120", "    timeout-minutes: 60", 2, 2)
+      )
     ).toContain("release-github-write-boundary");
     expect(
       releaseWorkflowProblems(

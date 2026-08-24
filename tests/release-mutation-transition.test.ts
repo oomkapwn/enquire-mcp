@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { replaceExactly } from "./helpers/exact-source-mutation.js";
 import { observeReleaseMutationTransitionPopulation } from "./release-mutation-identity-audit.js";
 import {
   auditReleaseMutationTransition,
@@ -228,10 +229,12 @@ describe("release mutation schema-v3 transition authority", () => {
         new URL("./fixtures/release-mutation-transition.v3.json", import.meta.url),
         "utf8"
       );
-      const drifted = matrixSource.replace(
+      const drifted = replaceExactly(
+        matrixSource,
         "interface WorkflowJob {",
         "// unauthorized transition drift\ninterface WorkflowJob {"
       );
+      expect(drifted).not.toBe(matrixSource);
 
       expect(
         releaseMutationVersionedTransitionAuditProblems(drifted, historicalFixtureSource, authoritySource)
@@ -423,7 +426,8 @@ describe("release mutation schema-v3 transition authority", () => {
     };
 
     expect(observe(matrixSource)).toEqual([]);
-    const referencedConstantDrift = matrixSource.replace(
+    const referencedConstantDrift = replaceExactly(
+      matrixSource,
       '                --provenance --access public --tag "$CHANNEL" --ignore-scripts\';',
       '                --provenance --access public --tag "$CHANNEL" --ignore-scripts # drift\';'
     );
@@ -432,7 +436,8 @@ describe("release mutation schema-v3 transition authority", () => {
       "current new identity release.m603 disagrees with its reviewed logical projection"
     );
 
-    const derivationDrift = matrixSource.replace(
+    const derivationDrift = replaceExactly(
+      matrixSource,
       "/usr/bin/curl https://attacker.invalid\\n`;",
       "/usr/bin/curl https://different.invalid\\n`;"
     );
@@ -441,7 +446,8 @@ describe("release mutation schema-v3 transition authority", () => {
       "current new identity release.m627 has an unreviewed tainted-transaction derivation"
     );
 
-    const companionClosureDrift = matrixSource.replace(
+    const companionClosureDrift = replaceExactly(
+      matrixSource,
       'entrypoint: readFileSync(new URL("../scripts/lib/entrypoint.mjs", import.meta.url), "utf8"),',
       "entrypoint: mcpbInputs.integrity,"
     );
@@ -450,7 +456,8 @@ describe("release mutation schema-v3 transition authority", () => {
       "current transition mcpbInputs must retain the exact reviewed 16-source companion closure"
     );
 
-    const unchangedSuccessorDrift = matrixSource.replace(
+    const unchangedSuccessorDrift = replaceExactly(
+      matrixSource,
       'replaceExactly(workflow, "  actions: read", "  actions: none", 4)',
       'replaceExactly(workflow, "  actions: read", "  actions: write", 4)'
     );
@@ -459,7 +466,8 @@ describe("release mutation schema-v3 transition authority", () => {
       "current successor release.m638 disagrees with its reviewed target witnesses"
     );
 
-    const existingSuccessorDrift = matrixSource.replace(
+    const existingSuccessorDrift = replaceExactly(
+      matrixSource,
       `'requireSpan(mcpbParsed, "/missing-version"'`,
       `'requireSpan(mcpbParsed, "/attacker-version"'`
     );
@@ -468,7 +476,8 @@ describe("release mutation schema-v3 transition authority", () => {
       "current successor release.m563 disagrees with its reviewed target witnesses"
     );
 
-    const m151WitnessDrift = matrixSource.replace(
+    const m151WitnessDrift = replaceExactly(
+      matrixSource,
       ["        anchor: MCPB_EXACT_NPM_PUBLISH.slice(0, 512),", "        before: 1,", "        after: 2"].join("\n"),
       ["        anchor: MCPB_EXACT_NPM_PUBLISH.slice(0, 512),", "        before: 0,", "        after: 2"].join("\n")
     );
@@ -487,7 +496,8 @@ describe("release mutation schema-v3 transition authority", () => {
       ])
     );
 
-    const splitMatcherDrift = matrixSource.replace(
+    const splitMatcherDrift = replaceExactly(
+      matrixSource,
       "      expect(mcpbContractProblems({ ...mcpbInputs, release: splitReleaseMutant })).toContain(\n",
       "      expect(mcpbContractProblems({ ...mcpbInputs, release: splitReleaseMutant })).not.toContain(\n"
     );
@@ -504,7 +514,8 @@ describe("release mutation schema-v3 transition authority", () => {
       "current target release.m582 case witness f0589fc81ef309f34760347e7e4d020c921026eaee8b0b78c6e3c3c48f3d6f0b must identify one exact root-bound case node; found 0"
     );
 
-    const splitInvocationDrift = matrixSource.replace(
+    const splitInvocationDrift = replaceExactly(
+      matrixSource,
       "      expect(mcpbContractProblems({ ...mcpbInputs, release: splitReleaseMutant })).toContain(\n",
       "      expect(mcpbContractProblems({ ...mcpbInputs, release: mcpbInputs.release })).toContain(\n"
     );
@@ -521,7 +532,8 @@ describe("release mutation schema-v3 transition authority", () => {
       "current target release.m582 case witness f0589fc81ef309f34760347e7e4d020c921026eaee8b0b78c6e3c3c48f3d6f0b must identify one exact root-bound case node; found 0"
     );
 
-    const equivalentOriginDrift = matrixSource.replace(
+    const equivalentOriginDrift = replaceExactly(
+      matrixSource,
       'const MCPB_RELEASE_VISIBILITY_POLL =\n  "          for (( release_attempt=1; release_attempt<=12; release_attempt++ )); do";',
       'const MCPB_RELEASE_VISIBILITY_POLL =\n  ("          for (( release_attempt=1; release_attempt<=12; release_attempt++ )); do");'
     );

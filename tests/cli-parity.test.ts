@@ -22,6 +22,8 @@ import { promises as fs } from "node:fs";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 
+import { replaceExactly } from "./helpers/exact-source-mutation.js";
+
 const repoRoot = path.resolve(__dirname, "..");
 
 async function readCli(): Promise<string> {
@@ -112,7 +114,11 @@ describe("CLI parity — serve and serve-http accept the same retrieval flags (v
     expect(noPersistHelp?.[1], "shared HNSW persistence help must use its cli-help constant").toBe(
       "NO_HNSW_PERSIST_HELP"
     );
-    const inlineHelpMutation = helperBody.replace("NO_HNSW_PERSIST_HELP", '"inline transport-shared help"');
+    const inlineHelpMutation = replaceExactly(
+      helperBody,
+      "NO_HNSW_PERSIST_HELP",
+      '"inline transport-shared help"'
+    );
     expect(
       /\.option\(\s*"--no-hnsw-persist"\s*,\s*([A-Z][A-Z0-9_]*|"[^"]*")\s*\)/.exec(inlineHelpMutation)?.[1]
     ).not.toBe("NO_HNSW_PERSIST_HELP");
@@ -204,10 +210,14 @@ describe("CLI parity — serve and serve-http shared-flag help text equality (v3
 
   it("NEGATIVE control — one transport replacing shared privacy help is detected", async () => {
     const cliSrc = await readCli();
-    const mutant = cliSrc.replace(
+    const originalServeBlock = extractCommandBlock(cliSrc, /\.command\(\s*"serve"\s*,/);
+    expect(originalServeBlock).not.toBe("");
+    const mutantServeBlock = replaceExactly(
+      originalServeBlock,
       '.option("--exclude-glob <pattern...>", EXCLUDE_GLOB_HELP)',
       '.option("--exclude-glob <pattern...>", "transport-local privacy help")'
     );
+    const mutant = replaceExactly(cliSrc, originalServeBlock, mutantServeBlock);
     const serveBlock = extractCommandBlock(mutant, /\.command\(\s*"serve"\s*,/);
     const serveHttpBlock = extractCommandBlock(mutant, /\.command\(\s*"serve-http"\s*\)/);
     const serveHelp = extractInlineHelp(serveBlock);
@@ -264,10 +274,14 @@ describe("CLI privacy admission — every direct content Vault command forwards 
 
   it("NEGATIVE control — a query that drops privacy forwarding is rejected", async () => {
     const cliSrc = await readCli();
-    const mutant = cliSrc.replace(
+    const queryBlock = commandBlocks(cliSrc).get("query") ?? "";
+    expect(queryBlock).not.toBe("");
+    const mutantQueryBlock = replaceExactly(
+      queryBlock,
       "new Vault(opts.vault, { excludeGlobs: opts.excludeGlob, readPaths: opts.readPaths })",
       "new Vault(opts.vault)"
     );
+    const mutant = replaceExactly(cliSrc, queryBlock, mutantQueryBlock);
     expect(directVaultPrivacyProblems(mutant)).toContain("query: privacy options do not control its Vault");
   });
 
@@ -455,7 +469,7 @@ describe("CLI persistence-path help is exact and shared", () => {
     expect(cliSrc.split(route).length - 1).toBe(registrations);
     expect(helpSrc).toContain(claim);
 
-    const mutant = cliSrc.replace(route, `.option("${flag} <path>", "inline stale help")`);
+    const mutant = replaceExactly(cliSrc, route, `.option("${flag} <path>", "inline stale help")`, registrations);
     expect(mutant.split(route).length - 1).toBe(registrations - 1);
   });
 });

@@ -27,6 +27,7 @@
 import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
+import { replaceExactly } from "./helpers/exact-source-mutation.js";
 
 const repoRoot = path.resolve(__dirname, "..");
 
@@ -149,7 +150,11 @@ describe("resource-bound completeness invariant (rc.36, R-5/AS#5 class)", () => 
     expect(body).not.toContain("listMarkdown(");
     expect(body).not.toContain("lower.indexOf(lowerT");
 
-    const mutant = body.replace("matchFoldedPatterns(lower, lowerTokens)", "{ counts: [], firstStarts: [] }");
+    const mutant = replaceExactly(
+      body,
+      "matchFoldedPatterns(lower, lowerTokens)",
+      "{ counts: [], firstStarts: [] }"
+    );
     expect(mutant).not.toContain("matchFoldedPatterns(lower, lowerTokens)");
   });
 

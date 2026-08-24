@@ -168,7 +168,7 @@ describe("name-fold — foldTag / nfc Unicode correctness (rc.9, L-TAG-1)", () =
 
   it("foldTag strips `#`, NFC-folds, and case-folds — NFC and NFD tag forms collapse to one key (POSITIVE)", () => {
     expect(nfc4).not.toBe(nfd4);
-    expect(`#${nfc4}`.replace(/^#+/, "").toLowerCase()).not.toBe(`${nfd4}`.toLowerCase()); // strip+lower alone fails
+    expect(`#${nfc4}`.slice(1).toLowerCase()).not.toBe(`${nfd4}`.toLowerCase()); // strip+lower alone fails
     expect(foldTag(`#${nfc4}`)).toBe(foldTag(nfd4)); // foldTag resolves them
     expect(foldTag("#Draft")).toBe("draft"); // strips # + lowercases (ASCII regression)
     expect(foldTag("##Idea")).toBe("idea"); // multiple leading #

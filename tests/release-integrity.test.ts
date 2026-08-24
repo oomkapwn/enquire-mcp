@@ -932,74 +932,6 @@ function replaceAllExactly(
   return mutated;
 }
 
-/**
- * Keep every raw String.replace value access out of this release oracle.
- * Literal mutations use the exact census helpers above instead.
- */
-function rawMutationCallProblems(source: string): string[] {
-  const sourceFile = ts.createSourceFile(
-    "release-integrity.test.ts",
-    source,
-    ts.ScriptTarget.Latest,
-    true,
-    ts.ScriptKind.TS
-  );
-  const problems: string[] = [];
-
-  function staticPropertyText(node: ts.Node | undefined): string | null {
-    let current = node;
-    while (current) {
-      if (ts.isComputedPropertyName(current)) current = current.expression;
-      else if (
-        ts.isParenthesizedExpression(current) ||
-        ts.isAsExpression(current) ||
-        ts.isTypeAssertionExpression(current) ||
-        ts.isNonNullExpression(current) ||
-        ts.isSatisfiesExpression(current)
-      ) {
-        current = current.expression;
-      } else break;
-    }
-    return current &&
-      (ts.isIdentifier(current) || ts.isStringLiteral(current) || ts.isNoSubstitutionTemplateLiteral(current))
-      ? current.text
-      : null;
-  }
-
-  function isTypeOnlyAccess(node: ts.Node): boolean {
-    let current: ts.Node | undefined = node.parent;
-    while (current) {
-      if (ts.isTypeQueryNode(current)) return true;
-      current = current.parent;
-    }
-    return false;
-  }
-
-  function visit(node: ts.Node): void {
-    if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) {
-      const propertyMethod = ts.isPropertyAccessExpression(node) ? staticPropertyText(node.name) : null;
-      const elementArgument = ts.isElementAccessExpression(node) ? node.argumentExpression : undefined;
-      const elementMethod = staticPropertyText(elementArgument);
-      const method = propertyMethod ?? elementMethod;
-      if ((method === "replace" || method === "replaceAll") && !isTypeOnlyAccess(node)) {
-        const position = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile));
-        problems.push(`raw .${method}() mutation at ${position.line + 1}:${position.character + 1}`);
-      }
-    }
-    if (ts.isBindingElement(node) && ts.isObjectBindingPattern(node.parent)) {
-      const boundProperty = staticPropertyText(node.propertyName ?? node.name);
-      if (boundProperty === "replace" || boundProperty === "replaceAll") {
-        const position = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile));
-        problems.push(`raw .${boundProperty}() mutation at ${position.line + 1}:${position.character + 1}`);
-      }
-    }
-    ts.forEachChild(node, visit);
-  }
-
-  visit(sourceFile);
-  return problems;
-}
-
 const RELEASE_MUTATION_MATRIX_TEST_TITLE =
   "keeps release.yml wired to the shared evaluator and an exact mirrored inventory";
 const RELEASE_MUTATION_MATRIX_SUITE_TITLE = "release identity and exact required-job gate";
@@ -12487,35 +12419,6 @@ done`;
     }
 
     const oracleSource = readFileSync(new URL("./release-integrity.test.ts", import.meta.url), "utf8");
-    expect(rawMutationCallProblems(oracleSource)).toEqual([]);
-    expect(rawMutationCallProblems("type Replacer = Parameters<typeof String.prototype.replace>[1];")).toEqual([]);
-    expect(rawMutationCallProblems('const weakened = workflow.replace("old", "new");')).toEqual([
-      expect.stringMatching(/raw \.replace\(\) mutation/)
-    ]);
-    expect(rawMutationCallProblems('const weakened = workflow["replaceAll"]("old", "new");')).toEqual([
-      expect.stringMatching(/raw \.replaceAll\(\) mutation/)
-    ]);
-    expect(rawMutationCallProblems('const rawMutation = workflow[("replace")];')).toEqual([
-      expect.stringMatching(/raw \.replace\(\) mutation/)
-    ]);
-    expect(rawMutationCallProblems("const rawMutation = workflow.replace;")).toEqual([
-      expect.stringMatching(/raw \.replace\(\) mutation/)
-    ]);
-    expect(rawMutationCallProblems('const { ["replace"]: rawMutation } = workflow;')).toEqual([
-      expect.stringMatching(/raw \.replace\(\) mutation/)
-    ]);
-    expect(rawMutationCallProblems("const { replace: rawMutation } = workflow;")).toEqual([
-      expect.stringMatching(/raw \.replace\(\) mutation/)
-    ]);
-    expect(rawMutationCallProblems("const rawMutation = String.prototype.replace;")).toEqual([
-      expect.stringMatching(/raw \.replace\(\) mutation/)
-    ]);
-    expect(
-      rawMutationCallProblems(
-        'function replaceExactly(source: string): string { return source.replace("old", "new"); }'
-      )
-    ).toEqual([expect.stringMatching(/raw \.replace\(\) mutation/)]);
-
     expect(releaseMutationInventoryProblems(oracleSource)).toEqual([]);
     const matrixStartOffset = oracleSource.indexOf(RELEASE_MUTATION_MATRIX_START);
     expect(matrixStartOffset).toBeGreaterThan(0);

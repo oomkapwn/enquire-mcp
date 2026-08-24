@@ -29,6 +29,7 @@ import { load } from "js-yaml";
 import { describe, expect, it } from "vitest";
 // @ts-expect-error — the release checker is an executable .mjs module without declarations; this test uses its pure core.
 import { evaluateReleaseChecks, REQUIRED_RELEASE_CHECKS } from "../scripts/check-release-integrity.mjs";
+import { replaceExactly } from "./helpers/exact-source-mutation.js";
 
 const repoRoot = path.resolve(__dirname, "..");
 const OWNER = "oomkapwn";
@@ -212,8 +213,7 @@ function mutateYaml(source: string, mutate: (document: YamlMapping) => void): st
 }
 
 function replaceUnique(source: string, needle: string, replacement: string): string {
-  if (source.split(needle).length !== 2) throw new Error(`mutation fixture expected one ${needle}`);
-  return source.replace(needle, replacement);
+  return replaceExactly(source, needle, replacement);
 }
 
 interface DockerfileFacts {

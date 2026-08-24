@@ -2051,7 +2051,13 @@ function dynamicComputedMethodTaintAnalysis(
   const localFunctions = new Map<ts.Symbol, Set<ts.FunctionLikeDeclaration>>();
   const functionSymbols = new Map<ts.FunctionLikeDeclaration, ts.Symbol>();
 
-  const symbolOf = (identifier: ts.Identifier): ts.Symbol | null => checker.getSymbolAtLocation(identifier) ?? null;
+  const symbolOf = (identifier: ts.Identifier): ts.Symbol | null => {
+    const parent = identifier.parent;
+    if (ts.isShorthandPropertyAssignment(parent) && parent.name === identifier) {
+      return checker.getShorthandAssignmentValueSymbol(parent) ?? checker.getSymbolAtLocation(identifier) ?? null;
+    }
+    return checker.getSymbolAtLocation(identifier) ?? null;
+  };
 
   function exactStaticKey(name: ts.PropertyName): string | null {
     if (!ts.isComputedPropertyName(name)) return staticPropertyText(name);

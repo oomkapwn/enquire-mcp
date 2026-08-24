@@ -2257,8 +2257,14 @@ function isTaintedDynamicMethodInvocation(
     return true;
   }
   const callee = unwrapStaticExpression(node.expression);
-  if (ts.isElementAccessExpression(callee) && isUnresolvedComputedMethod(callee.argumentExpression, methodResolver)) {
-    return false;
+  if (ts.isElementAccessExpression(callee)) {
+    const directMethod = computedMethodText(callee.argumentExpression, methodResolver);
+    if (
+      directMethod !== null ||
+      isUnresolvedComputedMethod(callee.argumentExpression, methodResolver)
+    ) {
+      return false;
+    }
   }
   if (
     (ts.isPropertyAccessExpression(callee) || ts.isElementAccessExpression(callee)) &&

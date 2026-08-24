@@ -991,12 +991,12 @@ function hasExactLifecycleNormalizationOwner(declaration: ts.VariableDeclaration
   const statementIndex = callbackBody.statements.indexOf(statement);
   const consumer = callbackBody.statements[statementIndex + 1];
   if (consumer === undefined || !ts.isForOfStatement(consumer) || !ts.isBlock(consumer.statement)) return false;
-  const contractDeclaration = ts.isVariableDeclarationList(consumer.initializer)
-    ? consumer.initializer.declarations[0]
-    : undefined;
+  const consumerInitializer = consumer.initializer;
+  if (!ts.isVariableDeclarationList(consumerInitializer)) return false;
+  const contractDeclaration = consumerInitializer.declarations[0];
   if (
     contractDeclaration === undefined ||
-    consumer.initializer.declarations.length !== 1 ||
+    consumerInitializer.declarations.length !== 1 ||
     !ts.isIdentifier(contractDeclaration.name) ||
     contractDeclaration.name.text !== "contract" ||
     !ts.isArrayLiteralExpression(consumer.expression) ||
@@ -1510,6 +1510,32 @@ interface ComputedMethodResolver {
   readonly resolve: (expression: ts.Expression | undefined) => StaticStringResolution;
 }
 
+/** True when a symbol has at least one declaration that survives TypeScript emit. */
+function symbolHasRuntimeValueBinding(symbol: ts.Symbol): boolean {
+  return (symbol.declarations ?? []).some((declaration) => {
+    if (
+      ts.isInterfaceDeclaration(declaration) ||
+      ts.isTypeAliasDeclaration(declaration) ||
+      ts.isTypeParameterDeclaration(declaration)
+    ) {
+      return false;
+    }
+    let current: ts.Node | undefined = declaration;
+    while (current !== undefined && !ts.isSourceFile(current)) {
+      if (
+        ts.canHaveModifiers(current) &&
+        ts.getModifiers(current)?.some((modifier) => modifier.kind === ts.SyntaxKind.DeclareKeyword)
+      ) {
+        return false;
+      }
+      if (ts.isImportSpecifier(current) && current.isTypeOnly) return false;
+      if (ts.isImportClause(current) && current.isTypeOnly) return false;
+      current = current.parent;
+    }
+    return !declaration.getSourceFile().isDeclarationFile;
+  });
+}
+
 /**
  * Resolve computed-property strings by lexical symbol identity.
  * Only one direct `const` initializer is followed, so a same-spelled shadow or
@@ -1533,13 +1559,14 @@ function computedMethodResolver(checker: ts.TypeChecker): ComputedMethodResolver
     if (literal !== null) return knownResolution(literal);
     if (ts.isPropertyAccessExpression(current) || ts.isElementAccessExpression(current)) {
       const owner = unwrapStaticExpression(current.expression);
+      const ownerSymbol = ts.isIdentifier(owner) ? checker.getSymbolAtLocation(owner) : undefined;
       const member = ts.isPropertyAccessExpression(current)
         ? current.name.text
         : staticStringExpressionText(current.argumentExpression ?? current);
       if (
         ts.isIdentifier(owner) &&
         owner.text === "Symbol" &&
-        checker.getSymbolAtLocation(owner) === undefined &&
+        (ownerSymbol === undefined || !symbolHasRuntimeValueBinding(ownerSymbol)) &&
         member === "iterator"
       ) {
         return knownResolution("@@Symbol.iterator");
@@ -1585,6 +1612,16 @@ function isUnresolvedComputedMethod(
   resolver: ComputedMethodResolver
 ): boolean {
   return resolver.resolve(expression).hasUnknown;
+}
+
+/** Assignment forms whose result can preserve a direct aliased value. */
+function isAliasAssignmentToken(kind: ts.SyntaxKind): boolean {
+  return (
+    kind === ts.SyntaxKind.EqualsToken ||
+    kind === ts.SyntaxKind.AmpersandAmpersandEqualsToken ||
+    kind === ts.SyntaxKind.BarBarEqualsToken ||
+    kind === ts.SyntaxKind.QuestionQuestionEqualsToken
+  );
 }
 
 /** Dynamic computed callees are fail-closed because replace/replaceAll cannot be excluded. */
@@ -1644,10 +1681,14 @@ function reflectiveOperationResolver(
   stringResolver: ComputedMethodResolver
 ): ReflectiveOperationResolver {
   const assignmentSources = new Map<ts.Symbol, ts.Expression[]>();
+  const destructuringAssignmentSources = new Map<
+    ts.Symbol,
+    Array<{ readonly name: ts.PropertyName; readonly owner: ts.Expression }>
+  >();
   const variableSourceCache = new Map<ts.Symbol, readonly ts.Expression[]>();
 
   function collectAssignmentSources(node: ts.Node): void {
-    if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
+    if (ts.isBinaryExpression(node) && isAliasAssignmentToken(node.operatorToken.kind)) {
       const left = unwrapStaticExpression(node.left);
       if (ts.isIdentifier(left)) {
         const symbol = checker.getSymbolAtLocation(left);
@@ -1655,6 +1696,22 @@ function reflectiveOperationResolver(
           const sources = assignmentSources.get(symbol) ?? [];
           sources.push(node.right);
           assignmentSources.set(symbol, sources);
+        }
+      } else if (node.operatorToken.kind === ts.SyntaxKind.EqualsToken && ts.isObjectLiteralExpression(left)) {
+        for (const property of left.properties) {
+          let target: ts.Identifier | null = null;
+          if (ts.isShorthandPropertyAssignment(property)) {
+            target = property.name;
+          } else if (ts.isPropertyAssignment(property)) {
+            const initializer = unwrapStaticExpression(property.initializer);
+            if (ts.isIdentifier(initializer)) target = initializer;
+          }
+          if (target === null) continue;
+          const symbol = checker.getSymbolAtLocation(target);
+          if (symbol === undefined) continue;
+          const sources = destructuringAssignmentSources.get(symbol) ?? [];
+          sources.push({ name: property.name, owner: node.right });
+          destructuringAssignmentSources.set(symbol, sources);
         }
       }
     }
@@ -1698,7 +1755,10 @@ function reflectiveOperationResolver(
     }
     if (ts.isIdentifier(current)) {
       const symbol = checker.getSymbolAtLocation(current);
-      if (symbol === undefined && (current.text === "Object" || current.text === "Reflect")) {
+      if (
+        (symbol === undefined || !symbolHasRuntimeValueBinding(symbol)) &&
+        (current.text === "Object" || current.text === "Reflect")
+      ) {
         return new Set<BuiltinObjectKind>([current.text]);
       }
       if (symbol === undefined || resolving.has(symbol)) return new Set();
@@ -1736,6 +1796,22 @@ function reflectiveOperationResolver(
     return operations;
   }
 
+  function destructuringAssignmentOperations(
+    symbol: ts.Symbol,
+    resolving: ReadonlySet<ts.Symbol>
+  ): ReadonlySet<ReflectiveOperationKind> {
+    const operations = new Set<ReflectiveOperationKind>();
+    for (const assignment of destructuringAssignmentSources.get(symbol) ?? []) {
+      const names = ts.isComputedPropertyName(assignment.name)
+        ? stringResolver.resolve(assignment.name.expression).values
+        : new Set([staticPropertyText(assignment.name) ?? ""]);
+      for (const operation of operationsFor(ownerKinds(assignment.owner, resolving), names)) {
+        operations.add(operation);
+      }
+    }
+    return operations;
+  }
+
   function bindingElementOperations(
     declaration: ts.BindingElement,
     resolving: ReadonlySet<ts.Symbol>
@@ -1764,7 +1840,7 @@ function reflectiveOperationResolver(
     if (ts.isConditionalExpression(current)) {
       return new Set([...resolve(current.whenTrue, resolving), ...resolve(current.whenFalse, resolving)]);
     }
-    if (ts.isBinaryExpression(current) && current.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
+    if (ts.isBinaryExpression(current) && isAliasAssignmentToken(current.operatorToken.kind)) {
       return resolve(current.right, resolving);
     }
     if (ts.isCallExpression(current)) {
@@ -1790,13 +1866,18 @@ function reflectiveOperationResolver(
     const declaration = declarations[0];
     if (declaration === undefined) return new Set();
     const nextResolving = new Set([...resolving, symbol]);
+    const assignedByDestructuring = destructuringAssignmentOperations(symbol, nextResolving);
     if (ts.isBindingElement(declaration)) {
       return new Set([
         ...bindingElementOperations(declaration, nextResolving),
-        ...(assignmentSources.get(symbol) ?? []).flatMap((source) => [...resolve(source, nextResolving)])
+        ...(assignmentSources.get(symbol) ?? []).flatMap((source) => [...resolve(source, nextResolving)]),
+        ...assignedByDestructuring
       ]);
     }
-    return new Set(variableValueSources(symbol).flatMap((source) => [...resolve(source, nextResolving)]));
+    return new Set([
+      ...variableValueSources(symbol).flatMap((source) => [...resolve(source, nextResolving)]),
+      ...assignedByDestructuring
+    ]);
   }
 
   return { resolve };
@@ -2001,7 +2082,7 @@ function dynamicComputedMethodTaintAnalysis(
     ) {
       collectBindingProjectionEdges(node.name, node.initializer);
     }
-    if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
+    if (ts.isBinaryExpression(node) && isAliasAssignmentToken(node.operatorToken.kind)) {
       const left = unwrapStaticExpression(node.left);
       if (ts.isIdentifier(left)) {
         const target = symbolOf(left);
@@ -2014,7 +2095,7 @@ function dynamicComputedMethodTaintAnalysis(
             if (source !== null) objectAliasEdges.push({ source, target });
           }
         }
-      } else if (ts.isObjectLiteralExpression(left)) {
+      } else if (node.operatorToken.kind === ts.SyntaxKind.EqualsToken && ts.isObjectLiteralExpression(left)) {
         collectAssignmentProjectionEdges(left, node.right);
       } else if (ts.isPropertyAccessExpression(left) || ts.isElementAccessExpression(left)) {
         const ownerExpression = unwrapStaticExpression(left.expression);
@@ -2113,6 +2194,10 @@ function dynamicComputedMethodTaintAnalysis(
         current.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken)
     ) {
       return expressionTaint(current.left) | expressionTaint(current.right);
+    }
+    if (ts.isBinaryExpression(current) && isAliasAssignmentToken(current.operatorToken.kind)) {
+      const leftTaint = current.operatorToken.kind === ts.SyntaxKind.EqualsToken ? 0 : expressionTaint(current.left);
+      return leftTaint | expressionTaint(current.right);
     }
     if (ts.isCallExpression(current)) {
       const acquisition = reflectiveAcquisition(current, operationResolver, methodResolver);
@@ -7955,8 +8040,10 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
     ).toEqual([expect.stringMatching(/unclassified raw \.replace access/)]);
     for (const reflectiveRawAccess of [
       'const rawMutation = Reflect.get(source, "replace");',
+      'declare const Reflect: { get(target: unknown, key: PropertyKey): unknown }; Reflect.get(source, "replace");',
       'const method = "re" + "place"; const rawMutation = Reflect.get(source, method);',
       'const rawMutation = Object.getOwnPropertyDescriptor(source, "replace")?.value;',
+      'declare const Object: { getOwnPropertyDescriptor(target: unknown, key: PropertyKey): PropertyDescriptor | undefined }; Object.getOwnPropertyDescriptor(source, "replaceAll")?.value;',
       'const method = "replaceAll"; const rawMutation = Reflect.getOwnPropertyDescriptor(source, method)?.value;',
       'Reflect.apply(Reflect.get(source, "replace"), source, ["old", "new"]);',
       'const getter = Reflect["get"]; getter(source, "replace");',
@@ -7967,6 +8054,10 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       'const getter = Reflect.get.bind(Reflect); getter(source, "replaceAll");',
       'const getter = Reflect.get.bind(); getter(source, "replace");',
       'let alias; let getter; getter = alias = Reflect.get; getter(source, "replace");',
+      'let getter; ({ get: getter } = Reflect); getter(source, "replaceAll");',
+      'let getter; getter ||= Reflect.get; getter(source, "replace");',
+      'let getter; getter ??= Reflect.get; getter(source, "replaceAll");',
+      'let getter = Reflect.get; getter &&= Reflect.get; getter(source, "replace");',
       'const R = Reflect; const getter = R.get; getter(source, "replace");',
       'let R = Reflect; const getter = R.get; getter(source, "replaceAll");',
       'const { get: getter } = Reflect; getter(source, "replace");',
@@ -7982,7 +8073,10 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       'Object.getOwnPropertyDescriptor.call(Object, source, "replace")?.value;',
       'Reflect.apply(Reflect.get, Reflect, [source, "replace"]);'
     ]) {
-      expect(repositoryMutationOracleProblems(mutationInventoryFile, reflectiveRawAccess)).toEqual([
+      expect(
+        repositoryMutationOracleProblems(mutationInventoryFile, reflectiveRawAccess),
+        reflectiveRawAccess
+      ).toEqual([
         expect.stringMatching(/reflectively acquires raw \.(?:replace|replaceAll)/)
       ]);
     }
@@ -7995,9 +8089,12 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       'let getter = () => "safe"; getter(source, "replace");',
       'const getter = (() => "safe").bind(null); getter(source, "replace");',
       'const getter = Reflect.get.bind(Reflect, source, "includes"); getter();',
+      'let getter; ({ get: getter } = { get: () => "safe" }); getter(source, "replace");',
+      'let getter; getter ||= () => "safe"; getter(source, "replace");',
       'const getter = Reflect.get; const value = getter(source, property); void value;',
       'const descriptor = Object.getOwnPropertyDescriptor(source, property); void descriptor;',
       'const iterator = Array.prototype[Symbol.iterator]; Reflect.apply(iterator, [], []);',
+      'declare const Symbol: SymbolConstructor; const iterator = source[Symbol.iterator]; Reflect.apply(iterator, source, []);',
       'Reflect.get.call(Reflect, source, "includes");',
       'Reflect.get.apply(Reflect, [source, "includes"]);',
       'Reflect["get"]["apply"](Reflect, [source, "includes"]);',
@@ -8027,6 +8124,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       'Reflect["get"]["apply"](Reflect, [source, property])("old", "new");',
       'Reflect.apply(Reflect.get, Reflect, [source, property])("old", "new");',
       'const getter = Reflect.get.bind(Reflect); getter(source, property)("old", "new");',
+      'let getter; ({ get: getter } = Reflect); getter(source, property)("old", "new");',
       'const Symbol = { iterator: getMethod() }; const rawMutation = source[Symbol.iterator]; Reflect.apply(rawMutation, source, []);'
     ]) {
       expect(repositoryMutationOracleProblems(mutationInventoryFile, dynamicReflectiveInvocation)).toEqual([
@@ -8049,6 +8147,8 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
     for (const extractedDynamicMethod of [
       'const rawMutation = source[getMethod()]; rawMutation.call(source, "old", "new");',
       'let rawMutation; rawMutation = source[getMethod()]; rawMutation("old", "new");',
+      'let alias; let rawMutation; rawMutation = alias = source[getMethod()]; rawMutation("old", "new");',
+      'let rawMutation; rawMutation ||= source[getMethod()]; rawMutation("old", "new");',
       'const rawMutation = source[getMethod()]; const alias = rawMutation; alias.apply(source, ["old", "new"]);',
       'const invoke = (fn) => fn.call(source, "old", "new"); invoke(source[getMethod()]);',
       'const invoke = (fn) => fn.call(source, "old", "new"); const alias = invoke; alias(source[getMethod()]);',
@@ -8085,6 +8185,12 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       "}"
     ].join("\n");
     expect(repositoryMutationOracleProblems(mutationInventoryFile, safelyShadowedDynamicMethod)).toEqual([]);
+    expect(
+      repositoryMutationOracleProblems(
+        mutationInventoryFile,
+        'let rawMutation; rawMutation ||= () => "safe"; rawMutation("old", "new");'
+      )
+    ).toEqual([]);
     const safelyShadowedDynamicProperty = [
       "const holder = { rawMutation: source[getMethod()] };",
       "{",

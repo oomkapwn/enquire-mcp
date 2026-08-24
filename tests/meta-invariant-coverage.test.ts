@@ -1643,10 +1643,7 @@ interface FlatAssignmentTarget {
 function flatAssignmentTarget(expression: ts.Expression): FlatAssignmentTarget | null {
   const current = unwrapStaticExpression(expression);
   if (ts.isIdentifier(current)) return { target: current };
-  if (
-    ts.isBinaryExpression(current) &&
-    current.operatorToken.kind === ts.SyntaxKind.EqualsToken
-  ) {
+  if (ts.isBinaryExpression(current) && current.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
     const target = unwrapStaticExpression(current.left);
     return ts.isIdentifier(target) ? { fallback: current.right, target } : null;
   }
@@ -2103,13 +2100,11 @@ function dynamicComputedMethodTaintAnalysis(
   function collectFunctions(node: ts.Node): void {
     if (ts.isFunctionDeclaration(node) && node.name !== undefined) {
       registerFunction(symbolOf(node.name), node);
-    } else if (
-      ts.isVariableDeclaration(node) &&
-      ts.isIdentifier(node.name) &&
-      node.initializer !== undefined &&
-      (ts.isArrowFunction(node.initializer) || ts.isFunctionExpression(node.initializer))
-    ) {
-      registerFunction(symbolOf(node.name), node.initializer);
+    } else if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer !== undefined) {
+      const initializer = unwrapStaticExpression(node.initializer);
+      if (ts.isArrowFunction(initializer) || ts.isFunctionExpression(initializer)) {
+        registerFunction(symbolOf(node.name), initializer);
+      }
     }
     ts.forEachChild(node, collectFunctions);
   }
@@ -2472,8 +2467,8 @@ function isTaintedDynamicMethodTagInvocation(
 
 /**
  * Resolve a statically replace-spelled reflective acquisition through exact
- * unshadowed built-ins or immutable lexical aliases. Unknown keys are handled
- * separately by the invocation-taint analysis, so passive Proxy forwarding is
+ * unshadowed built-ins or the explicitly reviewed lexical alias forms. Unknown
+ * keys are handled separately by the invocation-taint analysis, so passive Proxy forwarding is
  * not mislabeled as an executed mutation.
  */
 function reflectiveReplaceMethod(
@@ -8256,6 +8251,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       'const rawMutation = (0, source[getMethod()]); rawMutation.call(source, "old", "new");',
       'const rawMutation = source[getMethod()]; const alias = rawMutation; alias.apply(source, ["old", "new"]);',
       'const invoke = (fn) => fn.call(source, "old", "new"); invoke(source[getMethod()]);',
+      'const invoke = ((fn) => fn.call(source, "old", "new")); invoke(source[getMethod()]);',
       'const invoke = (fn) => fn.call(source, "old", "new"); const alias = invoke; alias(source[getMethod()]);',
       'const invoke = (fn) => fn.call(source, "old", "new"); let alias; alias = invoke; alias(source[getMethod()]);',
       '({ rawMutation: source[getMethod()] }).rawMutation("old", "new");',
@@ -8330,6 +8326,12 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       repositoryMutationOracleProblems(
         mutationInventoryFile,
         'let holder; const rawMutation = (holder ||= { rawMutation: () => "safe" }).rawMutation; rawMutation("old", "new");'
+      )
+    ).toEqual([]);
+    expect(
+      repositoryMutationOracleProblems(
+        mutationInventoryFile,
+        'const invoke = ((fn) => fn.call(source, "old", "new")); invoke(() => "safe");'
       )
     ).toEqual([]);
     const safelyShadowedDynamicProperty = [

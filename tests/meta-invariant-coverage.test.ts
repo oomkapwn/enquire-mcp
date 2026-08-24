@@ -1530,6 +1530,7 @@ function symbolHasRuntimeValueBinding(symbol: ts.Symbol): boolean {
       }
       if (ts.isImportSpecifier(current) && current.isTypeOnly) return false;
       if (ts.isImportClause(current) && current.isTypeOnly) return false;
+      if (ts.isImportEqualsDeclaration(current) && current.isTypeOnly) return false;
       current = current.parent;
     }
     return !declaration.getSourceFile().isDeclarationFile;
@@ -1624,6 +1625,34 @@ function isAliasAssignmentToken(kind: ts.SyntaxKind): boolean {
   );
 }
 
+/** Logical binary forms whose runtime result is one of their two operands. */
+function isLogicalValueToken(kind: ts.SyntaxKind): boolean {
+  return (
+    kind === ts.SyntaxKind.AmpersandAmpersandToken ||
+    kind === ts.SyntaxKind.BarBarToken ||
+    kind === ts.SyntaxKind.QuestionQuestionToken
+  );
+}
+
+interface FlatAssignmentTarget {
+  readonly fallback?: ts.Expression;
+  readonly target: ts.Identifier;
+}
+
+/** Resolve the identifier and optional default written by one flat assignment-pattern property. */
+function flatAssignmentTarget(expression: ts.Expression): FlatAssignmentTarget | null {
+  const current = unwrapStaticExpression(expression);
+  if (ts.isIdentifier(current)) return { target: current };
+  if (
+    ts.isBinaryExpression(current) &&
+    current.operatorToken.kind === ts.SyntaxKind.EqualsToken
+  ) {
+    const target = unwrapStaticExpression(current.left);
+    return ts.isIdentifier(target) ? { fallback: current.right, target } : null;
+  }
+  return null;
+}
+
 /** Dynamic computed callees are fail-closed because replace/replaceAll cannot be excluded. */
 function isDynamicComputedMethodUse(node: ts.ElementAccessExpression): boolean {
   const parent = node.parent;
@@ -1700,15 +1729,23 @@ function reflectiveOperationResolver(
       } else if (node.operatorToken.kind === ts.SyntaxKind.EqualsToken && ts.isObjectLiteralExpression(left)) {
         for (const property of left.properties) {
           let target: ts.Identifier | null = null;
+          let fallback: ts.Expression | undefined;
           if (ts.isShorthandPropertyAssignment(property)) {
             target = property.name;
+            fallback = property.objectAssignmentInitializer;
           } else if (ts.isPropertyAssignment(property)) {
-            const initializer = unwrapStaticExpression(property.initializer);
-            if (ts.isIdentifier(initializer)) target = initializer;
+            const assignmentTarget = flatAssignmentTarget(property.initializer);
+            target = assignmentTarget?.target ?? null;
+            fallback = assignmentTarget?.fallback;
           }
           if (target === null) continue;
           const symbol = checker.getSymbolAtLocation(target);
           if (symbol === undefined) continue;
+          if (fallback !== undefined) {
+            const sources = assignmentSources.get(symbol) ?? [];
+            sources.push(fallback);
+            assignmentSources.set(symbol, sources);
+          }
           const sources = destructuringAssignmentSources.get(symbol) ?? [];
           sources.push({ name: property.name, owner: node.right });
           destructuringAssignmentSources.set(symbol, sources);
@@ -1753,6 +1790,22 @@ function reflectiveOperationResolver(
     if (ts.isConditionalExpression(current)) {
       return new Set([...ownerKinds(current.whenTrue, resolving), ...ownerKinds(current.whenFalse, resolving)]);
     }
+    if (ts.isCommaListExpression(current)) {
+      const result = current.elements[current.elements.length - 1];
+      return result === undefined ? new Set() : ownerKinds(result, resolving);
+    }
+    if (ts.isBinaryExpression(current) && current.operatorToken.kind === ts.SyntaxKind.CommaToken) {
+      return ownerKinds(current.right, resolving);
+    }
+    if (ts.isBinaryExpression(current) && isLogicalValueToken(current.operatorToken.kind)) {
+      return new Set([...ownerKinds(current.left, resolving), ...ownerKinds(current.right, resolving)]);
+    }
+    if (ts.isBinaryExpression(current) && isAliasAssignmentToken(current.operatorToken.kind)) {
+      if (current.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
+        return ownerKinds(current.right, resolving);
+      }
+      return new Set([...ownerKinds(current.left, resolving), ...ownerKinds(current.right, resolving)]);
+    }
     if (ts.isIdentifier(current)) {
       const symbol = checker.getSymbolAtLocation(current);
       if (
@@ -1767,10 +1820,11 @@ function reflectiveOperationResolver(
     }
     if (ts.isPropertyAccessExpression(current) || ts.isElementAccessExpression(current)) {
       const owner = unwrapStaticExpression(current.expression);
+      const ownerSymbol = ts.isIdentifier(owner) ? checker.getSymbolAtLocation(owner) : undefined;
       if (
         !ts.isIdentifier(owner) ||
         owner.text !== "globalThis" ||
-        checker.getSymbolAtLocation(owner) !== undefined
+        (ownerSymbol !== undefined && symbolHasRuntimeValueBinding(ownerSymbol))
       ) {
         return new Set();
       }
@@ -1829,7 +1883,10 @@ function reflectiveOperationResolver(
       declaration.propertyName !== undefined && ts.isComputedPropertyName(declaration.propertyName)
         ? stringResolver.resolve(declaration.propertyName.expression).values
         : new Set([staticPropertyText(declaration.propertyName ?? declaration.name) ?? ""]);
-    return operationsFor(ownerKinds(variableDeclaration.initializer, resolving), names);
+    return new Set([
+      ...operationsFor(ownerKinds(variableDeclaration.initializer, resolving), names),
+      ...(declaration.initializer === undefined ? [] : resolve(declaration.initializer, resolving))
+    ]);
   }
 
   function resolve(
@@ -1840,8 +1897,21 @@ function reflectiveOperationResolver(
     if (ts.isConditionalExpression(current)) {
       return new Set([...resolve(current.whenTrue, resolving), ...resolve(current.whenFalse, resolving)]);
     }
-    if (ts.isBinaryExpression(current) && isAliasAssignmentToken(current.operatorToken.kind)) {
+    if (ts.isCommaListExpression(current)) {
+      const result = current.elements[current.elements.length - 1];
+      return result === undefined ? new Set() : resolve(result, resolving);
+    }
+    if (ts.isBinaryExpression(current) && current.operatorToken.kind === ts.SyntaxKind.CommaToken) {
       return resolve(current.right, resolving);
+    }
+    if (ts.isBinaryExpression(current) && isLogicalValueToken(current.operatorToken.kind)) {
+      return new Set([...resolve(current.left, resolving), ...resolve(current.right, resolving)]);
+    }
+    if (ts.isBinaryExpression(current) && isAliasAssignmentToken(current.operatorToken.kind)) {
+      if (current.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
+        return resolve(current.right, resolving);
+      }
+      return new Set([...resolve(current.left, resolving), ...resolve(current.right, resolving)]);
     }
     if (ts.isCallExpression(current)) {
       const callee = unwrapStaticExpression(current.expression);
@@ -1994,7 +2064,9 @@ function dynamicComputedMethodTaintAnalysis(
       if (element.dotDotDotToken !== undefined || !ts.isIdentifier(element.name)) continue;
       const key = exactStaticKey(element.propertyName ?? element.name);
       const target = symbolOf(element.name);
-      if (key !== null && target !== null) propertyProjectionEdges.push({ key, owner, target });
+      if (target === null) continue;
+      if (key !== null) propertyProjectionEdges.push({ key, owner, target });
+      if (element.initializer !== undefined) valueEdges.push({ expression: element.initializer, target });
     }
   }
 
@@ -2002,15 +2074,24 @@ function dynamicComputedMethodTaintAnalysis(
     for (const property of pattern.properties) {
       if (ts.isShorthandPropertyAssignment(property)) {
         const target = symbolOf(property.name);
-        if (target !== null) propertyProjectionEdges.push({ key: property.name.text, owner, target });
+        if (target !== null) {
+          propertyProjectionEdges.push({ key: property.name.text, owner, target });
+          if (property.objectAssignmentInitializer !== undefined) {
+            valueEdges.push({ expression: property.objectAssignmentInitializer, target });
+          }
+        }
         continue;
       }
       if (!ts.isPropertyAssignment(property)) continue;
-      const targetExpression = unwrapStaticExpression(property.initializer);
-      if (!ts.isIdentifier(targetExpression)) continue;
+      const targetExpression = flatAssignmentTarget(property.initializer);
+      if (targetExpression === null) continue;
       const key = exactStaticKey(property.name);
-      const target = symbolOf(targetExpression);
-      if (key !== null && target !== null) propertyProjectionEdges.push({ key, owner, target });
+      const target = symbolOf(targetExpression.target);
+      if (target === null) continue;
+      if (key !== null) propertyProjectionEdges.push({ key, owner, target });
+      if (targetExpression.fallback !== undefined) {
+        valueEdges.push({ expression: targetExpression.fallback, target });
+      }
     }
   }
 
@@ -2187,12 +2268,14 @@ function dynamicComputedMethodTaintAnalysis(
     if (ts.isConditionalExpression(current)) {
       return expressionTaint(current.whenTrue) | expressionTaint(current.whenFalse);
     }
-    if (
-      ts.isBinaryExpression(current) &&
-      (current.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken ||
-        current.operatorToken.kind === ts.SyntaxKind.BarBarToken ||
-        current.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken)
-    ) {
+    if (ts.isCommaListExpression(current)) {
+      const result = current.elements[current.elements.length - 1];
+      return result === undefined ? 0 : expressionTaint(result);
+    }
+    if (ts.isBinaryExpression(current) && current.operatorToken.kind === ts.SyntaxKind.CommaToken) {
+      return expressionTaint(current.right);
+    }
+    if (ts.isBinaryExpression(current) && isLogicalValueToken(current.operatorToken.kind)) {
       return expressionTaint(current.left) | expressionTaint(current.right);
     }
     if (ts.isBinaryExpression(current) && isAliasAssignmentToken(current.operatorToken.kind)) {
@@ -2233,25 +2316,7 @@ function dynamicComputedMethodTaintAnalysis(
         : methodResolver.resolve(current.argumentExpression);
       let taint = 0;
       for (const propertyName of propertyResolution.values) {
-        if (propertyName === "value" && (expressionTaint(owner) & DESCRIPTOR_VALUE_TAINT) !== 0) {
-          taint |= METHOD_VALUE_TAINT;
-        }
-        if (ts.isObjectLiteralExpression(owner)) {
-          const property = owner.properties.find(
-            (candidate) =>
-              (ts.isPropertyAssignment(candidate) || ts.isShorthandPropertyAssignment(candidate)) &&
-              exactStaticKey(candidate.name) === propertyName
-          );
-          if (property !== undefined) {
-            taint |= expressionTaint(
-              ts.isPropertyAssignment(property) ? property.initializer : property.name
-            );
-          }
-        }
-        if (ts.isIdentifier(owner)) {
-          const ownerSymbol = symbolOf(owner);
-          if (ownerSymbol !== null) taint |= propertyTaint(ownerSymbol, propertyName);
-        }
+        taint |= projectedPropertyTaint(owner, propertyName);
       }
       if (ts.isElementAccessExpression(current)) {
         if (propertyResolution.values.has("replace") || propertyResolution.values.has("replaceAll")) {
@@ -2266,6 +2331,24 @@ function dynamicComputedMethodTaintAnalysis(
 
   function projectedPropertyTaint(ownerExpression: ts.Expression, key: string): number {
     const owner = unwrapStaticExpression(ownerExpression);
+    if (ts.isConditionalExpression(owner)) {
+      return projectedPropertyTaint(owner.whenTrue, key) | projectedPropertyTaint(owner.whenFalse, key);
+    }
+    if (ts.isCommaListExpression(owner)) {
+      const result = owner.elements[owner.elements.length - 1];
+      return result === undefined ? 0 : projectedPropertyTaint(result, key);
+    }
+    if (ts.isBinaryExpression(owner) && owner.operatorToken.kind === ts.SyntaxKind.CommaToken) {
+      return projectedPropertyTaint(owner.right, key);
+    }
+    if (ts.isBinaryExpression(owner) && isLogicalValueToken(owner.operatorToken.kind)) {
+      return projectedPropertyTaint(owner.left, key) | projectedPropertyTaint(owner.right, key);
+    }
+    if (ts.isBinaryExpression(owner) && isAliasAssignmentToken(owner.operatorToken.kind)) {
+      const leftTaint =
+        owner.operatorToken.kind === ts.SyntaxKind.EqualsToken ? 0 : projectedPropertyTaint(owner.left, key);
+      return leftTaint | projectedPropertyTaint(owner.right, key);
+    }
     let taint = key === "value" && (expressionTaint(owner) & DESCRIPTOR_VALUE_TAINT) !== 0 ? METHOD_VALUE_TAINT : 0;
     if (ts.isObjectLiteralExpression(owner)) {
       const property = owner.properties.find(
@@ -8041,6 +8124,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
     for (const reflectiveRawAccess of [
       'const rawMutation = Reflect.get(source, "replace");',
       'declare const Reflect: { get(target: unknown, key: PropertyKey): unknown }; Reflect.get(source, "replace");',
+      'import type Reflect = require("safe"); Reflect.get(source, "replace");',
       'const method = "re" + "place"; const rawMutation = Reflect.get(source, method);',
       'const rawMutation = Object.getOwnPropertyDescriptor(source, "replace")?.value;',
       'declare const Object: { getOwnPropertyDescriptor(target: unknown, key: PropertyKey): PropertyDescriptor | undefined }; Object.getOwnPropertyDescriptor(source, "replaceAll")?.value;',
@@ -8055,12 +8139,22 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       'const getter = Reflect.get.bind(); getter(source, "replace");',
       'let alias; let getter; getter = alias = Reflect.get; getter(source, "replace");',
       'let getter; ({ get: getter } = Reflect); getter(source, "replaceAll");',
+      'let getter; ({ get: getter = () => "safe" } = Reflect); getter(source, "replace");',
+      'let getter; ({ get: getter = Reflect.get } = {}); getter(source, "replaceAll");',
+      'let getter; ({ getter = Reflect.get } = {}); getter(source, "replace");',
       'let getter; getter ||= Reflect.get; getter(source, "replace");',
       'let getter; getter ??= Reflect.get; getter(source, "replaceAll");',
       'let getter = Reflect.get; getter &&= Reflect.get; getter(source, "replace");',
+      'let getter = Reflect.get; (getter ||= () => "safe")(source, "replace");',
+      'const getter = (0, Reflect.get); getter(source, "replace");',
+      'const getter = Reflect.get || (() => "safe"); getter(source, "replaceAll");',
       'const R = Reflect; const getter = R.get; getter(source, "replace");',
       'let R = Reflect; const getter = R.get; getter(source, "replaceAll");',
+      'let R = Reflect; const getter = (R ||= {}).get; getter(source, "replace");',
+      'const getter = (0, Reflect).get; getter(source, "replaceAll");',
       'const { get: getter } = Reflect; getter(source, "replace");',
+      'const { get: getter = Reflect.get } = {}; getter(source, "replace");',
+      'const { getter = Reflect.get } = {}; getter(source, "replaceAll");',
       'let { get: getter } = Reflect; getter(source, "replaceAll");',
       'let { get: getter } = { get: () => "safe" }; getter = Reflect.get; getter(source, "replace");',
       'const descriptor = Object.getOwnPropertyDescriptor; descriptor(source, "replace")?.value;',
@@ -8084,13 +8178,22 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       'const value = Reflect.get(target, property, target);',
       'const value = Reflect.get(source, "includes");',
       'const Reflect = { get: () => "safe" }; Reflect.get(source, "replace");',
+      'import Reflect = require("safe"); Reflect.get(source, "replace");',
+      'const globalThis = { Reflect: { get: () => "safe" } }; globalThis.Reflect.get(source, "replace");',
       'const method = "replace"; { const method = "includes"; Reflect.get(source, method); }',
       'const getter = Reflect.get; { const getter = () => "safe"; getter(source, "replace"); }',
       'let getter = () => "safe"; getter(source, "replace");',
       'const getter = (() => "safe").bind(null); getter(source, "replace");',
       'const getter = Reflect.get.bind(Reflect, source, "includes"); getter();',
       'let getter; ({ get: getter } = { get: () => "safe" }); getter(source, "replace");',
+      'let getter; ({ get: getter = () => "safe" } = {}); getter(source, "replace");',
+      'let getter; ({ getter = () => "safe" } = {}); getter(source, "replace");',
       'let getter; getter ||= () => "safe"; getter(source, "replace");',
+      'let getter; (getter ||= () => "safe")(source, "replace");',
+      'let R; const getter = (R ||= { get: () => "safe" }).get; getter(source, "replace");',
+      'const getter = (0, () => "safe"); getter(source, "replace");',
+      'const getter = undefined || (() => "safe"); getter(source, "replace");',
+      'const getter = (0, { get: () => "safe" }).get; getter(source, "replace");',
       'const getter = Reflect.get; const value = getter(source, property); void value;',
       'const descriptor = Object.getOwnPropertyDescriptor(source, property); void descriptor;',
       'const iterator = Array.prototype[Symbol.iterator]; Reflect.apply(iterator, [], []);',
@@ -8149,6 +8252,8 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       'let rawMutation; rawMutation = source[getMethod()]; rawMutation("old", "new");',
       'let alias; let rawMutation; rawMutation = alias = source[getMethod()]; rawMutation("old", "new");',
       'let rawMutation; rawMutation ||= source[getMethod()]; rawMutation("old", "new");',
+      'let rawMutation = source[getMethod()]; (rawMutation ||= () => "safe")("old", "new");',
+      'const rawMutation = (0, source[getMethod()]); rawMutation.call(source, "old", "new");',
       'const rawMutation = source[getMethod()]; const alias = rawMutation; alias.apply(source, ["old", "new"]);',
       'const invoke = (fn) => fn.call(source, "old", "new"); invoke(source[getMethod()]);',
       'const invoke = (fn) => fn.call(source, "old", "new"); const alias = invoke; alias(source[getMethod()]);',
@@ -8165,13 +8270,19 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       'const holder = { rawMutation: source[getMethod()] }; const { rawMutation } = holder; rawMutation("old", "new");',
       'const key = "rawMutation"; const holder = { rawMutation: source[getMethod()] }; const { [key]: fn } = holder; fn("old", "new");',
       'let rawMutation; const holder = { rawMutation: source[getMethod()] }; ({ rawMutation } = holder); rawMutation("old", "new");',
+      'let rawMutation; const holder = { rawMutation: source[getMethod()] }; ({ rawMutation: rawMutation = () => "safe" } = holder); rawMutation("old", "new");',
+      'let rawMutation; ({ rawMutation: rawMutation = source[getMethod()] } = {}); rawMutation("old", "new");',
+      'let rawMutation; ({ rawMutation = source[getMethod()] } = {}); rawMutation("old", "new");',
+      'const { rawMutation = source[getMethod()] } = {}; rawMutation("old", "new");',
       'const key = "rawMutation"; let fn; const holder = { rawMutation: source[getMethod()] }; ({ [key]: fn } = holder); fn("old", "new");',
       'const invoke = ({ rawMutation }) => rawMutation("old", "new"); const holder = { rawMutation: source[getMethod()] }; invoke(holder);',
       'const rawMutation = source[getMethod()]; rawMutation`old`;',
       'const rawMutation = source[getMethod()]; const bound = rawMutation.bind(source); bound`old`;',
       'function select() { return source[getMethod()]; } select().call(source, "old", "new");',
       'const select = () => source[getMethod()]; const alias = select; alias().call(source, "old", "new");',
-      'const select = function named() { return source[getMethod()]; }; const alias = select; alias().call(source, "old", "new");'
+      'const select = function named() { return source[getMethod()]; }; const alias = select; alias().call(source, "old", "new");',
+      'let holder; const rawMutation = (holder = { rawMutation: source[getMethod()] }).rawMutation; rawMutation("old", "new");',
+      'let holder; const rawMutation = (holder ||= { rawMutation: source[getMethod()] }).rawMutation; rawMutation("old", "new");'
     ]) {
       expect(repositoryMutationOracleProblems(mutationInventoryFile, extractedDynamicMethod)).toEqual([
         expect.stringMatching(/invokes a value extracted from an unresolved dynamic computed method/)
@@ -8189,6 +8300,36 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       repositoryMutationOracleProblems(
         mutationInventoryFile,
         'let rawMutation; rawMutation ||= () => "safe"; rawMutation("old", "new");'
+      )
+    ).toEqual([]);
+    expect(
+      repositoryMutationOracleProblems(
+        mutationInventoryFile,
+        'let rawMutation; (rawMutation ||= () => "safe")("old", "new");'
+      )
+    ).toEqual([]);
+    expect(
+      repositoryMutationOracleProblems(
+        mutationInventoryFile,
+        'const rawMutation = (0, () => "safe"); rawMutation("old", "new");'
+      )
+    ).toEqual([]);
+    expect(
+      repositoryMutationOracleProblems(
+        mutationInventoryFile,
+        'let rawMutation; ({ rawMutation: rawMutation = () => "safe" } = {}); rawMutation("old", "new");'
+      )
+    ).toEqual([]);
+    expect(
+      repositoryMutationOracleProblems(
+        mutationInventoryFile,
+        'let rawMutation; ({ rawMutation = () => "safe" } = {}); rawMutation("old", "new");'
+      )
+    ).toEqual([]);
+    expect(
+      repositoryMutationOracleProblems(
+        mutationInventoryFile,
+        'let holder; const rawMutation = (holder ||= { rawMutation: () => "safe" }).rawMutation; rawMutation("old", "new");'
       )
     ).toEqual([]);
     const safelyShadowedDynamicProperty = [

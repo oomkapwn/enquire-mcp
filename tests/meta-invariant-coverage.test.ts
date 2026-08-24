@@ -2044,7 +2044,7 @@ function dynamicComputedMethodTaintAnalysis(
     readonly target: ts.Symbol;
   }> = [];
   const callExpressions: ts.CallExpression[] = [];
-  const localFunctions = new Map<ts.Symbol, ts.FunctionLikeDeclaration>();
+  const localFunctions = new Map<ts.Symbol, Set<ts.FunctionLikeDeclaration>>();
   const functionSymbols = new Map<ts.FunctionLikeDeclaration, ts.Symbol>();
 
   const symbolOf = (identifier: ts.Identifier): ts.Symbol | null => checker.getSymbolAtLocation(identifier) ?? null;
@@ -2094,7 +2094,9 @@ function dynamicComputedMethodTaintAnalysis(
 
   function registerFunction(symbol: ts.Symbol | null, declaration: ts.FunctionLikeDeclaration): void {
     if (symbol === null) return;
-    localFunctions.set(symbol, declaration);
+    const declarations = localFunctions.get(symbol) ?? new Set<ts.FunctionLikeDeclaration>();
+    declarations.add(declaration);
+    localFunctions.set(symbol, declarations);
     functionSymbols.set(declaration, symbol);
   }
   function collectFunctions(node: ts.Node): void {
@@ -2203,11 +2205,15 @@ function dynamicComputedMethodTaintAnalysis(
     let changed = false;
     for (const edge of valueEdges) {
       const source = unwrapStaticExpression(edge.expression);
-      if (!ts.isIdentifier(source) || localFunctions.has(edge.target)) continue;
+      if (!ts.isIdentifier(source)) continue;
       const sourceSymbol = symbolOf(source);
-      const declaration = sourceSymbol === null ? undefined : localFunctions.get(sourceSymbol);
-      if (declaration !== undefined) {
-        localFunctions.set(edge.target, declaration);
+      const sourceDeclarations = sourceSymbol === null ? undefined : localFunctions.get(sourceSymbol);
+      if (sourceDeclarations === undefined) continue;
+      const targetDeclarations = localFunctions.get(edge.target) ?? new Set<ts.FunctionLikeDeclaration>();
+      const before = targetDeclarations.size;
+      for (const declaration of sourceDeclarations) targetDeclarations.add(declaration);
+      if (targetDeclarations.size !== before) {
+        localFunctions.set(edge.target, targetDeclarations);
         changed = true;
       }
     }
@@ -2217,16 +2223,18 @@ function dynamicComputedMethodTaintAnalysis(
     const callee = unwrapStaticExpression(call.expression);
     if (!ts.isIdentifier(callee)) continue;
     const calleeSymbol = symbolOf(callee);
-    const declaration = calleeSymbol === null ? undefined : localFunctions.get(calleeSymbol);
-    if (declaration === undefined) continue;
-    for (const [index, parameter] of declaration.parameters.entries()) {
-      const argument = call.arguments[index];
-      if (argument === undefined) continue;
-      if (ts.isIdentifier(parameter.name)) {
-        const target = symbolOf(parameter.name);
-        if (target !== null) valueEdges.push({ expression: argument, target });
-      } else if (ts.isObjectBindingPattern(parameter.name)) {
-        collectBindingProjectionEdges(parameter.name, argument);
+    const declarations = calleeSymbol === null ? undefined : localFunctions.get(calleeSymbol);
+    if (declarations === undefined) continue;
+    for (const declaration of declarations) {
+      for (const [index, parameter] of declaration.parameters.entries()) {
+        const argument = call.arguments[index];
+        if (argument === undefined) continue;
+        if (ts.isIdentifier(parameter.name)) {
+          const target = symbolOf(parameter.name);
+          if (target !== null) valueEdges.push({ expression: argument, target });
+        } else if (ts.isObjectBindingPattern(parameter.name)) {
+          collectBindingProjectionEdges(parameter.name, argument);
+        }
       }
     }
   }
@@ -8258,6 +8266,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       'const invoke = ((fn) => fn.call(source, "old", "new")); invoke(source[getMethod()]);',
       'const invoke = (fn) => fn.call(source, "old", "new"); const alias = invoke; alias(source[getMethod()]);',
       'const invoke = (fn) => fn.call(source, "old", "new"); let alias; alias = invoke; alias(source[getMethod()]);',
+      'const invoke = (fn) => fn.call(source, "old", "new"); let alias = () => "safe"; alias = invoke; alias(source[getMethod()]);',
       '({ rawMutation: source[getMethod()] }).rawMutation("old", "new");',
       'const key = "rawMutation"; ({ rawMutation: () => "safe", [key]: source[getMethod()] }).rawMutation("old", "new");',
       'const holder = { rawMutation: source[getMethod()] }; holder.rawMutation("old", "new");',
@@ -8338,6 +8347,12 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       repositoryMutationOracleProblems(
         mutationInventoryFile,
         'const invoke = ((fn) => fn.call(source, "old", "new")); invoke(() => "safe");'
+      )
+    ).toEqual([]);
+    expect(
+      repositoryMutationOracleProblems(
+        mutationInventoryFile,
+        'const invoke = (fn) => fn(); let alias = () => "safe"; alias = invoke; alias(() => "also safe");'
       )
     ).toEqual([]);
     expect(

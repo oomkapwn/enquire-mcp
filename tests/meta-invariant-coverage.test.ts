@@ -1537,6 +1537,21 @@ function symbolHasRuntimeValueBinding(symbol: ts.Symbol): boolean {
   });
 }
 
+/** Find the visible runtime binding even for intrinsic-spelled identifiers such as globalThis. */
+function runtimeValueSymbolAt(
+  checker: ts.TypeChecker,
+  identifier: ts.Identifier
+): ts.Symbol | undefined {
+  const direct = checker.getSymbolAtLocation(identifier);
+  if (direct !== undefined && symbolHasRuntimeValueBinding(direct)) return direct;
+  return checker
+    .getSymbolsInScope(identifier, ts.SymbolFlags.Value)
+    .find(
+      (candidate) =>
+        candidate.getName() === identifier.text && symbolHasRuntimeValueBinding(candidate)
+    );
+}
+
 /**
  * Resolve computed-property strings by lexical symbol identity.
  * Only one direct `const` initializer is followed, so a same-spelled shadow or
@@ -1560,14 +1575,14 @@ function computedMethodResolver(checker: ts.TypeChecker): ComputedMethodResolver
     if (literal !== null) return knownResolution(literal);
     if (ts.isPropertyAccessExpression(current) || ts.isElementAccessExpression(current)) {
       const owner = unwrapStaticExpression(current.expression);
-      const ownerSymbol = ts.isIdentifier(owner) ? checker.getSymbolAtLocation(owner) : undefined;
+      const ownerSymbol = ts.isIdentifier(owner) ? runtimeValueSymbolAt(checker, owner) : undefined;
       const member = ts.isPropertyAccessExpression(current)
         ? current.name.text
         : staticStringExpressionText(current.argumentExpression ?? current);
       if (
         ts.isIdentifier(owner) &&
         owner.text === "Symbol" &&
-        (ownerSymbol === undefined || !symbolHasRuntimeValueBinding(ownerSymbol)) &&
+        ownerSymbol === undefined &&
         member === "iterator"
       ) {
         return knownResolution("@@Symbol.iterator");
@@ -1808,24 +1823,25 @@ function reflectiveOperationResolver(
       return new Set([...ownerKinds(current.left, resolving), ...ownerKinds(current.right, resolving)]);
     }
     if (ts.isIdentifier(current)) {
-      const symbol = checker.getSymbolAtLocation(current);
+      const runtimeSymbol = runtimeValueSymbolAt(checker, current);
       if (
-        (symbol === undefined || !symbolHasRuntimeValueBinding(symbol)) &&
+        runtimeSymbol === undefined &&
         (current.text === "Object" || current.text === "Reflect")
       ) {
         return new Set<BuiltinObjectKind>([current.text]);
       }
+      const symbol = runtimeSymbol ?? checker.getSymbolAtLocation(current);
       if (symbol === undefined || resolving.has(symbol)) return new Set();
       const nextResolving = new Set([...resolving, symbol]);
       return new Set(variableValueSources(symbol).flatMap((source) => [...ownerKinds(source, nextResolving)]));
     }
     if (ts.isPropertyAccessExpression(current) || ts.isElementAccessExpression(current)) {
       const owner = unwrapStaticExpression(current.expression);
-      const ownerSymbol = ts.isIdentifier(owner) ? checker.getSymbolAtLocation(owner) : undefined;
+      const ownerSymbol = ts.isIdentifier(owner) ? runtimeValueSymbolAt(checker, owner) : undefined;
       if (
         !ts.isIdentifier(owner) ||
         owner.text !== "globalThis" ||
-        (ownerSymbol !== undefined && symbolHasRuntimeValueBinding(ownerSymbol))
+        ownerSymbol !== undefined
       ) {
         return new Set();
       }
@@ -8178,6 +8194,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       'const { getOwnPropertyDescriptor: descriptor } = Object; descriptor(source, "replaceAll")?.value;',
       'const getter = globalThis.Reflect.get; getter(source, "replace");',
       'const descriptor = globalThis.Object.getOwnPropertyDescriptor; descriptor(source, "replace")?.value;',
+      '{ const globalThis = { Reflect: { get: () => "safe" } }; void globalThis; } globalThis.Reflect.get(source, "replace");',
       'Reflect.get.call(Reflect, source, "replace");',
       'Reflect.get.apply(Reflect, [source, "replace"]);',
       'Reflect["get"]["apply"](Reflect, [source, "replaceAll"]);',
@@ -8197,6 +8214,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       'const Reflect = { get: () => "safe" }; Reflect.get(source, "replace");',
       'import Reflect = require("safe"); Reflect.get(source, "replace");',
       'const globalThis = { Reflect: { get: () => "safe" } }; globalThis.Reflect.get(source, "replace");',
+      '{ const globalThis = { Reflect: { get: () => "safe" } }; globalThis.Reflect.get(source, "replace"); }',
       'const method = "replace"; { const method = "includes"; Reflect.get(source, method); }',
       'const getter = Reflect.get; { const getter = () => "safe"; getter(source, "replace"); }',
       'let getter = () => "safe"; getter(source, "replace");',
@@ -8228,7 +8246,10 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
         "void proxy;"
       ].join("\n")
     ]) {
-      expect(repositoryMutationOracleProblems(mutationInventoryFile, reviewedReflectiveAccess)).toEqual([]);
+      expect(
+        repositoryMutationOracleProblems(mutationInventoryFile, reviewedReflectiveAccess),
+        reviewedReflectiveAccess
+      ).toEqual([]);
     }
     for (const dynamicReflectiveInvocation of [
       'Reflect.get(source, property)("old", "new");',

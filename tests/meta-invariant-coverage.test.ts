@@ -2139,6 +2139,10 @@ function dynamicComputedMethodTaintAnalysis(
     }
   }
 
+  function collectObjectAliasEdges(source: ts.Symbol, target: ts.Symbol): void {
+    objectAliasEdges.push({ source, target }, { source: target, target: source });
+  }
+
   function collectEdges(node: ts.Node): void {
     if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer !== undefined) {
       const target = symbolOf(node.name);
@@ -2148,7 +2152,7 @@ function dynamicComputedMethodTaintAnalysis(
         if (ts.isObjectLiteralExpression(initializer)) collectObjectLiteralEdges(target, initializer);
         if (ts.isIdentifier(initializer)) {
           const source = symbolOf(initializer);
-          if (source !== null) objectAliasEdges.push({ source, target });
+          if (source !== null) collectObjectAliasEdges(source, target);
         }
       }
     } else if (
@@ -2168,7 +2172,7 @@ function dynamicComputedMethodTaintAnalysis(
           if (ts.isObjectLiteralExpression(right)) collectObjectLiteralEdges(target, right);
           if (ts.isIdentifier(right)) {
             const source = symbolOf(right);
-            if (source !== null) objectAliasEdges.push({ source, target });
+            if (source !== null) collectObjectAliasEdges(source, target);
           }
         }
       } else if (node.operatorToken.kind === ts.SyntaxKind.EqualsToken && ts.isObjectLiteralExpression(left)) {
@@ -2346,13 +2350,13 @@ function dynamicComputedMethodTaintAnalysis(
     }
     let taint = key === "value" && (expressionTaint(owner) & DESCRIPTOR_VALUE_TAINT) !== 0 ? METHOD_VALUE_TAINT : 0;
     if (ts.isObjectLiteralExpression(owner)) {
-      const property = owner.properties.find(
-        (candidate) =>
-          (ts.isPropertyAssignment(candidate) || ts.isShorthandPropertyAssignment(candidate)) &&
-          exactStaticKey(candidate.name) === key
-      );
-      if (property !== undefined) {
-        taint |= expressionTaint(ts.isPropertyAssignment(property) ? property.initializer : property.name);
+      for (const property of owner.properties) {
+        if (
+          (ts.isPropertyAssignment(property) || ts.isShorthandPropertyAssignment(property)) &&
+          exactStaticKey(property.name) === key
+        ) {
+          taint |= expressionTaint(ts.isPropertyAssignment(property) ? property.initializer : property.name);
+        }
       }
     }
     if (ts.isIdentifier(owner)) {
@@ -8255,6 +8259,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       'const invoke = (fn) => fn.call(source, "old", "new"); const alias = invoke; alias(source[getMethod()]);',
       'const invoke = (fn) => fn.call(source, "old", "new"); let alias; alias = invoke; alias(source[getMethod()]);',
       '({ rawMutation: source[getMethod()] }).rawMutation("old", "new");',
+      'const key = "rawMutation"; ({ rawMutation: () => "safe", [key]: source[getMethod()] }).rawMutation("old", "new");',
       'const holder = { rawMutation: source[getMethod()] }; holder.rawMutation("old", "new");',
       'const rawMutation = source[getMethod()]; const holder = { rawMutation }; holder.rawMutation("old", "new");',
       'const rawMutation = source[getMethod()]; const holder = { rawMutation }; holder["rawMutation"]("old", "new");',
@@ -8263,6 +8268,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       'const key = "rawMutation"; const holder = { [key]: source[getMethod()] }; holder.rawMutation("old", "new");',
       'const key = "rawMutation"; const holder = {}; holder[key] = source[getMethod()]; holder.rawMutation("old", "new");',
       'const holder = { rawMutation: source[getMethod()] }; const alias = holder; alias.rawMutation("old", "new");',
+      'const holder = {}; const alias = holder; alias.rawMutation = source[getMethod()]; holder.rawMutation("old", "new");',
       'const holder = { rawMutation: source[getMethod()] }; const { rawMutation } = holder; rawMutation("old", "new");',
       'const key = "rawMutation"; const holder = { rawMutation: source[getMethod()] }; const { [key]: fn } = holder; fn("old", "new");',
       'let rawMutation; const holder = { rawMutation: source[getMethod()] }; ({ rawMutation } = holder); rawMutation("old", "new");',
@@ -8332,6 +8338,18 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       repositoryMutationOracleProblems(
         mutationInventoryFile,
         'const invoke = ((fn) => fn.call(source, "old", "new")); invoke(() => "safe");'
+      )
+    ).toEqual([]);
+    expect(
+      repositoryMutationOracleProblems(
+        mutationInventoryFile,
+        'const key = "rawMutation"; ({ rawMutation: () => "safe", [key]: () => "also safe" }).rawMutation("old", "new");'
+      )
+    ).toEqual([]);
+    expect(
+      repositoryMutationOracleProblems(
+        mutationInventoryFile,
+        'const holder = {}; const alias = holder; alias.rawMutation = () => "safe"; holder.rawMutation("old", "new");'
       )
     ).toEqual([]);
     const safelyShadowedDynamicProperty = [

@@ -630,7 +630,7 @@ const REVIEWED_ORDINARY_TRANSFORMS = [
     filename: "k1-class-invariant.test.ts",
     id: "K-1 statement semicolon normalization",
     method: "replace",
-    owner: "function:boundRefusalBranch",
+    owner: "function:isBoundRefusalCondition",
     pattern: String.raw`/;$/u`,
     receiverRoot: "statement",
     replacement: '""'
@@ -1360,6 +1360,29 @@ function ordinaryTransformOwner(node: ts.Node): OrdinaryTransformOwner | null {
     current = current.parent;
   }
   return null;
+}
+
+/** Return semantic owners for the replace-spelled accesses in one causal fixture. */
+function ordinaryTransformOwnerIds(source: string): string[] {
+  const sourceFile = ts.createSourceFile(
+    "ordinary-transform-owner-fixture.ts",
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TS
+  );
+  const owners: string[] = [];
+  function visit(node: ts.Node): void {
+    if (
+      ts.isPropertyAccessExpression(node) &&
+      (node.name.text === "replace" || node.name.text === "replaceAll")
+    ) {
+      owners.push(ordinaryTransformOwner(node)?.id ?? "<unowned>");
+    }
+    ts.forEachChild(node, visit);
+  }
+  visit(sourceFile);
+  return owners;
 }
 
 /** Freeze one owner by semantic label, physical site, and complete AST text. */
@@ -8107,6 +8130,12 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
         { filename: "ghost-invariant.test.ts", id: "ownerless ordinary transform" }
       ])
     ).toEqual(["ownerless ordinary transform", "reviewed docs special case"]);
+    const sharedShapeOrdinaryOwnerFixture =
+      'function outer() { const direct = source.replace("old", "new"); function inner() { return source.replace("old", "new"); } return direct + inner(); }';
+    const sharedShapeOrdinaryOwners = ordinaryTransformOwnerIds(sharedShapeOrdinaryOwnerFixture);
+    expect(sharedShapeOrdinaryOwners).toEqual(["function:outer", "function:inner"]);
+    expect(sharedShapeOrdinaryOwners.filter((owner) => owner === "function:inner")).toHaveLength(1);
+    expect(sharedShapeOrdinaryOwners.filter((owner) => owner === "function:missing")).toHaveLength(0);
 
     const mutationCallSource = (call: ExactMutationHelperCallIdentity): string =>
       `${call.helper}(${call.sourceIdentifier}, ${JSON.stringify(call.needle)}, ${JSON.stringify(call.replacement)});`;

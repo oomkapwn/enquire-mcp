@@ -86,6 +86,33 @@ function mutationHelperCallOwner(node) {
   return { id: "source-statement", node: nearestStatement ?? node.getSourceFile() };
 }
 
+function ordinaryTransformOwner(node) {
+  let current = node;
+  while (current !== undefined) {
+    if (ts.isFunctionDeclaration(current) && current.name !== undefined) {
+      return { id: `function:${current.name.text}`, node: current };
+    }
+    if (ts.isMethodDeclaration(current) && ts.isIdentifier(current.name)) {
+      return { id: `function:${current.name.text}`, node: current };
+    }
+    if (ts.isArrowFunction(current) || ts.isFunctionExpression(current)) {
+      if (ts.isVariableDeclaration(current.parent) && ts.isIdentifier(current.parent.name)) {
+        return { id: `function:${current.parent.name.text}`, node: current };
+      }
+      const call = current.parent;
+      if (ts.isCallExpression(call) && call.arguments.includes(current)) {
+        const root = expressionReceiverRoot(call.expression);
+        const title = call.arguments[0];
+        if ((root === "it" || root === "test") && title !== undefined && ts.isStringLiteralLike(title)) {
+          return { id: `test:${title.text}`, node: current };
+        }
+      }
+    }
+    current = current.parent;
+  }
+  return null;
+}
+
 function topLevelExecutableOwner(node, sourceFile) {
   let current = node;
   while (current.parent !== undefined && current.parent !== sourceFile) current = current.parent;
@@ -145,6 +172,29 @@ function objectStringProperty(object, propertyName) {
   return null;
 }
 
+function objectStaticStringProperty(object, propertyName, sourceFile) {
+  for (const property of object.properties) {
+    if (!ts.isPropertyAssignment(property)) continue;
+    const name = property.name;
+    const staticName = ts.isIdentifier(name) || ts.isStringLiteralLike(name) ? name.text : null;
+    if (staticName !== propertyName) continue;
+    if (ts.isStringLiteralLike(property.initializer)) return property.initializer.text;
+    if (
+      ts.isTaggedTemplateExpression(property.initializer) &&
+      ts.isPropertyAccessExpression(property.initializer.tag) &&
+      ts.isIdentifier(property.initializer.tag.expression) &&
+      property.initializer.tag.expression.text === "String" &&
+      property.initializer.tag.name.text === "raw" &&
+      ts.isNoSubstitutionTemplateLiteral(property.initializer.template)
+    ) {
+      const text = property.initializer.template.getText(sourceFile);
+      return text.slice(1, -1);
+    }
+    return null;
+  }
+  return null;
+}
+
 function callCensusFilenames(sourceFile) {
   const filenames = [];
   for (const element of findArrayInitializer(sourceFile, "EXPECTED_REPOSITORY_MUTATION_HELPER_CALL_ENTRIES").elements) {
@@ -163,15 +213,54 @@ function ordinaryOwnerRows(sourceFile) {
     if (!ts.isObjectLiteralExpression(element)) throw new Error("reviewed ordinary transform is not an object literal");
     const filename = objectStringProperty(element, "filename");
     const id = objectStringProperty(element, "id");
+    const method = objectStringProperty(element, "method");
     const owner = objectStringProperty(element, "owner");
+    const pattern = objectStaticStringProperty(element, "pattern", sourceFile);
+    const receiverRoot = objectStringProperty(element, "receiverRoot");
+    const replacement = objectStringProperty(element, "replacement");
     if (filename === null || id === null) throw new Error("reviewed ordinary transform lacks filename/id");
-    if (owner === null) throw new Error(`reviewed transform ${id} lacks owner`);
-    rows.push({ filename, id, owner });
+    if (
+      (method !== "replace" && method !== "replaceAll") ||
+      owner === null ||
+      pattern === null ||
+      receiverRoot === null ||
+      replacement === null
+    ) {
+      throw new Error(`reviewed transform ${id} lacks a static call-shape field`);
+    }
+    rows.push({ filename, id, method, owner, pattern, receiverRoot, replacement });
   }
   if (new Set(rows.map((row) => row.id)).size !== rows.length) {
     throw new Error("duplicate reviewed ordinary transform id");
   }
   return rows;
+}
+
+function ordinaryCallSites(row, sourceFile) {
+  const sites = [];
+  function visit(node) {
+    if (ts.isPropertyAccessExpression(node) && node.name.text === row.method) {
+      const call = node.parent;
+      const pattern = ts.isCallExpression(call) ? call.arguments[0] : undefined;
+      const replacement = ts.isCallExpression(call) ? call.arguments[1] : undefined;
+      if (
+        ts.isCallExpression(call) &&
+        call.expression === node &&
+        call.arguments.length === 2 &&
+        pattern !== undefined &&
+        replacement !== undefined &&
+        expressionReceiverRoot(node.expression) === row.receiverRoot &&
+        pattern.getText(sourceFile) === row.pattern &&
+        replacement.getText(sourceFile) === row.replacement
+      ) {
+        const owner = ordinaryTransformOwner(call);
+        sites.push({ callStart: call.getStart(sourceFile), owner: owner?.id ?? "<unowned>" });
+      }
+    }
+    ts.forEachChild(node, visit);
+  }
+  visit(sourceFile);
+  return sites;
 }
 
 function updateMetaCount() {
@@ -239,9 +328,24 @@ function updateIdentityHashes() {
   }
 
   const ordinaryOwners = {};
-  for (const { filename, id, owner } of ordinaryOwnerRows(parsedMeta)) {
+  const claimedOrdinarySites = new Set();
+  for (const row of ordinaryOwnerRows(parsedMeta)) {
+    const { filename, id, owner } = row;
     const source = readFileSync(`tests/${filename}`, "utf8");
     const sourceFile = ts.createSourceFile(filename, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+    const observedSites = ordinaryCallSites(row, sourceFile);
+    const declaredOwnerSites = observedSites.filter((site) => site.owner === owner);
+    if (declaredOwnerSites.length !== 1) {
+      const observedSiteSummary = JSON.stringify(observedSites);
+      throw new Error(
+        `${id}: expected one exact call owned by ${owner}, found ${declaredOwnerSites.length}; all shape-matched sites ${observedSiteSummary}`
+      );
+    }
+    const siteKey = `${filename}:${declaredOwnerSites[0].callStart}`;
+    if (claimedOrdinarySites.has(siteKey)) {
+      throw new Error(`${id}: exact ordinary-transform site ${siteKey} is already claimed`);
+    }
+    claimedOrdinarySites.add(siteKey);
     const observed = sourceOwnerSha256(owner, sourceFile, sourceFile);
     ordinaryOwners[id] = { filename, owner, sha256: observed };
     const idPattern = escapeRegex(JSON.stringify(id));

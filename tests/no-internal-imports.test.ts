@@ -1141,13 +1141,12 @@ function safeObjectDestructuringFromCapability(
   const members = runtimeCapabilityDestructuringMembers(expression);
   if (!capabilityDestructuringAssignmentResultIsDiscarded(expression)) return false;
   return (
-    members !== undefined &&
-    members.every(
+    members?.every(
       (member) =>
         !member.rest &&
         member.staticName !== undefined &&
         !runtimeCapabilityMemberIsLoader(capability, member.staticName)
-    )
+    ) ?? false
   );
 }
 

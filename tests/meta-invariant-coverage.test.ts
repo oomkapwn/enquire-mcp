@@ -269,7 +269,7 @@ const EXPECTED_REPOSITORY_MUTATION_HELPER_CALL_ENTRIES = [
   ],
   [
     "no-internal-imports.test.ts",
-    { count: 76, sha256: "bcfbdcbb53f29bafaee23ea6f846317426c84a01e5f7bb4c0050d723b118fdac" }
+    { count: 79, sha256: "bcfbdcbb53f29bafaee23ea6f846317426c84a01e5f7bb4c0050d723b118fdac" }
   ],
   [
     "release-mutation-transition.test.ts",
@@ -3446,16 +3446,24 @@ function directRegistrations(body: ts.SourceFile | ts.ArrowFunction | ts.Functio
   return [];
 }
 
-type FocusTimeoutVitestBinding = "beforeAll" | "describe";
+type FocusTimeoutVitestBinding = "beforeAll" | "describe" | "it";
 
 const FOCUS_TIMEOUT_FILENAME = "tests/no-internal-imports.test.ts";
 const FOCUS_TIMEOUT_SUITE_TITLE = "Class A invariant — no test imports value from registration boilerplate";
 const FOCUS_TIMEOUT_SUITE_PROBLEM = `${FOCUS_TIMEOUT_FILENAME} must retain one direct top-level suite ${FOCUS_TIMEOUT_SUITE_TITLE}`;
 const FOCUS_TIMEOUT_REGISTRATION_PROBLEM = `${FOCUS_TIMEOUT_FILENAME} must retain one first direct beforeAll hook with exact timeout 45_000`;
+const FOCUS_TIMEOUT_TEST_TITLES = [
+  "keeps test imports and the exact coverage-only isolation boundary closed",
+  "NEGATIVE control: restricted imports and coverage isolation drift are rejected"
+] as const;
+
+function focusTimeoutTestProblem(title: string): string {
+  return `${FOCUS_TIMEOUT_FILENAME} must retain one direct async it registration with exact timeout 45_000: ${title}`;
+}
 
 /** Require the exact Vitest bindings that give the timeout registration authority. */
 function focusTimeoutVitestBindingProblems(sourceFile: ts.SourceFile): string[] {
-  const requiredBindings: readonly FocusTimeoutVitestBinding[] = ["beforeAll", "describe"];
+  const requiredBindings: readonly FocusTimeoutVitestBinding[] = ["beforeAll", "describe", "it"];
   const directCounts = new Map<FocusTimeoutVitestBinding, number>();
   const competingCounts = new Map<FocusTimeoutVitestBinding, number>();
   for (const binding of requiredBindings) {
@@ -3609,7 +3617,50 @@ function focusTimeoutRegistrationProblems(source: string): string[] {
     timeout !== undefined &&
     ts.isNumericLiteral(timeout) &&
     timeout.getText(sourceFile) === "45_000";
-  return registrationIsExact ? bindingProblems : [...bindingProblems, FOCUS_TIMEOUT_REGISTRATION_PROBLEM];
+  const testRegistrationProblems = FOCUS_TIMEOUT_TEST_TITLES.flatMap((expectedTitle, expectedIndex) => {
+    const matches = suiteCallback.body.statements.flatMap((statement, statementIndex) => {
+      if (!ts.isExpressionStatement(statement) || !ts.isCallExpression(statement.expression)) return [];
+      const call = statement.expression;
+      const title = call.arguments[0];
+      return (
+        ts.isIdentifier(call.expression) &&
+        call.expression.text === "it" &&
+        title !== undefined &&
+        ts.isStringLiteral(title) &&
+        title.text === expectedTitle
+          ? [{ call, statementIndex }]
+          : []
+      );
+    });
+    const testRegistrationEntry = matches.length === 1 ? matches[0] : undefined;
+    const testRegistration = testRegistrationEntry?.call;
+    const testCallback = testRegistration?.arguments[1];
+    const testTimeout = testRegistration?.arguments[2];
+    const testCallbackModifiers =
+      testCallback !== undefined && ts.isArrowFunction(testCallback) ? testCallback.modifiers : undefined;
+    const testRegistrationIsExact =
+      testRegistration !== undefined &&
+      testRegistrationEntry?.statementIndex === expectedIndex + 1 &&
+      testRegistration.questionDotToken === undefined &&
+      testRegistration.typeArguments === undefined &&
+      testRegistration.arguments.length === 3 &&
+      testCallback !== undefined &&
+      ts.isArrowFunction(testCallback) &&
+      testCallbackModifiers?.length === 1 &&
+      testCallbackModifiers[0]?.kind === ts.SyntaxKind.AsyncKeyword &&
+      testCallback.typeParameters === undefined &&
+      testCallback.parameters.length === 0 &&
+      ts.isBlock(testCallback.body) &&
+      testTimeout !== undefined &&
+      ts.isNumericLiteral(testTimeout) &&
+      testTimeout.getText(sourceFile) === "45_000";
+    return testRegistrationIsExact ? [] : [focusTimeoutTestProblem(expectedTitle)];
+  });
+  return [
+    ...bindingProblems,
+    ...(registrationIsExact ? [] : [FOCUS_TIMEOUT_REGISTRATION_PROBLEM]),
+    ...testRegistrationProblems
+  ];
 }
 
 /** A negative `describe` owns assertions only through direct nested registrations. */
@@ -8235,24 +8286,49 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
     const focusTimeoutProblems = focusTimeoutRegistrationProblems(focusTimeoutSource);
     expect(focusTimeoutProblems, focusTimeoutProblems.join("\n")).toEqual([]);
 
+    const exactHookRegistration = "  beforeAll(async () => {}, 45_000);";
+    const exactTestRegistrations = FOCUS_TIMEOUT_TEST_TITLES.map(
+      (title) => `  it(${JSON.stringify(title)}, async () => {}, 45_000);`
+    );
     const exactSource = [
-      'import { beforeAll, describe } from "vitest";',
+      'import { beforeAll, describe, it } from "vitest";',
       `describe(${JSON.stringify(FOCUS_TIMEOUT_SUITE_TITLE)}, () => {`,
-      "  beforeAll(async () => {}, 45_000);",
+      exactHookRegistration,
+      ...exactTestRegistrations,
       "});"
     ].join("\n");
     expect(focusTimeoutRegistrationProblems(exactSource)).toEqual([]);
 
-    const inheritedTimeout = replaceExactly(exactSource, "45_000", "15_000");
-    const underBufferedTimeout = replaceExactly(exactSource, "45_000", "30_000");
-    const missingTimeout = replaceExactly(exactSource, ", 45_000);", ");");
-    const raisedTimeout = replaceExactly(exactSource, "45_000", "45_001");
+    const inheritedTimeout = replaceExactly(
+      exactSource,
+      exactHookRegistration,
+      "  beforeAll(async () => {}, 15_000);"
+    );
+    const underBufferedTimeout = replaceExactly(
+      exactSource,
+      exactHookRegistration,
+      "  beforeAll(async () => {}, 30_000);"
+    );
+    const missingTimeout = replaceExactly(
+      exactSource,
+      exactHookRegistration,
+      "  beforeAll(async () => {});"
+    );
+    const raisedTimeout = replaceExactly(
+      exactSource,
+      exactHookRegistration,
+      "  beforeAll(async () => {}, 45_001);"
+    );
     const synchronousCallback = replaceExactly(exactSource, "beforeAll(async () =>", "beforeAll(() =>");
-    const registrationAfterReturn = replaceExactly(exactSource, "  beforeAll(", "  return;\n  beforeAll(");
+    const registrationAfterReturn = replaceExactly(
+      exactSource,
+      exactHookRegistration,
+      `  return;\n${exactHookRegistration}`
+    );
     const eagerPrefixArgument = replaceExactly(
       exactSource,
-      "  beforeAll(",
-      '  (() => { throw new Error("abort collection"); })();\n  beforeAll('
+      exactHookRegistration,
+      `  (() => { throw new Error("abort collection"); })();\n${exactHookRegistration}`
     );
     for (const candidate of [
       inheritedTimeout,
@@ -8266,10 +8342,38 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       expect(focusTimeoutRegistrationProblems(candidate)).toContain(FOCUS_TIMEOUT_REGISTRATION_PROBLEM);
     }
 
+    for (const [index, title] of FOCUS_TIMEOUT_TEST_TITLES.entries()) {
+      const exactTestRegistration = exactTestRegistrations[index];
+      if (exactTestRegistration === undefined) throw new Error(`missing exact focus-timeout test ${title}`);
+      const testProblem = focusTimeoutTestProblem(title);
+      for (const candidateRegistration of [
+        `  it(${JSON.stringify(title)}, async () => {}, 15_000);`,
+        `  it(${JSON.stringify(title)}, async () => {}, 30_000);`,
+        `  it(${JSON.stringify(title)}, async () => {});`,
+        `  it(${JSON.stringify(title)}, async () => {}, 45_001);`,
+        `  it(${JSON.stringify(title)}, () => {}, 45_000);`
+      ]) {
+        const candidate = replaceExactly(exactSource, exactTestRegistration, candidateRegistration);
+        expect(focusTimeoutRegistrationProblems(candidate)).toContain(testProblem);
+      }
+      const unreachable = replaceExactly(
+        exactSource,
+        exactTestRegistration,
+        `  return;\n${exactTestRegistration}`
+      );
+      expect(focusTimeoutRegistrationProblems(unreachable)).toContain(testProblem);
+      const eagerPrefix = replaceExactly(
+        exactSource,
+        exactTestRegistration,
+        `  (() => { throw new Error("abort collection"); })();\n${exactTestRegistration}`
+      );
+      expect(focusTimeoutRegistrationProblems(eagerPrefix)).toContain(testProblem);
+    }
+
     const aliasedBeforeAll = replaceExactly(
       exactSource,
-      'import { beforeAll, describe } from "vitest";',
-      'import { beforeAll as authenticBeforeAll, describe } from "vitest";\nconst beforeAll = authenticBeforeAll;'
+      'import { beforeAll, describe, it } from "vitest";',
+      'import { beforeAll as authenticBeforeAll, describe, it } from "vitest";\nconst beforeAll = authenticBeforeAll;'
     );
     expect(focusTimeoutRegistrationProblems(aliasedBeforeAll)).toContain(
       `${FOCUS_TIMEOUT_FILENAME} must bind beforeAll through one direct unaliased runtime vitest named import ` +
@@ -8288,8 +8392,8 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
 
     const aliasedDescribe = replaceExactly(
       exactSource,
-      'import { beforeAll, describe } from "vitest";',
-      'import { beforeAll, describe as authenticDescribe } from "vitest";\nconst describe = authenticDescribe;'
+      'import { beforeAll, describe, it } from "vitest";',
+      'import { beforeAll, describe as authenticDescribe, it } from "vitest";\nconst describe = authenticDescribe;'
     );
     expect(focusTimeoutRegistrationProblems(aliasedDescribe)).toContain(
       `${FOCUS_TIMEOUT_FILENAME} must bind describe through one direct unaliased runtime vitest named import ` +
@@ -8299,6 +8403,26 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
     const shadowedDescribe = `${exactSource}\nfunction describe(..._args: unknown[]): void {}`;
     expect(focusTimeoutRegistrationProblems(shadowedDescribe)).toContain(
       `${FOCUS_TIMEOUT_FILENAME} must bind describe through one direct unaliased runtime vitest named import ` +
+        "and no competing runtime bindings; found direct 1, competing 1"
+    );
+
+    const aliasedIt = replaceExactly(
+      exactSource,
+      'import { beforeAll, describe, it } from "vitest";',
+      'import { beforeAll, describe, it as authenticIt } from "vitest";\nconst it = authenticIt;'
+    );
+    expect(focusTimeoutRegistrationProblems(aliasedIt)).toContain(
+      `${FOCUS_TIMEOUT_FILENAME} must bind it through one direct unaliased runtime vitest named import ` +
+        "and no competing runtime bindings; found direct 0, competing 1"
+    );
+
+    const shadowedIt = replaceExactly(
+      exactSource,
+      "\n});",
+      "\n  function it(..._args: unknown[]): void {}\n});"
+    );
+    expect(focusTimeoutRegistrationProblems(shadowedIt)).toContain(
+      `${FOCUS_TIMEOUT_FILENAME} must bind it through one direct unaliased runtime vitest named import ` +
         "and no competing runtime bindings; found direct 1, competing 1"
     );
 
@@ -9220,7 +9344,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
         }
       }
     }
-  });
+  }, 60_000);
 
   // NEGATIVE control for the META-invariant itself (eats its own dog food).
   // Without these, the check above could trivially pass against a regex bug.

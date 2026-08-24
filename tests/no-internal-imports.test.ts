@@ -606,7 +606,6 @@ function registrationTimeoutProblems(
   expectedTimeout: string
 ): string[] {
   const sourceFile = ts.createSourceFile(filename, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
-  const bindingProblems = registrationVitestBindingProblems(sourceFile, filename, ["describe", callee]);
   const suites = sourceFile.statements.flatMap((statement) => {
     if (!ts.isExpressionStatement(statement) || !ts.isCallExpression(statement.expression)) return [];
     const call = statement.expression;
@@ -629,6 +628,7 @@ function registrationTimeoutProblems(
     suiteCallback.parameters.length !== 0 ||
     !ts.isBlock(suiteCallback.body)
   ) {
+    const bindingProblems = registrationVitestBindingProblems(sourceFile, filename, ["describe", callee]);
     return [...bindingProblems, `${filename} must retain one direct top-level suite ${suiteTitle}`];
   }
   const registrations = suiteCallback.body.statements.flatMap((statement, statementIndex) => {
@@ -640,6 +640,20 @@ function registrationTimeoutProblems(
   });
   const registrationEntry = registrations.length === 1 ? registrations[0] : undefined;
   const registration = registrationEntry?.call;
+  const prefixStatements =
+    registrationEntry === undefined
+      ? []
+      : suiteCallback.body.statements.slice(0, registrationEntry.statementIndex);
+  const prefixRegistrationBindings = prefixStatements.flatMap((statement): RegistrationVitestBinding[] => {
+    if (!ts.isExpressionStatement(statement) || !ts.isCallExpression(statement.expression)) return [];
+    const expression = statement.expression.expression;
+    if (!ts.isIdentifier(expression)) return [];
+    return expression.text === "beforeAll" || expression.text === "it" ? [expression.text] : [];
+  });
+  const requiredBindings = [
+    ...new Set<RegistrationVitestBinding>(["describe", callee, ...prefixRegistrationBindings])
+  ];
+  const bindingProblems = registrationVitestBindingProblems(sourceFile, filename, requiredBindings);
   const shadowsTargetCallee = suiteCallback.body.statements.some(
     (statement) => ts.isFunctionDeclaration(statement) && statement.name !== undefined && statement.name.text === callee
   );
@@ -649,20 +663,21 @@ function registrationTimeoutProblems(
     const call = statement.expression;
     if (
       !ts.isIdentifier(call.expression) ||
-      call.expression.text !== callee ||
+      (call.expression.text !== "beforeAll" && call.expression.text !== "it") ||
       call.questionDotToken !== undefined ||
       call.typeArguments !== undefined
     ) {
       return false;
     }
-    const callbackIndex = callee === "beforeAll" ? 0 : 1;
-    const timeoutIndex = callee === "beforeAll" ? 1 : 2;
+    const prefixCallee = call.expression.text;
+    const callbackIndex = prefixCallee === "beforeAll" ? 0 : 1;
+    const timeoutIndex = prefixCallee === "beforeAll" ? 1 : 2;
     const callback = call.arguments[callbackIndex];
     const timeout = call.arguments[timeoutIndex];
-    const minimumArgumentCount = callee === "beforeAll" ? 1 : 2;
+    const minimumArgumentCount = prefixCallee === "beforeAll" ? 1 : 2;
     return (
       (call.arguments.length === minimumArgumentCount || call.arguments.length === minimumArgumentCount + 1) &&
-      (callee === "beforeAll" || stringLiteralValue(call.arguments[0]) !== undefined) &&
+      (prefixCallee === "beforeAll" || stringLiteralValue(call.arguments[0]) !== undefined) &&
       callback !== undefined &&
       ts.isArrowFunction(callback) &&
       callback.parameters.length === 0 &&
@@ -846,14 +861,17 @@ function bindRuntimeModuleSource(filename: string, source: string, scriptKind: t
   const options: ts.CompilerOptions = {
     allowJs: true,
     module: ts.ModuleKind.ESNext,
+    moduleDetection: ts.ModuleDetectionKind.Force,
     noLib: true,
     noResolve: true,
     target: ts.ScriptTarget.Latest
   };
-  const candidate = ts.createSourceFile(virtualFilename, source, ts.ScriptTarget.Latest, true, scriptKind);
   const host = ts.createCompilerHost(options, true);
   host.fileExists = (requested) => requested === virtualFilename;
-  host.getSourceFile = (requested) => (requested === virtualFilename ? candidate : undefined);
+  host.getSourceFile = (requested, languageVersionOrOptions) =>
+    requested === virtualFilename
+      ? ts.createSourceFile(virtualFilename, source, languageVersionOrOptions, true, scriptKind)
+      : undefined;
   host.readFile = (requested) => (requested === virtualFilename ? source : undefined);
   const program = ts.createProgram({ host, options, rootNames: [virtualFilename] });
   const sourceFile = program.getSourceFile(virtualFilename);
@@ -1680,6 +1698,14 @@ function coverageIsolationProblems(input: CoverageIsolationInputs): string[] {
       "720_000"
     ),
     ...registrationTimeoutProblems(
+      requiredClosureSource(input.closureSources, "tests/meta-invariant-coverage.test.ts"),
+      "tests/meta-invariant-coverage.test.ts",
+      "META-invariant: exact structural census + NEGATIVE control coverage",
+      "it",
+      "every *-invariant.test.ts file has NEGATIVE control OR explicit exempt marker",
+      "60_000"
+    ),
+    ...registrationTimeoutProblems(
       requiredClosureSource(input.closureSources, "tests/release-integrity.test.ts"),
       "tests/release-integrity.test.ts",
       "release identity and exact required-job gate",
@@ -2075,7 +2101,7 @@ describe("Class A invariant — no test imports value from registration boilerpl
       coverageIsolationProblems(await currentCoverageIsolationInputs()),
       "Coverage isolation must remain exact, prerequisite-bound and production-import-free"
     ).toEqual([]);
-  });
+  }, 45_000);
 
   it("NEGATIVE control: restricted imports and coverage isolation drift are rejected", async () => {
     // Drift the input on purpose — a synthetic test importing from a restricted
@@ -3300,6 +3326,38 @@ describe("Class A invariant — no test imports value from registration boilerpl
     expect(metaTimeoutProblems(shadowedMetaRegistration)).toContain(metaTimeoutDiagnostic);
     expect(metaTimeoutProblems(staleMetaTimeout)).toContain(metaTimeoutDiagnostic);
     expect(metaTimeoutProblems(supersededMetaTimeout)).toContain(metaTimeoutDiagnostic);
+    const metaCensusTimeoutProblems = (source: string): string[] =>
+      registrationTimeoutProblems(
+        source,
+        "tests/meta-invariant-coverage.test.ts",
+        "META-invariant: exact structural census + NEGATIVE control coverage",
+        "it",
+        "every *-invariant.test.ts file has NEGATIVE control OR explicit exempt marker",
+        "60_000"
+      );
+    const metaCensusTimeoutDiagnostic =
+      "tests/meta-invariant-coverage.test.ts must retain one direct it registration with timeout 60_000";
+    const raisedMetaCensusTimeout = replaceExactly(
+      metaSource,
+      "  }, 60_000);\n\n  // NEGATIVE control for the META-invariant itself",
+      "  }, 60_001);\n\n  // NEGATIVE control for the META-invariant itself"
+    );
+    const missingMetaCensusTimeout = replaceExactly(
+      metaSource,
+      "  }, 60_000);\n\n  // NEGATIVE control for the META-invariant itself",
+      "  });\n\n  // NEGATIVE control for the META-invariant itself"
+    );
+    const eagerMetaCensusPrefix = replaceExactly(
+      metaSource,
+      '  }, 720_000);\n\n  it("every *-invariant.test.ts file has NEGATIVE control OR explicit exempt marker",',
+      '  }, 720_000);\n  (() => { throw new Error("abort collection"); })();\n\n' +
+        '  it("every *-invariant.test.ts file has NEGATIVE control OR explicit exempt marker",'
+    );
+    expect(metaCensusTimeoutProblems(metaSource)).toEqual([]);
+    expect(metaCensusTimeoutProblems(aliasedMetaCallee)).toContain(metaBindingDiagnostic);
+    expect(metaCensusTimeoutProblems(raisedMetaCensusTimeout)).toContain(metaCensusTimeoutDiagnostic);
+    expect(metaCensusTimeoutProblems(missingMetaCensusTimeout)).toContain(metaCensusTimeoutDiagnostic);
+    expect(metaCensusTimeoutProblems(eagerMetaCensusPrefix)).toContain(metaCensusTimeoutDiagnostic);
     const releaseSource = requiredClosureSource(current.closureSources, "tests/release-integrity.test.ts");
     const releaseTimeoutProblems = (source: string): string[] =>
       registrationTimeoutProblems(
@@ -3940,7 +3998,7 @@ describe("Class A invariant — no test imports value from registration boilerpl
 
     const typeOnlyProductionImport = 'import type { Vault } from "../src/vault.js";';
     expect(moduleProblems("tests/release-integrity.test.ts", typeOnlyProductionImport)).toEqual([]);
-  });
+  }, 45_000);
 });
 
 async function collectTestFiles(dir: string): Promise<string[]> {

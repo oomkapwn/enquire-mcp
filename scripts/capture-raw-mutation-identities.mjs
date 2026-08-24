@@ -254,7 +254,11 @@ function ordinaryCallSites(row, sourceFile) {
         replacement.getText(sourceFile) === row.replacement
       ) {
         const owner = ordinaryTransformOwner(call);
-        sites.push({ callStart: call.getStart(sourceFile), owner: owner?.id ?? "<unowned>" });
+        sites.push({
+          accessStart: node.name.getStart(sourceFile),
+          callStart: call.getStart(sourceFile),
+          owner: owner?.id ?? "<unowned>"
+        });
       }
     }
     ts.forEachChild(node, visit);
@@ -341,7 +345,7 @@ function updateIdentityHashes() {
         `${id}: expected one exact call owned by ${owner}, found ${declaredOwnerSites.length}; all shape-matched sites ${observedSiteSummary}`
       );
     }
-    const siteKey = `${filename}:${declaredOwnerSites[0].callStart}`;
+    const siteKey = `${filename}:${declaredOwnerSites[0].accessStart}`;
     if (claimedOrdinarySites.has(siteKey)) {
       throw new Error(`${id}: exact ordinary-transform site ${siteKey} is already claimed`);
     }

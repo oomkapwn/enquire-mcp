@@ -1362,8 +1362,14 @@ function ordinaryTransformOwner(node: ts.Node): OrdinaryTransformOwner | null {
   return null;
 }
 
-/** Return semantic owners for the replace-spelled accesses in one causal fixture. */
-function ordinaryTransformOwnerIds(source: string): string[] {
+interface OrdinaryTransformOwnerSite {
+  readonly accessStart: number;
+  readonly callStart: number;
+  readonly owner: string;
+}
+
+/** Return semantic owners and physical spans for replace-spelled accesses in one causal fixture. */
+function ordinaryTransformOwnerSites(source: string): OrdinaryTransformOwnerSite[] {
   const sourceFile = ts.createSourceFile(
     "ordinary-transform-owner-fixture.ts",
     source,
@@ -1371,18 +1377,25 @@ function ordinaryTransformOwnerIds(source: string): string[] {
     true,
     ts.ScriptKind.TS
   );
-  const owners: string[] = [];
+  const sites: OrdinaryTransformOwnerSite[] = [];
   function visit(node: ts.Node): void {
     if (
       ts.isPropertyAccessExpression(node) &&
       (node.name.text === "replace" || node.name.text === "replaceAll")
     ) {
-      owners.push(ordinaryTransformOwner(node)?.id ?? "<unowned>");
+      const call = node.parent;
+      if (ts.isCallExpression(call) && call.expression === node) {
+        sites.push({
+          accessStart: node.name.getStart(sourceFile),
+          callStart: call.getStart(sourceFile),
+          owner: ordinaryTransformOwner(node)?.id ?? "<unowned>",
+        });
+      }
     }
     ts.forEachChild(node, visit);
   }
   visit(sourceFile);
-  return owners;
+  return sites;
 }
 
 /** Freeze one owner by semantic label, physical site, and complete AST text. */
@@ -8132,10 +8145,18 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
     ).toEqual(["ownerless ordinary transform", "reviewed docs special case"]);
     const sharedShapeOrdinaryOwnerFixture =
       'function outer() { const direct = source.replace("old", "new"); function inner() { return source.replace("old", "new"); } return direct + inner(); }';
-    const sharedShapeOrdinaryOwners = ordinaryTransformOwnerIds(sharedShapeOrdinaryOwnerFixture);
+    const sharedShapeOrdinaryOwners = ordinaryTransformOwnerSites(sharedShapeOrdinaryOwnerFixture).map(
+      (site) => site.owner
+    );
     expect(sharedShapeOrdinaryOwners).toEqual(["function:outer", "function:inner"]);
     expect(sharedShapeOrdinaryOwners.filter((owner) => owner === "function:inner")).toHaveLength(1);
     expect(sharedShapeOrdinaryOwners.filter((owner) => owner === "function:missing")).toHaveLength(0);
+    const chainedOrdinarySites = ordinaryTransformOwnerSites(
+      'function chain() { return source.replace("old", "new").replaceAll("x", "y"); }'
+    );
+    expect(chainedOrdinarySites).toHaveLength(2);
+    expect(new Set(chainedOrdinarySites.map((site) => site.callStart)).size).toBe(1);
+    expect(new Set(chainedOrdinarySites.map((site) => site.accessStart)).size).toBe(2);
 
     const mutationCallSource = (call: ExactMutationHelperCallIdentity): string =>
       `${call.helper}(${call.sourceIdentifier}, ${JSON.stringify(call.needle)}, ${JSON.stringify(call.replacement)});`;

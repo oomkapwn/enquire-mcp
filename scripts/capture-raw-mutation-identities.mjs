@@ -165,10 +165,8 @@ function ordinaryOwnerRows(sourceFile) {
     const id = objectStringProperty(element, "id");
     const owner = objectStringProperty(element, "owner");
     if (filename === null || id === null) throw new Error("reviewed ordinary transform lacks filename/id");
-    if (filename !== "docs-consistency.test.ts") {
-      if (owner === null) throw new Error(`reviewed non-doc transform ${id} lacks owner`);
-      rows.push({ filename, id, owner });
-    }
+    if (owner === null) throw new Error(`reviewed transform ${id} lacks owner`);
+    rows.push({ filename, id, owner });
   }
   if (new Set(rows.map((row) => row.id)).size !== rows.length) {
     throw new Error("duplicate reviewed ordinary transform id");

@@ -294,12 +294,12 @@ function entryKeysOutside(
   return entries.map(([key]) => key).filter((key) => !allowed.has(key)).sort();
 }
 
-/** Require every non-doc ordinary transform to name the owner whose file is frozen. */
-function ownerlessNonDocsTransformIds(
+/** Require every reviewed ordinary transform to name the owner whose complete file is frozen. */
+function ownerlessReviewedTransformIds(
   entries: readonly { readonly filename: string; readonly id: string; readonly owner?: string }[]
 ): string[] {
   return entries
-    .filter((entry) => entry.filename !== "docs-consistency.test.ts" && entry.owner === undefined)
+    .filter((entry) => entry.owner === undefined)
     .map((entry) => entry.id)
     .sort();
 }
@@ -402,6 +402,7 @@ const REVIEWED_ORDINARY_TRANSFORMS = [
     filename: "docs-consistency.test.ts",
     id: "pdf OCR quote normalization",
     method: "replace",
+    owner: "function:normalize",
     pattern: "/[\"'`]/g",
     receiverRoot: "text",
     replacement: '""'
@@ -411,6 +412,7 @@ const REVIEWED_ORDINARY_TRANSFORMS = [
     filename: "docs-consistency.test.ts",
     id: "pdf OCR whitespace normalization",
     method: "replace",
+    owner: "function:normalize",
     pattern: "/\\s+/g",
     receiverRoot: "normalizedQuotes",
     replacement: '" "'
@@ -420,6 +422,7 @@ const REVIEWED_ORDINARY_TRANSFORMS = [
     filename: "docs-consistency.test.ts",
     id: "lifecycle whitespace normalization",
     method: "replace",
+    owner: "test:README, ROADMAP, and recipe prompt claims match the actual prompt contract",
     pattern: "/\\s+/g",
     receiverRoot: "lifecycle",
     replacement: '" "'
@@ -429,6 +432,7 @@ const REVIEWED_ORDINARY_TRANSFORMS = [
     filename: "docs-consistency.test.ts",
     id: "release gate parenthesis unescape",
     method: "replace",
+    owner: "function:requiredCiGates",
     pattern: "/\\\\([()])/g",
     receiverRoot: "gate",
     replacement: '"$1"'
@@ -676,6 +680,10 @@ type ReviewedOrdinaryTransformId = (typeof REVIEWED_ORDINARY_TRANSFORMS)[number]
 // the complete source file, so a reachable decoy, relocated clone, or severed
 // helper consumer cannot inherit authority from the same filename/title/count.
 const EXPECTED_REVIEWED_ORDINARY_OWNER_SHA256_ENTRIES = [
+  ["pdf OCR quote normalization", "0000000000000000000000000000000000000000000000000000000000000000"],
+  ["pdf OCR whitespace normalization", "0000000000000000000000000000000000000000000000000000000000000000"],
+  ["lifecycle whitespace normalization", "0000000000000000000000000000000000000000000000000000000000000000"],
+  ["release gate parenthesis unescape", "0000000000000000000000000000000000000000000000000000000000000000"],
   ["entrypoint block-comment stripping", "0000000000000000000000000000000000000000000000000000000000000000"],
   ["entrypoint line-comment stripping", "0000000000000000000000000000000000000000000000000000000000000000"],
   ["release-check open-parenthesis unescape", "0000000000000000000000000000000000000000000000000000000000000000"],
@@ -1465,12 +1473,11 @@ function reviewedOrdinaryTransformId(
     (candidate) =>
       candidate.filename === filename &&
       candidate.method === node.name.text &&
-      (!("owner" in candidate) ||
-        (owner !== null &&
-          candidate.owner === owner.id &&
-          EXPECTED_REVIEWED_ORDINARY_OWNER_SHA256.get(candidate.id) ===
-            ordinaryTransformOwnerSha256(owner, sourceFile) &&
-          isObviouslyReachableWithinSource(call, sourceFile))) &&
+      owner !== null &&
+      candidate.owner === owner.id &&
+      EXPECTED_REVIEWED_ORDINARY_OWNER_SHA256.get(candidate.id) ===
+        ordinaryTransformOwnerSha256(owner, sourceFile) &&
+      isObviouslyReachableWithinSource(call, sourceFile) &&
       candidate.receiverRoot === receiverRoot &&
       candidate.pattern === pattern.getText(sourceFile) &&
       candidate.replacement === replacement.getText(sourceFile)
@@ -1757,6 +1764,21 @@ function reflectiveOperationResolver(
     if (ts.isConditionalExpression(current)) {
       return new Set([...resolve(current.whenTrue, resolving), ...resolve(current.whenFalse, resolving)]);
     }
+    if (ts.isBinaryExpression(current) && current.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
+      return resolve(current.right, resolving);
+    }
+    if (ts.isCallExpression(current)) {
+      const callee = unwrapStaticExpression(current.expression);
+      if (ts.isPropertyAccessExpression(callee) || ts.isElementAccessExpression(callee)) {
+        const invocationNames = ts.isPropertyAccessExpression(callee)
+          ? new Set([callee.name.text])
+          : stringResolver.resolve(callee.argumentExpression).values;
+        if (invocationNames.has("bind") && current.arguments.length === 1) {
+          return resolve(callee.expression, resolving);
+        }
+      }
+      return new Set();
+    }
     if (ts.isPropertyAccessExpression(current) || ts.isElementAccessExpression(current)) {
       return operationsFor(ownerKinds(current.expression), accessNames(current).values);
     }
@@ -1768,7 +1790,12 @@ function reflectiveOperationResolver(
     const declaration = declarations[0];
     if (declaration === undefined) return new Set();
     const nextResolving = new Set([...resolving, symbol]);
-    if (ts.isBindingElement(declaration)) return bindingElementOperations(declaration, nextResolving);
+    if (ts.isBindingElement(declaration)) {
+      return new Set([
+        ...bindingElementOperations(declaration, nextResolving),
+        ...(assignmentSources.get(symbol) ?? []).flatMap((source) => [...resolve(source, nextResolving)])
+      ]);
+    }
     return new Set(variableValueSources(symbol).flatMap((source) => [...resolve(source, nextResolving)]));
   }
 
@@ -7837,11 +7864,11 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
     ).toEqual(["duplicate.test.ts"]);
     expect(entryKeysOutside([["ghost.test.ts", 1]], new Set(["live.test.ts"]))).toEqual(["ghost.test.ts"]);
     expect(
-      ownerlessNonDocsTransformIds([
+      ownerlessReviewedTransformIds([
         { filename: "docs-consistency.test.ts", id: "reviewed docs special case" },
         { filename: "ghost-invariant.test.ts", id: "ownerless ordinary transform" }
       ])
-    ).toEqual(["ownerless ordinary transform"]);
+    ).toEqual(["ownerless ordinary transform", "reviewed docs special case"]);
 
     const mutationCallSource = (call: ExactMutationHelperCallIdentity): string =>
       `${call.helper}(${call.sourceIdentifier}, ${JSON.stringify(call.needle)}, ${JSON.stringify(call.replacement)});`;
@@ -7931,10 +7958,13 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       'let getter = Reflect.get; getter(source, "replace");',
       'let getter; getter = Reflect.get; getter(source, "replaceAll");',
       'let getter = () => "safe"; getter = Reflect.get; getter(source, "replace");',
+      'const getter = Reflect.get.bind(Reflect); getter(source, "replaceAll");',
+      'let alias; let getter; getter = alias = Reflect.get; getter(source, "replace");',
       'const R = Reflect; const getter = R.get; getter(source, "replace");',
       'let R = Reflect; const getter = R.get; getter(source, "replaceAll");',
       'const { get: getter } = Reflect; getter(source, "replace");',
       'let { get: getter } = Reflect; getter(source, "replaceAll");',
+      'let { get: getter } = { get: () => "safe" }; getter = Reflect.get; getter(source, "replace");',
       'const descriptor = Object.getOwnPropertyDescriptor; descriptor(source, "replace")?.value;',
       'const { getOwnPropertyDescriptor: descriptor } = Object; descriptor(source, "replaceAll")?.value;',
       'const getter = globalThis.Reflect.get; getter(source, "replace");',
@@ -7956,6 +7986,8 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       'const method = "replace"; { const method = "includes"; Reflect.get(source, method); }',
       'const getter = Reflect.get; { const getter = () => "safe"; getter(source, "replace"); }',
       'let getter = () => "safe"; getter(source, "replace");',
+      'const getter = (() => "safe").bind(null); getter(source, "replace");',
+      'const getter = Reflect.get.bind(Reflect, source, "includes"); getter();',
       'const getter = Reflect.get; const value = getter(source, property); void value;',
       'const descriptor = Object.getOwnPropertyDescriptor(source, property); void descriptor;',
       'const iterator = Array.prototype[Symbol.iterator]; Reflect.apply(iterator, [], []);',
@@ -7987,6 +8019,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       'Reflect.get.apply(Reflect, [source, property])("old", "new");',
       'Reflect["get"]["apply"](Reflect, [source, property])("old", "new");',
       'Reflect.apply(Reflect.get, Reflect, [source, property])("old", "new");',
+      'const getter = Reflect.get.bind(Reflect); getter(source, property)("old", "new");',
       'const Symbol = { iterator: getMethod() }; const rawMutation = source[Symbol.iterator]; Reflect.apply(rawMutation, source, []);'
     ]) {
       expect(repositoryMutationOracleProblems(mutationInventoryFile, dynamicReflectiveInvocation)).toEqual([
@@ -8165,6 +8198,18 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       "docs-consistency.test.ts expected exactly one lifecycle whitespace normalization, found 0",
       "docs-consistency.test.ts expected exactly one release gate parenthesis unescape, found 0"
     ]);
+    const docsEarlyReturnAfterOcr = replaceExactly(
+      docsConsistencySource,
+      "  const ocr = normalize(ocrPdf);\n  const problems: string[] = [];",
+      "  const ocr = normalize(ocrPdf);\n  return [];\n  const problems: string[] = [];"
+    );
+    expect(repositoryMutationOracleProblems("docs-consistency.test.ts", docsEarlyReturnAfterOcr)).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/unclassified raw \.replace access/),
+        "docs-consistency.test.ts expected exactly one pdf OCR quote normalization, found 0",
+        "docs-consistency.test.ts expected exactly one pdf OCR whitespace normalization, found 0"
+      ])
+    );
 
     for (const mutation of [
       {
@@ -8334,12 +8379,9 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
     );
     const rawMutationInventorySet = new Set<string>(RAW_REPLACE_INVENTORY_FILES);
     expect(entryKeysOutside(EXPECTED_REPOSITORY_MUTATION_HELPER_CALL_ENTRIES, rawMutationInventorySet)).toEqual([]);
-    const nonDocsReviewedTransforms = REVIEWED_ORDINARY_TRANSFORMS.filter(
-      (reviewed) => reviewed.filename !== "docs-consistency.test.ts"
-    );
-    expect(ownerlessNonDocsTransformIds(REVIEWED_ORDINARY_TRANSFORMS)).toEqual([]);
+    expect(ownerlessReviewedTransformIds(REVIEWED_ORDINARY_TRANSFORMS)).toEqual([]);
     expect([...EXPECTED_REVIEWED_ORDINARY_OWNER_SHA256.keys()].sort()).toEqual(
-      nonDocsReviewedTransforms.map((reviewed) => reviewed.id).sort()
+      REVIEWED_ORDINARY_TRANSFORMS.map((reviewed) => reviewed.id).sort()
     );
     for (const filename of RAW_REPLACE_INVENTORY_FILES) {
       const source = await fs.readFile(path.join(repoRoot, "tests", filename), "utf8");

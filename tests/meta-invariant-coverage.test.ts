@@ -1367,7 +1367,7 @@ function sourceOwnerSha256(id: string, node: ts.Node, sourceFile: ts.SourceFile)
   return sha256Text(
     JSON.stringify({
       id,
-      source: node.getText(sourceFile),
+      source: ts.isSourceFile(node) ? node.getFullText() : node.getText(sourceFile),
       start: node.getStart(sourceFile)
     })
   );
@@ -1773,7 +1773,7 @@ function reflectiveOperationResolver(
         const invocationNames = ts.isPropertyAccessExpression(callee)
           ? new Set([callee.name.text])
           : stringResolver.resolve(callee.argumentExpression).values;
-        if (invocationNames.has("bind") && current.arguments.length === 1) {
+        if (invocationNames.has("bind") && current.arguments.length <= 1) {
           return resolve(callee.expression, resolving);
         }
       }
@@ -7959,6 +7959,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       'let getter; getter = Reflect.get; getter(source, "replaceAll");',
       'let getter = () => "safe"; getter = Reflect.get; getter(source, "replace");',
       'const getter = Reflect.get.bind(Reflect); getter(source, "replaceAll");',
+      'const getter = Reflect.get.bind(); getter(source, "replace");',
       'let alias; let getter; getter = alias = Reflect.get; getter(source, "replace");',
       'const R = Reflect; const getter = R.get; getter(source, "replace");',
       'let R = Reflect; const getter = R.get; getter(source, "replaceAll");',
@@ -8183,6 +8184,18 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
     expect(
       repositoryMutationOracleProblems("entrypoint-guard-invariant.test.ts", severedEntrypointConsumer)
     ).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/unclassified raw \.replace access/),
+        "entrypoint-guard-invariant.test.ts expected exactly one entrypoint block-comment stripping, found 0",
+        "entrypoint-guard-invariant.test.ts expected exactly one entrypoint line-comment stripping, found 0"
+      ])
+    );
+    const entrypointHeaderDrift = replaceExactly(
+      entrypointSource,
+      "// v3.11.6-rc.20 (external audit L-1) + rc.21 (rc.20 re-sweep F2) — script CLI",
+      "// v3.11.6-rc.20 (external audit L-1) + rc.21 (rc.20 re-sweep F2) — script CLX"
+    );
+    expect(repositoryMutationOracleProblems("entrypoint-guard-invariant.test.ts", entrypointHeaderDrift)).toEqual(
       expect.arrayContaining([
         expect.stringMatching(/unclassified raw \.replace access/),
         "entrypoint-guard-invariant.test.ts expected exactly one entrypoint block-comment stripping, found 0",

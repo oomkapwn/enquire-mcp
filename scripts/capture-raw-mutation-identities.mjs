@@ -49,7 +49,7 @@ function sourceOwnerSha256(id, node, sourceFile) {
   return sha256(
     JSON.stringify({
       id,
-      source: node.getText(sourceFile),
+      source: ts.isSourceFile(node) ? node.getFullText() : node.getText(sourceFile),
       start: node.getStart(sourceFile)
     })
   );

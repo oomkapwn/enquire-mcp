@@ -1726,17 +1726,21 @@ function reflectiveOperationResolver(
       } else if (node.operatorToken.kind === ts.SyntaxKind.EqualsToken && ts.isObjectLiteralExpression(left)) {
         for (const property of left.properties) {
           let target: ts.Identifier | null = null;
+          let targetSymbol: ts.Symbol | undefined;
           let fallback: ts.Expression | undefined;
           if (ts.isShorthandPropertyAssignment(property)) {
             target = property.name;
+            targetSymbol =
+              checker.getShorthandAssignmentValueSymbol(property) ?? checker.getSymbolAtLocation(property.name);
             fallback = property.objectAssignmentInitializer;
           } else if (ts.isPropertyAssignment(property)) {
             const assignmentTarget = flatAssignmentTarget(property.initializer);
             target = assignmentTarget?.target ?? null;
+            targetSymbol = target === null ? undefined : checker.getSymbolAtLocation(target);
             fallback = assignmentTarget?.fallback;
           }
           if (target === null) continue;
-          const symbol = checker.getSymbolAtLocation(target);
+          const symbol = targetSymbol;
           if (symbol === undefined) continue;
           if (fallback !== undefined) {
             const sources = assignmentSources.get(symbol) ?? [];
@@ -2070,7 +2074,7 @@ function dynamicComputedMethodTaintAnalysis(
   function collectAssignmentProjectionEdges(pattern: ts.ObjectLiteralExpression, owner: ts.Expression): void {
     for (const property of pattern.properties) {
       if (ts.isShorthandPropertyAssignment(property)) {
-        const target = symbolOf(property.name);
+        const target = checker.getShorthandAssignmentValueSymbol(property) ?? symbolOf(property.name);
         if (target !== null) {
           propertyProjectionEdges.push({ key: property.name.text, owner, target });
           if (property.objectAssignmentInitializer !== undefined) {

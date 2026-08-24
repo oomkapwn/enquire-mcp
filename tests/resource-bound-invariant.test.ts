@@ -150,11 +150,7 @@ describe("resource-bound completeness invariant (rc.36, R-5/AS#5 class)", () => 
     expect(body).not.toContain("listMarkdown(");
     expect(body).not.toContain("lower.indexOf(lowerT");
 
-    const mutant = replaceExactly(
-      body,
-      "matchFoldedPatterns(lower, lowerTokens)",
-      "{ counts: [], firstStarts: [] }"
-    );
+    const mutant = replaceExactly(body, "matchFoldedPatterns(lower, lowerTokens)", "{ counts: [], firstStarts: [] }");
     expect(mutant).not.toContain("matchFoldedPatterns(lower, lowerTokens)");
   });
 

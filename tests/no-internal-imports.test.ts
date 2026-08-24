@@ -1987,11 +1987,7 @@ describe("Class A invariant — no test imports value from registration boilerpl
       );
       await fs.writeFile(ciPath, baselineCi);
       for (const invalidCarrier of [
-        replaceExactly(
-          baselineCarrier,
-          "          expected_manifest_sha=",
-          "         expected_manifest_sha="
-        ),
+        replaceExactly(baselineCarrier, "          expected_manifest_sha=", "         expected_manifest_sha="),
         `${baselineCarrier}\n${baselineCarrier}`
       ]) {
         await fs.writeFile(ciPath, replaceExactly(baselineCi, baselineCarrier, invalidCarrier));

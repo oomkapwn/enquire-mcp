@@ -721,9 +721,7 @@ describe("privileged maintenance workflow invariants", () => {
     expect(() => replaceOccurrence("alpha alpha", "alpha", "omega", 1, 1)).toThrow(
       /expected 1 occurrence\(s\), found 2/
     );
-    expect(() => replaceOccurrence("alpha", "alpha", "omega", 1, 2)).toThrow(
-      /expected 2 occurrence\(s\), found 1/
-    );
+    expect(() => replaceOccurrence("alpha", "alpha", "omega", 1, 2)).toThrow(/expected 2 occurrence\(s\), found 1/);
     expect(
       releaseWorkflowProblems(replaceOnce(release, "permissions: {}", "permissions:\n  contents: write"))
     ).toContain("release-root-permissions");
@@ -869,14 +867,10 @@ describe("privileged maintenance workflow invariants", () => {
       )
     ).toContain("release-mcp-oidc-boundary");
     expect(
-      releaseWorkflowProblems(
-        replaceOccurrence(release, "    timeout-minutes: 120", "    timeout-minutes: 60", 1, 2)
-      )
+      releaseWorkflowProblems(replaceOccurrence(release, "    timeout-minutes: 120", "    timeout-minutes: 60", 1, 2))
     ).toContain("release-npm-trusted-publishing");
     expect(
-      releaseWorkflowProblems(
-        replaceOccurrence(release, "    timeout-minutes: 120", "    timeout-minutes: 60", 2, 2)
-      )
+      releaseWorkflowProblems(replaceOccurrence(release, "    timeout-minutes: 120", "    timeout-minutes: 60", 2, 2))
     ).toContain("release-github-write-boundary");
     expect(
       releaseWorkflowProblems(

@@ -34,7 +34,7 @@ import { releaseMutationVersionedTransitionAuditProblems } from "./release-mutat
 
 const repoRoot = path.resolve(__dirname, "..");
 const RELEASE_MUTATION_IDENTITY_FIXTURE_SHA256 = "8205d24e6d42dd4cb8986368611514131abe701434beb30150e33ea08f4b1288";
-const RELEASE_MUTATION_TRANSITION_FIXTURE_SHA256 = "d2110f2e61b269db85bd43cbe718c8c7758c7518164bf756efa8906dfb06fe0c";
+const RELEASE_MUTATION_TRANSITION_FIXTURE_SHA256 = "8ee9661611a64622c0d35fef32f0673e89726ac602f69b598a43f36a654fd3b0";
 const releaseMutationIdentityFixturePath = path.join(repoRoot, "tests/fixtures/release-mutation-identity.v2.json");
 const releaseMutationTransitionFixturePath = path.join(repoRoot, "tests/fixtures/release-mutation-transition.v3.json");
 const releaseIntegritySourcePath = path.join(repoRoot, "tests/release-integrity.test.ts");
@@ -233,22 +233,64 @@ const EXPECTED_REPOSITORY_MUTATION_HELPER_CALL_ENTRIES = [
   // Seven pre-AH-3 controls plus the two exact shared-write delegate controls above.
   [
     "abs-path-leak-invariant.test.ts",
-    { count: 7 + ABS_PATH_SHARED_WRITE_DELEGATE_MUTATIONS.length, sha256: "0000000000000000000000000000000000000000000000000000000000000000" }
+    {
+      count: 7 + ABS_PATH_SHARED_WRITE_DELEGATE_MUTATIONS.length,
+      sha256: "b6bd6c29b881d836003557db0d972f6083755b0aaf27ff9a37b1924707f723cd"
+    }
   ],
-  ["cli-parity.test.ts", { count: 6, sha256: "0000000000000000000000000000000000000000000000000000000000000000" }],
-  ["docker-glama-invariant.test.ts", { count: 1, sha256: "0000000000000000000000000000000000000000000000000000000000000000" }],
-  ["docs-consistency.test.ts", { count: 53, sha256: "0000000000000000000000000000000000000000000000000000000000000000" }],
-  ["enforcement-guard-invariant.test.ts", { count: 41, sha256: "0000000000000000000000000000000000000000000000000000000000000000" }],
-  ["erasure-invariant.test.ts", { count: 104, sha256: "0000000000000000000000000000000000000000000000000000000000000000" }],
-  ["k1-ast-invariant.test.ts", { count: 4, sha256: "0000000000000000000000000000000000000000000000000000000000000000" }],
-  ["k1-class-invariant.test.ts", { count: 102, sha256: "0000000000000000000000000000000000000000000000000000000000000000" }],
-  ["meta-invariant-coverage.test.ts", { count: 0, sha256: "0000000000000000000000000000000000000000000000000000000000000000" }],
-  ["no-internal-imports.test.ts", { count: 76, sha256: "0000000000000000000000000000000000000000000000000000000000000000" }],
-  ["release-mutation-transition.test.ts", { count: 10, sha256: "0000000000000000000000000000000000000000000000000000000000000000" }],
-  ["resource-bound-invariant.test.ts", { count: 1, sha256: "0000000000000000000000000000000000000000000000000000000000000000" }],
-  ["sink-parity-invariant.test.ts", { count: 1, sha256: "0000000000000000000000000000000000000000000000000000000000000000" }],
-  ["smoke-default-vault-invariant.test.ts", { count: 1, sha256: "0000000000000000000000000000000000000000000000000000000000000000" }],
-  ["write-lifecycle-invariant.test.ts", { count: 20, sha256: "0000000000000000000000000000000000000000000000000000000000000000" }]
+  ["cli-parity.test.ts", { count: 6, sha256: "a9ef3b468d6be29d93af888dd9df1289fc17bf0a0fa96d660d9378071ced0117" }],
+  [
+    "docker-glama-invariant.test.ts",
+    { count: 1, sha256: "5aaae89a44328f99d976c3d582430e10fb7653a328fb503ce74b960cd74b565f" }
+  ],
+  [
+    "docs-consistency.test.ts",
+    { count: 53, sha256: "17a217f6f91b6c281d3a5cfb90d4e9994965d04630d4df5de9450be307a0f765" }
+  ],
+  [
+    "enforcement-guard-invariant.test.ts",
+    { count: 41, sha256: "c7c768aa140f935cd63500477e2ff754334566d785b9f9b771bd5549265168d0" }
+  ],
+  [
+    "erasure-invariant.test.ts",
+    { count: 104, sha256: "3f0c236b37c04f0f5209b02c5eeb81ff6893e2794fdf850a2110999d2c92691f" }
+  ],
+  [
+    "k1-ast-invariant.test.ts",
+    { count: 4, sha256: "e70252bedcd8155bfa2fd316cb86c4f431f8a187c3dedf4c9670226f1590f75d" }
+  ],
+  [
+    "k1-class-invariant.test.ts",
+    { count: 102, sha256: "5a006450ce8fc1967a904c7d61a197519c2fb3259af3426d87eda826725d939e" }
+  ],
+  [
+    "meta-invariant-coverage.test.ts",
+    { count: 241, sha256: "4f70e79f24393c876b2519909060e4e005d404530c9fa846cb6a001f7d3b859e" }
+  ],
+  [
+    "no-internal-imports.test.ts",
+    { count: 76, sha256: "bcfbdcbb53f29bafaee23ea6f846317426c84a01e5f7bb4c0050d723b118fdac" }
+  ],
+  [
+    "release-mutation-transition.test.ts",
+    { count: 10, sha256: "45eeace981fdf3839dd86814a71563581c4eb377cfe916c4dab62d2d1a69f628" }
+  ],
+  [
+    "resource-bound-invariant.test.ts",
+    { count: 1, sha256: "6dcd1c958a24778372ec22aa91f159a02b536880e5dd49b92c275ee5d7788c0d" }
+  ],
+  [
+    "sink-parity-invariant.test.ts",
+    { count: 1, sha256: "e6dd6ac19c0ac0eb7d7a02fa69728040c0776ba19d1d9cb7857d62c8bff0825c" }
+  ],
+  [
+    "smoke-default-vault-invariant.test.ts",
+    { count: 1, sha256: "dbfe6230ed7c3b927ae2e218dc05529d0f04931bd3d247b09b10a755da98753f" }
+  ],
+  [
+    "write-lifecycle-invariant.test.ts",
+    { count: 20, sha256: "4acb29da9bd54ff345e5eae9c1d352303a557a40d90138595b00785771b547db" }
+  ]
 ] as const satisfies readonly (readonly [string, ExpectedMutationHelperCallCensus])[];
 const EXPECTED_REPOSITORY_MUTATION_HELPER_CALLS = new Map<string, ExpectedMutationHelperCallCensus>(
   EXPECTED_REPOSITORY_MUTATION_HELPER_CALL_ENTRIES
@@ -287,11 +329,11 @@ function duplicateStringEntryKeys(entries: readonly (readonly [string, unknown])
 }
 
 /** Report tuple keys that are not members of their authoritative source census. */
-function entryKeysOutside(
-  entries: readonly (readonly [string, unknown])[],
-  allowed: ReadonlySet<string>
-): string[] {
-  return entries.map(([key]) => key).filter((key) => !allowed.has(key)).sort();
+function entryKeysOutside(entries: readonly (readonly [string, unknown])[], allowed: ReadonlySet<string>): string[] {
+  return entries
+    .map(([key]) => key)
+    .filter((key) => !allowed.has(key))
+    .sort();
 }
 
 /** Require every reviewed ordinary transform to name the owner whose complete file is frozen. */
@@ -680,36 +722,36 @@ type ReviewedOrdinaryTransformId = (typeof REVIEWED_ORDINARY_TRANSFORMS)[number]
 // the complete source file, so a reachable decoy, relocated clone, or severed
 // helper consumer cannot inherit authority from the same filename/title/count.
 const EXPECTED_REVIEWED_ORDINARY_OWNER_SHA256_ENTRIES = [
-  ["pdf OCR quote normalization", "0000000000000000000000000000000000000000000000000000000000000000"],
-  ["pdf OCR whitespace normalization", "0000000000000000000000000000000000000000000000000000000000000000"],
-  ["lifecycle whitespace normalization", "0000000000000000000000000000000000000000000000000000000000000000"],
-  ["release gate parenthesis unescape", "0000000000000000000000000000000000000000000000000000000000000000"],
-  ["entrypoint block-comment stripping", "0000000000000000000000000000000000000000000000000000000000000000"],
-  ["entrypoint line-comment stripping", "0000000000000000000000000000000000000000000000000000000000000000"],
-  ["release-check open-parenthesis unescape", "0000000000000000000000000000000000000000000000000000000000000000"],
-  ["release-check close-parenthesis unescape", "0000000000000000000000000000000000000000000000000000000000000000"],
-  ["Docker COPY prefix stripping", "0000000000000000000000000000000000000000000000000000000000000000"],
-  ["Docker local COPY dot-prefix stripping", "0000000000000000000000000000000000000000000000000000000000000000"],
-  ["Docker local COPY slash-suffix stripping", "0000000000000000000000000000000000000000000000000000000000000000"],
-  ["fence block-comment stripping", "0000000000000000000000000000000000000000000000000000000000000000"],
-  ["fence line-comment stripping", "0000000000000000000000000000000000000000000000000000000000000000"],
-  ["GitHub response CRLF normalization", "0000000000000000000000000000000000000000000000000000000000000000"],
-  ["GitHub token-shape redaction", "0000000000000000000000000000000000000000000000000000000000000000"],
-  ["GitHub environment-token redaction", "0000000000000000000000000000000000000000000000000000000000000000"],
-  ["GitHub authorization-header redaction", "0000000000000000000000000000000000000000000000000000000000000000"],
-  ["GitHub diagnostic whitespace compaction", "0000000000000000000000000000000000000000000000000000000000000000"],
-  ["erasure source-path separator normalization", "0000000000000000000000000000000000000000000000000000000000000000"],
-  ["SQLite positive-shape label normalization", "0000000000000000000000000000000000000000000000000000000000000000"],
-  ["SQLite suffix label normalization", "0000000000000000000000000000000000000000000000000000000000000000"],
-  ["sensitive-reader kind label normalization", "0000000000000000000000000000000000000000000000000000000000000000"],
-  ["sensitive-reader growth label normalization", "0000000000000000000000000000000000000000000000000000000000000000"],
-  ["publisher kind label normalization", "0000000000000000000000000000000000000000000000000000000000000000"],
-  ["hardlink route label normalization", "0000000000000000000000000000000000000000000000000000000000000000"],
-  ["K-1 statement semicolon normalization", "0000000000000000000000000000000000000000000000000000000000000000"],
-  ["K-1 block-comment stripping", "0000000000000000000000000000000000000000000000000000000000000000"],
-  ["K-1 line-comment stripping", "0000000000000000000000000000000000000000000000000000000000000000"],
-  ["K-1 module-extension normalization", "0000000000000000000000000000000000000000000000000000000000000000"],
-  ["K-1 source-path separator normalization", "0000000000000000000000000000000000000000000000000000000000000000"]
+  ["pdf OCR quote normalization", "975b18242b52073bcfd429c9707ac73f878202b34c9bcaa81e356de9bc60125a"],
+  ["pdf OCR whitespace normalization", "975b18242b52073bcfd429c9707ac73f878202b34c9bcaa81e356de9bc60125a"],
+  ["lifecycle whitespace normalization", "defda9307afb729b46a5b5d30375169b661cf49bb5cc6e35ed4fdc8955a904cb"],
+  ["release gate parenthesis unescape", "2583bcc36c79173eef8ce45b135c21f041cef76435444e8ffe95c69a45718037"],
+  ["entrypoint block-comment stripping", "319def01444e238d986cd6674091a75f17ce843b71ac7e74e2c1aeba07741b0a"],
+  ["entrypoint line-comment stripping", "319def01444e238d986cd6674091a75f17ce843b71ac7e74e2c1aeba07741b0a"],
+  ["release-check open-parenthesis unescape", "e12c9f3c715151d4535e1531ca2c067e426973eae147b325fbac7b990bd36108"],
+  ["release-check close-parenthesis unescape", "e12c9f3c715151d4535e1531ca2c067e426973eae147b325fbac7b990bd36108"],
+  ["Docker COPY prefix stripping", "7fd4250de723b6b6097bc96e159dc3d2c42021f112a37a7aaf08afd0c88e3fc8"],
+  ["Docker local COPY dot-prefix stripping", "7fd4250de723b6b6097bc96e159dc3d2c42021f112a37a7aaf08afd0c88e3fc8"],
+  ["Docker local COPY slash-suffix stripping", "7fd4250de723b6b6097bc96e159dc3d2c42021f112a37a7aaf08afd0c88e3fc8"],
+  ["fence block-comment stripping", "6881fea8cc7ad196182cddf064bf3f51f0d3951cef21b4f797b14be121d29017"],
+  ["fence line-comment stripping", "6881fea8cc7ad196182cddf064bf3f51f0d3951cef21b4f797b14be121d29017"],
+  ["GitHub response CRLF normalization", "6307ef49718eda14526a8dc9b64ed064bb82f48c2ee46c8583f6b149aa0f9ef2"],
+  ["GitHub token-shape redaction", "d8ab2f87a80b4c0cbe4af8bf3e0f59391219109390fb4f6bcac01b23d41cda65"],
+  ["GitHub environment-token redaction", "d8ab2f87a80b4c0cbe4af8bf3e0f59391219109390fb4f6bcac01b23d41cda65"],
+  ["GitHub authorization-header redaction", "d8ab2f87a80b4c0cbe4af8bf3e0f59391219109390fb4f6bcac01b23d41cda65"],
+  ["GitHub diagnostic whitespace compaction", "d8ab2f87a80b4c0cbe4af8bf3e0f59391219109390fb4f6bcac01b23d41cda65"],
+  ["erasure source-path separator normalization", "3b89adabe6904f98add38a570ff29669bb8ab5b8ae3c3eabae4cc3faa53cce4c"],
+  ["SQLite positive-shape label normalization", "7f1649fadf90b9770a141c234e5a7f391df9ed5b0fd96e880b28ad6b71498e2f"],
+  ["SQLite suffix label normalization", "ea6ed99edfcffb8e5f0045e8b752635780d91ffa5fcee8554cb6bebb823088ac"],
+  ["sensitive-reader kind label normalization", "825c1499e89ae8a356c0d95a771841b2fd96c93f6b9094f3d783a18be9f2e266"],
+  ["sensitive-reader growth label normalization", "57522a53037186bd73e6009e064f56527b9995826ece3c7c88fdfd2756e6fd23"],
+  ["publisher kind label normalization", "dbdbeceb385475c63fdd65c52a02d69f0df72f270fc1733841d7bed3ecc02623"],
+  ["hardlink route label normalization", "8869c89d87f15f690cdfbfc352a1d9006a415c200d3880a4e35ad1b3fc148988"],
+  ["K-1 statement semicolon normalization", "ceb6cd851bf023ca1484a3ce9656770c015cdfd37eb3566f545d20beb63f956a"],
+  ["K-1 block-comment stripping", "e4ab04178c078637e0f4c686592e4c087735af6fae66bd301df5dcb3affd29e1"],
+  ["K-1 line-comment stripping", "e4ab04178c078637e0f4c686592e4c087735af6fae66bd301df5dcb3affd29e1"],
+  ["K-1 module-extension normalization", "d3bedd44899b1fe192310c42f374374aa7dc4ca4fe6e39e8fc181e0ca5ce50c2"],
+  ["K-1 source-path separator normalization", "38192dee61fd22c70e6eb075f1bf10e4dca81a981418a621d41d35c1a12fa0e9"]
 ] as const satisfies readonly (readonly [ReviewedOrdinaryTransformId, string])[];
 const EXPECTED_REVIEWED_ORDINARY_OWNER_SHA256 = new Map<ReviewedOrdinaryTransformId, string>(
   EXPECTED_REVIEWED_ORDINARY_OWNER_SHA256_ENTRIES
@@ -1348,11 +1390,7 @@ function ordinaryTransformOwner(node: ts.Node): OrdinaryTransformOwner | null {
       if (ts.isCallExpression(call) && call.arguments.includes(current)) {
         const root = expressionReceiverRoot(call.expression);
         const title = call.arguments[0];
-        if (
-          (root === "it" || root === "test") &&
-          title !== undefined &&
-          ts.isStringLiteralLike(title)
-        ) {
+        if ((root === "it" || root === "test") && title !== undefined && ts.isStringLiteralLike(title)) {
           return { id: `test:${title.text}`, node: current };
         }
       }
@@ -1379,16 +1417,13 @@ function ordinaryTransformOwnerSites(source: string): OrdinaryTransformOwnerSite
   );
   const sites: OrdinaryTransformOwnerSite[] = [];
   function visit(node: ts.Node): void {
-    if (
-      ts.isPropertyAccessExpression(node) &&
-      (node.name.text === "replace" || node.name.text === "replaceAll")
-    ) {
+    if (ts.isPropertyAccessExpression(node) && (node.name.text === "replace" || node.name.text === "replaceAll")) {
       const call = node.parent;
       if (ts.isCallExpression(call) && call.expression === node) {
         sites.push({
           accessStart: node.name.getStart(sourceFile),
           callStart: call.getStart(sourceFile),
-          owner: ordinaryTransformOwner(node)?.id ?? "<unowned>",
+          owner: ordinaryTransformOwner(node)?.id ?? "<unowned>"
         });
       }
     }
@@ -1511,8 +1546,7 @@ function reviewedOrdinaryTransformId(
       candidate.method === node.name.text &&
       owner !== null &&
       candidate.owner === owner.id &&
-      EXPECTED_REVIEWED_ORDINARY_OWNER_SHA256.get(candidate.id) ===
-        ordinaryTransformOwnerSha256(owner, sourceFile) &&
+      EXPECTED_REVIEWED_ORDINARY_OWNER_SHA256.get(candidate.id) === ordinaryTransformOwnerSha256(owner, sourceFile) &&
       isObviouslyReachableWithinSource(call, sourceFile) &&
       candidate.receiverRoot === receiverRoot &&
       candidate.pattern === pattern.getText(sourceFile) &&
@@ -1574,18 +1608,12 @@ function symbolHasRuntimeValueBinding(symbol: ts.Symbol): boolean {
 }
 
 /** Find the visible runtime binding even for intrinsic-spelled identifiers such as globalThis. */
-function runtimeValueSymbolAt(
-  checker: ts.TypeChecker,
-  identifier: ts.Identifier
-): ts.Symbol | undefined {
+function runtimeValueSymbolAt(checker: ts.TypeChecker, identifier: ts.Identifier): ts.Symbol | undefined {
   const direct = checker.getSymbolAtLocation(identifier);
   if (direct !== undefined && symbolHasRuntimeValueBinding(direct)) return direct;
   return checker
     .getSymbolsInScope(identifier, ts.SymbolFlags.Value)
-    .find(
-      (candidate) =>
-        candidate.getName() === identifier.text && symbolHasRuntimeValueBinding(candidate)
-    );
+    .find((candidate) => candidate.getName() === identifier.text && symbolHasRuntimeValueBinding(candidate));
 }
 
 /** True when a script-level lexical declaration shadows an intrinsic-spelled global. */
@@ -1593,9 +1621,7 @@ function hasTopLevelLexicalValueBinding(sourceFile: ts.SourceFile, name: string)
   const bindingContains = (binding: ts.BindingName): boolean =>
     ts.isIdentifier(binding)
       ? binding.text === name
-      : binding.elements.some(
-          (element) => !ts.isOmittedExpression(element) && bindingContains(element.name)
-        );
+      : binding.elements.some((element) => !ts.isOmittedExpression(element) && bindingContains(element.name));
   const isDeclared = (node: ts.Node): boolean =>
     ts.canHaveModifiers(node) &&
     (ts.getModifiers(node)?.some((modifier) => modifier.kind === ts.SyntaxKind.DeclareKeyword) ?? false);
@@ -1608,11 +1634,7 @@ function hasTopLevelLexicalValueBinding(sourceFile: ts.SourceFile, name: string)
     ) {
       return statement.declarationList.declarations.some((declaration) => bindingContains(declaration.name));
     }
-    return (
-      ts.isClassDeclaration(statement) &&
-      !isDeclared(statement) &&
-      statement.name?.text === name
-    );
+    return ts.isClassDeclaration(statement) && !isDeclared(statement) && statement.name?.text === name;
   });
 }
 
@@ -1643,12 +1665,7 @@ function computedMethodResolver(checker: ts.TypeChecker): ComputedMethodResolver
       const member = ts.isPropertyAccessExpression(current)
         ? current.name.text
         : staticStringExpressionText(current.argumentExpression ?? current);
-      if (
-        ts.isIdentifier(owner) &&
-        owner.text === "Symbol" &&
-        ownerSymbol === undefined &&
-        member === "iterator"
-      ) {
+      if (ts.isIdentifier(owner) && owner.text === "Symbol" && ownerSymbol === undefined && member === "iterator") {
         return knownResolution("@@Symbol.iterator");
       }
     }
@@ -1687,10 +1704,7 @@ function computedMethodText(
 }
 
 /** A known-safe computed string is not dynamic merely because it is not a replace spelling. */
-function isUnresolvedComputedMethod(
-  expression: ts.Expression | undefined,
-  resolver: ComputedMethodResolver
-): boolean {
+function isUnresolvedComputedMethod(expression: ts.Expression | undefined, resolver: ComputedMethodResolver): boolean {
   return resolver.resolve(expression).hasUnknown;
 }
 
@@ -1842,11 +1856,7 @@ function reflectiveOperationResolver(
     const declarations = symbol.declarations ?? [];
     if (declarations.length !== 1) return [];
     const declaration = declarations[0];
-    if (
-      declaration === undefined ||
-      !ts.isVariableDeclaration(declaration) ||
-      !ts.isIdentifier(declaration.name)
-    ) {
+    if (declaration === undefined || !ts.isVariableDeclaration(declaration) || !ts.isIdentifier(declaration.name)) {
       return [];
     }
     const sources: ts.Expression[] = [];
@@ -1888,10 +1898,7 @@ function reflectiveOperationResolver(
     }
     if (ts.isIdentifier(current)) {
       const runtimeSymbol = runtimeValueSymbolAt(checker, current);
-      if (
-        runtimeSymbol === undefined &&
-        (current.text === "Object" || current.text === "Reflect")
-      ) {
+      if (runtimeSymbol === undefined && (current.text === "Object" || current.text === "Reflect")) {
         return new Set<BuiltinObjectKind>([current.text]);
       }
       const symbol = runtimeSymbol ?? checker.getSymbolAtLocation(current);
@@ -1903,13 +1910,8 @@ function reflectiveOperationResolver(
       const owner = unwrapStaticExpression(current.expression);
       const ownerSymbol = ts.isIdentifier(owner) ? runtimeValueSymbolAt(checker, owner) : undefined;
       const ownerHasRuntimeBinding =
-        ownerSymbol !== undefined ||
-        (ts.isIdentifier(owner) && hasTopLevelLexicalValueBinding(sourceFile, owner.text));
-      if (
-        !ts.isIdentifier(owner) ||
-        owner.text !== "globalThis" ||
-        ownerHasRuntimeBinding
-      ) {
+        ownerSymbol !== undefined || (ts.isIdentifier(owner) && hasTopLevelLexicalValueBinding(sourceFile, owner.text));
+      if (!ts.isIdentifier(owner) || owner.text !== "globalThis" || ownerHasRuntimeBinding) {
         return new Set();
       }
       const names = accessNames(current).values;
@@ -2480,10 +2482,7 @@ function dynamicComputedMethodTaintAnalysis(
       const source = unwrapStaticExpression(edge.expression);
       if (ts.isIdentifier(source)) {
         const sourceSymbol = symbolOf(source);
-        if (
-          sourceSymbol !== null &&
-          mergeTaint(taintedReturns, edge.target, taintedReturns.get(sourceSymbol) ?? 0)
-        ) {
+        if (sourceSymbol !== null && mergeTaint(taintedReturns, edge.target, taintedReturns.get(sourceSymbol) ?? 0)) {
           changed = true;
         }
       }
@@ -2527,10 +2526,7 @@ function isTaintedDynamicMethodInvocation(
   const callee = unwrapStaticExpression(node.expression);
   if (ts.isElementAccessExpression(callee)) {
     const directMethod = computedMethodText(callee.argumentExpression, methodResolver);
-    if (
-      directMethod !== null ||
-      isUnresolvedComputedMethod(callee.argumentExpression, methodResolver)
-    ) {
+    if (directMethod !== null || isUnresolvedComputedMethod(callee.argumentExpression, methodResolver)) {
       return false;
     }
   }
@@ -2594,12 +2590,7 @@ function repositoryMutationOracleProblems(filename: string, source: string): str
   const reviewedTransformCounts = new Map<ReviewedOrdinaryTransformId, number>();
   const methodResolver = computedMethodResolver(checker);
   const operationResolver = reflectiveOperationResolver(sourceFile, checker, methodResolver);
-  const dynamicMethodTaint = dynamicComputedMethodTaintAnalysis(
-    sourceFile,
-    checker,
-    methodResolver,
-    operationResolver
-  );
+  const dynamicMethodTaint = dynamicComputedMethodTaintAnalysis(sourceFile, checker, methodResolver, operationResolver);
 
   function location(node: ts.Node): string {
     const position = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile));
@@ -8282,15 +8273,12 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       'Object.getOwnPropertyDescriptor.call(Object, source, "replace")?.value;',
       'Reflect.apply(Reflect.get, Reflect, [source, "replace"]);'
     ]) {
-      expect(
-        repositoryMutationOracleProblems(mutationInventoryFile, reflectiveRawAccess),
-        reflectiveRawAccess
-      ).toEqual([
-        expect.stringMatching(/reflectively acquires raw \.(?:replace|replaceAll)/)
-      ]);
+      expect(repositoryMutationOracleProblems(mutationInventoryFile, reflectiveRawAccess), reflectiveRawAccess).toEqual(
+        [expect.stringMatching(/reflectively acquires raw \.(?:replace|replaceAll)/)]
+      );
     }
     for (const reviewedReflectiveAccess of [
-      'const value = Reflect.get(target, property, target);',
+      "const value = Reflect.get(target, property, target);",
       'const value = Reflect.get(source, "includes");',
       'const Reflect = { get: () => "safe" }; Reflect.get(source, "replace");',
       'import Reflect = require("safe"); Reflect.get(source, "replace");',
@@ -8310,10 +8298,10 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       'const getter = (0, () => "safe"); getter(source, "replace");',
       'const getter = undefined || (() => "safe"); getter(source, "replace");',
       'const getter = (0, { get: () => "safe" }).get; getter(source, "replace");',
-      'const getter = Reflect.get; const value = getter(source, property); void value;',
-      'const descriptor = Object.getOwnPropertyDescriptor(source, property); void descriptor;',
-      'const iterator = Array.prototype[Symbol.iterator]; Reflect.apply(iterator, [], []);',
-      'declare const Symbol: SymbolConstructor; const iterator = source[Symbol.iterator]; Reflect.apply(iterator, source, []);',
+      "const getter = Reflect.get; const value = getter(source, property); void value;",
+      "const descriptor = Object.getOwnPropertyDescriptor(source, property); void descriptor;",
+      "const iterator = Array.prototype[Symbol.iterator]; Reflect.apply(iterator, [], []);",
+      "declare const Symbol: SymbolConstructor; const iterator = source[Symbol.iterator]; Reflect.apply(iterator, source, []);",
       'Reflect.get.call(Reflect, source, "includes");',
       'Reflect.get.apply(Reflect, [source, "includes"]);',
       'Reflect["get"]["apply"](Reflect, [source, "includes"]);',
@@ -8347,7 +8335,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       'Reflect.apply(Reflect.get, Reflect, [source, property])("old", "new");',
       'const getter = Reflect.get.bind(Reflect); getter(source, property)("old", "new");',
       'let getter; ({ get: getter } = Reflect); getter(source, property)("old", "new");',
-      'const Symbol = { iterator: getMethod() }; const rawMutation = source[Symbol.iterator]; Reflect.apply(rawMutation, source, []);'
+      "const Symbol = { iterator: getMethod() }; const rawMutation = source[Symbol.iterator]; Reflect.apply(rawMutation, source, []);"
     ]) {
       expect(repositoryMutationOracleProblems(mutationInventoryFile, dynamicReflectiveInvocation)).toEqual([
         expect.stringMatching(/invokes a value extracted from an unresolved dynamic computed method/)
@@ -8356,7 +8344,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
     expect(repositoryMutationOracleProblems(mutationInventoryFile, 'source[getMethod()]("old", "new");')).toEqual([
       expect.stringMatching(/dynamic computed method access; replace\/replaceAll cannot be excluded/)
     ]);
-    expect(repositoryMutationOracleProblems(mutationInventoryFile, 'source[getMethod()]`old`;')).toEqual([
+    expect(repositoryMutationOracleProblems(mutationInventoryFile, "source[getMethod()]`old`;")).toEqual([
       expect.stringMatching(/dynamic computed method access; replace\/replaceAll cannot be excluded/)
     ]);
     for (const knownSafeComputedCall of [
@@ -8399,8 +8387,8 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       'const { rawMutation = source[getMethod()] } = {}; rawMutation("old", "new");',
       'const key = "rawMutation"; let fn; const holder = { rawMutation: source[getMethod()] }; ({ [key]: fn } = holder); fn("old", "new");',
       'const invoke = ({ rawMutation }) => rawMutation("old", "new"); const holder = { rawMutation: source[getMethod()] }; invoke(holder);',
-      'const rawMutation = source[getMethod()]; rawMutation`old`;',
-      'const rawMutation = source[getMethod()]; const bound = rawMutation.bind(source); bound`old`;',
+      "const rawMutation = source[getMethod()]; rawMutation`old`;",
+      "const rawMutation = source[getMethod()]; const bound = rawMutation.bind(source); bound`old`;",
       'function select() { return source[getMethod()]; } select().call(source, "old", "new");',
       'const select = () => source[getMethod()]; const alias = select; alias().call(source, "old", "new");',
       'const select = function named() { return source[getMethod()]; }; const alias = select; alias().call(source, "old", "new");',
@@ -8565,10 +8553,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       ])
     );
 
-    const entrypointSource = await fs.readFile(
-      path.join(repoRoot, "tests/entrypoint-guard-invariant.test.ts"),
-      "utf8"
-    );
+    const entrypointSource = await fs.readFile(path.join(repoRoot, "tests/entrypoint-guard-invariant.test.ts"), "utf8");
     expect(repositoryMutationOracleProblems("entrypoint-guard-invariant.test.ts", entrypointSource)).toEqual([]);
     const severedEntrypointConsumer = replaceExactly(
       entrypointSource,
@@ -8581,9 +8566,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
         "      if (RAW_URL_GUARD.test(code)) offenders.push(f);"
       ].join("\n")
     );
-    expect(
-      repositoryMutationOracleProblems("entrypoint-guard-invariant.test.ts", severedEntrypointConsumer)
-    ).toEqual(
+    expect(repositoryMutationOracleProblems("entrypoint-guard-invariant.test.ts", severedEntrypointConsumer)).toEqual(
       expect.arrayContaining([
         expect.stringMatching(/unclassified raw \.replace access/),
         "entrypoint-guard-invariant.test.ts expected exactly one entrypoint block-comment stripping, found 0",

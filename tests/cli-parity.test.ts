@@ -114,11 +114,7 @@ describe("CLI parity — serve and serve-http accept the same retrieval flags (v
     expect(noPersistHelp?.[1], "shared HNSW persistence help must use its cli-help constant").toBe(
       "NO_HNSW_PERSIST_HELP"
     );
-    const inlineHelpMutation = replaceExactly(
-      helperBody,
-      "NO_HNSW_PERSIST_HELP",
-      '"inline transport-shared help"'
-    );
+    const inlineHelpMutation = replaceExactly(helperBody, "NO_HNSW_PERSIST_HELP", '"inline transport-shared help"');
     expect(
       /\.option\(\s*"--no-hnsw-persist"\s*,\s*([A-Z][A-Z0-9_]*|"[^"]*")\s*\)/.exec(inlineHelpMutation)?.[1]
     ).not.toBe("NO_HNSW_PERSIST_HELP");

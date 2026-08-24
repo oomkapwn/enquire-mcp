@@ -622,9 +622,7 @@ function replaceFinalAsciiIdentifierOrFallbackExactly(source: string, replacemen
   if (!/^[A-Za-z_$][A-Za-z0-9_$]*$/u.test(replacement)) {
     throw new Error(`final ASCII identifier replacement is invalid: ${replacement}`);
   }
-  const matches = [
-    ...source.matchAll(/(^|[^A-Za-z0-9_$])([A-Za-z_$][A-Za-z0-9_$]*)(?=[^A-Za-z0-9_$]*$)/gu)
-  ];
+  const matches = [...source.matchAll(/(^|[^A-Za-z0-9_$])([A-Za-z_$][A-Za-z0-9_$]*)(?=[^A-Za-z0-9_$]*$)/gu)];
   if (matches.length === 0) {
     const fallback = `void ${replacement};`;
     if (fallback === source) throw new Error("final ASCII identifier fallback did not change its source");

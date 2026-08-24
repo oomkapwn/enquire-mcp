@@ -167,7 +167,7 @@ function ordinaryOwnerRows(sourceFile) {
     if (filename === null || id === null) throw new Error("reviewed ordinary transform lacks filename/id");
     if (filename !== "docs-consistency.test.ts") {
       if (owner === null) throw new Error(`reviewed non-doc transform ${id} lacks owner`);
-      rows.push({ filename, id });
+      rows.push({ filename, id, owner });
     }
   }
   if (new Set(rows.map((row) => row.id)).size !== rows.length) {
@@ -241,11 +241,11 @@ function updateIdentityHashes() {
   }
 
   const ordinaryOwners = {};
-  for (const { filename, id } of ordinaryOwnerRows(parsedMeta)) {
+  for (const { filename, id, owner } of ordinaryOwnerRows(parsedMeta)) {
     const source = readFileSync(`tests/${filename}`, "utf8");
     const sourceFile = ts.createSourceFile(filename, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
-    const observed = sourceOwnerSha256(id, sourceFile, sourceFile);
-    ordinaryOwners[id] = { filename, sha256: observed };
+    const observed = sourceOwnerSha256(owner, sourceFile, sourceFile);
+    ordinaryOwners[id] = { filename, owner, sha256: observed };
     const idPattern = escapeRegex(JSON.stringify(id));
     metaSource = replaceOne(
       metaSource,

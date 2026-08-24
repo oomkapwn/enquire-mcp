@@ -2090,8 +2090,7 @@ function dynamicComputedMethodTaintAnalysis(
     if (ts.isCallExpression(current)) {
       const acquisition = reflectiveAcquisition(current, operationResolver, methodResolver);
       if (
-        acquisition !== null &&
-        acquisition.key.hasUnknown &&
+        acquisition?.key.hasUnknown &&
         !acquisition.key.values.has("replace") &&
         !acquisition.key.values.has("replaceAll")
       ) {

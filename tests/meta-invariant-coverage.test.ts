@@ -316,6 +316,16 @@ const EXPECTED_REPOSITORY_MUTATION_HELPER_IMPORTS = new Map<string, readonly str
   EXPECTED_REPOSITORY_MUTATION_HELPER_IMPORT_ENTRIES
 );
 const EXACT_MUTATION_HELPERS = new Set(["replaceExactly", "replaceAllExactly", "replaceIntegerAllExactly"]);
+const EXACT_MUTATION_HELPER_IMPLEMENTATION_FILE = "helpers/exact-source-mutation.ts";
+// release-integrity predates the shared helper and independently pins its two local
+// definitions, every direct call, and alias/shadowing failures. Keep this exception
+// exact instead of letting an open-ended "local helper" category bypass the census.
+const LOCAL_EXACT_MUTATION_HELPER_AUTHORITY_ENTRIES = [
+  ["release-integrity.test.ts", ["replaceAllExactly", "replaceExactly"]]
+] as const satisfies readonly (readonly [string, readonly string[]])[];
+const LOCAL_EXACT_MUTATION_HELPER_AUTHORITIES = new Map<string, readonly string[]>(
+  LOCAL_EXACT_MUTATION_HELPER_AUTHORITY_ENTRIES
+);
 
 /** Report repeated tuple keys before Map construction can silently last-win. */
 function duplicateStringEntryKeys(entries: readonly (readonly [string, unknown])[]): string[] {
@@ -1609,7 +1619,9 @@ function symbolHasRuntimeValueBinding(symbol: ts.Symbol): boolean {
 
 /** Find the visible runtime binding even for intrinsic-spelled identifiers such as globalThis. */
 function runtimeValueSymbolAt(checker: ts.TypeChecker, identifier: ts.Identifier): ts.Symbol | undefined {
-  const direct = checker.getSymbolAtLocation(identifier);
+  const direct = ts.isShorthandPropertyAssignment(identifier.parent)
+    ? checker.getShorthandAssignmentValueSymbol(identifier.parent)
+    : checker.getSymbolAtLocation(identifier);
   if (direct !== undefined && symbolHasRuntimeValueBinding(direct)) return direct;
   return checker
     .getSymbolsInScope(identifier, ts.SymbolFlags.Value)
@@ -2780,8 +2792,45 @@ function exactMutationHelperCallCensus(filename: string, source: string): Mutati
   return { count: records.length, sha256: sha256Text(JSON.stringify(records)) };
 }
 
+/** True when a declaration/import/export position is erased before JavaScript runtime. */
+function isErasedRuntimeNode(node: ts.Node): boolean {
+  let current: ts.Node | undefined = node;
+  while (current !== undefined && !ts.isSourceFile(current)) {
+    if (
+      ts.isInterfaceDeclaration(current) ||
+      ts.isTypeAliasDeclaration(current) ||
+      ts.isTypeParameterDeclaration(current) ||
+      ts.isTypeQueryNode(current) ||
+      ts.isPropertySignature(current) ||
+      ts.isMethodSignature(current) ||
+      (ts.isHeritageClause(current) && current.token === ts.SyntaxKind.ImplementsKeyword) ||
+      (ts.isImportSpecifier(current) && current.isTypeOnly) ||
+      (ts.isImportClause(current) && current.isTypeOnly) ||
+      (ts.isImportEqualsDeclaration(current) && current.isTypeOnly) ||
+      (ts.isExportSpecifier(current) && current.isTypeOnly) ||
+      (ts.isExportDeclaration(current) && current.isTypeOnly)
+    ) {
+      return true;
+    }
+    if (
+      ts.canHaveModifiers(current) &&
+      (ts.getModifiers(current)?.some((modifier) => modifier.kind === ts.SyntaxKind.DeclareKeyword) ||
+        ((ts.isMethodDeclaration(current) ||
+          ts.isPropertyDeclaration(current) ||
+          ts.isGetAccessorDeclaration(current) ||
+          ts.isSetAccessorDeclaration(current)) &&
+          ts.getModifiers(current)?.some((modifier) => modifier.kind === ts.SyntaxKind.AbstractKeyword)))
+    ) {
+      return true;
+    }
+    current = current.parent;
+  }
+  return false;
+}
+
 /** True only when an identifier creates a runtime binding that can shadow an imported helper. */
 function isValueBindingIdentifier(node: ts.Identifier): boolean {
+  if (isErasedRuntimeNode(node)) return false;
   const parent = node.parent;
   return (
     ((ts.isVariableDeclaration(parent) ||
@@ -2805,23 +2854,33 @@ function isValueBindingIdentifier(node: ts.Identifier): boolean {
 function importsExactMutationHelperModule(filename: string, source: string): boolean {
   const sourceFile = ts.createSourceFile(filename, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
   return sourceFile.statements.some(
-    (statement) =>
-      ts.isImportDeclaration(statement) &&
-      statement.importClause !== undefined &&
-      !statement.importClause.isTypeOnly &&
-      ts.isStringLiteral(statement.moduleSpecifier) &&
-      statement.moduleSpecifier.text === "./helpers/exact-source-mutation.js"
+    (statement) => {
+      if (
+        !ts.isImportDeclaration(statement) ||
+        !ts.isStringLiteral(statement.moduleSpecifier) ||
+        statement.moduleSpecifier.text !== "./helpers/exact-source-mutation.js"
+      ) {
+        return false;
+      }
+      const clause = statement.importClause;
+      if (clause === undefined) return true;
+      if (clause.isTypeOnly) return false;
+      if (clause.name !== undefined) return true;
+      const bindings = clause.namedBindings;
+      if (bindings === undefined || ts.isNamespaceImport(bindings)) return true;
+      return bindings.elements.length === 0 || bindings.elements.some((element) => !element.isTypeOnly);
+    }
   );
 }
 
 /** Require direct, unaliased helper imports and reject every local binding that can shadow them. */
 function exactMutationHelperBindingProblems(filename: string, source: string): string[] {
-  const expectedImports = EXPECTED_REPOSITORY_MUTATION_HELPER_IMPORTS.get(filename);
-  if (expectedImports === undefined) return [];
+  const expectedImports = EXPECTED_REPOSITORY_MUTATION_HELPER_IMPORTS.get(filename) ?? [];
 
-  const sourceFile = ts.createSourceFile(filename, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const { checker, sourceFile } = bindOracleSource(filename, source);
   const problems: string[] = [];
   const approvedImportIdentifiers = new Set<ts.Identifier>();
+  const approvedImportSymbols = new Set<ts.Symbol>();
   const actualImports: string[] = [];
   const helperImports = sourceFile.statements.filter(
     (statement): statement is ts.ImportDeclaration =>
@@ -2830,21 +2889,24 @@ function exactMutationHelperBindingProblems(filename: string, source: string): s
       statement.moduleSpecifier.text === "./helpers/exact-source-mutation.js"
   );
 
-  if (helperImports.length !== 1) {
+  if (expectedImports.length > 0 && helperImports.length !== 1) {
     problems.push(
       `${filename} expected exactly one exact-source-mutation helper import, found ${helperImports.length}`
     );
   }
-  const importClause = helperImports[0]?.importClause;
-  if (
-    importClause === undefined ||
-    importClause.isTypeOnly ||
-    importClause.name !== undefined ||
-    importClause.namedBindings === undefined ||
-    !ts.isNamedImports(importClause.namedBindings)
-  ) {
-    problems.push(`${filename} exact-source-mutation helpers must use one named import`);
-  } else {
+  const importClause = expectedImports.length > 0 ? helperImports[0]?.importClause : undefined;
+  if (expectedImports.length > 0) {
+    if (
+      importClause === undefined ||
+      importClause.isTypeOnly ||
+      importClause.name !== undefined ||
+      importClause.namedBindings === undefined ||
+      !ts.isNamedImports(importClause.namedBindings)
+    ) {
+      problems.push(`${filename} exact-source-mutation helpers must use one named import`);
+    }
+  }
+  if (importClause?.namedBindings !== undefined && ts.isNamedImports(importClause.namedBindings)) {
     for (const element of importClause.namedBindings.elements) {
       const importedName = element.propertyName?.text ?? element.name.text;
       const localName = element.name.text;
@@ -2858,6 +2920,8 @@ function exactMutationHelperBindingProblems(filename: string, source: string): s
       }
       actualImports.push(localName);
       approvedImportIdentifiers.add(element.name);
+      const symbol = runtimeValueSymbolAt(checker, element.name);
+      if (symbol !== undefined) approvedImportSymbols.add(symbol);
     }
   }
 
@@ -2866,6 +2930,10 @@ function exactMutationHelperBindingProblems(filename: string, source: string): s
   if (actual.join("\0") !== expected.join("\0")) {
     problems.push(`${filename} expected exact helper imports ${expected.join(", ")}, found ${actual.join(", ")}`);
   }
+  const resolvesToApprovedImport = (identifier: ts.Identifier): boolean => {
+    const symbol = runtimeValueSymbolAt(checker, identifier);
+    return symbol !== undefined && approvedImportSymbols.has(symbol);
+  };
 
   function visit(node: ts.Node): void {
     if (
@@ -2879,9 +2947,187 @@ function exactMutationHelperBindingProblems(filename: string, source: string): s
         `${filename}:${position.line + 1}:${position.character + 1} shadows exact mutation helper ${node.text}`
       );
     }
+    if (
+      ts.isIdentifier(node) &&
+      !approvedImportIdentifiers.has(node) &&
+      !isErasedRuntimeNode(node) &&
+      resolvesToApprovedImport(node) &&
+      (!ts.isCallExpression(node.parent) || node.parent.expression !== node)
+    ) {
+      const position = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile));
+      problems.push(
+        `${filename}:${position.line + 1}:${position.character + 1} uses exact mutation helper ${node.text} outside a direct censused call`
+      );
+    }
     ts.forEachChild(node, visit);
   }
   visit(sourceFile);
+  return problems;
+}
+
+/** Reject statically helper-spelled member/property surfaces that evade Identifier-call censuses. */
+function exactMutationHelperMemberSurfaceProblems(filename: string, source: string): string[] {
+  const { checker, sourceFile } = bindOracleSource(filename, source);
+  const methodResolver = computedMethodResolver(checker);
+  const problems: string[] = [];
+  const report = (helper: string, node: ts.Node): void => {
+    const position = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile));
+    problems.push(
+      `${filename}:${position.line + 1}:${position.character + 1} exposes exact mutation helper ${helper} through a member/property surface`
+    );
+  };
+  const helperNamesFromValues = (values: ReadonlySet<string>): string[] =>
+    [...values].filter((value) => EXACT_MUTATION_HELPERS.has(value)).sort();
+  const helperNamesFromProperty = (name: ts.PropertyName): string[] => {
+    if (ts.isComputedPropertyName(name)) {
+      return helperNamesFromValues(methodResolver.resolve(name.expression).values);
+    }
+    const text = staticPropertyText(name);
+    return text !== null && EXACT_MUTATION_HELPERS.has(text) ? [text] : [];
+  };
+  const reportAll = (helpers: readonly string[], node: ts.Node): void => {
+    for (const helper of helpers) report(helper, node);
+  };
+
+  function visit(node: ts.Node): void {
+    if (
+      (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) &&
+      !isErasedRuntimeNode(node) &&
+      !isTypeOnlyAccess(node)
+    ) {
+      const helpers = ts.isPropertyAccessExpression(node)
+        ? helperNamesFromProperty(node.name)
+        : helperNamesFromValues(methodResolver.resolve(node.argumentExpression).values);
+      reportAll(helpers, node);
+    } else if (
+      ts.isBindingElement(node) &&
+      node.propertyName !== undefined &&
+      !isErasedRuntimeNode(node) &&
+      !isTypeOnlyAccess(node)
+    ) {
+      reportAll(helperNamesFromProperty(node.propertyName), node.propertyName);
+    } else if (
+      (ts.isPropertyAssignment(node) ||
+        ts.isShorthandPropertyAssignment(node) ||
+        ts.isMethodDeclaration(node) ||
+        ts.isGetAccessorDeclaration(node) ||
+        ts.isSetAccessorDeclaration(node) ||
+        ts.isPropertyDeclaration(node)) &&
+      !isErasedRuntimeNode(node) &&
+      !isTypeOnlyAccess(node)
+    ) {
+      reportAll(helperNamesFromProperty(node.name), node.name);
+    } else if (
+      ts.isImportSpecifier(node) &&
+      node.propertyName !== undefined &&
+      !isErasedRuntimeNode(node)
+    ) {
+      reportAll(helperNamesFromProperty(node.propertyName), node.propertyName);
+    } else if (ts.isExportSpecifier(node) && !isErasedRuntimeNode(node)) {
+      const names = [node.propertyName, node.name].filter(
+        (name): name is ts.Identifier | ts.StringLiteral => name !== undefined
+      );
+      const seen = new Set<string>();
+      for (const name of names) {
+        for (const helper of helperNamesFromProperty(name)) {
+          if (seen.has(helper)) continue;
+          seen.add(helper);
+          report(helper, name);
+        }
+      }
+    } else if (ts.isNamespaceExport(node) && !isErasedRuntimeNode(node)) {
+      const helpers = helperNamesFromProperty(node.name);
+      reportAll(helpers, node.name);
+    }
+    ts.forEachChild(node, visit);
+  }
+
+  visit(sourceFile);
+  return problems;
+}
+
+/** Keep one historical local-helper authority closed to its two self-audited Identifier forms. */
+function localExactMutationHelperAuthorityProblems(
+  filename: string,
+  source: string,
+  allowedHelpers: readonly string[]
+): string[] {
+  const sourceFile = ts.createSourceFile(filename, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const allowed = new Set(allowedHelpers);
+  const problems: string[] = [];
+  if (importsExactMutationHelperModule(filename, source)) {
+    problems.push(`${filename} local exact-mutation authority must not import the shared helper module`);
+  }
+
+  function visit(node: ts.Node): void {
+    if (ts.isIdentifier(node) && EXACT_MUTATION_HELPERS.has(node.text) && isValueBindingIdentifier(node)) {
+      const reviewedDefinition =
+        allowed.has(node.text) &&
+        ts.isFunctionDeclaration(node.parent) &&
+        node.parent.name === node &&
+        node.parent.parent === sourceFile;
+      if (!reviewedDefinition) {
+        const position = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile));
+        problems.push(
+          `${filename}:${position.line + 1}:${position.character + 1} binds unreviewed local exact mutation helper ${node.text}`
+        );
+      }
+    }
+    if (
+      ts.isCallExpression(node) &&
+      ts.isIdentifier(node.expression) &&
+      EXACT_MUTATION_HELPERS.has(node.expression.text) &&
+      !allowed.has(node.expression.text)
+    ) {
+      const position = sourceFile.getLineAndCharacterOfPosition(node.expression.getStart(sourceFile));
+      problems.push(
+        `${filename}:${position.line + 1}:${position.character + 1} calls unreviewed local exact mutation helper ${node.expression.text}`
+      );
+    }
+    ts.forEachChild(node, visit);
+  }
+
+  visit(sourceFile);
+  return problems;
+}
+
+/** Bind every helper-spelled runtime surface to either the shared helper census or one exact local authority. */
+function repositoryMutationHelperSurfaceProblems(filename: string, source: string): string[] {
+  if (filename === EXACT_MUTATION_HELPER_IMPLEMENTATION_FILE) return [];
+
+  const problems = exactMutationHelperMemberSurfaceProblems(filename, source);
+  const localAuthority = LOCAL_EXACT_MUTATION_HELPER_AUTHORITIES.get(filename);
+  if (localAuthority !== undefined) {
+    problems.push(...localExactMutationHelperAuthorityProblems(filename, source, localAuthority));
+    return problems;
+  }
+  if (
+    EXPECTED_REPOSITORY_MUTATION_HELPER_IMPORTS.get(filename) === undefined &&
+    importsExactMutationHelperModule(filename, source)
+  ) {
+    problems.push(`${filename} imports exact mutation helpers but is absent from their binding census`);
+  }
+  problems.push(...exactMutationHelperBindingProblems(filename, source));
+  const expectedCalls = EXPECTED_REPOSITORY_MUTATION_HELPER_CALLS.get(filename);
+  const actualCalls = exactMutationHelperCallCensus(filename, source);
+  if (expectedCalls === undefined) {
+    if (actualCalls.count !== 0) {
+      problems.push(
+        `${filename} has ${actualCalls.count} direct exact mutation-helper call(s) but is absent from their call census`
+      );
+    }
+  } else {
+    if (actualCalls.count !== expectedCalls.count) {
+      problems.push(
+        `${filename} exact mutation-helper count drifted; expected ${expectedCalls.count}, found ${actualCalls.count}`
+      );
+    }
+    if (actualCalls.sha256 !== expectedCalls.sha256) {
+      problems.push(
+        `${filename} exact mutation-helper identity drifted; expected ${expectedCalls.sha256}, found ${actualCalls.sha256}`
+      );
+    }
+  }
   return problems;
 }
 
@@ -8175,6 +8421,23 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       'import { replaceExactly } from "./helpers/exact-source-mutation.js";\n' +
       'replaceExactly("alpha", "alpha", "omega");';
     expect(exactMutationHelperBindingProblems("abs-path-leak-invariant.test.ts", exactHelperImport)).toEqual([]);
+    for (const escapedHelperReference of [
+      `${exactHelperImport}\nconst mutate = replaceExactly; void mutate;`,
+      'import { replaceExactly } from "./helpers/exact-source-mutation.js";\n' +
+        '(replaceExactly)("alpha", "alpha", "omega");',
+      'import { replaceExactly } from "./helpers/exact-source-mutation.js";\n' +
+        'replaceExactly.call(undefined, "alpha", "alpha", "omega");'
+    ]) {
+      expect(
+        exactMutationHelperBindingProblems("abs-path-leak-invariant.test.ts", escapedHelperReference)
+      ).toEqual(
+        expect.arrayContaining([expect.stringMatching(/uses exact mutation helper replaceExactly outside a direct censused call/)])
+      );
+    }
+    const erasedHelperReference =
+      'import { replaceExactly } from "./helpers/exact-source-mutation.js";\n' +
+      "type ExactMutation = typeof replaceExactly;";
+    expect(exactMutationHelperBindingProblems("abs-path-leak-invariant.test.ts", erasedHelperReference)).toEqual([]);
     const shadowedHelper =
       `${exactHelperImport}\n{ ` +
       'const replaceExactly = (source: string): string => source; replaceExactly("alpha"); }';
@@ -8192,6 +8455,138 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
         expect.stringMatching(/expected exact helper imports replaceExactly, found/)
       ])
     );
+
+    const unmappedHelperFilename = "cache-isolation-invariant.test.ts";
+    const unmappedWeakLocalHelper =
+      'function replaceExactly(source: string): string { return source.slice(0); }\nreplaceExactly("alpha");';
+    expect(repositoryMutationHelperSurfaceProblems(unmappedHelperFilename, unmappedWeakLocalHelper)).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/shadows exact mutation helper replaceExactly/),
+        expect.stringMatching(/1 direct exact mutation-helper call\(s\).*absent from their call census/)
+      ])
+    );
+    expect(
+      repositoryMutationHelperSurfaceProblems(unmappedHelperFilename, 'replaceExactly("alpha", "alpha", "omega");')
+    ).toEqual([
+      expect.stringMatching(/1 direct exact mutation-helper call\(s\).*absent from their call census/)
+    ]);
+    expect(
+      repositoryMutationHelperSurfaceProblems(
+        unmappedHelperFilename,
+        'const documentation = "replaceExactly()"; void documentation;'
+      )
+    ).toEqual([]);
+    expect(
+      repositoryMutationHelperSurfaceProblems(
+        unmappedHelperFilename,
+        "interface MutationShape { replaceExactly(source: string): string; readonly replaceAllExactly: string }"
+      )
+    ).toEqual([]);
+    const unmappedMemberHelper =
+      'const weak = { ["replace" + "Exactly"]: (source: string): string => source.slice(0) };\n' +
+      'void weak["replaceExactly"]("alpha");';
+    expect(repositoryMutationHelperSurfaceProblems(unmappedHelperFilename, unmappedMemberHelper)).toEqual(
+      expect.arrayContaining([expect.stringMatching(/exposes exact mutation helper replaceExactly/)])
+    );
+    const constKeyMemberHelper =
+      'const helperKey = "replaceExactly";\n' +
+      'const weak = { [helperKey]: (source: string): string => source.slice(0) };\n' +
+      'void weak[helperKey]("alpha");';
+    expect(repositoryMutationHelperSurfaceProblems(unmappedHelperFilename, constKeyMemberHelper)).toEqual(
+      expect.arrayContaining([expect.stringMatching(/exposes exact mutation helper replaceExactly/)])
+    );
+    const safeConstKeyMember =
+      'const helperKey = "documentMutation";\n' +
+      'const ordinary = { [helperKey]: (source: string): string => source };\n' +
+      'void ordinary[helperKey]("alpha");';
+    expect(repositoryMutationHelperSurfaceProblems(unmappedHelperFilename, safeConstKeyMember)).toEqual([]);
+    const unresolvedComposedHelperKey =
+      'const weak = { replaceExactly: (source: string): string => source.slice(0) };\n' +
+      'void weak[(0, "replaceExactly")]("alpha");';
+    expect(repositoryMutationOracleProblems(unmappedHelperFilename, unresolvedComposedHelperKey)).toEqual(
+      expect.arrayContaining([expect.stringMatching(/unclassified dynamic computed method access/)]),
+    );
+    const helperExportLabel =
+      'const safe = (source: string): string => source.slice(0); export { safe as replaceExactly };';
+    expect(repositoryMutationHelperSurfaceProblems(unmappedHelperFilename, helperExportLabel)).toEqual(
+      expect.arrayContaining([expect.stringMatching(/exposes exact mutation helper replaceExactly/)])
+    );
+    const helperReExport = 'export { replaceExactly as hidden } from "./weak.js";';
+    expect(repositoryMutationHelperSurfaceProblems(unmappedHelperFilename, helperReExport)).toEqual(
+      expect.arrayContaining([expect.stringMatching(/exposes exact mutation helper replaceExactly/)])
+    );
+    const helperNamespaceExport = 'export * as replaceExactly from "./weak.js";';
+    expect(repositoryMutationHelperSurfaceProblems(unmappedHelperFilename, helperNamespaceExport)).toEqual(
+      expect.arrayContaining([expect.stringMatching(/exposes exact mutation helper replaceExactly/)])
+    );
+    const erasedHelperSurfaces = [
+      'import type { replaceExactly as ExactMutation } from "./types.js";',
+      'import { type replaceAllExactly as AllMutation } from "./helpers/exact-source-mutation.js";',
+      "declare const HelperKeys: { readonly replaceExactly: unique symbol };",
+      "interface ComputedMutationShape { readonly [HelperKeys.replaceExactly]: string }",
+      "declare namespace MutationTypes { interface replaceExactly {} }",
+      "class ImplementsMutationShape implements MutationTypes.replaceExactly {}",
+      "declare const ordinary: { readonly replaceExactly: unknown };",
+      "type MutationLookup = typeof ordinary.replaceExactly;",
+      "declare class MutationShape { replaceExactly(source: string): string }",
+      "abstract class AbstractShape { abstract replaceExactly(source: string): string }",
+      "declare function replaceAllExactly(source: string): string;",
+      "void 0;"
+    ].join("\n");
+    expect(repositoryMutationHelperSurfaceProblems(unmappedHelperFilename, erasedHelperSurfaces)).toEqual([]);
+    const concreteHelperInAbstractClass =
+      "abstract class WeakMutation { replaceExactly(source: string): string { return source.slice(0); } }";
+    expect(repositoryMutationHelperSurfaceProblems(unmappedHelperFilename, concreteHelperInAbstractClass)).toEqual(
+      expect.arrayContaining([expect.stringMatching(/exposes exact mutation helper replaceExactly/)])
+    );
+    const runtimeHelperExtends =
+      "declare const MutationBase: { replaceExactly: new () => object }; class WeakMutation extends MutationBase.replaceExactly {}";
+    expect(repositoryMutationHelperSurfaceProblems(unmappedHelperFilename, runtimeHelperExtends)).toEqual(
+      expect.arrayContaining([expect.stringMatching(/exposes exact mutation helper replaceExactly/)])
+    );
+    const localAuthorityFilename = "release-integrity.test.ts";
+    const unexpectedLocalAuthorityHelper =
+      'function replaceIntegerAllExactly(source: string): string { return source.slice(0); }\n' +
+      'void replaceIntegerAllExactly("alpha");';
+    expect(
+      repositoryMutationHelperSurfaceProblems(localAuthorityFilename, unexpectedLocalAuthorityHelper)
+    ).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/binds unreviewed local exact mutation helper replaceIntegerAllExactly/),
+        expect.stringMatching(/calls unreviewed local exact mutation helper replaceIntegerAllExactly/)
+      ])
+    );
+    expect(
+      repositoryMutationHelperSurfaceProblems(
+        localAuthorityFilename,
+        'const weak = { replaceExactly: (source: string): string => source.slice(0) }; weak["replaceExactly"]("a");'
+      )
+    ).toEqual(expect.arrayContaining([expect.stringMatching(/exposes exact mutation helper replaceExactly/)]));
+    expect(
+      repositoryMutationHelperSurfaceProblems(
+        localAuthorityFilename,
+        'import { replaceExactly as hidden } from "./helpers/exact-source-mutation.js"; void hidden;'
+      )
+    ).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/must not import the shared helper module/),
+        expect.stringMatching(/exposes exact mutation helper replaceExactly/)
+      ])
+    );
+    for (const hiddenSharedImport of [
+      'import "./helpers/exact-source-mutation.js";',
+      'import {} from "./helpers/exact-source-mutation.js";'
+    ]) {
+      expect(repositoryMutationHelperSurfaceProblems(localAuthorityFilename, hiddenSharedImport)).toContain(
+        "release-integrity.test.ts local exact-mutation authority must not import the shared helper module"
+      );
+    }
+    expect(
+      repositoryMutationHelperSurfaceProblems(
+        localAuthorityFilename,
+        'import type {} from "./helpers/exact-source-mutation.js";'
+      )
+    ).toEqual([]);
 
     const mutationInventoryFile = "abs-path-leak-invariant.test.ts";
     expect(
@@ -8769,12 +9164,32 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
 
     expect(duplicateStringEntryKeys(EXPECTED_REPOSITORY_MUTATION_HELPER_CALL_ENTRIES)).toEqual([]);
     expect(duplicateStringEntryKeys(EXPECTED_REPOSITORY_MUTATION_HELPER_IMPORT_ENTRIES)).toEqual([]);
+    expect(duplicateStringEntryKeys(LOCAL_EXACT_MUTATION_HELPER_AUTHORITY_ENTRIES)).toEqual([]);
     expect(duplicateStringEntryKeys(EXPECTED_REVIEWED_ORDINARY_OWNER_SHA256_ENTRIES)).toEqual([]);
     expect([...EXPECTED_REPOSITORY_MUTATION_HELPER_CALLS.keys()].sort()).toEqual(
       [...EXPECTED_REPOSITORY_MUTATION_HELPER_IMPORTS.keys()].sort()
     );
     const rawMutationInventorySet = new Set<string>(RAW_REPLACE_INVENTORY_FILES);
     expect(entryKeysOutside(EXPECTED_REPOSITORY_MUTATION_HELPER_CALL_ENTRIES, rawMutationInventorySet)).toEqual([]);
+    expect([...LOCAL_EXACT_MUTATION_HELPER_AUTHORITIES]).toEqual([
+      ["release-integrity.test.ts", ["replaceAllExactly", "replaceExactly"]]
+    ]);
+    expect(
+      [...LOCAL_EXACT_MUTATION_HELPER_AUTHORITIES.keys()].filter(
+        (filename) => !rawMutationInventorySet.has(filename)
+      )
+    ).toEqual([]);
+    expect(
+      EXPECTED_REPOSITORY_MUTATION_HELPER_IMPORTS.has(EXACT_MUTATION_HELPER_IMPLEMENTATION_FILE) ||
+        EXPECTED_REPOSITORY_MUTATION_HELPER_CALLS.has(EXACT_MUTATION_HELPER_IMPLEMENTATION_FILE)
+    ).toBe(false);
+    expect(
+      [...LOCAL_EXACT_MUTATION_HELPER_AUTHORITIES.keys()].filter(
+        (filename) =>
+          EXPECTED_REPOSITORY_MUTATION_HELPER_IMPORTS.has(filename) ||
+          EXPECTED_REPOSITORY_MUTATION_HELPER_CALLS.has(filename)
+      )
+    ).toEqual([]);
     expect(ownerlessReviewedTransformIds(REVIEWED_ORDINARY_TRANSFORMS)).toEqual([]);
     expect([...EXPECTED_REVIEWED_ORDINARY_OWNER_SHA256.keys()].sort()).toEqual(
       REVIEWED_ORDINARY_TRANSFORMS.map((reviewed) => reviewed.id).sort()
@@ -8784,14 +9199,8 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       const problems = repositoryMutationOracleProblems(filename, source);
       expect(problems, problems.join("\n")).toEqual([]);
       const expectedHelperCalls = EXPECTED_REPOSITORY_MUTATION_HELPER_CALLS.get(filename);
-      const expectedHelperImports = EXPECTED_REPOSITORY_MUTATION_HELPER_IMPORTS.get(filename);
-      if (importsExactMutationHelperModule(filename, source) && expectedHelperImports === undefined) {
-        throw new Error(`${filename} imports exact mutation helpers but is absent from their binding census`);
-      }
-      if (expectedHelperImports !== undefined) {
-        const bindingProblems = exactMutationHelperBindingProblems(filename, source);
-        expect(bindingProblems, bindingProblems.join("\n")).toEqual([]);
-      }
+      const helperSurfaceProblems = repositoryMutationHelperSurfaceProblems(filename, source);
+      expect(helperSurfaceProblems, helperSurfaceProblems.join("\n")).toEqual([]);
       if (expectedHelperCalls !== undefined) {
         if (filename === "abs-path-leak-invariant.test.ts") {
           for (const requiredCall of ABS_PATH_SHARED_WRITE_DELEGATE_MUTATIONS) {
@@ -8809,14 +9218,6 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
             ).toBe(1);
           }
         }
-        const actualHelperCalls = exactMutationHelperCallCensus(filename, source);
-        expect(actualHelperCalls.count, `${filename} exact mutation-helper count drifted`).toBe(
-          expectedHelperCalls.count
-        );
-        expect(
-          actualHelperCalls.sha256,
-          `${filename} exact mutation-helper identity drifted; observed ${actualHelperCalls.sha256}`
-        ).toBe(expectedHelperCalls.sha256);
       }
     }
   });

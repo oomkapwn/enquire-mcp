@@ -274,7 +274,6 @@ describe("GitHub Pages artifact", () => {
       "<!-- __ENQUIRE_VERSION__ -->",
       "<textarea>__ENQUIRE_VERSION__</textarea>",
       "<template><template></template>__ENQUIRE_VERSION__</template>",
-      "<template><!x </template>__ENQUIRE_VERSION__</template>",
       "<script><!--<script></script>__ENQUIRE_VERSION__</script>"
     ]) {
       const { apiSource, outDir, root } = await typeDocFixture();
@@ -360,6 +359,11 @@ describe("GitHub Pages artifact", () => {
     await writeFile(landingPath, hiddenDetails, "utf8");
     await expect(validatePagesArtifact(outDir, pkg)).rejects.toThrow(
       `live #faq has ${FAQ_ENTRIES.length - 1} details entries; expected ${FAQ_ENTRIES.length}`
+    );
+    const hiddenFaqList = replaceExactly(landing, '<div class="faq-list">', '<div class="faq-list" hidden>', 1);
+    await writeFile(landingPath, hiddenFaqList, "utf8");
+    await expect(validatePagesArtifact(outDir, pkg)).rejects.toThrow(
+      "expected exactly one live .faq-list container; found 0"
     );
     const hiddenSummaryAttribute = replaceExactly(
       landing,

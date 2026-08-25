@@ -1,11 +1,18 @@
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import ts from "typescript";
+import {
+  ciWorkflowReceiptDigest,
+  EXPECTED_VITEST_BOOTSTRAP_FILES,
+  inspectRepositoryVitestBootstrap,
+  VITEST_BOOTSTRAP_MANIFEST
+} from "./lib/oia-vitest-bootstrap.mjs";
 
 const META_PATH = "tests/meta-invariant-coverage.test.ts";
 const RELEASE_AUDIT_PATH = "tests/release-mutation-identity-audit.ts";
 const RELEASE_INTEGRITY_PATH = "tests/release-integrity.test.ts";
 const TRANSITION_FIXTURE_PATH = "tests/fixtures/release-mutation-transition.v3.json";
+const CI_WORKFLOW_PATH = ".github/workflows/ci.yml";
 const EXACT_MUTATION_HELPERS = new Set([
   "replaceExactly",
   "replaceAllExactly",
@@ -280,6 +287,31 @@ function updateMetaCount() {
   process.stdout.write(`${JSON.stringify({ metaCallCount: observed.count })}\n`);
 }
 
+function updateVitestBootstrapReceipt() {
+  const ciSource = readFileSync(CI_WORKFLOW_PATH, "utf8");
+  const manifestSource = `${EXPECTED_VITEST_BOOTSTRAP_FILES.map((filename) => {
+    const digest =
+      filename === CI_WORKFLOW_PATH
+        ? ciWorkflowReceiptDigest(ciSource)
+        : sha256(readFileSync(filename));
+    return `${digest}  ${filename}`;
+  }).join("\n")}\n`;
+  writeFileSync(VITEST_BOOTSTRAP_MANIFEST, manifestSource);
+  const manifestDigest = sha256(manifestSource);
+  const updatedCi = replaceOne(
+    ciSource,
+    /^( {10}expected_manifest_sha=)[0-9a-f]{64}$/gmu,
+    (_match, prefix) => `${prefix}${manifestDigest}`,
+    "Vitest bootstrap receipt carrier"
+  );
+  writeFileSync(CI_WORKFLOW_PATH, updatedCi);
+  const findings = inspectRepositoryVitestBootstrap(process.cwd());
+  if (findings.length > 0) {
+    throw new Error(`refreshed Vitest bootstrap receipt is invalid:\n${JSON.stringify(findings, null, 2)}`);
+  }
+  process.stdout.write(`${JSON.stringify({ manifestDigest })}\n`);
+}
+
 function updateReleasePreFixture() {
   const releaseSha = sha256(readFileSync(RELEASE_INTEGRITY_PATH));
   const auditSource = replaceOne(
@@ -381,7 +413,8 @@ function updateIdentityHashes() {
 
 const mode = process.argv[2];
 if (mode === "count") updateMetaCount();
+else if (mode === "bootstrap") updateVitestBootstrapReceipt();
 else if (mode === "release-pre") updateReleasePreFixture();
 else if (mode === "release-post") updateReleasePostFixture();
 else if (mode === "hashes") updateIdentityHashes();
-else throw new Error("usage: capture-raw-mutation-identities.mjs count|release-pre|release-post|hashes");
+else throw new Error("usage: capture-raw-mutation-identities.mjs bootstrap|count|release-pre|release-post|hashes");

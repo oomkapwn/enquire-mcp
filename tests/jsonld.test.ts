@@ -153,7 +153,7 @@ describe("injectJsonLdIntoHtml", () => {
   it("injects exactly one real JSON-LD script when the MIME type appears only in text or comments", () => {
     const source = `<!doctype html><html><head>
 <!-- example only: <script type="application/ld+json">{}</script> -->
-<!-- outer <!-- <script type="application/ld+json">{"hidden":true}</script> --> outer -->
+<!-- outer <script type="application/ld+json">{"hidden":true}</script> outer -->
 <meta data-example="<script type='application/ld+json'>{}</script>">
 <script data-note='type="application/ld+json" data-enquire-jsonld="graph-v1"'>{"ignored":true}</script>
 <script>const mimeExample = "application/ld+json";</script>
@@ -366,6 +366,7 @@ application/ld+json
       "<html><head><body></head></body></html>",
       "<html><head><main></main></head><body></body></html>",
       "<html><head>body text</head><body></body></html>",
+      "<html><head><!-- outer <!-- hidden --> active tail --></head><body></body></html>",
       "<html><head></head><body></body><body></body></html>"
     ]) {
       expect(() => injectJsonLdIntoHtml(malformedHead, pkg), malformedHead).toThrow(

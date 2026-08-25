@@ -68,6 +68,8 @@ jobs:
             tests/workflow-privilege-invariant.test.ts
       - name: Regenerate the synchronized social preview
         run: npm run render:preview
+      - name: Refresh the trusted Vitest bootstrap receipt
+        run: node scripts/capture-raw-mutation-identities.mjs bootstrap
       - name: Refresh the release-mutation identity chain
         run: |
           node scripts/capture-raw-mutation-identities.mjs release-pre
@@ -130,6 +132,8 @@ jobs:
           retention-days: 1
           path: |
             ${{ runner.temp }}/raw-mutation-identities.json
+            .github/trusted-vitest-bootstrap.sha256
+            .github/workflows/ci.yml
             AGENTS.md
             CLAUDE.md
             CHANGELOG.md

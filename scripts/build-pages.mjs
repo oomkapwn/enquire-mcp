@@ -199,6 +199,13 @@ function tagAttributeValues(node, name) {
     : [];
 }
 
+/** @param {Record<string, any>} node */
+function tagClassTokens(node) {
+  return tagAttributeValues(node, "class").flatMap((value) =>
+    typeof value === "string" ? value.split(/[\t\n\f\r ]+/).filter(Boolean) : []
+  );
+}
+
 /** @param {Array<Record<string, any>>} nodes @param {number} startIndex */
 function matchingEndIndex(nodes, startIndex) {
   const start = nodes[startIndex];
@@ -321,16 +328,36 @@ function liveFaqProblems(html) {
   const faqStart = faqStarts[0]?.index ?? -1;
   const faqEnd = matchingEndIndex(nodes, faqStart);
   if (faqEnd < 0) return ["live #faq section is not closed"];
+  const allFaqLists = nodes
+    .map((node, index) => ({ node, index }))
+    .filter(({ node }) => node.kind === "startTag" && tagClassTokens(node).includes("faq-list"));
+  const faqLists = allFaqLists.filter(({ node, index }) => {
+    const classes = tagAttributeValues(node, "class");
+    return (
+      node.name === "div" &&
+      !node.malformed &&
+      index > faqStart &&
+      index < faqEnd &&
+      classes.length === 1 &&
+      tagAttributeValues(node, "hidden").length === 0
+    );
+  });
+  if (allFaqLists.length !== 1 || faqLists.length !== 1) {
+    return [`expected exactly one live .faq-list container; found ${faqLists.length}`];
+  }
+  const faqListStart = faqLists[0]?.index ?? -1;
+  const faqListEnd = matchingEndIndex(nodes, faqListStart);
+  if (faqListEnd < 0 || faqListEnd > faqEnd) return ["live .faq-list container is not closed inside #faq"];
   const details = nodes
     .map((node, index) => ({ node, index }))
     .filter(
       ({ node, index }) =>
-        index > faqStart &&
-        index < faqEnd &&
+        index > faqListStart &&
+        index < faqListEnd &&
         node.kind === "startTag" &&
         node.name === "details" &&
         tagAttributeValues(node, "hidden").length === 0 &&
-        isDirectElementChild(nodes, faqStart, faqEnd, index)
+        isDirectElementChild(nodes, faqListStart, faqListEnd, index)
     );
   if (details.length !== FAQ_ENTRIES.length) {
     return [`live #faq has ${details.length} details entries; expected ${FAQ_ENTRIES.length}`];

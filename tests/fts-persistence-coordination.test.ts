@@ -15,6 +15,7 @@ import {
   PersistenceLeaseConflictError,
   recoverPersistenceLease
 } from "../src/persistence-lease.js";
+import { replaceExactly } from "./helpers/exact-source-mutation.js";
 
 const childFixture = path.resolve(__dirname, "fixtures", "fts-persistence-child.mjs");
 const roots: string[] = [];
@@ -133,7 +134,7 @@ afterEach(async () => {
 });
 
 describe("FtsIndex cross-process persistence coordination", () => {
-  it("pins every CLI FTS owner to awaited lifetime release with a live mutation control", async () => {
+  it("NEGATIVE: pins every CLI FTS owner to awaited lifetime release with a live mutation control", async () => {
     const cliSource = await fs.readFile(path.resolve("src/cli.ts"), "utf8");
     const lifecycleProblems = (source: string): string[] => {
       const awaited = source.match(/\bawait (?:ftsIndex|idx)\.closeAndRelease\(\);/gu) ?? [];
@@ -144,7 +145,9 @@ describe("FtsIndex cross-process persistence coordination", () => {
     };
     expect(lifecycleProblems(cliSource)).toEqual([]);
     expect(
-      lifecycleProblems(cliSource.replace("await ftsIndex.closeAndRelease();", "void ftsIndex.closeAndRelease();"))
+      lifecycleProblems(
+        replaceExactly(cliSource, "await ftsIndex.closeAndRelease();", "void ftsIndex.closeAndRelease();", 3)
+      )
     ).toContain("expected 5 awaited CLI FTS releases, found 4");
   });
 

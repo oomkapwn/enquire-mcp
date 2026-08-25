@@ -48,7 +48,7 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 > 3. **`serve` 期间由 enquire 发起的对外网络调用为零。** q8 向量嵌入模型**在你的机器上**运行，索引的是**你**亲手写下的 markdown——正因如此，它需要一次明确的本地下载（约 118 MB），而不是云端 API 密钥。内容只返回给你连接的 MCP 客户端；该客户端或隧道如何处理数据属于其自身的信任边界（[已强制执行](./SECURITY.md)，而非纸面承诺）。
 > 4. **时效感知召回。** 每条结果都报告笔记有多旧；可选的时效重排让智能体优先采用新知识，并把陈旧事实标记出来等待复核——这是"遗忘感知"前沿，建立在你的文件本就拥有的 `mtime` 之上。
 
-**46 个工具 · 19 个 MCP 提示词 · 2212+ 单元测试 · 50+ 语言 · v3.11.x 稳定版 · 语义化版本约束 · MIT · npm 构建溯源（SLSA L2）。**
+**46 个工具 · 19 个 MCP 提示词 · 2228+ 单元测试 · 50+ 语言 · v3.11.x 稳定版 · 语义化版本约束 · MIT · npm 构建溯源（SLSA L2）。**
 
 ---
 
@@ -67,7 +67,7 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 | **完整的 Obsidian 知识面** | ✅ Markdown、双向链接、frontmatter、Canvas、Bases、PDF 和 OCR |
 | **处理复杂问题的智能体检索** | ✅ HyDE、子问题分解、上下文包、GraphRAG-light 和 19 个 MCP 提示词 |
 | **扩展性能而不放弃控制** | ✅ HNSW 实时更新、持久化、自适应补充和 int8 量化 |
-| **生产级可信度** | ✅ 默认只读、隐私过滤、认证 HTTP、semver 契约、2212 项测试、13 个发布门禁、SLSA L2 来源证明 |
+| **生产级可信度** | ✅ 默认只读、隐私过滤、认证 HTTP、semver 契约、2228 项测试、13 个发布门禁、SLSA L2 来源证明 |
 
 **一个仓库。所有智能体。完整检索栈。没有云端锁定。**
 
@@ -278,7 +278,7 @@ graph LR
 | **HTTP 传输** | Bearer 鉴权（常量时间 SHA-256 + `timingSafeEqual`）、按 token 限流、严格 CORS |
 | **Frontmatter** | `js-yaml@5` `load`（YAML 1.2 核心 schema，默认安全）——不执行代码 |
 | **缓存 + 索引文件** | 在 POSIX 权限可用时，Enquire 会尽力对敏感文件重新应用 `0600`；Enquire 创建的父目录初始为 `0700`，现有/自定义父目录仍由运维方管理 |
-| **2212 单元测试 · 每个 PR 13 项发布必需 CI 检查 · 当前全部 13 项受分支保护** | 当前已核验的发布态；详细运行说明如下。 |
+| **2228 单元测试 · 每个 PR 13 项发布必需 CI 检查 · 当前全部 13 项受分支保护** | 当前已核验的发布态；详细运行说明如下。 |
 | **CI** | `release.yml` 直接列出 **13 项发布门禁**，且每个 PR 都会运行：`lint`、`test (22)`、`test (24)`、`smoke`、`audit`、`coverage`、`version-consistency`、`docs`、`oia`、`protocol-conformance`、`package-consumer`、`mcpb-basic` 和 `docker`。固定的 Windows hostile-filesystem job `test-windows` 是一个额外的具名 check-run，并作为 `smoke` 的阻断性前置条件被间接强制。当前分支保护已强制全部 **13 项**（分支保护快照在线核验于 2026-08-21）。`test-macos` 是唯一带 `continue-on-error` 的指导性 job。`docker` 门禁会构建镜像并执行有界的 CLI 与 MCP 自省探测；CodeQL 通过 [GitHub default setup](https://docs.github.com/code-security/code-scanning/automatically-scanning-your-code-for-vulnerabilities-and-errors/configuring-default-setup-for-code-scanning) 运行两项独立且未受保护的分析。npm publish 前，`release.yml` 会在带 tag 的 SHA 上重新核验其直接列出的全部 13 项门禁。 |
 | **覆盖率** | 行 ≥86% · 语句 ≥82% · 函数 ≥75% · 分支 ≥74%（已设门禁） |
 | **构建发布** | 每个 tag 发布到 npm + GitHub Release · 语义化版本 · **签名构建溯源**（npm + Sigstore，SLSA Build L2；L3 生成器在路线图中） |
@@ -319,7 +319,7 @@ graph LR
 ```bash
 git clone https://github.com/oomkapwn/enquire-mcp.git
 cd enquire-mcp && npm install
-npm test       # 完整套件（2212 个测试）
+npm test       # 完整套件（2228 个测试）
 npm run lint   # 零警告
 npm run build  # tsc → dist/
 ```

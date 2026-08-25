@@ -11,6 +11,7 @@ import {
   OcrCancelledError,
   OcrTimeoutError
 } from "../src/ocr-admission.js";
+import { replaceExactly } from "./helpers/exact-source-mutation.js";
 
 interface Deferred<T> {
   promise: Promise<T>;
@@ -196,11 +197,11 @@ describe("OCR request cancellation wiring", () => {
 
   it("NEGATIVE control: detects a handler that drops the SDK signal", async () => {
     const source = await fs.readFile(new URL("../src/tool-registry.ts", import.meta.url), "utf8");
-    const mutated = source.replace(", { signal: ctx.mcpReq.signal }", "");
+    const mutated = replaceExactly(source, ", { signal: ctx.mcpReq.signal }", "");
     expect(hasOcrSignalWiring(mutated)).toBe(false);
     const security = await fs.readFile(new URL("../SECURITY.md", import.meta.url), "utf8");
     expect(
-      ocrResourceClaimProblems(security.replace("DEFAULT_OCR_TIMEOUT_MS=600000", "DEFAULT_OCR_TIMEOUT_MS=1"))
+      ocrResourceClaimProblems(replaceExactly(security, "DEFAULT_OCR_TIMEOUT_MS=600000", "DEFAULT_OCR_TIMEOUT_MS=1"))
     ).toEqual(["DEFAULT_OCR_TIMEOUT_MS=600000"]);
   });
 });

@@ -25,6 +25,7 @@ import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 // @ts-expect-error — plain .mjs script, no type declarations
 import { createSyntheticVault } from "../scripts/synthetic-vault.mjs";
+import { replaceExactly } from "./helpers/exact-source-mutation.js";
 
 const repoRoot = path.resolve(__dirname, "..");
 const distEntry = path.join(repoRoot, "dist", "index.js");
@@ -68,7 +69,7 @@ describe("smoke default-vault target (audit G-1)", () => {
     expect(httpStartupObservationProblems(smokeSource)).toEqual([]);
     // Causal mutation control: deleting the early-child observation recreates
     // the misleading eight-second timeout that hid the real startup error.
-    const blindMutant = smokeSource.replace('httpProc.once("close"', 'httpProc.once("ignored-close"');
+    const blindMutant = replaceExactly(smokeSource, 'httpProc.once("close"', 'httpProc.once("ignored-close"');
     expect(httpStartupObservationProblems(blindMutant)).toContain(
       "HTTP smoke does not observe child close before declaring a startup timeout"
     );

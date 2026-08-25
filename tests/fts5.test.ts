@@ -18,6 +18,7 @@ import {
 } from "../src/fts5.js";
 import { FTS_SCHEMA_VERSION } from "../src/schema-contract.js";
 import { Vault } from "../src/vault.js";
+import { replaceExactly } from "./helpers/exact-source-mutation.js";
 
 let canRunFts5 = true;
 beforeAll(async () => {
@@ -1636,21 +1637,26 @@ describe("FtsIndex — full lifecycle", () => {
     expect(admissionProblems(source)).toEqual([]);
     expect(
       admissionProblems(
-        source.replace("const admission = this.inspectAdmission();", "const admission = { rebuildReasons: [] };")
+        replaceExactly(
+          source,
+          "const admission = this.inspectAdmission();",
+          "const admission = { rebuildReasons: [] };"
+        )
       )
     ).toContain("two same-handle ownership checks are required");
-    expect(admissionProblems(source.replace("    txn.immediate();", "    txn();"))).toContain(
+    expect(admissionProblems(replaceExactly(source, "    txn.immediate();", "    txn();"))).toContain(
       "bootstrap transaction must acquire IMMEDIATE reservation"
     );
-    expect(admissionProblems(source.replace("admission.signature !== initialAdmission.signature", "false"))).toContain(
-      "transactional recheck must match the preflight authority snapshot"
-    );
-    expect(admissionProblems(source.replace(`${expectedDiscoveryAssertionLine}\n`, ""))).toContain(
+    expect(
+      admissionProblems(replaceExactly(source, "admission.signature !== initialAdmission.signature", "false"))
+    ).toContain("transactional recheck must match the preflight authority snapshot");
+    expect(admissionProblems(replaceExactly(source, `${expectedDiscoveryAssertionLine}\n`, ""))).toContain(
       "expected discovery must bind initial admission before bootstrap"
     );
     expect(
       admissionProblems(
-        source.replace(
+        replaceExactly(
+          source,
           `${expectedDiscoveryAssertionLine}\n${bootstrapCallLine}`,
           `${bootstrapCallLine}\n${expectedDiscoveryAssertionLine}`
         )

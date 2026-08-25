@@ -210,7 +210,22 @@ async function independentExecutableSourceCensus(root: string, relativeDirectory
   return files.sort();
 }
 
+const VITEST_RUNTIME_ROOTS = new Set(["vi", "vitest"]);
 const VITEST_RUNTIME_LOADERS = new Set(["doMock", "importActual", "importMock", "mock"]);
+const NODE_MODULE_RUNTIME_LOADER_EXPORTS = new Set(["Module", "createRequire", "default"]);
+const MODULE_RUNTIME_LOADER_MEMBERS = new Set([
+  "__proto__",
+  "_compile",
+  "_load",
+  "children",
+  "constructor",
+  "createRequire",
+  "load",
+  "parent",
+  "require"
+]);
+const GLOBAL_THIS_RUNTIME_CAPABILITIES = new Set(["global", "globalThis", "module", "process", "require", "vi"]);
+const PROCESS_RUNTIME_LOADER_MEMBERS = new Set(["getBuiltinModule", "mainModule"]);
 // Canonical JSON SHA-256 pins keep every reviewed step exact without copying
 // multiline shell bodies into this invariant a second time.
 const EXPECTED_COVERAGE_STEP_FINGERPRINTS = [
@@ -584,7 +599,6 @@ function registrationTimeoutProblems(
   expectedTimeout: string
 ): string[] {
   const sourceFile = ts.createSourceFile(filename, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
-  const bindingProblems = registrationVitestBindingProblems(sourceFile, filename, ["describe", callee]);
   const suites = sourceFile.statements.flatMap((statement) => {
     if (!ts.isExpressionStatement(statement) || !ts.isCallExpression(statement.expression)) return [];
     const call = statement.expression;
@@ -607,6 +621,7 @@ function registrationTimeoutProblems(
     suiteCallback.parameters.length !== 0 ||
     !ts.isBlock(suiteCallback.body)
   ) {
+    const bindingProblems = registrationVitestBindingProblems(sourceFile, filename, ["describe", callee]);
     return [...bindingProblems, `${filename} must retain one direct top-level suite ${suiteTitle}`];
   }
   const registrations = suiteCallback.body.statements.flatMap((statement, statementIndex) => {
@@ -618,6 +633,16 @@ function registrationTimeoutProblems(
   });
   const registrationEntry = registrations.length === 1 ? registrations[0] : undefined;
   const registration = registrationEntry?.call;
+  const prefixStatements =
+    registrationEntry === undefined ? [] : suiteCallback.body.statements.slice(0, registrationEntry.statementIndex);
+  const prefixRegistrationBindings = prefixStatements.flatMap((statement): RegistrationVitestBinding[] => {
+    if (!ts.isExpressionStatement(statement) || !ts.isCallExpression(statement.expression)) return [];
+    const expression = statement.expression.expression;
+    if (!ts.isIdentifier(expression)) return [];
+    return expression.text === "beforeAll" || expression.text === "it" ? [expression.text] : [];
+  });
+  const requiredBindings = [...new Set<RegistrationVitestBinding>(["describe", callee, ...prefixRegistrationBindings])];
+  const bindingProblems = registrationVitestBindingProblems(sourceFile, filename, requiredBindings);
   const shadowsTargetCallee = suiteCallback.body.statements.some(
     (statement) => ts.isFunctionDeclaration(statement) && statement.name !== undefined && statement.name.text === callee
   );
@@ -627,20 +652,21 @@ function registrationTimeoutProblems(
     const call = statement.expression;
     if (
       !ts.isIdentifier(call.expression) ||
-      call.expression.text !== callee ||
+      (call.expression.text !== "beforeAll" && call.expression.text !== "it") ||
       call.questionDotToken !== undefined ||
       call.typeArguments !== undefined
     ) {
       return false;
     }
-    const callbackIndex = callee === "beforeAll" ? 0 : 1;
-    const timeoutIndex = callee === "beforeAll" ? 1 : 2;
+    const prefixCallee = call.expression.text;
+    const callbackIndex = prefixCallee === "beforeAll" ? 0 : 1;
+    const timeoutIndex = prefixCallee === "beforeAll" ? 1 : 2;
     const callback = call.arguments[callbackIndex];
     const timeout = call.arguments[timeoutIndex];
-    const minimumArgumentCount = callee === "beforeAll" ? 1 : 2;
+    const minimumArgumentCount = prefixCallee === "beforeAll" ? 1 : 2;
     return (
       (call.arguments.length === minimumArgumentCount || call.arguments.length === minimumArgumentCount + 1) &&
-      (callee === "beforeAll" || stringLiteralValue(call.arguments[0]) !== undefined) &&
+      (prefixCallee === "beforeAll" || stringLiteralValue(call.arguments[0]) !== undefined) &&
       callback !== undefined &&
       ts.isArrowFunction(callback) &&
       callback.parameters.length === 0 &&
@@ -698,65 +724,647 @@ interface RuntimeModuleEdges {
   readonly problems: readonly string[];
 }
 
+function unwrapRuntimeExpression(expression: ts.Expression): ts.Expression {
+  let current = expression;
+  while (
+    ts.isParenthesizedExpression(current) ||
+    ts.isAsExpression(current) ||
+    ts.isTypeAssertionExpression(current) ||
+    ts.isNonNullExpression(current) ||
+    ts.isSatisfiesExpression(current)
+  ) {
+    current = current.expression;
+  }
+  return current;
+}
+
+function runtimeStaticStringValue(expression: ts.Expression | undefined): string | undefined {
+  if (expression === undefined) return undefined;
+  const current = unwrapRuntimeExpression(expression);
+  if (ts.isStringLiteralLike(current)) return current.text;
+  if (ts.isBinaryExpression(current) && current.operatorToken.kind === ts.SyntaxKind.PlusToken) {
+    const left = runtimeStaticStringValue(current.left);
+    const right = runtimeStaticStringValue(current.right);
+    return left === undefined || right === undefined ? undefined : left + right;
+  }
+  return undefined;
+}
+
+function runtimeMemberName(expression: ts.Expression): string | undefined {
+  if (ts.isPropertyAccessExpression(expression)) return expression.name.text;
+  if (ts.isElementAccessExpression(expression)) return runtimeStaticStringValue(expression.argumentExpression);
+  return undefined;
+}
+
+function runtimeStaticPropertyName(name: ts.PropertyName | undefined): string | undefined {
+  if (name === undefined) return undefined;
+  if (ts.isComputedPropertyName(name)) return runtimeStaticStringValue(name.expression);
+  return ts.isIdentifier(name) || ts.isStringLiteralLike(name) ? name.text : undefined;
+}
+
+function runtimeMemberReceiver(expression: ts.Expression): ts.Expression | undefined {
+  return ts.isPropertyAccessExpression(expression) || ts.isElementAccessExpression(expression)
+    ? expression.expression
+    : undefined;
+}
+
+function runtimeSymbolHasValueBinding(symbol: ts.Symbol): boolean {
+  return (symbol.declarations ?? []).some((declaration) => {
+    if (
+      ts.isInterfaceDeclaration(declaration) ||
+      ts.isTypeAliasDeclaration(declaration) ||
+      ts.isTypeParameterDeclaration(declaration) ||
+      ts.isExportSpecifier(declaration)
+    ) {
+      return false;
+    }
+    let current: ts.Node | undefined = declaration;
+    while (current !== undefined && !ts.isSourceFile(current)) {
+      if (
+        ts.canHaveModifiers(current) &&
+        ts.getModifiers(current)?.some((modifier) => modifier.kind === ts.SyntaxKind.DeclareKeyword)
+      ) {
+        return false;
+      }
+      if (ts.isImportSpecifier(current) && current.isTypeOnly) return false;
+      if (ts.isImportClause(current) && current.isTypeOnly) return false;
+      if (ts.isImportEqualsDeclaration(current) && current.isTypeOnly) return false;
+      current = current.parent;
+    }
+    return !declaration.getSourceFile().isDeclarationFile;
+  });
+}
+
+function runtimeValueSymbolAt(checker: ts.TypeChecker, identifier: ts.Identifier): ts.Symbol | undefined {
+  const direct = ts.isShorthandPropertyAssignment(identifier.parent)
+    ? checker.getShorthandAssignmentValueSymbol(identifier.parent)
+    : checker.getSymbolAtLocation(identifier);
+  if (direct !== undefined && runtimeSymbolHasValueBinding(direct)) return direct;
+  return checker
+    .getSymbolsInScope(identifier, ts.SymbolFlags.Value)
+    .find((candidate) => candidate.getName() === identifier.text && runtimeSymbolHasValueBinding(candidate));
+}
+
+function isErasedRuntimeModuleNode(node: ts.Node): boolean {
+  let current: ts.Node | undefined = node;
+  while (current !== undefined && !ts.isSourceFile(current)) {
+    if (
+      ts.isInterfaceDeclaration(current) ||
+      ts.isTypeAliasDeclaration(current) ||
+      ts.isTypeParameterDeclaration(current) ||
+      ts.isTypeQueryNode(current) ||
+      ts.isPropertySignature(current) ||
+      ts.isMethodSignature(current) ||
+      (ts.isHeritageClause(current) && current.token === ts.SyntaxKind.ImplementsKeyword) ||
+      (ts.isImportSpecifier(current) && current.isTypeOnly) ||
+      (ts.isImportClause(current) && current.isTypeOnly) ||
+      (ts.isImportEqualsDeclaration(current) && current.isTypeOnly) ||
+      (ts.isExportSpecifier(current) && current.isTypeOnly) ||
+      (ts.isExportDeclaration(current) && current.isTypeOnly)
+    ) {
+      return true;
+    }
+    if (
+      ts.canHaveModifiers(current) &&
+      (ts.getModifiers(current)?.some((modifier) => modifier.kind === ts.SyntaxKind.DeclareKeyword) ||
+        ((ts.isMethodDeclaration(current) ||
+          ts.isPropertyDeclaration(current) ||
+          ts.isGetAccessorDeclaration(current) ||
+          ts.isSetAccessorDeclaration(current)) &&
+          ts.getModifiers(current)?.some((modifier) => modifier.kind === ts.SyntaxKind.AbstractKeyword)))
+    ) {
+      return true;
+    }
+    current = current.parent;
+  }
+  return false;
+}
+
+interface BoundRuntimeModuleSource {
+  readonly checker: ts.TypeChecker;
+  readonly sourceFile: ts.SourceFile;
+}
+
+function bindRuntimeModuleSource(
+  filename: string,
+  source: string,
+  scriptKind: ts.ScriptKind
+): BoundRuntimeModuleSource {
+  const virtualFilename = `/__runtime_module_edges__/${filename}`;
+  const options: ts.CompilerOptions = {
+    allowJs: true,
+    module: ts.ModuleKind.ESNext,
+    moduleDetection: ts.ModuleDetectionKind.Force,
+    noLib: true,
+    noResolve: true,
+    target: ts.ScriptTarget.Latest
+  };
+  const host = ts.createCompilerHost(options, true);
+  host.fileExists = (requested) => requested === virtualFilename;
+  host.getSourceFile = (requested, languageVersionOrOptions) =>
+    requested === virtualFilename
+      ? ts.createSourceFile(virtualFilename, source, languageVersionOrOptions, true, scriptKind)
+      : undefined;
+  host.readFile = (requested) => (requested === virtualFilename ? source : undefined);
+  const program = ts.createProgram({ host, options, rootNames: [virtualFilename] });
+  const sourceFile = program.getSourceFile(virtualFilename);
+  if (sourceFile === undefined) throw new Error(`runtime module-edge analyzer could not bind ${filename}`);
+  return { checker: program.getTypeChecker(), sourceFile };
+}
+
+function runtimeExpressionEnvelope(expression: ts.Expression): ts.Expression {
+  let current = expression;
+  while (true) {
+    const parent = current.parent;
+    if (
+      (ts.isParenthesizedExpression(parent) ||
+        ts.isAsExpression(parent) ||
+        ts.isTypeAssertionExpression(parent) ||
+        ts.isNonNullExpression(parent) ||
+        ts.isSatisfiesExpression(parent)) &&
+      parent.expression === current
+    ) {
+      current = parent;
+      continue;
+    }
+    return current;
+  }
+}
+
+function isDirectCallTarget(expression: ts.Expression): boolean {
+  const envelope = runtimeExpressionEnvelope(expression);
+  return ts.isCallExpression(envelope.parent) && envelope.parent.expression === envelope;
+}
+
+function isDirectRuntimeMemberReceiver(expression: ts.Expression): boolean {
+  const envelope = runtimeExpressionEnvelope(expression);
+  return (
+    (ts.isPropertyAccessExpression(envelope.parent) || ts.isElementAccessExpression(envelope.parent)) &&
+    envelope.parent.expression === envelope
+  );
+}
+
+function isRuntimeLoaderIdentifierReference(identifier: ts.Identifier): boolean {
+  const parent = identifier.parent;
+  if (
+    (ts.isPropertyAccessExpression(parent) && parent.name === identifier) ||
+    ((ts.isPropertyAssignment(parent) ||
+      ts.isMethodDeclaration(parent) ||
+      ts.isPropertyDeclaration(parent) ||
+      ts.isPropertySignature(parent) ||
+      ts.isMethodSignature(parent)) &&
+      parent.name === identifier) ||
+    (ts.isBindingElement(parent) && (parent.name === identifier || parent.propertyName === identifier)) ||
+    ((ts.isVariableDeclaration(parent) ||
+      ts.isParameter(parent) ||
+      ts.isFunctionDeclaration(parent) ||
+      ts.isFunctionExpression(parent) ||
+      ts.isClassDeclaration(parent) ||
+      ts.isClassExpression(parent) ||
+      ts.isTypeAliasDeclaration(parent) ||
+      ts.isInterfaceDeclaration(parent) ||
+      ts.isTypeParameterDeclaration(parent) ||
+      ts.isImportClause(parent) ||
+      ts.isImportSpecifier(parent) ||
+      ts.isNamespaceImport(parent) ||
+      ts.isImportEqualsDeclaration(parent)) &&
+      parent.name === identifier) ||
+    ts.isTypeReferenceNode(parent) ||
+    ts.isTypeQueryNode(parent) ||
+    ts.isQualifiedName(parent)
+  ) {
+    return false;
+  }
+  if (ts.isExportSpecifier(parent)) {
+    const declaration = parent.parent.parent;
+    if (
+      parent.isTypeOnly ||
+      (ts.isExportDeclaration(declaration) && (declaration.isTypeOnly || declaration.moduleSpecifier !== undefined))
+    ) {
+      return false;
+    }
+    return parent.propertyName === undefined || parent.propertyName === identifier;
+  }
+  return true;
+}
+
+type RuntimeCapabilityKind = "globalThis" | "module" | "process" | "vi";
+
+function directVitestRuntimeRootSymbols(sourceFile: ts.SourceFile, checker: ts.TypeChecker): ReadonlySet<ts.Symbol> {
+  const symbols = new Set<ts.Symbol>();
+  for (const statement of sourceFile.statements) {
+    if (
+      !ts.isImportDeclaration(statement) ||
+      !ts.isStringLiteral(statement.moduleSpecifier) ||
+      statement.moduleSpecifier.text !== "vitest" ||
+      statement.importClause?.isTypeOnly === true ||
+      statement.importClause?.namedBindings === undefined ||
+      !ts.isNamedImports(statement.importClause.namedBindings)
+    ) {
+      continue;
+    }
+    for (const element of statement.importClause.namedBindings.elements) {
+      if (!element.isTypeOnly && element.propertyName === undefined && VITEST_RUNTIME_ROOTS.has(element.name.text)) {
+        const symbol = runtimeValueSymbolAt(checker, element.name);
+        if (symbol !== undefined) symbols.add(symbol);
+      }
+    }
+  }
+  return symbols;
+}
+
+function ambientRuntimeIdentifier(
+  expression: ts.Expression,
+  name: string,
+  checker: ts.TypeChecker
+): expression is ts.Identifier {
+  const current = unwrapRuntimeExpression(expression);
+  return ts.isIdentifier(current) && current.text === name && runtimeValueSymbolAt(checker, current) === undefined;
+}
+
+function globalThisContainerExpression(
+  expression: ts.Expression,
+  checker: ts.TypeChecker,
+  resolving: ReadonlySet<ts.Symbol> = new Set()
+): boolean {
+  const current = unwrapRuntimeExpression(expression);
+  if (
+    ambientRuntimeIdentifier(current, "globalThis", checker) ||
+    ambientRuntimeIdentifier(current, "global", checker)
+  ) {
+    return true;
+  }
+  const receiver = runtimeMemberReceiver(current);
+  if (
+    receiver !== undefined &&
+    (runtimeMemberName(current) === "globalThis" || runtimeMemberName(current) === "global") &&
+    globalThisContainerExpression(receiver, checker, resolving)
+  ) {
+    return true;
+  }
+  if (!ts.isIdentifier(current)) return false;
+  const symbol = runtimeValueSymbolAt(checker, current);
+  if (symbol === undefined || resolving.has(symbol)) return false;
+  const declarations = symbol.declarations ?? [];
+  if (declarations.length !== 1) return false;
+  const declaration = declarations[0];
+  if (
+    declaration === undefined ||
+    !ts.isVariableDeclaration(declaration) ||
+    !ts.isIdentifier(declaration.name) ||
+    declaration.initializer === undefined ||
+    !ts.isVariableDeclarationList(declaration.parent) ||
+    (declaration.parent.flags & ts.NodeFlags.Const) === 0
+  ) {
+    return false;
+  }
+  return globalThisContainerExpression(declaration.initializer, checker, new Set([...resolving, symbol]));
+}
+
+function runtimeCapabilityKind(
+  expression: ts.Expression,
+  checker: ts.TypeChecker,
+  vitestRuntimeRootSymbols: ReadonlySet<ts.Symbol>
+): RuntimeCapabilityKind | undefined {
+  const current = unwrapRuntimeExpression(expression);
+  if (globalThisContainerExpression(current, checker)) return "globalThis";
+  if (ts.isIdentifier(current)) {
+    if (
+      (current.text === "module" || current.text === "process") &&
+      runtimeValueSymbolAt(checker, current) === undefined
+    ) {
+      return current.text;
+    }
+    if (VITEST_RUNTIME_ROOTS.has(current.text)) {
+      const symbol = runtimeValueSymbolAt(checker, current);
+      if (
+        (current.text === "vi" && symbol === undefined) ||
+        (symbol !== undefined && vitestRuntimeRootSymbols.has(symbol))
+      ) {
+        return "vi";
+      }
+    }
+    return undefined;
+  }
+  const receiver = runtimeMemberReceiver(current);
+  if (receiver === undefined) return undefined;
+  const memberName = runtimeMemberName(current);
+  const receiverCapability = runtimeCapabilityKind(receiver, checker, vitestRuntimeRootSymbols);
+  if (receiverCapability === "globalThis") {
+    if (memberName === "globalThis") return "globalThis";
+    return memberName === "module" || memberName === "process" || memberName === "vi" ? memberName : undefined;
+  }
+  if (memberName === "mainModule" && receiverCapability === "process") {
+    return "module";
+  }
+  return undefined;
+}
+
+function bindingElementSource(binding: ts.BindingElement): ts.Expression | undefined {
+  const pattern = binding.parent;
+  if (!ts.isObjectBindingPattern(pattern)) return undefined;
+  const declaration = pattern.parent;
+  return ts.isVariableDeclaration(declaration) && declaration.name === pattern ? declaration.initializer : undefined;
+}
+
+interface RuntimeCapabilityDestructuringMember {
+  readonly rest: boolean;
+  readonly staticName?: string;
+}
+
+function runtimeCapabilityDestructuringMembers(
+  expression: ts.Expression
+): readonly RuntimeCapabilityDestructuringMember[] | undefined {
+  const envelope = runtimeExpressionEnvelope(expression);
+  const parent = envelope.parent;
+  if (ts.isVariableDeclaration(parent) && parent.initializer === envelope && ts.isObjectBindingPattern(parent.name)) {
+    return parent.name.elements.map((element) => ({
+      rest: element.dotDotDotToken !== undefined,
+      staticName:
+        element.propertyName !== undefined
+          ? runtimeStaticPropertyName(element.propertyName)
+          : ts.isIdentifier(element.name)
+            ? element.name.text
+            : undefined
+    }));
+  }
+  if (
+    ts.isBinaryExpression(parent) &&
+    parent.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+    parent.right === envelope
+  ) {
+    const left = unwrapRuntimeExpression(parent.left);
+    if (!ts.isObjectLiteralExpression(left)) return undefined;
+    return left.properties.map((property) => {
+      if (ts.isSpreadAssignment(property)) return { rest: true };
+      if (ts.isPropertyAssignment(property) || ts.isShorthandPropertyAssignment(property)) {
+        return { rest: false, staticName: runtimeStaticPropertyName(property.name) };
+      }
+      return { rest: false };
+    });
+  }
+  return undefined;
+}
+
+function runtimeCapabilityMemberIsLoader(capability: RuntimeCapabilityKind, memberName: string): boolean {
+  if (capability === "globalThis") return GLOBAL_THIS_RUNTIME_CAPABILITIES.has(memberName);
+  if (capability === "module") return MODULE_RUNTIME_LOADER_MEMBERS.has(memberName);
+  if (capability === "process") return PROCESS_RUNTIME_LOADER_MEMBERS.has(memberName);
+  return VITEST_RUNTIME_LOADERS.has(memberName);
+}
+
+function capabilityDestructuringAssignmentResultIsDiscarded(expression: ts.Expression): boolean {
+  const sourceEnvelope = runtimeExpressionEnvelope(expression);
+  const destructuringOwner = sourceEnvelope.parent;
+  if (
+    !ts.isBinaryExpression(destructuringOwner) ||
+    destructuringOwner.operatorToken.kind !== ts.SyntaxKind.EqualsToken
+  ) {
+    return true;
+  }
+  const assignmentEnvelope = runtimeExpressionEnvelope(destructuringOwner);
+  const resultConsumer = assignmentEnvelope.parent;
+  return (
+    (ts.isExpressionStatement(resultConsumer) && resultConsumer.expression === assignmentEnvelope) ||
+    (ts.isVoidExpression(resultConsumer) && resultConsumer.expression === assignmentEnvelope)
+  );
+}
+
+function safeObjectDestructuringFromCapability(expression: ts.Expression, capability: RuntimeCapabilityKind): boolean {
+  const members = runtimeCapabilityDestructuringMembers(expression);
+  if (!capabilityDestructuringAssignmentResultIsDiscarded(expression)) return false;
+  return (
+    members?.every(
+      (member) =>
+        !member.rest &&
+        member.staticName !== undefined &&
+        !runtimeCapabilityMemberIsLoader(capability, member.staticName)
+    ) ?? false
+  );
+}
+
+function runtimeLoaderImportProblems(filename: string, declaration: ts.ImportDeclaration): string[] {
+  const moduleName = stringLiteralValue(declaration.moduleSpecifier);
+  const clause = declaration.importClause;
+  if (moduleName === undefined || clause === undefined || clause.isTypeOnly) return [];
+  const problems: string[] = [];
+  const bindings = clause.namedBindings;
+  if (moduleName === "node:module" || moduleName === "module") {
+    if (clause.name !== undefined || (bindings !== undefined && ts.isNamespaceImport(bindings))) {
+      problems.push(`${filename} acquires createRequire-capable node:module outside the reviewed static import graph`);
+    }
+    if (bindings !== undefined && ts.isNamedImports(bindings)) {
+      for (const element of bindings.elements) {
+        const importedName = element.propertyName?.text ?? element.name.text;
+        if (!element.isTypeOnly && NODE_MODULE_RUNTIME_LOADER_EXPORTS.has(importedName)) {
+          problems.push(
+            importedName === "createRequire"
+              ? `${filename} acquires createRequire outside the reviewed static import graph`
+              : `${filename} acquires createRequire-capable node:module export ${importedName} outside the static graph`
+          );
+        }
+      }
+    }
+  }
+  if (moduleName === "vitest") {
+    if (clause.name !== undefined || (bindings !== undefined && ts.isNamespaceImport(bindings))) {
+      problems.push(`${filename} acquires a Vitest runtime loader namespace outside the reviewed static import graph`);
+    }
+    if (bindings !== undefined && ts.isNamedImports(bindings)) {
+      for (const element of bindings.elements) {
+        const importedName = element.propertyName?.text ?? element.name.text;
+        const directRuntimeRoot =
+          !element.isTypeOnly &&
+          VITEST_RUNTIME_ROOTS.has(importedName) &&
+          element.propertyName === undefined &&
+          element.name.text === importedName;
+        if (
+          !element.isTypeOnly &&
+          ((VITEST_RUNTIME_ROOTS.has(importedName) && !directRuntimeRoot) || VITEST_RUNTIME_LOADERS.has(importedName))
+        ) {
+          problems.push(
+            `${filename} acquires Vitest runtime loader ${importedName} outside the reviewed static import graph`
+          );
+        }
+      }
+    }
+  }
+  return problems;
+}
+
 function runtimeModuleEdges(filename: string, source: string): RuntimeModuleEdges {
   const scriptKind = filename.endsWith(".mjs") || filename.endsWith(".cjs") ? ts.ScriptKind.JS : ts.ScriptKind.TS;
-  const sourceFile = ts.createSourceFile(filename, source, ts.ScriptTarget.Latest, true, scriptKind);
+  const { checker, sourceFile } = bindRuntimeModuleSource(filename, source, scriptKind);
+  const vitestRuntimeRootSymbols = directVitestRuntimeRootSymbols(sourceFile, checker);
   const specifiers: string[] = [];
   const problems: string[] = [];
-  const addLiteral = (expression: ts.Expression | undefined, kind: string): void => {
+  const addLiteral = (expression: ts.Expression | undefined, kind: string): string | undefined => {
     const specifier = stringLiteralValue(expression);
     if (specifier === undefined) {
       problems.push(`${filename} uses a nonliteral ${kind} loader`);
     } else {
       specifiers.push(specifier);
     }
+    return specifier;
+  };
+  const rejectLoaderNamespace = (specifier: string | undefined, kind: string): void => {
+    if (specifier === "node:module" || specifier === "module" || specifier === "vitest") {
+      problems.push(`${filename} acquires runtime loader namespace ${specifier} through ${kind}`);
+    }
   };
   const visit = (node: ts.Node): void => {
+    if (isErasedRuntimeModuleNode(node)) return;
     if (ts.isImportDeclaration(node) && importClauseHasRuntimeValue(node.importClause)) {
       addLiteral(node.moduleSpecifier, "import");
+      problems.push(...runtimeLoaderImportProblems(filename, node));
     } else if (
       ts.isExportDeclaration(node) &&
       node.moduleSpecifier !== undefined &&
       exportDeclarationHasRuntimeValue(node)
     ) {
-      addLiteral(node.moduleSpecifier, "export");
+      rejectLoaderNamespace(addLiteral(node.moduleSpecifier, "export"), "re-export");
     } else if (
       ts.isImportEqualsDeclaration(node) &&
       !node.isTypeOnly &&
       ts.isExternalModuleReference(node.moduleReference)
     ) {
-      addLiteral(node.moduleReference.expression, "import-equals");
+      rejectLoaderNamespace(addLiteral(node.moduleReference.expression, "import-equals"), "import-equals");
     } else if (ts.isCallExpression(node)) {
       if (node.expression.kind === ts.SyntaxKind.ImportKeyword) {
-        addLiteral(node.arguments[0], "dynamic import");
-      } else if (ts.isIdentifier(node.expression) && node.expression.text === "require") {
-        addLiteral(node.arguments[0], "require");
-      } else if (
-        ts.isPropertyAccessExpression(node.expression) &&
-        ts.isIdentifier(node.expression.expression) &&
-        node.expression.expression.text === "module" &&
-        node.expression.name.text === "require"
+        rejectLoaderNamespace(addLiteral(node.arguments[0], "dynamic import"), "dynamic import");
+      } else {
+        const callee = unwrapRuntimeExpression(node.expression);
+        if (ambientRuntimeIdentifier(callee, "require", checker)) {
+          rejectLoaderNamespace(addLiteral(node.arguments[0], "require"), "require");
+        } else if (ts.isPropertyAccessExpression(callee) || ts.isElementAccessExpression(callee)) {
+          const receiver = runtimeMemberReceiver(callee);
+          const directGlobalRequire =
+            receiver !== undefined &&
+            runtimeCapabilityKind(receiver, checker, vitestRuntimeRootSymbols) === "globalThis" &&
+            runtimeMemberName(callee) === "require";
+          const capability =
+            receiver === undefined ? undefined : runtimeCapabilityKind(receiver, checker, vitestRuntimeRootSymbols);
+          const memberName = runtimeMemberName(callee);
+          if (directGlobalRequire) {
+            rejectLoaderNamespace(addLiteral(node.arguments[0], "globalThis.require"), "globalThis.require");
+          } else if (capability === "module" && memberName === "require") {
+            rejectLoaderNamespace(addLiteral(node.arguments[0], "module.require"), "module.require");
+          } else if (capability === "vi" && memberName !== undefined && VITEST_RUNTIME_LOADERS.has(memberName)) {
+            addLiteral(node.arguments[0], `vi.${memberName}`);
+          }
+        }
+      }
+    }
+    if (
+      ts.isIdentifier(node) &&
+      node.text === "require" &&
+      runtimeValueSymbolAt(checker, node) === undefined &&
+      isRuntimeLoaderIdentifierReference(node)
+    ) {
+      if (!isDirectCallTarget(node)) {
+        problems.push(`${filename} uses require as a first-class loader value outside the reviewed static graph`);
+      }
+    }
+    if (ts.isIdentifier(node) && isRuntimeLoaderIdentifierReference(node)) {
+      const capability = runtimeCapabilityKind(node, checker, vitestRuntimeRootSymbols);
+      if (
+        capability !== undefined &&
+        capability !== "globalThis" &&
+        !isDirectRuntimeMemberReceiver(node) &&
+        !safeObjectDestructuringFromCapability(node, capability)
       ) {
-        addLiteral(node.arguments[0], "module.require");
-      } else if (
-        ts.isElementAccessExpression(node.expression) &&
-        ts.isIdentifier(node.expression.expression) &&
-        node.expression.expression.text === "module" &&
-        stringLiteralValue(node.expression.argumentExpression) === "require"
+        problems.push(`${filename} acquires first-class ${capability} runtime capability outside the static graph`);
+      }
+    }
+    if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) {
+      const projectedCapability = runtimeCapabilityKind(node, checker, vitestRuntimeRootSymbols);
+      if (
+        projectedCapability !== undefined &&
+        projectedCapability !== "globalThis" &&
+        !isDirectRuntimeMemberReceiver(node) &&
+        !safeObjectDestructuringFromCapability(node, projectedCapability)
       ) {
-        addLiteral(node.arguments[0], "module[require]");
+        problems.push(
+          `${filename} acquires first-class ${projectedCapability} runtime capability outside the static graph`
+        );
+      }
+      const memberName = runtimeMemberName(node);
+      const memberReceiver = runtimeMemberReceiver(node);
+      const capability =
+        memberReceiver === undefined
+          ? undefined
+          : runtimeCapabilityKind(memberReceiver, checker, vitestRuntimeRootSymbols);
+      const directGlobalRequire =
+        memberReceiver !== undefined &&
+        runtimeCapabilityKind(memberReceiver, checker, vitestRuntimeRootSymbols) === "globalThis" &&
+        memberName === "require";
+      if (directGlobalRequire && !isDirectCallTarget(node)) {
+        problems.push(`${filename} acquires a first-class runtime loader outside the reviewed static import graph`);
+      } else if (capability !== undefined && memberName === undefined) {
+        problems.push(`${filename} uses a dynamic ${capability} capability member outside the static graph`);
+      } else if (capability === "process" && memberName === "getBuiltinModule") {
+        problems.push(`${filename} uses process.getBuiltinModule outside the reviewed static import graph`);
       } else if (
-        ts.isPropertyAccessExpression(node.expression) &&
-        ts.isIdentifier(node.expression.expression) &&
-        node.expression.expression.text === "vi" &&
-        VITEST_RUNTIME_LOADERS.has(node.expression.name.text)
+        capability === "module" &&
+        memberName !== undefined &&
+        MODULE_RUNTIME_LOADER_MEMBERS.has(memberName) &&
+        memberName !== "require"
       ) {
-        addLiteral(node.arguments[0], `vi.${node.expression.name.text}`);
+        problems.push(
+          memberName === "createRequire"
+            ? `${filename} acquires createRequire outside the reviewed static import graph`
+            : `${filename} acquires module runtime loader member ${memberName} outside the static graph`
+        );
       } else if (
-        (ts.isIdentifier(node.expression) && node.expression.text === "createRequire") ||
-        (ts.isPropertyAccessExpression(node.expression) && node.expression.name.text === "createRequire")
+        (capability === "module" && memberName === "require" && !isDirectCallTarget(node)) ||
+        (capability === "vi" &&
+          memberName !== undefined &&
+          VITEST_RUNTIME_LOADERS.has(memberName) &&
+          !isDirectCallTarget(node))
       ) {
-        problems.push(`${filename} uses createRequire outside the reviewed static import graph`);
+        problems.push(`${filename} acquires a first-class runtime loader outside the reviewed static import graph`);
+      }
+    }
+    if (ts.isBindingElement(node)) {
+      const staticName =
+        node.propertyName !== undefined
+          ? runtimeStaticPropertyName(node.propertyName)
+          : ts.isIdentifier(node.name)
+            ? node.name.text
+            : undefined;
+      const sourceExpression = bindingElementSource(node);
+      const sourceCapability =
+        sourceExpression === undefined
+          ? undefined
+          : runtimeCapabilityKind(sourceExpression, checker, vitestRuntimeRootSymbols);
+      if (sourceCapability !== undefined && node.dotDotDotToken !== undefined) {
+        problems.push(`${filename} dynamically destructures a runtime capability outside the static import graph`);
+      } else if (
+        sourceCapability !== undefined &&
+        staticName !== undefined &&
+        runtimeCapabilityMemberIsLoader(sourceCapability, staticName)
+      ) {
+        problems.push(`${filename} destructures a runtime loader outside the reviewed static import graph`);
+      } else if (sourceCapability !== undefined && staticName === undefined) {
+        problems.push(`${filename} dynamically destructures a runtime capability outside the static import graph`);
+      }
+    }
+    if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
+      const sourceCapability = runtimeCapabilityKind(node.right, checker, vitestRuntimeRootSymbols);
+      const members = runtimeCapabilityDestructuringMembers(node.right);
+      if (sourceCapability !== undefined && members !== undefined) {
+        if (!capabilityDestructuringAssignmentResultIsDiscarded(node.right)) {
+          problems.push(
+            `${filename} preserves a ${sourceCapability} runtime capability through assignment destructuring`
+          );
+        }
+        for (const member of members) {
+          if (member.rest || member.staticName === undefined) {
+            problems.push(`${filename} dynamically destructures a runtime capability outside the static import graph`);
+          } else if (runtimeCapabilityMemberIsLoader(sourceCapability, member.staticName)) {
+            problems.push(`${filename} destructures a runtime loader outside the reviewed static import graph`);
+          }
+        }
       }
     }
     ts.forEachChild(node, visit);
@@ -1050,6 +1658,14 @@ function coverageIsolationProblems(input: CoverageIsolationInputs): string[] {
       "beforeAll",
       undefined,
       "720_000"
+    ),
+    ...registrationTimeoutProblems(
+      requiredClosureSource(input.closureSources, "tests/meta-invariant-coverage.test.ts"),
+      "tests/meta-invariant-coverage.test.ts",
+      "META-invariant: exact structural census + NEGATIVE control coverage",
+      "it",
+      "every *-invariant.test.ts file has NEGATIVE control OR explicit exempt marker",
+      "60_000"
     ),
     ...registrationTimeoutProblems(
       requiredClosureSource(input.closureSources, "tests/release-integrity.test.ts"),
@@ -1447,7 +2063,7 @@ describe("Class A invariant — no test imports value from registration boilerpl
       coverageIsolationProblems(await currentCoverageIsolationInputs()),
       "Coverage isolation must remain exact, prerequisite-bound and production-import-free"
     ).toEqual([]);
-  });
+  }, 60_000);
 
   it("NEGATIVE control: restricted imports and coverage isolation drift are rejected", async () => {
     // Drift the input on purpose — a synthetic test importing from a restricted
@@ -1987,7 +2603,7 @@ describe("Class A invariant — no test imports value from registration boilerpl
       );
       await fs.writeFile(ciPath, baselineCi);
       for (const invalidCarrier of [
-        baselineCarrier.replace(/^ {10}/u, "         "),
+        replaceExactly(baselineCarrier, "          expected_manifest_sha=", "         expected_manifest_sha="),
         `${baselineCarrier}\n${baselineCarrier}`
       ]) {
         await fs.writeFile(ciPath, replaceExactly(baselineCi, baselineCarrier, invalidCarrier));
@@ -2672,6 +3288,38 @@ describe("Class A invariant — no test imports value from registration boilerpl
     expect(metaTimeoutProblems(shadowedMetaRegistration)).toContain(metaTimeoutDiagnostic);
     expect(metaTimeoutProblems(staleMetaTimeout)).toContain(metaTimeoutDiagnostic);
     expect(metaTimeoutProblems(supersededMetaTimeout)).toContain(metaTimeoutDiagnostic);
+    const metaCensusTimeoutProblems = (source: string): string[] =>
+      registrationTimeoutProblems(
+        source,
+        "tests/meta-invariant-coverage.test.ts",
+        "META-invariant: exact structural census + NEGATIVE control coverage",
+        "it",
+        "every *-invariant.test.ts file has NEGATIVE control OR explicit exempt marker",
+        "60_000"
+      );
+    const metaCensusTimeoutDiagnostic =
+      "tests/meta-invariant-coverage.test.ts must retain one direct it registration with timeout 60_000";
+    const raisedMetaCensusTimeout = replaceExactly(
+      metaSource,
+      "  }, 60_000);\n\n  // NEGATIVE control for the META-invariant itself",
+      "  }, 60_001);\n\n  // NEGATIVE control for the META-invariant itself"
+    );
+    const missingMetaCensusTimeout = replaceExactly(
+      metaSource,
+      "  }, 60_000);\n\n  // NEGATIVE control for the META-invariant itself",
+      "  });\n\n  // NEGATIVE control for the META-invariant itself"
+    );
+    const eagerMetaCensusPrefix = replaceExactly(
+      metaSource,
+      '  }, 720_000);\n\n  it("every *-invariant.test.ts file has NEGATIVE control OR explicit exempt marker",',
+      '  }, 720_000);\n  (() => { throw new Error("abort collection"); })();\n\n' +
+        '  it("every *-invariant.test.ts file has NEGATIVE control OR explicit exempt marker",'
+    );
+    expect(metaCensusTimeoutProblems(metaSource)).toEqual([]);
+    expect(metaCensusTimeoutProblems(aliasedMetaCallee)).toContain(metaBindingDiagnostic);
+    expect(metaCensusTimeoutProblems(raisedMetaCensusTimeout)).toContain(metaCensusTimeoutDiagnostic);
+    expect(metaCensusTimeoutProblems(missingMetaCensusTimeout)).toContain(metaCensusTimeoutDiagnostic);
+    expect(metaCensusTimeoutProblems(eagerMetaCensusPrefix)).toContain(metaCensusTimeoutDiagnostic);
     const releaseSource = requiredClosureSource(current.closureSources, "tests/release-integrity.test.ts");
     const releaseTimeoutProblems = (source: string): string[] =>
       registrationTimeoutProblems(
@@ -2745,17 +3393,17 @@ describe("Class A invariant — no test imports value from registration boilerpl
     const staleTransitionTimeout = replaceExactly(
       current.releaseMutationTransitionSource,
       transitionTimeoutNeedle,
-      transitionTimeoutNeedle.replace("60_000", "35_000")
+      replaceExactly(transitionTimeoutNeedle, "60_000", "35_000")
     );
     const missingTransitionTimeout = replaceExactly(
       current.releaseMutationTransitionSource,
       transitionTimeoutNeedle,
-      transitionTimeoutNeedle.replace("}, 60_000);", "});")
+      replaceExactly(transitionTimeoutNeedle, "}, 60_000);", "});")
     );
     const raisedTransitionTimeout = replaceExactly(
       current.releaseMutationTransitionSource,
       transitionTimeoutNeedle,
-      transitionTimeoutNeedle.replace("60_000", "60_001")
+      replaceExactly(transitionTimeoutNeedle, "60_000", "60_001")
     );
     const unreachableTransitionRegistration =
       'describe("release mutation schema-v3 transition authority", () => {\n' +
@@ -2781,6 +3429,8 @@ describe("Class A invariant — no test imports value from registration boilerpl
       "tests/docs-consistency.test.ts must bind it through one direct unaliased vitest named import and no other runtime bindings; found direct 0, other 1";
     const docsDescribeBindingDiagnostic =
       "tests/docs-consistency.test.ts must bind describe through one direct unaliased vitest named import and no other runtime bindings; found direct 0, other 1";
+    const docsSuiteLocalItBindingDiagnostic =
+      "tests/docs-consistency.test.ts must bind it through one direct unaliased vitest named import and no other runtime bindings; found direct 1, other 1";
     const exactDocsRegistration =
       'import { describe, it } from "vitest";\n' +
       'describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () => {\n' +
@@ -2826,36 +3476,34 @@ describe("Class A invariant — no test imports value from registration boilerpl
       "});";
     expect(docsTimeoutProblems(aliasedDocsCallee)).toContain(docsItBindingDiagnostic);
     expect(docsTimeoutProblems(aliasedDocsSuite)).toContain(docsDescribeBindingDiagnostic);
-    expect(docsTimeoutProblems(suiteLocalOptionalVarShadow)).toContain(
-      docsItBindingDiagnostic.replace("found direct 0, other 1", "found direct 1, other 1")
-    );
+    expect(docsTimeoutProblems(suiteLocalOptionalVarShadow)).toContain(docsSuiteLocalItBindingDiagnostic);
     expect(docsTimeoutProblems(localPrefixRegistrar)).toContain(docsTimeoutDiagnostic);
     expect(docsTimeoutProblems(eagerPrefixArgument)).toContain(docsTimeoutDiagnostic);
     const docsTimeoutNeedle = '  }, 60_000);\n\n  it("package.json description tool-count matches actual count"';
     const inheritedDocsTimeout = replaceExactly(
       current.docsConsistencySource,
       docsTimeoutNeedle,
-      docsTimeoutNeedle.replace("60_000", "15_000")
+      replaceExactly(docsTimeoutNeedle, "60_000", "15_000")
     );
     const provenInsufficientDocsTimeout = replaceExactly(
       current.docsConsistencySource,
       docsTimeoutNeedle,
-      docsTimeoutNeedle.replace("60_000", "25_000")
+      replaceExactly(docsTimeoutNeedle, "60_000", "25_000")
     );
     const underBufferedDocsTimeout = replaceExactly(
       current.docsConsistencySource,
       docsTimeoutNeedle,
-      docsTimeoutNeedle.replace("60_000", "45_000")
+      replaceExactly(docsTimeoutNeedle, "60_000", "45_000")
     );
     const missingDocsTimeout = replaceExactly(
       current.docsConsistencySource,
       docsTimeoutNeedle,
-      docsTimeoutNeedle.replace("}, 60_000);", "});")
+      replaceExactly(docsTimeoutNeedle, "}, 60_000);", "});")
     );
     const raisedDocsTimeout = replaceExactly(
       current.docsConsistencySource,
       docsTimeoutNeedle,
-      docsTimeoutNeedle.replace("60_000", "60_001")
+      replaceExactly(docsTimeoutNeedle, "60_000", "60_001")
     );
     const unreachableDocsRegistration =
       'describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () => {\n' +
@@ -2921,15 +3569,369 @@ describe("Class A invariant — no test imports value from registration boilerpl
       "tests/helpers/exact-source-mutation.ts value-imports production path dist/index.js"
     ]);
 
+    expect([...NODE_MODULE_RUNTIME_LOADER_EXPORTS]).toEqual(["Module", "createRequire", "default"]);
+    expect([...MODULE_RUNTIME_LOADER_MEMBERS]).toEqual([
+      "__proto__",
+      "_compile",
+      "_load",
+      "children",
+      "constructor",
+      "createRequire",
+      "load",
+      "parent",
+      "require"
+    ]);
+    expect([...GLOBAL_THIS_RUNTIME_CAPABILITIES]).toEqual([
+      "global",
+      "globalThis",
+      "module",
+      "process",
+      "require",
+      "vi"
+    ]);
+    expect([...PROCESS_RUNTIME_LOADER_MEMBERS]).toEqual(["getBuiltinModule", "mainModule"]);
+    expect([...VITEST_RUNTIME_ROOTS]).toEqual(["vi", "vitest"]);
+    expect([...VITEST_RUNTIME_LOADERS]).toEqual(["doMock", "importActual", "importMock", "mock"]);
+
+    const directVitestLoader =
+      'import { vi } from "vitest";\nvoid vi.importActual("./helpers/exact-source-mutation.js");';
+    expect(moduleProblems("tests/release-integrity.test.ts", directVitestLoader)).toEqual([]);
     const vitestProductionImport = 'import { vi } from "vitest";\nvoid vi.importActual("../src/vault.js");';
     expect(moduleProblems("tests/release-integrity.test.ts", vitestProductionImport)).toContain(
       "tests/release-integrity.test.ts value-imports production path src/vault.js"
     );
+    const directVitestRootLoader =
+      'import { vitest } from "vitest";\nvoid vitest.importActual("./helpers/exact-source-mutation.js");';
+    expect(moduleProblems("tests/release-integrity.test.ts", directVitestRootLoader)).toEqual([]);
+    const vitestRootProductionImport = 'import { vitest } from "vitest";\nvoid vitest.importActual("../src/vault.js");';
+    expect(moduleProblems("tests/release-integrity.test.ts", vitestRootProductionImport)).toContain(
+      "tests/release-integrity.test.ts value-imports production path src/vault.js"
+    );
+    const escapedVitestRootLoader =
+      'import { vitest } from "vitest";\nconst hiddenLoader = vitest.importActual; void hiddenLoader;';
+    expect(moduleProblems("tests/release-integrity.test.ts", escapedVitestRootLoader)).toContain(
+      "tests/release-integrity.test.ts acquires a first-class runtime loader outside the reviewed static import graph"
+    );
+    const aliasedVitestImport = 'import { vi as testApi } from "vitest";\nvoid testApi;';
+    expect(moduleProblems("tests/release-integrity.test.ts", aliasedVitestImport)).toContain(
+      "tests/release-integrity.test.ts acquires Vitest runtime loader vi outside the reviewed static import graph"
+    );
+    const aliasedVitestRootImport = 'import { vitest as testApi } from "vitest";\nvoid testApi;';
+    expect(moduleProblems("tests/release-integrity.test.ts", aliasedVitestRootImport)).toContain(
+      "tests/release-integrity.test.ts acquires Vitest runtime loader vitest outside the reviewed static import graph"
+    );
+    const directVitestFunctionImport = 'import { importActual } from "vitest";\nvoid importActual;';
+    expect(moduleProblems("tests/release-integrity.test.ts", directVitestFunctionImport)).toContain(
+      "tests/release-integrity.test.ts acquires Vitest runtime loader importActual outside the reviewed static import graph"
+    );
+    const typeOnlyLoaderImports =
+      'import type { createRequire } from "node:module";\nimport type { vi } from "vitest";';
+    expect(moduleProblems("tests/release-integrity.test.ts", typeOnlyLoaderImports)).toEqual([]);
     const createRequireLoader =
       'import { createRequire } from "node:module";\n' + "const loadCoverageModule = createRequire(import.meta.url);";
     expect(moduleProblems("tests/release-integrity.test.ts", createRequireLoader)).toContain(
-      "tests/release-integrity.test.ts uses createRequire outside the reviewed static import graph"
+      "tests/release-integrity.test.ts acquires createRequire outside the reviewed static import graph"
     );
+    const aliasedCreateRequireImport = 'import { createRequire as cr } from "node:module";\nvoid cr;';
+    expect(moduleProblems("tests/release-integrity.test.ts", aliasedCreateRequireImport)).toContain(
+      "tests/release-integrity.test.ts acquires createRequire outside the reviewed static import graph"
+    );
+    const moduleConstructorImport = 'import { Module } from "node:module";\nvoid Module;';
+    expect(moduleProblems("tests/release-integrity.test.ts", moduleConstructorImport)).toContain(
+      "tests/release-integrity.test.ts acquires createRequire-capable node:module export Module outside the static graph"
+    );
+    const moduleDefaultImport = 'import { default as ModuleApi } from "node:module";\nvoid ModuleApi;';
+    expect(moduleProblems("tests/release-integrity.test.ts", moduleDefaultImport)).toContain(
+      "tests/release-integrity.test.ts acquires createRequire-capable node:module export default outside the static graph"
+    );
+    const safeNodeModuleImport = 'import { builtinModules } from "node:module";\nvoid builtinModules;';
+    expect(runtimeModuleEdges("tests/release-integrity.test.ts", safeNodeModuleImport).problems).toEqual([]);
+    const acquiredCreateRequireLoader = [
+      'const { createRequire: cr } = process.getBuiltinModule("node:module");',
+      "const hiddenRequire = cr(import.meta.url);",
+      'hiddenRequire("./unreceipted.cjs");'
+    ].join("\n");
+    expect(moduleProblems("tests/release-integrity.test.ts", acquiredCreateRequireLoader)).toContain(
+      "tests/release-integrity.test.ts uses process.getBuiltinModule outside the reviewed static import graph"
+    );
+    const bracketAcquiredCreateRequireLoader = acquiredCreateRequireLoader
+      .split('process.getBuiltinModule("node:module")')
+      .join('process["getBuiltinModule"]("node:module")');
+    expect(moduleProblems("tests/release-integrity.test.ts", bracketAcquiredCreateRequireLoader)).toContain(
+      "tests/release-integrity.test.ts uses process.getBuiltinModule outside the reviewed static import graph"
+    );
+    const concatenatedProcessLoader =
+      'void process["getBuiltin" + "Module"]("node:module").createRequire(import.meta.url);';
+    expect(moduleProblems("tests/release-integrity.test.ts", concatenatedProcessLoader)).toContain(
+      "tests/release-integrity.test.ts uses process.getBuiltinModule outside the reviewed static import graph"
+    );
+    const aliasedProcessLoader = 'const runtimeProcess = process; void runtimeProcess.getBuiltinModule("node:module");';
+    expect(moduleProblems("tests/release-integrity.test.ts", aliasedProcessLoader)).toContain(
+      "tests/release-integrity.test.ts acquires first-class process runtime capability outside the static graph"
+    );
+    const aliasedModuleLoader = 'const runtimeModule = module; void runtimeModule.require("./unreceipted.cjs");';
+    expect(moduleProblems("tests/release-integrity.test.ts", aliasedModuleLoader)).toContain(
+      "tests/release-integrity.test.ts acquires first-class module runtime capability outside the static graph"
+    );
+    const processMainModuleLoader = 'void process.mainModule.require("./helpers/exact-source-mutation.js");';
+    expect(moduleProblems("tests/release-integrity.test.ts", processMainModuleLoader)).toEqual([]);
+    const aliasedProcessMainModule = "const runtimeModule = process.mainModule; void runtimeModule;";
+    expect(moduleProblems("tests/release-integrity.test.ts", aliasedProcessMainModule)).toContain(
+      "tests/release-integrity.test.ts acquires first-class module runtime capability outside the static graph"
+    );
+    const moduleConstructorLoader = 'void module.constructor._load("./unreceipted.cjs");';
+    expect(moduleProblems("tests/release-integrity.test.ts", moduleConstructorLoader)).toContain(
+      "tests/release-integrity.test.ts acquires module runtime loader member constructor outside the static graph"
+    );
+    for (const memberName of [
+      "__proto__",
+      "_compile",
+      "_load",
+      "children",
+      "constructor",
+      "createRequire",
+      "load",
+      "parent"
+    ]) {
+      const memberProblems = moduleProblems(
+        "tests/release-integrity.test.ts",
+        `const hiddenLoader = module[${JSON.stringify(memberName)}]; void hiddenLoader;`
+      );
+      expect(memberProblems).toContain(
+        memberName === "createRequire"
+          ? "tests/release-integrity.test.ts acquires createRequire outside the reviewed static import graph"
+          : `tests/release-integrity.test.ts acquires module runtime loader member ${memberName} outside the static graph`
+      );
+    }
+    const assignedModuleLoader = "let hiddenRequire: unknown; ({ require: hiddenRequire } = module);";
+    expect(moduleProblems("tests/release-integrity.test.ts", assignedModuleLoader)).toContain(
+      "tests/release-integrity.test.ts acquires first-class module runtime capability outside the static graph"
+    );
+    const wrappedRequireLoader = '(0, require)("./unreceipted.cjs");';
+    expect(moduleProblems("tests/release-integrity.test.ts", wrappedRequireLoader)).toContain(
+      "tests/release-integrity.test.ts uses require as a first-class loader value outside the reviewed static graph"
+    );
+    const aliasedRequireLoader = 'const hiddenRequire = require; hiddenRequire("./unreceipted.cjs");';
+    expect(moduleProblems("tests/release-integrity.test.ts", aliasedRequireLoader)).toContain(
+      "tests/release-integrity.test.ts uses require as a first-class loader value outside the reviewed static graph"
+    );
+    const boundModuleRequireLoader =
+      'const hiddenRequire = module.require.bind(module); hiddenRequire("./unreceipted.cjs");';
+    expect(moduleProblems("tests/release-integrity.test.ts", boundModuleRequireLoader)).toContain(
+      "tests/release-integrity.test.ts acquires a first-class runtime loader outside the reviewed static import graph"
+    );
+    const exportedRequireLoader = "export { require as hiddenRequire };";
+    expect(moduleProblems("tests/release-integrity.test.ts", exportedRequireLoader)).toContain(
+      "tests/release-integrity.test.ts uses require as a first-class loader value outside the reviewed static graph"
+    );
+    const globalRequireLoader = 'void globalThis["re" + "quire"]("./helpers/exact-source-mutation.js");';
+    expect(moduleProblems("tests/release-integrity.test.ts", globalRequireLoader)).toEqual([]);
+    const escapedGlobalRequire = "const hiddenRequire = globalThis.require; void hiddenRequire;";
+    expect(moduleProblems("tests/release-integrity.test.ts", escapedGlobalRequire)).toContain(
+      "tests/release-integrity.test.ts acquires a first-class runtime loader outside the reviewed static import graph"
+    );
+    const aliasedGlobalProcessLoader =
+      'const runtimeRoot = globalThis; void runtimeRoot.process.getBuiltinModule("node:module");';
+    expect(moduleProblems("tests/release-integrity.test.ts", aliasedGlobalProcessLoader)).toContain(
+      "tests/release-integrity.test.ts uses process.getBuiltinModule outside the reviewed static import graph"
+    );
+    const globalThisSelfLoader =
+      'const runtimeRoot = globalThis.globalThis; void runtimeRoot.process.getBuiltinModule("node:module");';
+    expect(moduleProblems("tests/release-integrity.test.ts", globalThisSelfLoader)).toContain(
+      "tests/release-integrity.test.ts uses process.getBuiltinModule outside the reviewed static import graph"
+    );
+    const safeGlobalThisSelf = "const runtimeRoot = globalThis.globalThis; void runtimeRoot.Array;";
+    expect(moduleProblems("tests/release-integrity.test.ts", safeGlobalThisSelf)).toEqual([]);
+    for (const [nodeGlobalLoader, expectedProblem] of [
+      [
+        'void global.process.getBuiltinModule("node:module");',
+        "tests/release-integrity.test.ts uses process.getBuiltinModule outside the reviewed static import graph"
+      ],
+      [
+        'void global.globalThis.process.getBuiltinModule("node:module");',
+        "tests/release-integrity.test.ts uses process.getBuiltinModule outside the reviewed static import graph"
+      ],
+      [
+        'const runtimeRoot = global.global; void runtimeRoot.module.require("./unreceipted.cjs");',
+        "tests/release-integrity.test.ts has unresolved runtime import ./unreceipted.cjs"
+      ]
+    ]) {
+      expect(moduleProblems("tests/release-integrity.test.ts", nodeGlobalLoader)).toContain(expectedProblem);
+    }
+    expect(moduleProblems("tests/release-integrity.test.ts", "void global.Array;")).toEqual([]);
+    const destructuredGlobalCapability =
+      "const runtimeRoot = globalThis; const { process: runtimeProcess } = runtimeRoot; void runtimeProcess;";
+    expect(moduleProblems("tests/release-integrity.test.ts", destructuredGlobalCapability)).toContain(
+      "tests/release-integrity.test.ts destructures a runtime loader outside the reviewed static import graph"
+    );
+    for (const capabilityName of ["global", "globalThis", "module", "process", "require", "vi"]) {
+      const capabilityProblems = moduleProblems(
+        "tests/release-integrity.test.ts",
+        `const { ${capabilityName}: hiddenCapability } = globalThis; void hiddenCapability;`
+      );
+      expect(capabilityProblems).toContain(
+        "tests/release-integrity.test.ts destructures a runtime loader outside the reviewed static import graph"
+      );
+    }
+    const nestedGlobalCapability =
+      "const { globalThis: { process: runtimeProcess } } = globalThis; void runtimeProcess;";
+    expect(moduleProblems("tests/release-integrity.test.ts", nestedGlobalCapability)).toContain(
+      "tests/release-integrity.test.ts destructures a runtime loader outside the reviewed static import graph"
+    );
+    const safeGlobalAlias = "const runtimeRoot = globalThis; void runtimeRoot.Array;";
+    expect(moduleProblems("tests/release-integrity.test.ts", safeGlobalAlias)).toEqual([]);
+    const aliasedVitestLoader =
+      'import { vi } from "vitest"; const hiddenImport = vi.importActual; hiddenImport("../src/vault.js");';
+    expect(moduleProblems("tests/release-integrity.test.ts", aliasedVitestLoader)).toContain(
+      "tests/release-integrity.test.ts acquires a first-class runtime loader outside the reviewed static import graph"
+    );
+    for (const loaderName of ["doMock", "importActual", "importMock", "mock"]) {
+      const directLoader = `import { vi } from "vitest";\nvoid vi[${JSON.stringify(loaderName)}]("./helpers/exact-source-mutation.js");`;
+      expect(moduleProblems("tests/release-integrity.test.ts", directLoader)).toEqual([]);
+      const escapedLoader = `import { vi } from "vitest";\nconst hiddenLoader = vi[${JSON.stringify(loaderName)}]; void hiddenLoader;`;
+      expect(moduleProblems("tests/release-integrity.test.ts", escapedLoader)).toContain(
+        "tests/release-integrity.test.ts acquires a first-class runtime loader outside the reviewed static import graph"
+      );
+    }
+    const destructuredProcessLoader = "const { getBuiltinModule: loader } = process; void loader;";
+    expect(moduleProblems("tests/release-integrity.test.ts", destructuredProcessLoader)).toContain(
+      "tests/release-integrity.test.ts destructures a runtime loader outside the reviewed static import graph"
+    );
+    const destructuredGlobalProcessLoader = "const { getBuiltinModule: loader } = globalThis.process; void loader;";
+    expect(moduleProblems("tests/release-integrity.test.ts", destructuredGlobalProcessLoader)).toContain(
+      "tests/release-integrity.test.ts destructures a runtime loader outside the reviewed static import graph"
+    );
+    const destructuredModuleLoader = "const { require: loader } = module; void loader;";
+    expect(moduleProblems("tests/release-integrity.test.ts", destructuredModuleLoader)).toContain(
+      "tests/release-integrity.test.ts destructures a runtime loader outside the reviewed static import graph"
+    );
+    const destructuredVitestLoader = 'import { vi } from "vitest";\nconst { importActual: loader } = vi; void loader;';
+    expect(moduleProblems("tests/release-integrity.test.ts", destructuredVitestLoader)).toContain(
+      "tests/release-integrity.test.ts destructures a runtime loader outside the reviewed static import graph"
+    );
+    const assignedGlobalProcessLoader =
+      "let runtimeProcess: unknown; ({ process: runtimeProcess } = globalThis); void runtimeProcess;";
+    expect(moduleProblems("tests/release-integrity.test.ts", assignedGlobalProcessLoader)).toContain(
+      "tests/release-integrity.test.ts destructures a runtime loader outside the reviewed static import graph"
+    );
+    const assignedGlobalRequireLoader =
+      "let runtimeRequire: unknown; ({ require: runtimeRequire } = globalThis); void runtimeRequire;";
+    expect(moduleProblems("tests/release-integrity.test.ts", assignedGlobalRequireLoader)).toContain(
+      "tests/release-integrity.test.ts destructures a runtime loader outside the reviewed static import graph"
+    );
+    const safeCapabilityAssignment =
+      "let arrayConstructor: unknown; let env: unknown; ({ Array: arrayConstructor } = globalThis); ({ env } = process); void arrayConstructor; void env;";
+    expect(moduleProblems("tests/release-integrity.test.ts", safeCapabilityAssignment)).toEqual([]);
+    const escapedCapabilityAssignmentResult =
+      'let env: unknown; const escapedProcess = ({ env } = process); void escapedProcess.getBuiltinModule("node:module");';
+    expect(moduleProblems("tests/release-integrity.test.ts", escapedCapabilityAssignmentResult)).toContain(
+      "tests/release-integrity.test.ts acquires first-class process runtime capability outside the static graph"
+    );
+    const escapedGlobalAssignmentResult =
+      'let arrayConstructor: unknown; const escapedRoot = ({ Array: arrayConstructor } = globalThis); void escapedRoot.process.getBuiltinModule("node:module");';
+    expect(moduleProblems("tests/release-integrity.test.ts", escapedGlobalAssignmentResult)).toContain(
+      "tests/release-integrity.test.ts preserves a globalThis runtime capability through assignment destructuring"
+    );
+    const voidedCapabilityAssignment = "let env: unknown; void ({ env } = process); void env;";
+    expect(moduleProblems("tests/release-integrity.test.ts", voidedCapabilityAssignment)).toEqual([]);
+    const descendantProcessProperty =
+      "const { getBuiltinModule: ordinary } = process.env; void ordinary; void globalThis.process.env;";
+    expect(moduleProblems("tests/release-integrity.test.ts", descendantProcessProperty)).toEqual([]);
+    const safeCapabilityDestructuring =
+      'import { vi } from "vitest";\n' +
+      "const { argv } = process; const { filename } = module; const { fn } = vi; " +
+      "const { Array: arrayConstructor } = globalThis; const { env } = globalThis.process; " +
+      "const { filename: mainFilename } = process.mainModule; " +
+      "void argv; void filename; void fn; void arrayConstructor; void env; void mainFilename;";
+    expect(moduleProblems("tests/release-integrity.test.ts", safeCapabilityDestructuring)).toEqual([]);
+    const restGlobalCapability = "const { ...runtimeGlobal } = globalThis; void runtimeGlobal;";
+    expect(moduleProblems("tests/release-integrity.test.ts", restGlobalCapability)).toContain(
+      "tests/release-integrity.test.ts dynamically destructures a runtime capability outside the static import graph"
+    );
+    const dynamicProcessMember = "declare const runtimeKey: string; void process[runtimeKey];";
+    expect(moduleProblems("tests/release-integrity.test.ts", dynamicProcessMember)).toContain(
+      "tests/release-integrity.test.ts uses a dynamic process capability member outside the static graph"
+    );
+    const dynamicModuleBinding =
+      "declare const runtimeKey: string; const { [runtimeKey]: hiddenLoader } = module; void hiddenLoader;";
+    expect(moduleProblems("tests/release-integrity.test.ts", dynamicModuleBinding)).toContain(
+      "tests/release-integrity.test.ts dynamically destructures a runtime capability outside the static import graph"
+    );
+    const ambientShorthandLoaders =
+      "const requireHolder = { require }; const processHolder = { process }; void requireHolder; void processHolder;";
+    const ambientShorthandProblems = moduleProblems("tests/release-integrity.test.ts", ambientShorthandLoaders);
+    expect(ambientShorthandProblems).toContain(
+      "tests/release-integrity.test.ts uses require as a first-class loader value outside the reviewed static graph"
+    );
+    expect(ambientShorthandProblems).toContain(
+      "tests/release-integrity.test.ts acquires first-class process runtime capability outside the static graph"
+    );
+    const invokedLocalLoaderShadows = [
+      "const process = { getBuiltinModule: (name: string): string => name };",
+      'const module = { require: (name: string): string => name, createRequire: (): string => "safe" };',
+      "const require = (name: string): string => name;",
+      'const createRequire = (): string => "safe";',
+      "const vi = { importActual: (name: string): string => name };",
+      "const vitest = { importActual: (name: string): string => name };",
+      'const ordinary = { createRequire: (): string => "safe" };',
+      'void process.getBuiltinModule("node:module"); void module.require("safe");',
+      'void module.createRequire(); void require("safe"); void createRequire();',
+      'void vi.importActual("safe"); void vitest.importActual("safe"); void ordinary.createRequire();'
+    ].join("\n");
+    expect(moduleProblems("tests/release-integrity.test.ts", invokedLocalLoaderShadows)).toEqual([]);
+    const localShorthandLoaders = [
+      'const require = (name: string): string => name; const process = { env: "safe" };',
+      "const holder = { require, process }; void holder;"
+    ].join("\n");
+    expect(moduleProblems("tests/release-integrity.test.ts", localShorthandLoaders)).toEqual([]);
+    const invokedLocalGlobalShadow = [
+      "const globalThis = { globalThis: { Array }, require: (name: string): string => name, process: { getBuiltinModule: (name: string): string => name } };",
+      'void globalThis.globalThis.Array; void globalThis.require("safe"); void globalThis.process.getBuiltinModule("safe");'
+    ].join("\n");
+    expect(moduleProblems("tests/release-integrity.test.ts", invokedLocalGlobalShadow)).toEqual([]);
+    const invokedLocalNodeGlobalShadow = [
+      "const global = { global: { Array }, process: { getBuiltinModule: (name: string): string => name } };",
+      'void global.global.Array; void global.process.getBuiltinModule("safe");'
+    ].join("\n");
+    expect(moduleProblems("tests/release-integrity.test.ts", invokedLocalNodeGlobalShadow)).toEqual([]);
+    const dynamicLocalShadow = [
+      'const process = { env: "safe" }; const module = { filename: "safe" };',
+      'const runtimeKey = "env"; const moduleKey = "filename";',
+      "void process[runtimeKey]; void module[moduleKey];"
+    ].join("\n");
+    expect(moduleProblems("tests/release-integrity.test.ts", dynamicLocalShadow)).toEqual([]);
+    const safeRuntimeExport = "const safe = 1; export { safe as require };";
+    expect(moduleProblems("tests/release-integrity.test.ts", safeRuntimeExport)).toEqual([]);
+    const safeTypeExport = "type require = unknown; export type { require };";
+    expect(moduleProblems("tests/release-integrity.test.ts", safeTypeExport)).toEqual([]);
+    expect(moduleProblems("tests/release-integrity.test.ts", 'void import("node:module");')).toContain(
+      "tests/release-integrity.test.ts acquires runtime loader namespace node:module through dynamic import"
+    );
+    expect(
+      moduleProblems("tests/release-integrity.test.ts", 'import ModuleApi = require("node:module"); void ModuleApi;')
+    ).toContain("tests/release-integrity.test.ts acquires runtime loader namespace node:module through import-equals");
+    expect(
+      moduleProblems("tests/release-integrity.test.ts", 'import type ModuleApi = require("node:module");')
+    ).toEqual([]);
+    expect(
+      moduleProblems("tests/release-integrity.test.ts", 'export { createRequire as hidden } from "node:module";')
+    ).toContain("tests/release-integrity.test.ts acquires runtime loader namespace node:module through re-export");
+    const inertLoaderNames = [
+      'const documentation = "require createRequire process.getBuiltinModule vi.importActual";',
+      "const ordinary = { require: documentation, createRequire: documentation, getBuiltinModule: documentation };",
+      "type createRequire = { readonly require: string };",
+      "void ordinary;"
+    ].join("\n");
+    expect(moduleProblems("tests/release-integrity.test.ts", inertLoaderNames)).toEqual([]);
+    const erasedLoaderAccesses = [
+      'import { vi, vitest } from "vitest";',
+      "type ModuleLoader = typeof module.require;",
+      "type ProcessLoader = typeof process.getBuiltinModule;",
+      "type GlobalLoader = typeof globalThis.require;",
+      "type VitestLoader = typeof vi.importActual;",
+      "type VitestRootLoader = typeof vitest.importMock;"
+    ].join("\n");
+    expect(moduleProblems("tests/release-integrity.test.ts", erasedLoaderAccesses)).toEqual([]);
     const emptyNamedProductionImport = 'import {} from "../src/vault.js";';
     expect(moduleProblems("tests/release-integrity.test.ts", emptyNamedProductionImport)).toContain(
       "tests/release-integrity.test.ts value-imports production path src/vault.js"
@@ -2956,7 +3958,7 @@ describe("Class A invariant — no test imports value from registration boilerpl
 
     const typeOnlyProductionImport = 'import type { Vault } from "../src/vault.js";';
     expect(moduleProblems("tests/release-integrity.test.ts", typeOnlyProductionImport)).toEqual([]);
-  });
+  }, 90_000);
 });
 
 async function collectTestFiles(dir: string): Promise<string[]> {

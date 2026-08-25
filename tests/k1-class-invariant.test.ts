@@ -3705,7 +3705,11 @@ describe("K-1 class invariant (v3.6.3 methodological guard; recursive scan since
     { store: "Embed" as const, file: "embed-db.ts", spec: EMBED_ADMISSION_ORDER }
   ])("rejects a $store openOnce that loses its private mutating signature", async ({ file, spec }) => {
     const source = await fs.readFile(path.resolve(process.cwd(), "src", file), "utf8");
-    const mutant = replaceExactly(source, spec.mutatingOpenStart, spec.mutatingOpenStart.replace("private ", ""));
+    const mutant = replaceExactly(
+      source,
+      spec.mutatingOpenStart,
+      replaceExactly(spec.mutatingOpenStart, "private ", "")
+    );
     expect(admissionOrderProblems(mutant, spec)).toContain(
       `${spec.label} openOnce: exact private mutating signature changed`
     );

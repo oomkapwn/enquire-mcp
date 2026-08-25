@@ -28,6 +28,7 @@ import {
   releaseWatcherActivationGuard,
   watcherActivationGuardPath
 } from "../src/watcher-activation-guard.js";
+import { replaceExactly } from "./helpers/exact-source-mutation.js";
 
 afterEach(() => {
   setEmbeddingsOffline(false); // module-global flag — reset so it can't leak across tests
@@ -539,7 +540,8 @@ describe("embeddings serve-offline enforcement (rc.42 F1)", () => {
       const queryGuard =
         "        setEmbeddingsOffline();\n        const v = new Vault(opts.vault, { excludeGlobs: opts.excludeGlob, readPaths: opts.readPaths });";
       expect(sources.cliSrc).toContain(queryGuard);
-      const commentOnlyCli = sources.cliSrc.replace(
+      const commentOnlyCli = replaceExactly(
+        sources.cliSrc,
         queryGuard,
         "        // setEmbeddingsOffline();\n        const v = new Vault(opts.vault);"
       );
@@ -547,7 +549,8 @@ describe("embeddings serve-offline enforcement (rc.42 F1)", () => {
         "query"
       );
 
-      const conditionalCli = sources.cliSrc.replace(
+      const conditionalCli = replaceExactly(
+        sources.cliSrc,
         queryGuard,
         "        if (false) {\n          setEmbeddingsOffline();\n        }\n        const v = new Vault(opts.vault);"
       );
@@ -555,12 +558,17 @@ describe("embeddings serve-offline enforcement (rc.42 F1)", () => {
         "query"
       );
 
-      const disabledCli = sources.cliSrc.replace(queryGuard, queryGuard.replace("();", "(false);"));
+      const disabledCli = replaceExactly(
+        sources.cliSrc,
+        queryGuard,
+        "        setEmbeddingsOffline(false);\n        const v = new Vault(opts.vault, { excludeGlobs: opts.excludeGlob, readPaths: opts.readPaths });"
+      );
       expect(inspectEmbeddingsOfflineGuards({ ...sources, cliSrc: disabledCli }).missingRuntimeActions).toContain(
         "query"
       );
 
-      const resetBeforeQueryCli = sources.cliSrc.replace(
+      const resetBeforeQueryCli = replaceExactly(
+        sources.cliSrc,
         queryGuard,
         `${queryGuard.split("\n")[0]}\n        setEmbeddingsOffline(false);\n        const v = new Vault(opts.vault);`
       );
@@ -568,7 +576,8 @@ describe("embeddings serve-offline enforcement (rc.42 F1)", () => {
         inspectEmbeddingsOfflineGuards({ ...sources, cliSrc: resetBeforeQueryCli }).missingRuntimeActions
       ).toContain("query");
 
-      const shadowedCli = sources.cliSrc.replace(
+      const shadowedCli = replaceExactly(
+        sources.cliSrc,
         queryGuard,
         `        const setEmbeddingsOffline = () => {};\n${queryGuard}`
       );
@@ -576,7 +585,8 @@ describe("embeddings serve-offline enforcement (rc.42 F1)", () => {
         "query"
       );
 
-      const mainScopeShadowedCli = sources.cliSrc.replace(
+      const mainScopeShadowedCli = replaceExactly(
+        sources.cliSrc,
         "  const program = new Command();",
         "  const setEmbeddingsOffline = () => {};\n  const program = new Command();"
       );
@@ -584,16 +594,30 @@ describe("embeddings serve-offline enforcement (rc.42 F1)", () => {
         inspectEmbeddingsOfflineGuards({ ...sources, cliSrc: mainScopeShadowedCli }).missingRuntimeActions
       ).toContain("query");
 
-      const lateCli = sources.cliSrc
-        .replace(queryGuard, "        const v = new Vault(opts.vault);")
-        .replace(/( {8}const result = await searchHybrid\([^\n]+\);\n)/, "$1        setEmbeddingsOffline();\n");
+      const cliWithoutQueryGuard = replaceExactly(
+        sources.cliSrc,
+        queryGuard,
+        "        const v = new Vault(opts.vault);"
+      );
+      expect(cliWithoutQueryGuard).not.toBe(sources.cliSrc);
+      expect(
+        inspectEmbeddingsOfflineGuards({ ...sources, cliSrc: cliWithoutQueryGuard }).missingRuntimeActions
+      ).toContain("query");
+
+      const queryCall =
+        "          const result = await searchHybrid(v, { query: text, limit }, { ftsIndex, embedFile: embedDbPath(v.root) });\n";
+      const lateGuard = `${queryCall}        setEmbeddingsOffline();\n`;
+      const lateCli = replaceExactly(cliWithoutQueryGuard, queryCall, lateGuard);
+      expect(lateCli).not.toBe(cliWithoutQueryGuard);
+      expect(lateCli).toContain(lateGuard);
       expect(inspectEmbeddingsOfflineGuards({ ...sources, cliSrc: lateCli }).missingRuntimeActions).toContain("query");
 
       const rerankerGuard =
         "  if (autoTokenizerCtor && autoModelForSeqClsCtor) {\n" +
         "    if (transformersModule) applyOfflineEnv(transformersModule);";
       expect(sources.embSrc).toContain(rerankerGuard);
-      const commentOnlyReranker = sources.embSrc.replace(
+      const commentOnlyReranker = replaceExactly(
+        sources.embSrc,
         rerankerGuard,
         "  if (autoTokenizerCtor && autoModelForSeqClsCtor) {\n" +
           "    // if (transformersModule) applyOfflineEnv(transformersModule);"
@@ -605,7 +629,8 @@ describe("embeddings serve-offline enforcement (rc.42 F1)", () => {
       expect(rerankerInspection.cachedPipelineGuard).toBe(true);
       expect(rerankerInspection.cachedRerankerGuard).toBe(false);
 
-      const wrongRerankerCondition = sources.embSrc.replace(
+      const wrongRerankerCondition = replaceExactly(
+        sources.embSrc,
         rerankerGuard,
         "  if (autoTokenizerCtor && autoModelForSeqClsCtor) {\n" + "    if (false) applyOfflineEnv(transformersModule);"
       );
@@ -613,7 +638,8 @@ describe("embeddings serve-offline enforcement (rc.42 F1)", () => {
         false
       );
 
-      const restoredCachedPipeline = sources.embSrc.replace(
+      const restoredCachedPipeline = replaceExactly(
+        sources.embSrc,
         "    if (transformersModule) applyOfflineEnv(transformersModule);\n    return pipelineCtor;",
         "    if (transformersModule) applyOfflineEnv(transformersModule);\n" +
           "    if (transformersModule) restoreOnlineEnv(transformersModule);\n" +
@@ -625,7 +651,8 @@ describe("embeddings serve-offline enforcement (rc.42 F1)", () => {
 
       const prepareBoundary = "  setEmbeddingsOffline();\n  // v3.11.5-rc.1 CRL-1";
       expect(sources.serverSrc).toContain(prepareBoundary);
-      const resetServer = sources.serverSrc.replace(
+      const resetServer = replaceExactly(
+        sources.serverSrc,
         prepareBoundary,
         "  setEmbeddingsOffline();\n  setEmbeddingsOffline(false);\n  // v3.11.5-rc.1 CRL-1"
       );

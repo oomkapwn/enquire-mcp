@@ -41,6 +41,7 @@ import {
 } from "../src/http-transport.js";
 import { DEFAULT_MAX_FILE_BYTES, Vault } from "../src/vault.js";
 import { WriteRequestTracker } from "../src/write-lifecycle.js";
+import { replaceExactly } from "./helpers/exact-source-mutation.js";
 
 let root: string;
 
@@ -700,48 +701,83 @@ describe("modern HTTP dual-era structural invariant", () => {
     expect(modernHttpV2Problems(source)).toEqual([]);
   });
 
-  it("negative control: detects tracker bypass, unsafe close order, and routing downgrade", async () => {
+  it("negative control: each tracker, shutdown, and routing regression is independently causal", async () => {
     const source = await fs.readFile(path.resolve("src/http-transport.ts"), "utf8");
-    const broken = source
-      .replace("buildMcpServer(deps, opts, writeTracker)", "buildMcpServer(deps, opts)")
-      .replace(
-        'await writeTracker.abortRollbackSafe("Modern HTTP shutdown exceeded the request-drain deadline");\n' +
+    const mutations = [
+      {
+        label: "modern factory tracker bypass",
+        needle: "createMcpHandler(() => buildMcpServer(deps, opts, writeTracker), {",
+        replacement: "createMcpHandler(() => buildMcpServer(deps, opts), {",
+        expectedProblems: ["modern: factory does not attach the aggregate write tracker"]
+      },
+      {
+        label: "unawaited aggregate write drain",
+        needle:
+          'await writeTracker.abortRollbackSafe("Modern HTTP shutdown exceeded the request-drain deadline");\n' +
           "        await writeTracker.waitForAll();",
-        'await writeTracker.abortRollbackSafe("Modern HTTP shutdown exceeded the request-drain deadline");\n' +
-          "        void writeTracker.waitForAll();"
-      )
-      .replace(
-        "handleStatelessRequest(req, res, deps, opts, body, writeTracker)",
-        "handleStatelessRequest(req, res, deps, opts, body)"
-      )
-      .replace("const server = buildMcpServer(deps, opts, writeTracker);", "const server = buildMcpServer(deps, opts);")
-      .replace("await waitForBoundedSettlement(closeTask, closeMs)", "await closeTask")
-      .replace(
-        'if (req.method === "POST" && !isJsonContentType(req.headers["content-type"])) {',
-        'if (req.method === "POST") {'
-      )
-      .replace("if (!(await isLegacyRequest(probe, body))) {", "if (false) {")
-      .replace(
-        "const probe = await toWebRequest(req, body);",
-        "await readJsonBody(req, maxBodyBytes);\n          const probe = await toWebRequest(req);"
-      )
-      .replace("await Promise.all([modernClose, legacyClose]);", "void modernClose; void legacyClose;")
-      .replace("httpServerShutdowns.set(server, shutdownTask);", "void shutdownTask;");
+        replacement:
+          'await writeTracker.abortRollbackSafe("Modern HTTP shutdown exceeded the request-drain deadline");\n' +
+          "        void writeTracker.waitForAll();",
+        expectedProblems: ["modern: write integrity tail does not precede bounded handler close"]
+      },
+      {
+        label: "legacy stateless tracker bypass",
+        needle: "handleStatelessRequest(req, res, deps, opts, body, writeTracker)",
+        replacement: "handleStatelessRequest(req, res, deps, opts, body)",
+        expectedProblems: ["legacy stateless: dispatch is not owned by the shared write tracker"]
+      },
+      {
+        label: "legacy stateless server tracker bypass",
+        needle: "const server = buildMcpServer(deps, opts, writeTracker);",
+        replacement: "const server = buildMcpServer(deps, opts);",
+        expectedProblems: ["legacy stateless: server factory bypasses the shared write tracker"]
+      },
+      {
+        label: "unbounded modern handler close",
+        needle: "await waitForBoundedSettlement(closeTask, closeMs)",
+        replacement: "await closeTask",
+        expectedProblems: ["modern: write integrity tail does not precede bounded handler close"]
+      },
+      {
+        label: "missing content-type guard",
+        needle: 'if (req.method === "POST" && !isJsonContentType(req.headers["content-type"])) {',
+        replacement: 'if (req.method === "POST") {',
+        expectedProblems: ["routing: Content-Type 415 guard does not precede JSON parsing"]
+      },
+      {
+        label: "disabled official classifier",
+        needle: "if (!(await isLegacyRequest(probe, body))) {",
+        replacement: "if (false) {",
+        expectedProblems: ["routing: official classifier does not precede legacy session requirements"]
+      },
+      {
+        label: "duplicate body read and dropped parsed-body forwarding",
+        needle: "const probe = await toWebRequest(req, body);",
+        replacement: "await readJsonBody(req, maxBodyBytes);\n          const probe = await toWebRequest(req);",
+        expectedProblems: [
+          "routing: Node request body is not read exactly once",
+          "routing: parsed body is not forwarded to modern classification and dispatch"
+        ]
+      },
+      {
+        label: "unawaited protocol-owner close",
+        needle: "await Promise.all([modernClose, legacyClose]);",
+        replacement: "void modernClose; void legacyClose;",
+        expectedProblems: ["shutdown: protocol owners do not close before shared dependencies"]
+      },
+      {
+        label: "unmemoized concurrent shutdown",
+        needle: "httpServerShutdowns.set(server, shutdownTask);",
+        replacement: "void shutdownTask;",
+        expectedProblems: ["shutdown: concurrent callers do not join one memoized teardown"]
+      }
+    ] as const;
 
-    expect(modernHttpV2Problems(broken)).toEqual(
-      expect.arrayContaining([
-        "modern: factory does not attach the aggregate write tracker",
-        "modern: write integrity tail does not precede bounded handler close",
-        "legacy stateless: dispatch is not owned by the shared write tracker",
-        "legacy stateless: server factory bypasses the shared write tracker",
-        "routing: Content-Type 415 guard does not precede JSON parsing",
-        "routing: Node request body is not read exactly once",
-        "routing: parsed body is not forwarded to modern classification and dispatch",
-        "routing: official classifier does not precede legacy session requirements",
-        "shutdown: protocol owners do not close before shared dependencies",
-        "shutdown: concurrent callers do not join one memoized teardown"
-      ])
-    );
+    for (const mutation of mutations) {
+      const broken = replaceExactly(source, mutation.needle, mutation.replacement);
+      expect(broken, `${mutation.label} must change the production source`).not.toBe(source);
+      expect(modernHttpV2Problems(broken), mutation.label).toEqual(mutation.expectedProblems);
+    }
   });
 });
 

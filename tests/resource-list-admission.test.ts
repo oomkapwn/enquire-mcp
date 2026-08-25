@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { listVaultNoteResources, vaultResourceInfo } from "../src/resource-admission.js";
 import { Vault } from "../src/vault.js";
+import { replaceExactly } from "./helpers/exact-source-mutation.js";
 
 describe("resource inventory admission", () => {
   let root = "";
@@ -59,7 +60,8 @@ describe("resource inventory admission", () => {
   it("keeps a structural negative control for cumulative response bytes", () => {
     const source = readFileSync(path.resolve(__dirname, "../src/resource-admission.ts"), "utf8");
     expect(source).toContain("resourceBytes > MAX_RESOURCE_LIST_UTF8_BYTES - serializedBytes");
-    const mutant = source.replace(
+    const mutant = replaceExactly(
+      source,
       "resourceBytes > MAX_RESOURCE_LIST_UTF8_BYTES - serializedBytes",
       "resourceBytes < 0"
     );

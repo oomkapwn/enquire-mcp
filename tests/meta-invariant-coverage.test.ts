@@ -163,11 +163,52 @@ const EXTRA_STRUCTURAL_FILES = [
 const EXPECTED_STRUCTURAL_FILES = [...EXPECTED_NAMED_STRUCTURAL_FILES, ...EXTRA_STRUCTURAL_FILES] as const;
 const EXPECTED_STRUCTURAL_FILE_COUNT = EXPECTED_STRUCTURAL_FILES.length;
 
-// Derive the raw-mutation census from the structural census. A newly added
-// invariant can no longer fall outside this oracle because somebody forgot a
-// second, parallel filename list. The shared helper is included separately so
-// its implementation cannot quietly regress to the primitive it replaces.
-const RAW_REPLACE_INVENTORY_FILES = [...EXPECTED_STRUCTURAL_FILES, "helpers/exact-source-mutation.ts"] as const;
+// Source-reader candidates outside the structural census are derived from
+// executable structure rather than another naming convention: direct/path-
+// resolved authentic node:fs reads enter, and a conservative same-file rooted
+// `src` enumeration + authentic read co-occurrence covers loop-carried paths.
+// This is deliberately a fail-closed superset, not a claim that every member's
+// every read targets production. Freeze it so classifier drift or a new reader
+// cannot silently change the raw-mutation inventory.
+const EXPECTED_SOURCE_READER_CANDIDATE_FILES = [
+  "cli.test.ts",
+  "crlf-heading.test.ts",
+  "embed-db.test.ts",
+  "embed-persistence-coordination.test.ts",
+  "embeddings-offline.test.ts",
+  "feedback.test.ts",
+  "fold-offset.test.ts",
+  "frontmatter.test.ts",
+  "fts-persistence-coordination.test.ts",
+  "fts5.test.ts",
+  "hnsw-sync-critical-section.test.ts",
+  "http-transport.test.ts",
+  "line-terminator.test.ts",
+  "ocr-admission.test.ts",
+  "pages.test.ts",
+  "parser-linear-budget.test.ts",
+  "peek-meta.test.ts",
+  "prepare-deps-failfast.test.ts",
+  "redos-trailing-strip.test.ts",
+  "resource-list-admission.test.ts",
+  "tool-input-admission.test.ts",
+  "watcher-startup-order.test.ts",
+  "wikilink-scan.test.ts"
+] as const;
+const EXPECTED_SOURCE_READER_CANDIDATE_MEMBERSHIP_SHA256 =
+  "fe6385f42afce1fbdf84749f0b502d8e7b2d8e8cff7ce5448b94cfa924b0bbed";
+
+// The raw-mutation inventory is the union of convention/curated structural
+// tests and the independently derived source-reader candidate class. The shared helper
+// is included separately so its implementation cannot quietly regress to the
+// primitive it replaces.
+const RAW_REPLACE_INVENTORY_FILES = [
+  ...new Set([
+    ...EXPECTED_STRUCTURAL_FILES,
+    ...EXPECTED_SOURCE_READER_CANDIDATE_FILES,
+    "helpers/exact-source-mutation.ts"
+  ])
+] as const;
 
 interface ExactMutationHelperCallIdentity {
   readonly helper: "replaceExactly" | "replaceAllExactly" | "replaceIntegerAllExactly";
@@ -256,12 +297,40 @@ const EXPECTED_REPOSITORY_MUTATION_HELPER_CALL_ENTRIES = [
     { count: 104, sha256: "3f0c236b37c04f0f5209b02c5eeb81ff6893e2794fdf850a2110999d2c92691f" }
   ],
   [
+    "embeddings-offline.test.ts",
+    { count: 12, sha256: "0000000000000000000000000000000000000000000000000000000000000000" }
+  ],
+  [
+    "embed-persistence-coordination.test.ts",
+    { count: 2, sha256: "0000000000000000000000000000000000000000000000000000000000000000" }
+  ],
+  [
+    "fts-persistence-coordination.test.ts",
+    { count: 1, sha256: "0000000000000000000000000000000000000000000000000000000000000000" }
+  ],
+  [
+    "fts5.test.ts",
+    { count: 5, sha256: "0000000000000000000000000000000000000000000000000000000000000000" }
+  ],
+  [
+    "http-transport.test.ts",
+    { count: 1, sha256: "0000000000000000000000000000000000000000000000000000000000000000" }
+  ],
+  [
+    "hnsw-sync-critical-section.test.ts",
+    { count: 6, sha256: "0000000000000000000000000000000000000000000000000000000000000000" }
+  ],
+  [
     "k1-ast-invariant.test.ts",
     { count: 4, sha256: "e70252bedcd8155bfa2fd316cb86c4f431f8a187c3dedf4c9670226f1590f75d" }
   ],
   [
     "k1-class-invariant.test.ts",
     { count: 102, sha256: "5a006450ce8fc1967a904c7d61a197519c2fb3259af3426d87eda826725d939e" }
+  ],
+  [
+    "jsonld.test.ts",
+    { count: 11, sha256: "0000000000000000000000000000000000000000000000000000000000000000" }
   ],
   [
     "meta-invariant-coverage.test.ts",
@@ -272,6 +341,18 @@ const EXPECTED_REPOSITORY_MUTATION_HELPER_CALL_ENTRIES = [
     { count: 79, sha256: "2d72dcd050c19d5112e4f1d2e4abfdaa699dd0a1dfe70c4e97b9761e3e4ab51e" }
   ],
   [
+    "ocr-admission.test.ts",
+    { count: 2, sha256: "0000000000000000000000000000000000000000000000000000000000000000" }
+  ],
+  [
+    "pages.test.ts",
+    { count: 52, sha256: "0000000000000000000000000000000000000000000000000000000000000000" }
+  ],
+  [
+    "prepare-deps-failfast.test.ts",
+    { count: 1, sha256: "0000000000000000000000000000000000000000000000000000000000000000" }
+  ],
+  [
     "release-mutation-transition.test.ts",
     { count: 10, sha256: "45eeace981fdf3839dd86814a71563581c4eb377cfe916c4dab62d2d1a69f628" }
   ],
@@ -280,12 +361,24 @@ const EXPECTED_REPOSITORY_MUTATION_HELPER_CALL_ENTRIES = [
     { count: 1, sha256: "6dcd1c958a24778372ec22aa91f159a02b536880e5dd49b92c275ee5d7788c0d" }
   ],
   [
+    "resource-list-admission.test.ts",
+    { count: 1, sha256: "0000000000000000000000000000000000000000000000000000000000000000" }
+  ],
+  [
     "sink-parity-invariant.test.ts",
     { count: 1, sha256: "e6dd6ac19c0ac0eb7d7a02fa69728040c0776ba19d1d9cb7857d62c8bff0825c" }
   ],
   [
     "smoke-default-vault-invariant.test.ts",
     { count: 1, sha256: "dbfe6230ed7c3b927ae2e218dc05529d0f04931bd3d247b09b10a755da98753f" }
+  ],
+  [
+    "tool-input-admission.test.ts",
+    { count: 1, sha256: "0000000000000000000000000000000000000000000000000000000000000000" }
+  ],
+  [
+    "watcher-startup-order.test.ts",
+    { count: 44, sha256: "0000000000000000000000000000000000000000000000000000000000000000" }
   ],
   [
     "write-lifecycle-invariant.test.ts",
@@ -300,16 +393,29 @@ const EXPECTED_REPOSITORY_MUTATION_HELPER_IMPORT_ENTRIES = [
   ["cli-parity.test.ts", ["replaceExactly"]],
   ["docker-glama-invariant.test.ts", ["replaceExactly"]],
   ["docs-consistency.test.ts", ["replaceAllExactly", "replaceExactly", "replaceIntegerAllExactly"]],
+  ["embed-persistence-coordination.test.ts", ["replaceExactly"]],
+  ["embeddings-offline.test.ts", ["replaceExactly"]],
   ["enforcement-guard-invariant.test.ts", ["replaceAllExactly", "replaceExactly"]],
   ["erasure-invariant.test.ts", ["replaceExactly"]],
+  ["fts-persistence-coordination.test.ts", ["replaceExactly"]],
+  ["fts5.test.ts", ["replaceExactly"]],
+  ["hnsw-sync-critical-section.test.ts", ["replaceExactly"]],
+  ["http-transport.test.ts", ["replaceExactly"]],
+  ["jsonld.test.ts", ["replaceExactly"]],
   ["k1-ast-invariant.test.ts", ["replaceExactly"]],
   ["k1-class-invariant.test.ts", ["replaceAllExactly", "replaceExactly"]],
   ["meta-invariant-coverage.test.ts", ["replaceAllExactly", "replaceExactly", "replaceIntegerAllExactly"]],
   ["no-internal-imports.test.ts", ["replaceExactly"]],
+  ["ocr-admission.test.ts", ["replaceExactly"]],
+  ["pages.test.ts", ["replaceExactly"]],
+  ["prepare-deps-failfast.test.ts", ["replaceExactly"]],
   ["release-mutation-transition.test.ts", ["replaceExactly"]],
   ["resource-bound-invariant.test.ts", ["replaceExactly"]],
+  ["resource-list-admission.test.ts", ["replaceExactly"]],
   ["sink-parity-invariant.test.ts", ["replaceExactly"]],
   ["smoke-default-vault-invariant.test.ts", ["replaceExactly"]],
+  ["tool-input-admission.test.ts", ["replaceExactly"]],
+  ["watcher-startup-order.test.ts", ["replaceExactly"]],
   ["write-lifecycle-invariant.test.ts", ["replaceExactly"]]
 ] as const satisfies readonly (readonly [string, readonly string[]])[];
 const EXPECTED_REPOSITORY_MUTATION_HELPER_IMPORTS = new Map<string, readonly string[]>(
@@ -722,6 +828,150 @@ const REVIEWED_ORDINARY_TRANSFORMS = [
     pattern: String.raw`"\\"`,
     receiverRoot: "filePath",
     replacement: '"/"'
+  },
+  {
+    filename: "line-terminator.test.ts",
+    id: "line-terminator block-comment stripping",
+    method: "replace",
+    owner: "function:rawLineOpOffenders",
+    pattern: String.raw`/\/\*[\s\S]*?\*\//g`,
+    receiverRoot: "source",
+    replacement: '""'
+  },
+  {
+    filename: "line-terminator.test.ts",
+    id: "line-terminator line-comment stripping",
+    method: "replace",
+    owner: "function:rawLineOpOffenders",
+    pattern: String.raw`/\/\/.*$/`,
+    receiverRoot: "l",
+    replacement: '""'
+  },
+  {
+    filename: "redos-trailing-strip.test.ts",
+    id: "ReDoS source-path separator normalization",
+    method: "replace",
+    owner: "function:walk",
+    pattern: String.raw`/\\/gu`,
+    receiverRoot: "path",
+    replacement: '"/"'
+  },
+  {
+    filename: "redos-trailing-strip.test.ts",
+    id: "ReDoS trailing-slash parity transform",
+    method: "replace",
+    owner: "test:stripTrailingSlashes is byte-identical to the old /\\/+$/ regex (POSITIVE — correctness parity)",
+    pattern: String.raw`/\/+$/`,
+    receiverRoot: "c",
+    replacement: '""'
+  },
+  {
+    filename: "redos-trailing-strip.test.ts",
+    id: "ReDoS catastrophic control transform",
+    method: "replace",
+    owner: "test:the old /\\/+$/ regex IS catastrophic on the same shape (NEGATIVE control — proves the timing test discriminates)",
+    pattern: String.raw`/\/+$/`,
+    receiverRoot: "evil",
+    replacement: '""'
+  },
+  {
+    filename: "embed-db.test.ts",
+    id: "Embed synchronous admission label normalization",
+    method: "replaceAll",
+    owner: "test:rejects an unadmitted embedding namespace in %s before derived-artifact mutation",
+    pattern: '" "',
+    receiverRoot: "label",
+    replacement: '"-"'
+  },
+  {
+    filename: "embed-db.test.ts",
+    id: "Embed sidecar route label normalization",
+    method: "replaceAll",
+    owner: "test:$route refuses a symlink SQLite sidecar without changing either sentinel",
+    pattern: '" "',
+    receiverRoot: "route",
+    replacement: '"-"'
+  },
+  {
+    filename: "embed-db.test.ts",
+    id: "Embed malformed-generation value normalization",
+    method: "replaceAll",
+    owner: "test:refuses malformed current generation metadata: $field=$value",
+    pattern: '"/"',
+    receiverRoot: "value",
+    replacement: '"-"'
+  },
+  {
+    filename: "embeddings-offline.test.ts",
+    id: "embedding index extension mapping",
+    method: "replace",
+    owner: "test:setEmbeddingsOffline toggles and both programmatic server boundaries enforce it (POSITIVE)",
+    pattern: String.raw`/\.fts5\.db$/u`,
+    receiverRoot: "defaultIndexFile",
+    replacement: '".embed.db"'
+  },
+  {
+    filename: "fts5.test.ts",
+    id: "FTS route slug normalization",
+    method: "replaceAll",
+    owner: "test:$route refuses a symlink SQLite sidecar without changing either sentinel",
+    pattern: '" "',
+    receiverRoot: "route",
+    replacement: '"-"'
+  },
+  {
+    filename: "fts5.test.ts",
+    id: "FTS shadow schema fixture extension",
+    method: "replace",
+    owner: "test:refuses foreign or malformed populated databases without changing logical contents",
+    pattern: String.raw`/\)\s*;?\s*$/u`,
+    receiverRoot: "shadowSchema",
+    replacement: '", foreign_payload BLOB)"'
+  },
+  {
+    filename: "watcher-startup-order.test.ts",
+    id: "watcher existence-guard whitespace normalization",
+    method: "replace",
+    owner: "function:isWatcherExistenceGuard",
+    pattern: String.raw`/\s+/g`,
+    receiverRoot: "expression",
+    replacement: '""'
+  },
+  {
+    filename: "watcher-startup-order.test.ts",
+    id: "watcher guard-arm predecessor whitespace normalization",
+    method: "replace",
+    owner: "function:watcherStartupOrderViolations",
+    pattern: String.raw`/\s+/g`,
+    receiverRoot: "previousStatement",
+    replacement: '""'
+  },
+  {
+    filename: "watcher-startup-order.test.ts",
+    id: "watcher recovery-catch whitespace normalization",
+    method: "replace",
+    owner: "function:watcherStartupOrderViolations",
+    pattern: String.raw`/\s+/g`,
+    receiverRoot: "catchClause",
+    replacement: '""'
+  },
+  {
+    filename: "watcher-startup-order.test.ts",
+    id: "watcher frozen capability whitespace normalization",
+    method: "replace",
+    owner: "function:frozenEmbedCapabilityViolations",
+    pattern: String.raw`/\s+/g`,
+    receiverRoot: "frozenReturn",
+    replacement: '""'
+  },
+  {
+    filename: "watcher-startup-order.test.ts",
+    id: "watcher startup validation whitespace normalization",
+    method: "replace",
+    owner: "function:visit",
+    pattern: String.raw`/\s+/g`,
+    receiverRoot: "node",
+    replacement: '""'
   }
 ] as const;
 
@@ -761,7 +1011,62 @@ const EXPECTED_REVIEWED_ORDINARY_OWNER_SHA256_ENTRIES = [
   ["K-1 block-comment stripping", "e4ab04178c078637e0f4c686592e4c087735af6fae66bd301df5dcb3affd29e1"],
   ["K-1 line-comment stripping", "e4ab04178c078637e0f4c686592e4c087735af6fae66bd301df5dcb3affd29e1"],
   ["K-1 module-extension normalization", "d3bedd44899b1fe192310c42f374374aa7dc4ca4fe6e39e8fc181e0ca5ce50c2"],
-  ["K-1 source-path separator normalization", "38192dee61fd22c70e6eb075f1bf10e4dca81a981418a621d41d35c1a12fa0e9"]
+  ["K-1 source-path separator normalization", "38192dee61fd22c70e6eb075f1bf10e4dca81a981418a621d41d35c1a12fa0e9"],
+  [
+    "line-terminator block-comment stripping",
+    "0000000000000000000000000000000000000000000000000000000000000000"
+  ],
+  [
+    "line-terminator line-comment stripping",
+    "0000000000000000000000000000000000000000000000000000000000000000"
+  ],
+  [
+    "ReDoS source-path separator normalization",
+    "0000000000000000000000000000000000000000000000000000000000000000"
+  ],
+  [
+    "ReDoS trailing-slash parity transform",
+    "0000000000000000000000000000000000000000000000000000000000000000"
+  ],
+  [
+    "ReDoS catastrophic control transform",
+    "0000000000000000000000000000000000000000000000000000000000000000"
+  ],
+  [
+    "Embed synchronous admission label normalization",
+    "0000000000000000000000000000000000000000000000000000000000000000"
+  ],
+  [
+    "Embed sidecar route label normalization",
+    "0000000000000000000000000000000000000000000000000000000000000000"
+  ],
+  [
+    "Embed malformed-generation value normalization",
+    "0000000000000000000000000000000000000000000000000000000000000000"
+  ],
+  ["embedding index extension mapping", "0000000000000000000000000000000000000000000000000000000000000000"],
+  ["FTS route slug normalization", "0000000000000000000000000000000000000000000000000000000000000000"],
+  ["FTS shadow schema fixture extension", "0000000000000000000000000000000000000000000000000000000000000000"],
+  [
+    "watcher existence-guard whitespace normalization",
+    "0000000000000000000000000000000000000000000000000000000000000000"
+  ],
+  [
+    "watcher guard-arm predecessor whitespace normalization",
+    "0000000000000000000000000000000000000000000000000000000000000000"
+  ],
+  [
+    "watcher recovery-catch whitespace normalization",
+    "0000000000000000000000000000000000000000000000000000000000000000"
+  ],
+  [
+    "watcher frozen capability whitespace normalization",
+    "0000000000000000000000000000000000000000000000000000000000000000"
+  ],
+  [
+    "watcher startup validation whitespace normalization",
+    "0000000000000000000000000000000000000000000000000000000000000000"
+  ]
 ] as const satisfies readonly (readonly [ReviewedOrdinaryTransformId, string])[];
 const EXPECTED_REVIEWED_ORDINARY_OWNER_SHA256 = new Map<ReviewedOrdinaryTransformId, string>(
   EXPECTED_REVIEWED_ORDINARY_OWNER_SHA256_ENTRIES
@@ -1671,6 +1976,7 @@ function computedMethodResolver(checker: ts.TypeChecker): ComputedMethodResolver
     const current = unwrapStaticExpression(expression);
     const literal = staticStringExpressionText(current);
     if (literal !== null) return knownResolution(literal);
+    if (ts.isNumericLiteral(current)) return knownResolution(current.text);
     if (ts.isPropertyAccessExpression(current) || ts.isElementAccessExpression(current)) {
       const owner = unwrapStaticExpression(current.expression);
       const ownerSymbol = ts.isIdentifier(owner) ? runtimeValueSymbolAt(checker, owner) : undefined;
@@ -1794,7 +2100,15 @@ function bindOracleSource(filename: string, source: string): BoundOracleSource {
 
 type BuiltinObjectKind = "Object" | "Reflect";
 type ReflectiveGetterKind = "object.descriptor" | "reflect.descriptor" | "reflect.get";
-type ReflectiveOperationKind = ReflectiveGetterKind | "reflect.apply";
+type ReflectiveOperationKind =
+  | ReflectiveGetterKind
+  | "object.assign"
+  | "object.define"
+  | "object.definePlural"
+  | "object.fromEntries"
+  | "reflect.apply"
+  | "reflect.define"
+  | "reflect.set";
 
 interface ReflectiveOperationResolver {
   readonly resolve: (expression: ts.Expression) => ReadonlySet<ReflectiveOperationKind>;
@@ -1802,9 +2116,9 @@ interface ReflectiveOperationResolver {
 
 /**
  * Resolve unshadowed reflective built-ins and lexical aliases by exact symbol identity.
- * Every direct assignment source of a mutable identifier is unioned conservatively;
- * parameter-forwarded aliases, nested projections, and plural descriptor maps are intentionally
- * outside this bounded checked-in-source oracle.
+ * Every direct assignment source of a mutable identifier is unioned conservatively,
+ * including destructive/property-construction operations used by both raw-method
+ * and exact-helper surface oracles.
  */
 function reflectiveOperationResolver(
   sourceFile: ts.SourceFile,
@@ -1942,6 +2256,12 @@ function reflectiveOperationResolver(
         if (owner === "Reflect" && name === "get") operations.add("reflect.get");
         if (owner === "Reflect" && name === "getOwnPropertyDescriptor") operations.add("reflect.descriptor");
         if (owner === "Reflect" && name === "apply") operations.add("reflect.apply");
+        if (owner === "Reflect" && name === "defineProperty") operations.add("reflect.define");
+        if (owner === "Reflect" && name === "set") operations.add("reflect.set");
+        if (owner === "Object" && name === "assign") operations.add("object.assign");
+        if (owner === "Object" && name === "defineProperty") operations.add("object.define");
+        if (owner === "Object" && name === "defineProperties") operations.add("object.definePlural");
+        if (owner === "Object" && name === "fromEntries") operations.add("object.fromEntries");
         if (owner === "Object" && name === "getOwnPropertyDescriptor") operations.add("object.descriptor");
       }
     }
@@ -2065,7 +2385,8 @@ function reflectiveAcquisition(
   const getterOperations = (expression: ts.Expression): ReadonlySet<ReflectiveGetterKind> =>
     new Set(
       [...operationResolver.resolve(expression)].filter(
-        (operation): operation is ReflectiveGetterKind => operation !== "reflect.apply"
+        (operation): operation is ReflectiveGetterKind =>
+          operation === "object.descriptor" || operation === "reflect.descriptor" || operation === "reflect.get"
       )
     );
   const acquisition = (
@@ -2174,6 +2495,41 @@ function dynamicComputedMethodTaintAnalysis(
     }
   }
 
+  function collectArrayBindingProjectionEdges(pattern: ts.ArrayBindingPattern, owner: ts.Expression): void {
+    for (const [index, element] of pattern.elements.entries()) {
+      if (ts.isOmittedExpression(element)) continue;
+      if (!ts.isIdentifier(element.name)) {
+        collectAggregateBindingTargets(element.name, owner);
+        continue;
+      }
+      const target = symbolOf(element.name);
+      if (target === null) continue;
+      if (element.dotDotDotToken === undefined) {
+        propertyProjectionEdges.push({ key: String(index), owner, target });
+      } else {
+        // A rest binding may receive any tainted slot from this index onward.
+        valueEdges.push({ expression: owner, target });
+      }
+      if (element.initializer !== undefined) valueEdges.push({ expression: element.initializer, target });
+    }
+  }
+
+  function collectAggregateBindingTargets(pattern: ts.BindingName, owner: ts.Expression): void {
+    if (ts.isIdentifier(pattern)) {
+      const target = symbolOf(pattern);
+      if (target !== null) valueEdges.push({ expression: owner, target });
+      return;
+    }
+    for (const element of pattern.elements) {
+      if (ts.isOmittedExpression(element)) continue;
+      collectAggregateBindingTargets(element.name, owner);
+      if (element.initializer !== undefined && ts.isIdentifier(element.name)) {
+        const target = symbolOf(element.name);
+        if (target !== null) valueEdges.push({ expression: element.initializer, target });
+      }
+    }
+  }
+
   function collectAssignmentProjectionEdges(pattern: ts.ObjectLiteralExpression, owner: ts.Expression): void {
     for (const property of pattern.properties) {
       if (ts.isShorthandPropertyAssignment(property)) {
@@ -2195,6 +2551,61 @@ function dynamicComputedMethodTaintAnalysis(
       if (key !== null) propertyProjectionEdges.push({ key, owner, target });
       if (targetExpression.fallback !== undefined) {
         valueEdges.push({ expression: targetExpression.fallback, target });
+      }
+    }
+  }
+
+  function collectArrayAssignmentProjectionEdges(pattern: ts.ArrayLiteralExpression, owner: ts.Expression): void {
+    for (const [index, element] of pattern.elements.entries()) {
+      if (ts.isOmittedExpression(element)) continue;
+      if (ts.isSpreadElement(element)) {
+        const targetExpression = unwrapStaticExpression(element.expression);
+        if (!ts.isIdentifier(targetExpression)) continue;
+        const target = symbolOf(targetExpression);
+        if (target !== null) valueEdges.push({ expression: owner, target });
+        continue;
+      }
+      const targetExpression = flatAssignmentTarget(element);
+      if (targetExpression === null) {
+        collectAggregateAssignmentTargets(element, owner);
+        continue;
+      }
+      const target = symbolOf(targetExpression.target);
+      if (target === null) continue;
+      propertyProjectionEdges.push({ key: String(index), owner, target });
+      if (targetExpression.fallback !== undefined) {
+        valueEdges.push({ expression: targetExpression.fallback, target });
+      }
+    }
+  }
+
+  function collectAggregateAssignmentTargets(expression: ts.Expression, owner: ts.Expression): void {
+    const current = unwrapStaticExpression(expression);
+    if (ts.isIdentifier(current)) {
+      const target = symbolOf(current);
+      if (target !== null) valueEdges.push({ expression: owner, target });
+      return;
+    }
+    if (ts.isBinaryExpression(current) && current.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
+      collectAggregateAssignmentTargets(current.left, owner);
+      return;
+    }
+    if (ts.isArrayLiteralExpression(current)) {
+      for (const element of current.elements) {
+        if (ts.isOmittedExpression(element)) continue;
+        collectAggregateAssignmentTargets(ts.isSpreadElement(element) ? element.expression : element, owner);
+      }
+      return;
+    }
+    if (ts.isObjectLiteralExpression(current)) {
+      for (const property of current.properties) {
+        if (ts.isShorthandPropertyAssignment(property)) {
+          collectAggregateAssignmentTargets(property.name, owner);
+        } else if (ts.isPropertyAssignment(property)) {
+          collectAggregateAssignmentTargets(property.initializer, owner);
+        } else if (ts.isSpreadAssignment(property)) {
+          collectAggregateAssignmentTargets(property.expression, owner);
+        }
       }
     }
   }
@@ -2248,6 +2659,20 @@ function dynamicComputedMethodTaintAnalysis(
     }
   }
 
+  /** Bind statically indexed array slots to the same property-taint lattice as object carriers. */
+  function collectArrayLiteralEdges(owner: ts.Symbol, array: ts.ArrayLiteralExpression): void {
+    for (const [index, element] of array.elements.entries()) {
+      if (ts.isOmittedExpression(element) || ts.isSpreadElement(element)) continue;
+      propertyEdges.push({ expression: element, key: String(index), owner });
+    }
+  }
+
+  function collectLiteralCarrierEdges(owner: ts.Symbol, expression: ts.Expression): void {
+    const current = unwrapStaticExpression(expression);
+    if (ts.isObjectLiteralExpression(current)) collectObjectLiteralEdges(owner, current);
+    if (ts.isArrayLiteralExpression(current)) collectArrayLiteralEdges(owner, current);
+  }
+
   function collectObjectAliasEdges(source: ts.Symbol, target: ts.Symbol): void {
     objectAliasEdges.push({ source, target }, { source: target, target: source });
   }
@@ -2258,7 +2683,7 @@ function dynamicComputedMethodTaintAnalysis(
       if (target !== null) {
         valueEdges.push({ expression: node.initializer, target });
         const initializer = unwrapStaticExpression(node.initializer);
-        if (ts.isObjectLiteralExpression(initializer)) collectObjectLiteralEdges(target, initializer);
+        collectLiteralCarrierEdges(target, initializer);
         if (ts.isIdentifier(initializer)) {
           const source = symbolOf(initializer);
           if (source !== null) collectObjectAliasEdges(source, target);
@@ -2270,6 +2695,12 @@ function dynamicComputedMethodTaintAnalysis(
       node.initializer !== undefined
     ) {
       collectBindingProjectionEdges(node.name, node.initializer);
+    } else if (
+      ts.isVariableDeclaration(node) &&
+      ts.isArrayBindingPattern(node.name) &&
+      node.initializer !== undefined
+    ) {
+      collectArrayBindingProjectionEdges(node.name, node.initializer);
     }
     if (ts.isBinaryExpression(node) && isAliasAssignmentToken(node.operatorToken.kind)) {
       const left = unwrapStaticExpression(node.left);
@@ -2278,7 +2709,7 @@ function dynamicComputedMethodTaintAnalysis(
         if (target !== null) {
           valueEdges.push({ expression: node.right, target });
           const right = unwrapStaticExpression(node.right);
-          if (ts.isObjectLiteralExpression(right)) collectObjectLiteralEdges(target, right);
+          collectLiteralCarrierEdges(target, right);
           if (ts.isIdentifier(right)) {
             const source = symbolOf(right);
             if (source !== null) collectObjectAliasEdges(source, target);
@@ -2286,6 +2717,8 @@ function dynamicComputedMethodTaintAnalysis(
         }
       } else if (node.operatorToken.kind === ts.SyntaxKind.EqualsToken && ts.isObjectLiteralExpression(left)) {
         collectAssignmentProjectionEdges(left, node.right);
+      } else if (node.operatorToken.kind === ts.SyntaxKind.EqualsToken && ts.isArrayLiteralExpression(left)) {
+        collectArrayAssignmentProjectionEdges(left, node.right);
       } else if (ts.isPropertyAccessExpression(left) || ts.isElementAccessExpression(left)) {
         const ownerExpression = unwrapStaticExpression(left.expression);
         const keyResolution = ts.isPropertyAccessExpression(left)
@@ -2296,6 +2729,30 @@ function dynamicComputedMethodTaintAnalysis(
         if (ts.isIdentifier(ownerExpression) && key !== null) {
           const owner = symbolOf(ownerExpression);
           if (owner !== null) propertyEdges.push({ expression: node.right, key, owner });
+        }
+      }
+    }
+    if (ts.isForOfStatement(node)) {
+      const owner = node.expression;
+      const initializer = node.initializer;
+      if (ts.isVariableDeclarationList(initializer)) {
+        for (const declaration of initializer.declarations) {
+          if (ts.isIdentifier(declaration.name)) {
+            const target = symbolOf(declaration.name);
+            if (target !== null) valueEdges.push({ expression: owner, target });
+          } else if (ts.isArrayBindingPattern(declaration.name)) {
+            collectArrayBindingProjectionEdges(declaration.name, owner);
+          } else {
+            collectAggregateBindingTargets(declaration.name, owner);
+          }
+        }
+      } else {
+        const targetExpression = unwrapStaticExpression(initializer);
+        if (ts.isIdentifier(targetExpression)) {
+          const target = symbolOf(targetExpression);
+          if (target !== null) valueEdges.push({ expression: owner, target });
+        } else {
+          collectAggregateAssignmentTargets(initializer, owner);
         }
       }
     }
@@ -2326,22 +2783,66 @@ function dynamicComputedMethodTaintAnalysis(
     }
     if (!changed) break;
   }
+  const collectParameterFlow = (parameter: ts.ParameterDeclaration, argument: ts.Expression): void => {
+    if (ts.isIdentifier(parameter.name)) {
+      const target = symbolOf(parameter.name);
+      if (target !== null) valueEdges.push({ expression: argument, target });
+    } else if (ts.isObjectBindingPattern(parameter.name)) {
+      collectBindingProjectionEdges(parameter.name, argument);
+    } else if (ts.isArrayBindingPattern(parameter.name)) {
+      collectArrayBindingProjectionEdges(parameter.name, argument);
+    }
+  };
   for (const call of callExpressions) {
     const callee = unwrapStaticExpression(call.expression);
-    if (!ts.isIdentifier(callee)) continue;
-    const calleeSymbol = symbolOf(callee);
-    const declarations = calleeSymbol === null ? undefined : localFunctions.get(calleeSymbol);
-    if (declarations === undefined) continue;
-    for (const declaration of declarations) {
-      for (const [index, parameter] of declaration.parameters.entries()) {
-        const argument = call.arguments[index];
-        if (argument === undefined) continue;
-        if (ts.isIdentifier(parameter.name)) {
-          const target = symbolOf(parameter.name);
-          if (target !== null) valueEdges.push({ expression: argument, target });
-        } else if (ts.isObjectBindingPattern(parameter.name)) {
-          collectBindingProjectionEdges(parameter.name, argument);
+    if (ts.isIdentifier(callee)) {
+      const calleeSymbol = symbolOf(callee);
+      const declarations = calleeSymbol === null ? undefined : localFunctions.get(calleeSymbol);
+      if (declarations !== undefined) {
+        for (const declaration of declarations) {
+          for (const [index, parameter] of declaration.parameters.entries()) {
+            const argumentsForParameter =
+              parameter.dotDotDotToken === undefined
+                ? call.arguments.slice(index, index + 1)
+                : call.arguments.slice(index);
+            for (const argument of argumentsForParameter) collectParameterFlow(parameter, argument);
+          }
         }
+      }
+    }
+    if (ts.isPropertyAccessExpression(callee) || ts.isElementAccessExpression(callee)) {
+      const methods = ts.isPropertyAccessExpression(callee)
+        ? new Set([callee.name.text])
+        : methodResolver.resolve(callee.argumentExpression).values;
+      const elementCallbackIndex = methods.has("reduce") || methods.has("reduceRight") ? 1 : 0;
+      const isElementCallback = [
+        "every",
+        "filter",
+        "find",
+        "findIndex",
+        "findLast",
+        "findLastIndex",
+        "flatMap",
+        "forEach",
+        "map",
+        "reduce",
+        "reduceRight",
+        "some"
+      ].some((method) => methods.has(method));
+      const callbackExpression = call.arguments[0];
+      if (!isElementCallback || callbackExpression === undefined) continue;
+      const callback = unwrapStaticExpression(callbackExpression);
+      let declarations: ReadonlySet<ts.FunctionLikeDeclaration> | undefined;
+      if (ts.isArrowFunction(callback) || ts.isFunctionExpression(callback)) {
+        declarations = new Set([callback]);
+      } else if (ts.isIdentifier(callback)) {
+        const callbackSymbol = symbolOf(callback);
+        declarations = callbackSymbol === null ? undefined : localFunctions.get(callbackSymbol);
+      }
+      if (declarations === undefined) continue;
+      for (const declaration of declarations) {
+        const parameter = declaration.parameters[elementCallbackIndex];
+        if (parameter !== undefined) collectParameterFlow(parameter, callee.expression);
       }
     }
   }
@@ -2370,6 +2871,48 @@ function dynamicComputedMethodTaintAnalysis(
     properties.set(key, after);
     taintedProperties.set(owner, properties);
     return true;
+  }
+
+  /**
+   * Rest bindings are array carriers whose complete local argument/destructure
+   * ingress is represented by value edges above. Selecting one of their values
+   * therefore propagates existing aggregate taint instead of manufacturing a
+   * possible String.replace/replaceAll method solely from the computed index.
+   */
+  function isTrackedRestArrayCarrier(
+    expression: ts.Expression,
+    resolving: ReadonlySet<ts.Symbol> = new Set()
+  ): boolean {
+    const current = unwrapStaticExpression(expression);
+    if (ts.isConditionalExpression(current)) {
+      return (
+        isTrackedRestArrayCarrier(current.whenTrue, resolving) &&
+        isTrackedRestArrayCarrier(current.whenFalse, resolving)
+      );
+    }
+    if (ts.isCommaListExpression(current)) {
+      const result = current.elements[current.elements.length - 1];
+      return result !== undefined && isTrackedRestArrayCarrier(result, resolving);
+    }
+    if (ts.isBinaryExpression(current) && current.operatorToken.kind === ts.SyntaxKind.CommaToken) {
+      return isTrackedRestArrayCarrier(current.right, resolving);
+    }
+    if (!ts.isIdentifier(current)) return false;
+    const symbol = symbolOf(current);
+    if (symbol === null || resolving.has(symbol)) return false;
+    const nextResolving = new Set([...resolving, symbol]);
+    return (symbol.declarations ?? []).some((declaration) => {
+      if (ts.isParameter(declaration) && ts.isIdentifier(declaration.name)) {
+        return declaration.dotDotDotToken !== undefined;
+      }
+      if (ts.isBindingElement(declaration) && declaration.dotDotDotToken !== undefined) return true;
+      return (
+        ts.isVariableDeclaration(declaration) &&
+        ts.isIdentifier(declaration.name) &&
+        declaration.initializer !== undefined &&
+        isTrackedRestArrayCarrier(declaration.initializer, nextResolving)
+      );
+    });
   }
 
   const expressionTaint = (expression: ts.Expression): number => {
@@ -2418,6 +2961,17 @@ function dynamicComputedMethodTaintAnalysis(
         if (methodNames.has("bind") && (expressionTaint(callee.expression) & METHOD_VALUE_TAINT) !== 0) {
           return METHOD_VALUE_TAINT;
         }
+        // Array projection APIs return a value selected from their carrier.
+        // Conservatively propagate aggregate carrier taint through every such
+        // call result; no diagnostic is emitted unless that result is invoked.
+        const ownerTaint = expressionTaint(callee.expression) & METHOD_VALUE_TAINT;
+        if (ownerTaint !== 0) {
+          if (methodNames.has("at")) {
+            const key = computedMethodText(current.arguments[0], methodResolver);
+            return key === null ? ownerTaint : projectedPropertyTaint(callee.expression, key) | ownerTaint;
+          }
+          return ownerTaint;
+        }
       }
       if (!ts.isIdentifier(callee)) return 0;
       const symbol = symbolOf(callee);
@@ -2436,7 +2990,17 @@ function dynamicComputedMethodTaintAnalysis(
         if (propertyResolution.values.has("replace") || propertyResolution.values.has("replaceAll")) {
           taint |= METHOD_VALUE_TAINT;
         }
-        if (propertyResolution.hasUnknown) taint |= METHOD_VALUE_TAINT;
+        if (propertyResolution.hasUnknown) {
+          taint |= isTrackedRestArrayCarrier(owner) ? expressionTaint(owner) : METHOD_VALUE_TAINT;
+        }
+      }
+      return taint;
+    }
+    if (ts.isArrayLiteralExpression(current)) {
+      let taint = 0;
+      for (const element of current.elements) {
+        if (ts.isOmittedExpression(element)) continue;
+        taint |= expressionTaint(ts.isSpreadElement(element) ? element.expression : element);
       }
       return taint;
     }
@@ -2474,6 +3038,13 @@ function dynamicComputedMethodTaintAnalysis(
         }
       }
     }
+    if (ts.isArrayLiteralExpression(owner) && /^(?:0|[1-9]\d*)$/u.test(key)) {
+      const element = owner.elements[Number(key)];
+      if (element !== undefined && !ts.isOmittedExpression(element) && !ts.isSpreadElement(element)) {
+        taint |= expressionTaint(element);
+      }
+    }
+    if (/^(?:0|[1-9]\d*)$/u.test(key)) taint |= expressionTaint(owner);
     if (ts.isIdentifier(owner)) {
       const ownerSymbol = symbolOf(owner);
       if (ownerSymbol !== null) taint |= propertyTaint(ownerSymbol, key);
@@ -2538,7 +3109,11 @@ function isTaintedDynamicMethodInvocation(
   const callee = unwrapStaticExpression(node.expression);
   if (ts.isElementAccessExpression(callee)) {
     const directMethod = computedMethodText(callee.argumentExpression, methodResolver);
-    if (directMethod !== null || isUnresolvedComputedMethod(callee.argumentExpression, methodResolver)) {
+    if (
+      directMethod === "replace" ||
+      directMethod === "replaceAll" ||
+      isUnresolvedComputedMethod(callee.argumentExpression, methodResolver)
+    ) {
       return false;
     }
   }
@@ -2967,6 +3542,8 @@ function exactMutationHelperBindingProblems(filename: string, source: string): s
 function exactMutationHelperMemberSurfaceProblems(filename: string, source: string): string[] {
   const { checker, sourceFile } = bindOracleSource(filename, source);
   const methodResolver = computedMethodResolver(checker);
+  const operationResolver = reflectiveOperationResolver(sourceFile, checker, methodResolver);
+  const assignmentSources = new Map<ts.Symbol, ts.Expression[]>();
   const problems: string[] = [];
   const report = (helper: string, node: ts.Node): void => {
     const position = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile));
@@ -2986,8 +3563,349 @@ function exactMutationHelperMemberSurfaceProblems(filename: string, source: stri
   const reportAll = (helpers: readonly string[], node: ts.Node): void => {
     for (const helper of helpers) report(helper, node);
   };
+  function collectAssignmentSources(node: ts.Node): void {
+    if (ts.isBinaryExpression(node) && isAliasAssignmentToken(node.operatorToken.kind)) {
+      const left = unwrapStaticExpression(node.left);
+      if (ts.isIdentifier(left)) {
+        const symbol = checker.getSymbolAtLocation(left);
+        if (symbol !== undefined) {
+          const sources = assignmentSources.get(symbol) ?? [];
+          sources.push(node.right);
+          assignmentSources.set(symbol, sources);
+        }
+      }
+    }
+    ts.forEachChild(node, collectAssignmentSources);
+  }
+  collectAssignmentSources(sourceFile);
+
+  /** Resolve helper-spelled keys inside an Object.fromEntries iterable. */
+  function helperNamesFromEntryIterable(
+    expression: ts.Expression,
+    resolving: ReadonlySet<ts.Symbol> = new Set()
+  ): string[] {
+    const current = unwrapStaticExpression(expression);
+    if (ts.isConditionalExpression(current)) {
+      return [
+        ...helperNamesFromEntryIterable(current.whenTrue, resolving),
+        ...helperNamesFromEntryIterable(current.whenFalse, resolving)
+      ];
+    }
+    if (ts.isCommaListExpression(current)) {
+      const result = current.elements[current.elements.length - 1];
+      return result === undefined ? [] : helperNamesFromEntryIterable(result, resolving);
+    }
+    if (ts.isBinaryExpression(current) && current.operatorToken.kind === ts.SyntaxKind.CommaToken) {
+      return helperNamesFromEntryIterable(current.right, resolving);
+    }
+    if (ts.isBinaryExpression(current) && isLogicalValueToken(current.operatorToken.kind)) {
+      return [
+        ...helperNamesFromEntryIterable(current.left, resolving),
+        ...helperNamesFromEntryIterable(current.right, resolving)
+      ];
+    }
+    if (ts.isBinaryExpression(current) && isAliasAssignmentToken(current.operatorToken.kind)) {
+      return [
+        ...helperNamesFromEntryIterable(current.right, resolving),
+        ...(current.operatorToken.kind === ts.SyntaxKind.EqualsToken
+          ? []
+          : helperNamesFromEntryIterable(current.left, resolving))
+      ];
+    }
+    if (ts.isIdentifier(current)) {
+      const symbol = checker.getSymbolAtLocation(current);
+      if (symbol === undefined || resolving.has(symbol)) return [];
+      const nextResolving = new Set([...resolving, symbol]);
+      const declarations = symbol.declarations ?? [];
+      const sources: ts.Expression[] = [...(assignmentSources.get(symbol) ?? [])];
+      if (declarations.length === 1) {
+        const declaration = declarations[0];
+        if (
+          declaration !== undefined &&
+          ts.isVariableDeclaration(declaration) &&
+          ts.isIdentifier(declaration.name) &&
+          declaration.initializer !== undefined
+        ) {
+          sources.unshift(declaration.initializer);
+        }
+      }
+      return sources.flatMap((sourceExpression) =>
+        helperNamesFromEntryIterable(sourceExpression, nextResolving)
+      );
+    }
+    if (ts.isNewExpression(current)) {
+      const firstArgument = current.arguments?.[0];
+      return firstArgument === undefined ? [] : helperNamesFromEntryIterable(firstArgument, resolving);
+    }
+    if (!ts.isArrayLiteralExpression(current)) return [];
+    const helpers = new Set<string>();
+    for (const element of current.elements) {
+      if (ts.isOmittedExpression(element)) continue;
+      if (ts.isSpreadElement(element)) {
+        for (const helper of helperNamesFromEntryIterable(element.expression, resolving)) helpers.add(helper);
+        continue;
+      }
+      const entry = unwrapStaticExpression(element);
+      if (ts.isArrayLiteralExpression(entry)) {
+        const key = entry.elements[0];
+        if (key !== undefined && !ts.isOmittedExpression(key) && !ts.isSpreadElement(key)) {
+          for (const helper of helperNamesFromValues(methodResolver.resolve(key).values)) helpers.add(helper);
+        }
+      } else {
+        for (const helper of helperNamesFromEntryIterable(entry, resolving)) helpers.add(helper);
+      }
+    }
+    return [...helpers].sort();
+  }
+
+  /** Resolve exact keys written by Object.assign/defineProperties carriers. */
+  function helperNamesFromObjectCarrier(
+    expression: ts.Expression,
+    resolving: ReadonlySet<ts.Symbol> = new Set()
+  ): string[] {
+    const current = unwrapStaticExpression(expression);
+    if (ts.isConditionalExpression(current)) {
+      return [
+        ...helperNamesFromObjectCarrier(current.whenTrue, resolving),
+        ...helperNamesFromObjectCarrier(current.whenFalse, resolving)
+      ];
+    }
+    if (ts.isCommaListExpression(current)) {
+      const result = current.elements[current.elements.length - 1];
+      return result === undefined ? [] : helperNamesFromObjectCarrier(result, resolving);
+    }
+    if (ts.isBinaryExpression(current) && current.operatorToken.kind === ts.SyntaxKind.CommaToken) {
+      return helperNamesFromObjectCarrier(current.right, resolving);
+    }
+    if (ts.isBinaryExpression(current) && isLogicalValueToken(current.operatorToken.kind)) {
+      return [
+        ...helperNamesFromObjectCarrier(current.left, resolving),
+        ...helperNamesFromObjectCarrier(current.right, resolving)
+      ];
+    }
+    if (ts.isBinaryExpression(current) && isAliasAssignmentToken(current.operatorToken.kind)) {
+      return [
+        ...helperNamesFromObjectCarrier(current.right, resolving),
+        ...(current.operatorToken.kind === ts.SyntaxKind.EqualsToken
+          ? []
+          : helperNamesFromObjectCarrier(current.left, resolving))
+      ];
+    }
+    if (ts.isIdentifier(current)) {
+      const symbol = checker.getSymbolAtLocation(current);
+      if (symbol === undefined || resolving.has(symbol)) return [];
+      const nextResolving = new Set([...resolving, symbol]);
+      const sources: ts.Expression[] = [...(assignmentSources.get(symbol) ?? [])];
+      const declarations = symbol.declarations ?? [];
+      if (declarations.length === 1) {
+        const declaration = declarations[0];
+        if (
+          declaration !== undefined &&
+          ts.isVariableDeclaration(declaration) &&
+          ts.isIdentifier(declaration.name) &&
+          declaration.initializer !== undefined
+        ) {
+          sources.unshift(declaration.initializer);
+        }
+      }
+      return sources.flatMap((sourceExpression) => helperNamesFromObjectCarrier(sourceExpression, nextResolving));
+    }
+    if (ts.isObjectLiteralExpression(current)) {
+      const helpers = new Set<string>();
+      for (const property of current.properties) {
+        if (
+          ts.isPropertyAssignment(property) ||
+          ts.isShorthandPropertyAssignment(property) ||
+          ts.isMethodDeclaration(property) ||
+          ts.isGetAccessorDeclaration(property) ||
+          ts.isSetAccessorDeclaration(property)
+        ) {
+          for (const helper of helperNamesFromProperty(property.name)) helpers.add(helper);
+        }
+        if (ts.isSpreadAssignment(property)) {
+          for (const helper of helperNamesFromObjectCarrier(property.expression, resolving)) helpers.add(helper);
+        }
+      }
+      return [...helpers].sort();
+    }
+    if (ts.isCallExpression(current)) {
+      const operations = operationResolver.resolve(current.expression);
+      if (operations.has("object.fromEntries")) {
+        const entries = current.arguments[0];
+        return entries === undefined ? [] : helperNamesFromEntryIterable(entries, resolving);
+      }
+      if (operations.has("object.assign")) {
+        return current.arguments
+          .slice(1)
+          .flatMap((argument) => helperNamesFromObjectCarrier(argument, resolving));
+      }
+    }
+    return [];
+  }
+
+  interface OperationTarget {
+    readonly operation: ReflectiveOperationKind;
+    readonly prefix: readonly ts.Expression[];
+  }
+  const expressionValueSources = (identifier: ts.Identifier): readonly ts.Expression[] => {
+    const symbol = checker.getSymbolAtLocation(identifier);
+    if (symbol === undefined) return [];
+    const sources: ts.Expression[] = [...(assignmentSources.get(symbol) ?? [])];
+    const declarations = symbol.declarations ?? [];
+    if (declarations.length === 1) {
+      const declaration = declarations[0];
+      if (
+        declaration !== undefined &&
+        ts.isVariableDeclaration(declaration) &&
+        ts.isIdentifier(declaration.name) &&
+        declaration.initializer !== undefined
+      ) {
+        sources.unshift(declaration.initializer);
+      }
+    }
+    return sources;
+  };
+  function operationTargets(
+    expression: ts.Expression,
+    resolving: ReadonlySet<ts.Symbol> = new Set()
+  ): OperationTarget[] {
+    const current = unwrapStaticExpression(expression);
+    if (ts.isConditionalExpression(current)) {
+      return [...operationTargets(current.whenTrue, resolving), ...operationTargets(current.whenFalse, resolving)];
+    }
+    if (ts.isCommaListExpression(current)) {
+      const result = current.elements[current.elements.length - 1];
+      return result === undefined ? [] : operationTargets(result, resolving);
+    }
+    if (ts.isBinaryExpression(current) && current.operatorToken.kind === ts.SyntaxKind.CommaToken) {
+      return operationTargets(current.right, resolving);
+    }
+    if (ts.isBinaryExpression(current) && isLogicalValueToken(current.operatorToken.kind)) {
+      return [...operationTargets(current.left, resolving), ...operationTargets(current.right, resolving)];
+    }
+    if (ts.isBinaryExpression(current) && isAliasAssignmentToken(current.operatorToken.kind)) {
+      return [
+        ...operationTargets(current.right, resolving),
+        ...(current.operatorToken.kind === ts.SyntaxKind.EqualsToken ? [] : operationTargets(current.left, resolving))
+      ];
+    }
+    if (ts.isCallExpression(current)) {
+      const callee = unwrapStaticExpression(current.expression);
+      if (ts.isPropertyAccessExpression(callee) || ts.isElementAccessExpression(callee)) {
+        const invocations = ts.isPropertyAccessExpression(callee)
+          ? new Set([callee.name.text])
+          : methodResolver.resolve(callee.argumentExpression).values;
+        if (invocations.has("bind")) {
+          return operationTargets(callee.expression, resolving).map((target) => ({
+            operation: target.operation,
+            prefix: [...target.prefix, ...current.arguments.slice(1)]
+          }));
+        }
+      }
+    }
+    if (ts.isIdentifier(current)) {
+      const symbol = checker.getSymbolAtLocation(current);
+      if (symbol !== undefined && !resolving.has(symbol)) {
+        const sources = expressionValueSources(current);
+        if (sources.length > 0) {
+          const nextResolving = new Set([...resolving, symbol]);
+          const targets = sources.flatMap((sourceExpression) => operationTargets(sourceExpression, nextResolving));
+          if (targets.length > 0) return targets;
+        }
+      }
+    }
+    return [...operationResolver.resolve(current)].map((operation) => ({ operation, prefix: [] }));
+  }
+  const appliedArguments = (expression: ts.Expression | undefined): readonly ts.Expression[] | null => {
+    if (expression === undefined) return null;
+    const current = unwrapStaticExpression(expression);
+    if (!ts.isArrayLiteralExpression(current)) return null;
+    const argumentsList: ts.Expression[] = [];
+    for (const element of current.elements) {
+      if (ts.isOmittedExpression(element)) continue;
+      if (ts.isSpreadElement(element)) {
+        const spread = appliedArguments(element.expression);
+        if (spread === null) return null;
+        argumentsList.push(...spread);
+      } else {
+        argumentsList.push(element);
+      }
+    }
+    return argumentsList;
+  };
+  const normalizedOperationInvocations = (
+    call: ts.CallExpression
+  ): Array<{ readonly operation: ReflectiveOperationKind; readonly argumentsList: readonly ts.Expression[] }> => {
+    const callee = unwrapStaticExpression(call.expression);
+    if (ts.isPropertyAccessExpression(callee) || ts.isElementAccessExpression(callee)) {
+      const invocations = ts.isPropertyAccessExpression(callee)
+        ? new Set([callee.name.text])
+        : methodResolver.resolve(callee.argumentExpression).values;
+      if (invocations.has("call")) {
+        return operationTargets(callee.expression).map((target) => ({
+          argumentsList: [...target.prefix, ...call.arguments.slice(1)],
+          operation: target.operation
+        }));
+      }
+      if (invocations.has("apply")) {
+        const argumentsList = appliedArguments(call.arguments[1]);
+        if (argumentsList !== null) {
+          return operationTargets(callee.expression).map((target) => ({
+            argumentsList: [...target.prefix, ...argumentsList],
+            operation: target.operation
+          }));
+        }
+      }
+    }
+    if (operationResolver.resolve(call.expression).has("reflect.apply")) {
+      const targetExpression = call.arguments[0];
+      const argumentsList = appliedArguments(call.arguments[2]);
+      if (targetExpression !== undefined && argumentsList !== null) {
+        return operationTargets(targetExpression).map((target) => ({
+          argumentsList: [...target.prefix, ...argumentsList],
+          operation: target.operation
+        }));
+      }
+    }
+    return operationTargets(call.expression)
+      .filter((target) => target.operation !== "reflect.apply")
+      .map((target) => ({
+        argumentsList: [...target.prefix, ...call.arguments],
+        operation: target.operation
+      }));
+  };
 
   function visit(node: ts.Node): void {
+    if (ts.isCallExpression(node)) {
+      for (const invocation of normalizedOperationInvocations(node)) {
+        if (
+          invocation.operation === "object.descriptor" ||
+          invocation.operation === "object.define" ||
+          invocation.operation === "reflect.descriptor" ||
+          invocation.operation === "reflect.define" ||
+          invocation.operation === "reflect.get" ||
+          invocation.operation === "reflect.set"
+        ) {
+          const propertyKey = invocation.argumentsList[1];
+          if (propertyKey !== undefined) {
+            reportAll(helperNamesFromValues(methodResolver.resolve(propertyKey).values), propertyKey);
+          }
+        }
+        if (invocation.operation === "object.fromEntries") {
+          const entries = invocation.argumentsList[0];
+          if (entries !== undefined) reportAll(helperNamesFromEntryIterable(entries), entries);
+        }
+        if (invocation.operation === "object.definePlural") {
+          const descriptors = invocation.argumentsList[1];
+          if (descriptors !== undefined) reportAll(helperNamesFromObjectCarrier(descriptors), descriptors);
+        }
+        if (invocation.operation === "object.assign") {
+          for (const sourceArgument of invocation.argumentsList.slice(1)) {
+            reportAll(helperNamesFromObjectCarrier(sourceArgument), sourceArgument);
+          }
+        }
+      }
+    }
     if (
       (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) &&
       !isErasedRuntimeNode(node) &&
@@ -3123,6 +4041,737 @@ function repositoryMutationHelperSurfaceProblems(filename: string, source: strin
     }
   }
   return problems;
+}
+
+interface SourceReaderCandidateFacts {
+  readonly candidateReads: number;
+  readonly candidateReadSha256: string;
+}
+
+/** Return the single const initializer that statically supplies one identifier. */
+function staticConstInitializer(identifier: ts.Identifier, checker: ts.TypeChecker): ts.Expression | null {
+  const symbol = checker.getSymbolAtLocation(identifier);
+  if (symbol === undefined || symbol.declarations?.length !== 1) return null;
+  const declaration = symbol.declarations[0];
+  if (
+    declaration === undefined ||
+    !ts.isVariableDeclaration(declaration) ||
+    declaration.initializer === undefined ||
+    !ts.isVariableDeclarationList(declaration.parent) ||
+    (declaration.parent.flags & ts.NodeFlags.Const) === 0
+  ) {
+    return null;
+  }
+  return declaration.initializer;
+}
+
+/** Recognize a checked-in production-source path, including static const carriers. */
+function namesProductionSourcePath(expression: ts.Expression, checker: ts.TypeChecker): boolean {
+  const fragments: string[] = [];
+  const resolving = new Set<ts.Symbol>();
+  function visit(node: ts.Node): void {
+    if (ts.isStringLiteralLike(node)) {
+      fragments.push(node.text.split("\\").join("/"));
+      return;
+    }
+    if (ts.isTemplateHead(node) || ts.isTemplateMiddle(node) || ts.isTemplateTail(node)) {
+      fragments.push(node.text.split("\\").join("/"));
+      return;
+    }
+    if (ts.isIdentifier(node)) {
+      const symbol = checker.getSymbolAtLocation(node);
+      if (symbol === undefined || resolving.has(symbol)) return;
+      const initializer = staticConstInitializer(node, checker);
+      if (initializer === null) return;
+      resolving.add(symbol);
+      visit(initializer);
+      resolving.delete(symbol);
+      return;
+    }
+    ts.forEachChild(node, visit);
+  }
+  visit(expression);
+  // A static `src` path segment is sufficient even when the basename is
+  // dynamic; excluding it would let a new loop-carried source reader evade census.
+  const productionPath = /(?:^|\/+|\.\.)src(?:\/+|$)/u;
+  return (
+    fragments.some((fragment) => productionPath.test(fragment)) ||
+    productionPath.test(fragments.join("")) ||
+    productionPath.test(fragments.join("/"))
+  );
+}
+
+/** Require repository-root evidence before treating a detached `src` enumeration as production. */
+function hasProductionSourceRootAnchor(expression: ts.Expression, checker: ts.TypeChecker): boolean {
+  const resolving = new Set<ts.Symbol>();
+  let anchored = false;
+  function visit(node: ts.Node): void {
+    if (anchored) return;
+    if (ts.isIdentifier(node) && (node.text === "repoRoot" || node.text === "__dirname")) {
+      anchored = true;
+      return;
+    }
+    if (ts.isIdentifier(node)) {
+      const symbol = checker.getSymbolAtLocation(node);
+      if (symbol !== undefined && !resolving.has(symbol)) {
+        const initializer = staticConstInitializer(node, checker);
+        if (initializer !== null) {
+          resolving.add(symbol);
+          visit(initializer);
+          resolving.delete(symbol);
+          if (anchored) return;
+        }
+      }
+    }
+    if (ts.isPropertyAccessExpression(node) && node.name.text === "url" && ts.isMetaProperty(node.expression)) {
+      anchored = true;
+      return;
+    }
+    if (
+      ts.isCallExpression(node) &&
+      ts.isPropertyAccessExpression(node.expression) &&
+      node.expression.name.text === "cwd" &&
+      ts.isIdentifier(node.expression.expression) &&
+      node.expression.expression.text === "process"
+    ) {
+      anchored = true;
+      return;
+    }
+    ts.forEachChild(node, visit);
+  }
+  visit(expression);
+  return anchored;
+}
+
+/** Detect statically rooted `src` evidence that may carry paths into same-file fs reads. */
+function hasProductionSourceEnumeration(sourceFile: ts.SourceFile, checker: ts.TypeChecker): boolean {
+  let found = false;
+  function visit(node: ts.Node): void {
+    if (found) return;
+    const pathExpression = ts.isCallExpression(node) || ts.isNewExpression(node) ? node : null;
+    const carriesCallback =
+      pathExpression?.arguments?.some(
+        (argument) => ts.isArrowFunction(argument) || ts.isFunctionExpression(argument)
+      ) ?? false;
+    const callee = pathExpression === null ? null : unwrapStaticExpression(pathExpression.expression);
+    const calleeName =
+      callee === null
+        ? null
+        : ts.isIdentifier(callee)
+          ? callee.text
+          : ts.isPropertyAccessExpression(callee)
+            ? callee.name.text
+            : ts.isElementAccessExpression(callee)
+              ? staticStringExpressionText(callee.argumentExpression)
+              : null;
+    const isPathConstructor = calleeName === "join" || calleeName === "resolve";
+    const carriesRootedSourceArgument =
+      pathExpression?.arguments?.some(
+        (argument) =>
+          ts.isExpression(argument) &&
+          namesProductionSourcePath(argument, checker) &&
+          hasProductionSourceRootAnchor(argument, checker)
+      ) ?? false;
+    if (
+      pathExpression !== null &&
+      !carriesCallback &&
+      (carriesRootedSourceArgument ||
+        (isPathConstructor &&
+          namesProductionSourcePath(pathExpression, checker) &&
+          hasProductionSourceRootAnchor(pathExpression, checker)))
+    ) {
+      found = true;
+      return;
+    }
+    ts.forEachChild(node, visit);
+  }
+  visit(sourceFile);
+  return found;
+}
+
+/**
+ * Derive the fail-closed source-reader candidate class from authentic fs reads
+ * plus direct/path-resolved or conservative same-file rooted `src` evidence.
+ * Raw/helper mutation discovery deliberately does not participate in
+ * membership: every candidate file is handed to the complete repository
+ * mutation oracle, so extracted, destructured, reflective, and future mutation
+ * spellings cannot evade inventory by evading a second narrower detector here.
+ */
+function sourceReaderCandidateFacts(filename: string, source: string): SourceReaderCandidateFacts {
+  const { checker, sourceFile } = bindOracleSource(filename, source);
+  const directReaders = new Set<ts.Symbol>();
+  const fsContainers = new Set<ts.Symbol>();
+  const createRequireFactories = new Set<ts.Symbol>();
+  const nodeModuleContainers = new Set<ts.Symbol>();
+  const assignmentSources = new Map<ts.Symbol, ts.Expression[]>();
+  const destructuringSources = new Map<
+    ts.Symbol,
+    Array<{ readonly keys: readonly string[]; readonly owner: ts.Expression }>
+  >();
+  const methodResolver = computedMethodResolver(checker);
+  const operationResolver = reflectiveOperationResolver(sourceFile, checker, methodResolver);
+  const addSymbol = (target: Set<ts.Symbol>, identifier: ts.Identifier): void => {
+    const symbol = checker.getSymbolAtLocation(identifier);
+    if (symbol !== undefined) target.add(symbol);
+  };
+  const assignmentPropertyKey = (name: ts.PropertyName): string | null => {
+    if (!ts.isComputedPropertyName(name)) return staticPropertyText(name);
+    const resolution = methodResolver.resolve(name.expression);
+    return !resolution.hasUnknown && resolution.values.size === 1 ? ([...resolution.values][0] ?? null) : null;
+  };
+  const collectDestructuringAssignmentSources = (
+    pattern: ts.ObjectLiteralExpression,
+    owner: ts.Expression,
+    prefix: readonly string[] = []
+  ): void => {
+    for (const property of pattern.properties) {
+      if (ts.isShorthandPropertyAssignment(property)) {
+        const symbol =
+          checker.getShorthandAssignmentValueSymbol(property) ?? checker.getSymbolAtLocation(property.name);
+        if (symbol === undefined) continue;
+        const sources = destructuringSources.get(symbol) ?? [];
+        sources.push({ keys: [...prefix, property.name.text], owner });
+        destructuringSources.set(symbol, sources);
+        continue;
+      }
+      if (!ts.isPropertyAssignment(property)) continue;
+      const key = assignmentPropertyKey(property.name);
+      if (key === null) continue;
+      const target = flatAssignmentTarget(property.initializer)?.target;
+      if (target !== undefined) {
+        const symbol = checker.getSymbolAtLocation(target);
+        if (symbol === undefined) continue;
+        const sources = destructuringSources.get(symbol) ?? [];
+        sources.push({ keys: [...prefix, key], owner });
+        destructuringSources.set(symbol, sources);
+        continue;
+      }
+      const nested = unwrapStaticExpression(property.initializer);
+      if (ts.isObjectLiteralExpression(nested)) {
+        collectDestructuringAssignmentSources(nested, owner, [...prefix, key]);
+      }
+    }
+  };
+  function collectAssignmentSources(node: ts.Node): void {
+    if (ts.isBinaryExpression(node) && isAliasAssignmentToken(node.operatorToken.kind)) {
+      const left = unwrapStaticExpression(node.left);
+      if (ts.isIdentifier(left)) {
+        const symbol = checker.getSymbolAtLocation(left);
+        if (symbol !== undefined) {
+          const sources = assignmentSources.get(symbol) ?? [];
+          sources.push(node.right);
+          assignmentSources.set(symbol, sources);
+        }
+      } else if (node.operatorToken.kind === ts.SyntaxKind.EqualsToken && ts.isObjectLiteralExpression(left)) {
+        collectDestructuringAssignmentSources(left, node.right);
+      }
+    }
+    ts.forEachChild(node, collectAssignmentSources);
+  }
+  collectAssignmentSources(sourceFile);
+
+  for (const statement of sourceFile.statements) {
+    if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier)) continue;
+    const moduleName = statement.moduleSpecifier.text;
+    const clause = statement.importClause;
+    if (clause === undefined || clause.isTypeOnly) continue;
+    if (moduleName === "node:module") {
+      if (clause.name !== undefined) addSymbol(nodeModuleContainers, clause.name);
+      const bindings = clause.namedBindings;
+      if (bindings !== undefined && ts.isNamespaceImport(bindings)) {
+        addSymbol(nodeModuleContainers, bindings.name);
+      } else if (bindings !== undefined && ts.isNamedImports(bindings)) {
+        for (const element of bindings.elements) {
+          if (element.isTypeOnly) continue;
+          const importedName = element.propertyName?.text ?? element.name.text;
+          if (importedName === "createRequire") addSymbol(createRequireFactories, element.name);
+        }
+      }
+      continue;
+    }
+    if (moduleName !== "node:fs" && moduleName !== "node:fs/promises") continue;
+    if (clause.name !== undefined) addSymbol(fsContainers, clause.name);
+    const bindings = clause.namedBindings;
+    if (bindings === undefined) continue;
+    if (ts.isNamespaceImport(bindings)) {
+      addSymbol(fsContainers, bindings.name);
+      continue;
+    }
+    for (const element of bindings.elements) {
+      if (element.isTypeOnly) continue;
+      const importedName = element.propertyName?.text ?? element.name.text;
+      if (importedName === "readFile" || importedName === "readFileSync") {
+        addSymbol(directReaders, element.name);
+      } else if (moduleName === "node:fs" && importedName === "promises") {
+        addSymbol(fsContainers, element.name);
+      }
+    }
+  }
+
+  const symbolIsIn = (identifier: ts.Identifier, symbols: ReadonlySet<ts.Symbol>): boolean => {
+    const symbol = checker.getSymbolAtLocation(identifier);
+    return symbol !== undefined && symbols.has(symbol);
+  };
+  const variableValueSources = (identifier: ts.Identifier): readonly ts.Expression[] => {
+    const symbol = checker.getSymbolAtLocation(identifier);
+    if (symbol === undefined || symbol.declarations?.length !== 1) return [];
+    const declaration = symbol.declarations[0];
+    if (declaration === undefined || !ts.isVariableDeclaration(declaration) || !ts.isIdentifier(declaration.name)) {
+      return assignmentSources.get(symbol) ?? [];
+    }
+    const sources: ts.Expression[] = [];
+    if (declaration.initializer !== undefined) sources.push(declaration.initializer);
+    sources.push(...(assignmentSources.get(symbol) ?? []));
+    return sources;
+  };
+  const bindingElementProjection = (
+    identifier: ts.Identifier
+  ): { readonly keys: readonly string[]; readonly owner: ts.Expression } | null => {
+    const symbol = checker.getSymbolAtLocation(identifier);
+    if (symbol === undefined || symbol.declarations?.length !== 1) return null;
+    let declaration = symbol.declarations[0];
+    if (
+      declaration === undefined ||
+      !ts.isBindingElement(declaration) ||
+      !ts.isObjectBindingPattern(declaration.parent)
+    ) {
+      return null;
+    }
+    const keys: string[] = [];
+    while (ts.isBindingElement(declaration) && ts.isObjectBindingPattern(declaration.parent)) {
+      const propertyName = declaration.propertyName ?? (ts.isIdentifier(declaration.name) ? declaration.name : null);
+      if (propertyName === null) return null;
+      const key = assignmentPropertyKey(propertyName);
+      if (key === null) return null;
+      keys.unshift(key);
+      const owner = declaration.parent.parent;
+      if (ts.isVariableDeclaration(owner)) {
+        return owner.initializer === undefined ? null : { keys, owner: owner.initializer };
+      }
+      if (!ts.isBindingElement(owner)) return null;
+      declaration = owner;
+    }
+    return null;
+  };
+  function isCreateRequireFactory(
+    expression: ts.Expression,
+    resolving: ReadonlySet<ts.Symbol> = new Set()
+  ): boolean {
+    const current = unwrapStaticExpression(expression);
+    if (ts.isConditionalExpression(current)) {
+      return isCreateRequireFactory(current.whenTrue, resolving) || isCreateRequireFactory(current.whenFalse, resolving);
+    }
+    if (ts.isCommaListExpression(current)) {
+      const result = current.elements[current.elements.length - 1];
+      return result !== undefined && isCreateRequireFactory(result, resolving);
+    }
+    if (ts.isBinaryExpression(current) && current.operatorToken.kind === ts.SyntaxKind.CommaToken) {
+      return isCreateRequireFactory(current.right, resolving);
+    }
+    if (ts.isBinaryExpression(current) && isLogicalValueToken(current.operatorToken.kind)) {
+      return isCreateRequireFactory(current.left, resolving) || isCreateRequireFactory(current.right, resolving);
+    }
+    if (ts.isBinaryExpression(current) && isAliasAssignmentToken(current.operatorToken.kind)) {
+      return (
+        isCreateRequireFactory(current.right, resolving) ||
+        (current.operatorToken.kind !== ts.SyntaxKind.EqualsToken && isCreateRequireFactory(current.left, resolving))
+      );
+    }
+    if (ts.isIdentifier(current)) {
+      if (symbolIsIn(current, createRequireFactories)) return true;
+      const symbol = checker.getSymbolAtLocation(current);
+      if (symbol === undefined || resolving.has(symbol)) return false;
+      const nextResolving = new Set([...resolving, symbol]);
+      return variableValueSources(current).some((sourceExpression) =>
+        isCreateRequireFactory(sourceExpression, nextResolving)
+      );
+    }
+    if (ts.isCallExpression(current)) {
+      const callee = unwrapStaticExpression(current.expression);
+      if (ts.isPropertyAccessExpression(callee) || ts.isElementAccessExpression(callee)) {
+        const invocations = ts.isPropertyAccessExpression(callee)
+          ? new Set([callee.name.text])
+          : methodResolver.resolve(callee.argumentExpression).values;
+        return invocations.has("bind") && isCreateRequireFactory(callee.expression, resolving);
+      }
+    }
+    if (ts.isPropertyAccessExpression(current) || ts.isElementAccessExpression(current)) {
+      const members = ts.isPropertyAccessExpression(current)
+        ? new Set([current.name.text])
+        : methodResolver.resolve(current.argumentExpression).values;
+      return members.has("createRequire") && isNodeModuleContainer(current.expression, resolving);
+    }
+    return false;
+  }
+
+  function isNodeModuleContainer(
+    expression: ts.Expression,
+    resolving: ReadonlySet<ts.Symbol> = new Set()
+  ): boolean {
+    const current = unwrapStaticExpression(expression);
+    if (ts.isConditionalExpression(current)) {
+      return isNodeModuleContainer(current.whenTrue, resolving) || isNodeModuleContainer(current.whenFalse, resolving);
+    }
+    if (ts.isIdentifier(current)) {
+      if (symbolIsIn(current, nodeModuleContainers)) return true;
+      const symbol = checker.getSymbolAtLocation(current);
+      if (symbol === undefined || resolving.has(symbol)) return false;
+      const nextResolving = new Set([...resolving, symbol]);
+      return variableValueSources(current).some((sourceExpression) =>
+        isNodeModuleContainer(sourceExpression, nextResolving)
+      );
+    }
+    if (!ts.isCallExpression(current)) return false;
+    const moduleArgument = current.arguments[0];
+    return (
+      moduleArgument !== undefined &&
+      ts.isStringLiteral(moduleArgument) &&
+      moduleArgument.text === "node:module" &&
+      (isNodeRequireFunction(current.expression) || isGetBuiltinModuleFunction(current.expression))
+    );
+  }
+
+  function isNodeRequireFunction(
+    expression: ts.Expression,
+    resolving: ReadonlySet<ts.Symbol> = new Set()
+  ): boolean {
+    const current = unwrapStaticExpression(expression);
+    if (ts.isConditionalExpression(current)) {
+      return isNodeRequireFunction(current.whenTrue, resolving) || isNodeRequireFunction(current.whenFalse, resolving);
+    }
+    if (ts.isCommaListExpression(current)) {
+      const result = current.elements[current.elements.length - 1];
+      return result !== undefined && isNodeRequireFunction(result, resolving);
+    }
+    if (ts.isBinaryExpression(current) && current.operatorToken.kind === ts.SyntaxKind.CommaToken) {
+      return isNodeRequireFunction(current.right, resolving);
+    }
+    if (ts.isBinaryExpression(current) && isLogicalValueToken(current.operatorToken.kind)) {
+      return isNodeRequireFunction(current.left, resolving) || isNodeRequireFunction(current.right, resolving);
+    }
+    if (ts.isBinaryExpression(current) && isAliasAssignmentToken(current.operatorToken.kind)) {
+      return (
+        isNodeRequireFunction(current.right, resolving) ||
+        (current.operatorToken.kind !== ts.SyntaxKind.EqualsToken && isNodeRequireFunction(current.left, resolving))
+      );
+    }
+    if (ts.isIdentifier(current)) {
+      const runtimeSymbol = runtimeValueSymbolAt(checker, current);
+      if (
+        current.text === "require" &&
+        runtimeSymbol === undefined &&
+        !hasTopLevelLexicalValueBinding(sourceFile, "require")
+      ) {
+        return true;
+      }
+      const symbol = checker.getSymbolAtLocation(current);
+      if (symbol === undefined || resolving.has(symbol)) return false;
+      const nextResolving = new Set([...resolving, symbol]);
+      return variableValueSources(current).some((sourceExpression) =>
+        isNodeRequireFunction(sourceExpression, nextResolving)
+      );
+    }
+    if (ts.isCallExpression(current)) return isCreateRequireFactory(current.expression);
+    return false;
+  }
+
+  function isGetBuiltinModuleFunction(
+    expression: ts.Expression,
+    resolving: ReadonlySet<ts.Symbol> = new Set()
+  ): boolean {
+    const current = unwrapStaticExpression(expression);
+    if (ts.isConditionalExpression(current)) {
+      return (
+        isGetBuiltinModuleFunction(current.whenTrue, resolving) ||
+        isGetBuiltinModuleFunction(current.whenFalse, resolving)
+      );
+    }
+    if (ts.isIdentifier(current)) {
+      const symbol = checker.getSymbolAtLocation(current);
+      if (symbol === undefined || resolving.has(symbol)) return false;
+      const nextResolving = new Set([...resolving, symbol]);
+      return variableValueSources(current).some((sourceExpression) =>
+        isGetBuiltinModuleFunction(sourceExpression, nextResolving)
+      );
+    }
+    if (ts.isCallExpression(current)) {
+      const callee = unwrapStaticExpression(current.expression);
+      if (ts.isPropertyAccessExpression(callee) || ts.isElementAccessExpression(callee)) {
+        const invocations = ts.isPropertyAccessExpression(callee)
+          ? new Set([callee.name.text])
+          : methodResolver.resolve(callee.argumentExpression).values;
+        return invocations.has("bind") && isGetBuiltinModuleFunction(callee.expression, resolving);
+      }
+      return false;
+    }
+    if (!ts.isPropertyAccessExpression(current) && !ts.isElementAccessExpression(current)) return false;
+    const owner = unwrapStaticExpression(current.expression);
+    if (!ts.isIdentifier(owner) || owner.text !== "process") return false;
+    const runtimeSymbol = runtimeValueSymbolAt(checker, owner);
+    if (runtimeSymbol !== undefined || hasTopLevelLexicalValueBinding(sourceFile, "process")) return false;
+    const members = ts.isPropertyAccessExpression(current)
+      ? new Set([current.name.text])
+      : methodResolver.resolve(current.argumentExpression).values;
+    return members.has("getBuiltinModule");
+  }
+
+  const isAuthenticModuleAcquisition = (call: ts.CallExpression, moduleName: string): boolean => {
+    const moduleArgument = call.arguments[0];
+    return (
+      moduleArgument !== undefined &&
+      ts.isStringLiteral(moduleArgument) &&
+      moduleArgument.text === moduleName &&
+      (isNodeRequireFunction(call.expression) || isGetBuiltinModuleFunction(call.expression))
+    );
+  };
+  const isFsContainer = (expression: ts.Expression, resolving = new Set<ts.Symbol>()): boolean => {
+    const current = unwrapStaticExpression(expression);
+    if (ts.isConditionalExpression(current)) {
+      return isFsContainer(current.whenTrue, resolving) || isFsContainer(current.whenFalse, resolving);
+    }
+    if (ts.isCommaListExpression(current)) {
+      const result = current.elements[current.elements.length - 1];
+      return result !== undefined && isFsContainer(result, resolving);
+    }
+    if (ts.isBinaryExpression(current) && current.operatorToken.kind === ts.SyntaxKind.CommaToken) {
+      return isFsContainer(current.right, resolving);
+    }
+    if (ts.isBinaryExpression(current) && isLogicalValueToken(current.operatorToken.kind)) {
+      return isFsContainer(current.left, resolving) || isFsContainer(current.right, resolving);
+    }
+    if (ts.isBinaryExpression(current) && isAliasAssignmentToken(current.operatorToken.kind)) {
+      return (
+        isFsContainer(current.right, resolving) ||
+        (current.operatorToken.kind !== ts.SyntaxKind.EqualsToken && isFsContainer(current.left, resolving))
+      );
+    }
+    if (ts.isIdentifier(current)) {
+      if (symbolIsIn(current, fsContainers)) return true;
+      const symbol = checker.getSymbolAtLocation(current);
+      if (symbol === undefined || resolving.has(symbol)) return false;
+      const sources = variableValueSources(current);
+      const projections = [
+        ...(bindingElementProjection(current) === null ? [] : [bindingElementProjection(current)]),
+        ...(destructuringSources.get(symbol) ?? [])
+      ].filter(
+        (projection): projection is { readonly keys: readonly string[]; readonly owner: ts.Expression } =>
+          projection !== null
+      );
+      if (sources.length === 0 && projections.length === 0) return false;
+      resolving.add(symbol);
+      const result =
+        sources.some((sourceExpression) => isFsContainer(sourceExpression, resolving)) ||
+        projections.some(
+          (projection) =>
+            projection.keys.length > 0 &&
+            projection.keys.every((key) => key === "promises") &&
+            isFsContainer(projection.owner, resolving)
+        );
+      resolving.delete(symbol);
+      return result;
+    }
+    if (ts.isCallExpression(current)) {
+      return (
+        isAuthenticModuleAcquisition(current, "node:fs") ||
+        isAuthenticModuleAcquisition(current, "node:fs/promises")
+      );
+    }
+    if (ts.isPropertyAccessExpression(current) || ts.isElementAccessExpression(current)) {
+      const members = ts.isPropertyAccessExpression(current)
+        ? new Set([current.name.text])
+        : methodResolver.resolve(current.argumentExpression).values;
+      return members.has("promises") && isFsContainer(current.expression, resolving);
+    }
+    return false;
+  };
+  const isFsReader = (expression: ts.Expression, resolving = new Set<ts.Symbol>()): boolean => {
+    const current = unwrapStaticExpression(expression);
+    if (ts.isConditionalExpression(current)) {
+      return isFsReader(current.whenTrue, resolving) || isFsReader(current.whenFalse, resolving);
+    }
+    if (ts.isCommaListExpression(current)) {
+      const result = current.elements[current.elements.length - 1];
+      return result !== undefined && isFsReader(result, resolving);
+    }
+    if (ts.isBinaryExpression(current) && current.operatorToken.kind === ts.SyntaxKind.CommaToken) {
+      return isFsReader(current.right, resolving);
+    }
+    if (ts.isBinaryExpression(current) && isLogicalValueToken(current.operatorToken.kind)) {
+      return isFsReader(current.left, resolving) || isFsReader(current.right, resolving);
+    }
+    if (ts.isBinaryExpression(current) && isAliasAssignmentToken(current.operatorToken.kind)) {
+      return (
+        isFsReader(current.right, resolving) ||
+        (current.operatorToken.kind !== ts.SyntaxKind.EqualsToken && isFsReader(current.left, resolving))
+      );
+    }
+    if (ts.isIdentifier(current)) {
+      if (symbolIsIn(current, directReaders)) return true;
+      const symbol = checker.getSymbolAtLocation(current);
+      if (symbol === undefined || resolving.has(symbol)) return false;
+      const bindingProjection = bindingElementProjection(current);
+      const projections = [
+        ...(bindingProjection === null ? [] : [bindingProjection]),
+        ...(destructuringSources.get(symbol) ?? [])
+      ];
+      const sources = variableValueSources(current);
+      if (sources.length === 0 && projections.length === 0) return false;
+      resolving.add(symbol);
+      const result =
+        sources.some((sourceExpression) => isFsReader(sourceExpression, resolving)) ||
+        projections.some(
+          (projection) =>
+            projection.keys.length > 0 &&
+            projection.keys.slice(0, -1).every((key) => key === "promises") &&
+            (projection.keys.at(-1) === "readFile" || projection.keys.at(-1) === "readFileSync") &&
+            isFsContainer(projection.owner, resolving)
+        );
+      resolving.delete(symbol);
+      return result;
+    }
+    if (ts.isCallExpression(current)) {
+      const callee = unwrapStaticExpression(current.expression);
+      if (ts.isPropertyAccessExpression(callee) || ts.isElementAccessExpression(callee)) {
+        const members = ts.isPropertyAccessExpression(callee)
+          ? new Set([callee.name.text])
+          : methodResolver.resolve(callee.argumentExpression).values;
+        return members.has("bind") && isFsReader(callee.expression, resolving);
+      }
+      return false;
+    }
+    if (!ts.isPropertyAccessExpression(current) && !ts.isElementAccessExpression(current)) return false;
+    const members = ts.isPropertyAccessExpression(current)
+      ? new Set([current.name.text])
+      : methodResolver.resolve(current.argumentExpression).values;
+    return (
+      (members.has("readFile") || members.has("readFileSync")) && isFsContainer(current.expression, resolving)
+    );
+  };
+  const arrayArgument = (expression: ts.Expression | undefined, index: number): ts.Expression | undefined => {
+    if (expression === undefined) return undefined;
+    const current = unwrapStaticExpression(expression);
+    if (!ts.isArrayLiteralExpression(current)) return undefined;
+    const element = current.elements[index];
+    return element === undefined || ts.isOmittedExpression(element) || ts.isSpreadElement(element)
+      ? undefined
+      : element;
+  };
+  const fsReadPathArgument = (call: ts.CallExpression): ts.Expression | undefined => {
+    const callee = unwrapStaticExpression(call.expression);
+    if (isFsReader(callee)) return call.arguments[0];
+    if (ts.isPropertyAccessExpression(callee) || ts.isElementAccessExpression(callee)) {
+      const invocations = ts.isPropertyAccessExpression(callee)
+        ? new Set([callee.name.text])
+        : methodResolver.resolve(callee.argumentExpression).values;
+      if (isFsReader(callee.expression)) {
+        if (invocations.has("call")) return call.arguments[1];
+        if (invocations.has("apply")) return arrayArgument(call.arguments[1], 0);
+        // A partially bound reader can consume its source path before the
+        // eventual zero-argument invocation. Treat the bind itself as the
+        // conservative read edge so source-reader membership cannot disappear.
+        if (invocations.has("bind")) return call.arguments[1];
+      }
+    }
+    if (operationResolver.resolve(call.expression).has("reflect.apply")) {
+      const reader = call.arguments[0];
+      if (reader !== undefined && isFsReader(reader)) return arrayArgument(call.arguments[2], 0);
+    }
+    return undefined;
+  };
+
+  const authenticReadCalls: Array<{ readonly call: ts.CallExpression; readonly path: ts.Expression }> = [];
+  const readRecords: Array<{
+    readonly call: string;
+    readonly callStart: number;
+    readonly owner: string;
+    readonly ownerSha256: string;
+  }> = [];
+  const recordRead = (call: ts.CallExpression): void => {
+    const owner = mutationHelperCallOwner(call);
+    readRecords.push({
+      call: call.getText(sourceFile),
+      callStart: call.getStart(sourceFile),
+      owner: owner.id,
+      ownerSha256: sourceOwnerSha256(owner.id, owner.node, sourceFile)
+    });
+  };
+  function visit(node: ts.Node): void {
+    if (ts.isCallExpression(node)) {
+      const sourceArgument = fsReadPathArgument(node);
+      if (sourceArgument !== undefined) authenticReadCalls.push({ call: node, path: sourceArgument });
+    }
+    ts.forEachChild(node, visit);
+  }
+  visit(sourceFile);
+  const enumeratesProductionSource = hasProductionSourceEnumeration(sourceFile, checker);
+  for (const read of authenticReadCalls) {
+    if (enumeratesProductionSource || namesProductionSourcePath(read.path, checker)) recordRead(read.call);
+  }
+  return {
+    candidateReads: readRecords.length,
+    candidateReadSha256: sha256Text(JSON.stringify(readRecords))
+  };
+}
+
+function sourceReaderCandidateMembershipSha256(filenames: readonly string[]): string {
+  return sha256Text(JSON.stringify([...filenames].sort()));
+}
+
+/** Require exact agreement between one derived class and its reviewed membership seal. */
+function assertSourceReaderCandidateMembership(
+  label: string,
+  actual: ReadonlySet<string>,
+  expectedFilenames: readonly string[],
+  expectedSha256: string
+): void {
+  const expected = new Set<string>(expectedFilenames);
+  const missing = expectedFilenames.filter((name) => !actual.has(name));
+  const unexpected = [...actual].filter((name) => !expected.has(name)).sort();
+  const actualSha256 = sourceReaderCandidateMembershipSha256([...actual]);
+  if (missing.length === 0 && unexpected.length === 0 && actualSha256 === expectedSha256) {
+    return;
+  }
+  const details: string[] = [];
+  if (missing.length > 0) details.push(`missing: ${missing.join(", ")}`);
+  if (unexpected.length > 0) details.push(`unexpected: ${unexpected.join(", ")}`);
+  if (actualSha256 !== expectedSha256) {
+    details.push(`membership sha256: expected ${expectedSha256}, found ${actualSha256}`);
+  }
+  throw new Error(`${label} mismatch (${details.join("; ")})`);
+}
+
+function assertSourceReaderCandidateMembershipSeal(actual: ReadonlySet<string>): void {
+  assertSourceReaderCandidateMembership(
+    "source-reader candidate census",
+    actual,
+    EXPECTED_SOURCE_READER_CANDIDATE_FILES,
+    EXPECTED_SOURCE_READER_CANDIDATE_MEMBERSHIP_SHA256
+  );
+}
+
+/** Derive every non-structural source-reader candidate without consulting its filename seal. */
+async function collectSourceReaderCandidateFiles(): Promise<string[]> {
+  const testsRoot = path.join(repoRoot, "tests");
+  const structuralFiles = new Set<string>(EXPECTED_STRUCTURAL_FILES);
+  const derived = new Set<string>();
+  async function walk(dir: string): Promise<void> {
+    const entries = await fs.readdir(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        await walk(full);
+      } else if (entry.name.endsWith(".test.ts")) {
+        const relative = path.relative(testsRoot, full).split(path.sep).join("/");
+        if (structuralFiles.has(relative)) continue;
+        const source = await fs.readFile(full, "utf8");
+        const facts = sourceReaderCandidateFacts(relative, source);
+        if (facts.candidateReads > 0) derived.add(relative);
+      }
+    }
+  }
+  await walk(testsRoot);
+  assertSourceReaderCandidateMembershipSeal(derived);
+  return [...derived].sort().map((name) => path.join(testsRoot, name));
 }
 
 /** Discover all structural-invariant test files: every `*-invariant.test.ts`
@@ -3446,13 +5095,26 @@ const FOCUS_TIMEOUT_FILENAME = "tests/no-internal-imports.test.ts";
 const FOCUS_TIMEOUT_SUITE_TITLE = "Class A invariant — no test imports value from registration boilerplate";
 const FOCUS_TIMEOUT_SUITE_PROBLEM = `${FOCUS_TIMEOUT_FILENAME} must retain one direct top-level suite ${FOCUS_TIMEOUT_SUITE_TITLE}`;
 const FOCUS_TIMEOUT_REGISTRATION_PROBLEM = `${FOCUS_TIMEOUT_FILENAME} must retain one first direct beforeAll hook with exact timeout 45_000`;
-const FOCUS_TIMEOUT_TEST_TITLES = [
-  "keeps test imports and the exact coverage-only isolation boundary closed",
-  "NEGATIVE control: restricted imports and coverage isolation drift are rejected"
+const FOCUS_TIMEOUT_TEST_REGISTRATIONS = [
+  {
+    lowerTimeout: "59_999",
+    raisedTimeout: "60_001",
+    timeout: "60_000",
+    title: "keeps test imports and the exact coverage-only isolation boundary closed"
+  },
+  {
+    lowerTimeout: "89_999",
+    raisedTimeout: "90_001",
+    timeout: "90_000",
+    title: "NEGATIVE control: restricted imports and coverage isolation drift are rejected"
+  }
 ] as const;
 
-function focusTimeoutTestProblem(title: string): string {
-  return `${FOCUS_TIMEOUT_FILENAME} must retain one direct async it registration with exact timeout 45_000: ${title}`;
+function focusTimeoutTestProblem(registration: (typeof FOCUS_TIMEOUT_TEST_REGISTRATIONS)[number]): string {
+  return (
+    `${FOCUS_TIMEOUT_FILENAME} must retain one direct async it registration with exact timeout ` +
+    `${registration.timeout}: ${registration.title}`
+  );
 }
 
 /** Require the exact Vitest bindings that give the timeout registration authority. */
@@ -3534,7 +5196,7 @@ function focusTimeoutVitestBindingProblems(sourceFile: ts.SourceFile): string[] 
   });
 }
 
-/** Independently pin the reachable 45-second focus-census and OIA-wiring hook. */
+/** Independently pin the reachable bounded focus-census and OIA-wiring hook. */
 function focusTimeoutRegistrationProblems(source: string): string[] {
   const sourceFile = ts.createSourceFile(
     FOCUS_TIMEOUT_FILENAME,
@@ -3611,7 +5273,7 @@ function focusTimeoutRegistrationProblems(source: string): string[] {
     timeout !== undefined &&
     ts.isNumericLiteral(timeout) &&
     timeout.getText(sourceFile) === "45_000";
-  const testRegistrationProblems = FOCUS_TIMEOUT_TEST_TITLES.flatMap((expectedTitle, expectedIndex) => {
+  const testRegistrationProblems = FOCUS_TIMEOUT_TEST_REGISTRATIONS.flatMap((expected, expectedIndex) => {
     const matches = suiteCallback.body.statements.flatMap((statement, statementIndex) => {
       if (!ts.isExpressionStatement(statement) || !ts.isCallExpression(statement.expression)) return [];
       const call = statement.expression;
@@ -3620,7 +5282,7 @@ function focusTimeoutRegistrationProblems(source: string): string[] {
         call.expression.text === "it" &&
         title !== undefined &&
         ts.isStringLiteral(title) &&
-        title.text === expectedTitle
+        title.text === expected.title
         ? [{ call, statementIndex }]
         : [];
     });
@@ -3645,8 +5307,8 @@ function focusTimeoutRegistrationProblems(source: string): string[] {
       ts.isBlock(testCallback.body) &&
       testTimeout !== undefined &&
       ts.isNumericLiteral(testTimeout) &&
-      testTimeout.getText(sourceFile) === "45_000";
-    return testRegistrationIsExact ? [] : [focusTimeoutTestProblem(expectedTitle)];
+      testTimeout.getText(sourceFile) === expected.timeout;
+    return testRegistrationIsExact ? [] : [focusTimeoutTestProblem(expected)];
   });
   return [
     ...bindingProblems,
@@ -8279,8 +9941,9 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
     expect(focusTimeoutProblems, focusTimeoutProblems.join("\n")).toEqual([]);
 
     const exactHookRegistration = "  beforeAll(async () => {}, 45_000);";
-    const exactTestRegistrations = FOCUS_TIMEOUT_TEST_TITLES.map(
-      (title) => `  it(${JSON.stringify(title)}, async () => {}, 45_000);`
+    const exactTestRegistrations = FOCUS_TIMEOUT_TEST_REGISTRATIONS.map(
+      (registration) =>
+        `  it(${JSON.stringify(registration.title)}, async () => {}, ${registration.timeout});`
     );
     const exactSource = [
       'import { beforeAll, describe, it } from "vitest";',
@@ -8322,16 +9985,17 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       expect(focusTimeoutRegistrationProblems(candidate)).toContain(FOCUS_TIMEOUT_REGISTRATION_PROBLEM);
     }
 
-    for (const [index, title] of FOCUS_TIMEOUT_TEST_TITLES.entries()) {
+    for (const [index, registration] of FOCUS_TIMEOUT_TEST_REGISTRATIONS.entries()) {
       const exactTestRegistration = exactTestRegistrations[index];
-      if (exactTestRegistration === undefined) throw new Error(`missing exact focus-timeout test ${title}`);
-      const testProblem = focusTimeoutTestProblem(title);
+      if (exactTestRegistration === undefined) {
+        throw new Error(`missing exact focus-timeout test ${registration.title}`);
+      }
+      const testProblem = focusTimeoutTestProblem(registration);
       for (const candidateRegistration of [
-        `  it(${JSON.stringify(title)}, async () => {}, 15_000);`,
-        `  it(${JSON.stringify(title)}, async () => {}, 30_000);`,
-        `  it(${JSON.stringify(title)}, async () => {});`,
-        `  it(${JSON.stringify(title)}, async () => {}, 45_001);`,
-        `  it(${JSON.stringify(title)}, () => {}, 45_000);`
+        `  it(${JSON.stringify(registration.title)}, async () => {}, ${registration.lowerTimeout});`,
+        `  it(${JSON.stringify(registration.title)}, async () => {});`,
+        `  it(${JSON.stringify(registration.title)}, async () => {}, ${registration.raisedTimeout});`,
+        `  it(${JSON.stringify(registration.title)}, () => {}, ${registration.timeout});`
       ]) {
         const candidate = replaceExactly(exactSource, exactTestRegistration, candidateRegistration);
         expect(focusTimeoutRegistrationProblems(candidate)).toContain(testProblem);
@@ -8410,6 +10074,302 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
     oneForOneSwap.add("replacement-invariant.test.ts");
     expect(() => assertStructuralFileMembership(oneForOneSwap)).toThrow(
       /missing: abs-path-leak-invariant\.test\.ts; unexpected: replacement-invariant\.test\.ts/
+    );
+
+    const sourceOracleClassFixture = [
+      'import { readFileSync } from "node:fs";',
+      'import { replaceExactly } from "./helpers/exact-source-mutation.js";',
+      'const source = readFileSync(new URL("../src/server.ts", import.meta.url), "utf8");',
+      'replaceExactly(source, "old", "new");'
+    ].join("\n");
+    const sourceOracleFacts = sourceReaderCandidateFacts("future-source-oracle.test.ts", sourceOracleClassFixture);
+    expect(sourceOracleFacts).toMatchObject({ candidateReads: 1 });
+    expect(sourceOracleFacts.candidateReadSha256).toMatch(/^[a-f0-9]{64}$/u);
+    const readOnlyClassFacts = sourceReaderCandidateFacts(
+      "read-only.test.ts",
+      'import { readFileSync } from "node:fs"; readFileSync("src/server.ts", "utf8");'
+    );
+    expect(readOnlyClassFacts).toMatchObject({ candidateReads: 1 });
+    const mutationOnlyClassFacts = sourceReaderCandidateFacts(
+      "mutation-only.test.ts",
+      'import { replaceExactly } from "./helpers/exact-source-mutation.js"; replaceExactly(source, "old", "new");'
+    );
+    expect(mutationOnlyClassFacts).toMatchObject({ candidateReads: 0 });
+    const forgedReaderClassFacts = sourceReaderCandidateFacts(
+      "forged-reader.test.ts",
+      'const readFileSync = () => "source"; readFileSync("src/server.ts", "utf8").replace("old", "new");'
+    );
+    expect(forgedReaderClassFacts).toMatchObject({ candidateReads: 0 });
+    const staticPathAliasFacts = sourceReaderCandidateFacts(
+      "path-alias-source-oracle.test.ts",
+      [
+        'import path from "node:path";',
+        'import { readFileSync } from "node:fs";',
+        'const sourcePath = path.join("src", "server.ts");',
+        'const read = readFileSync;',
+        'read(sourcePath, "utf8");'
+      ].join("\n")
+    );
+    expect(staticPathAliasFacts).toMatchObject({ candidateReads: 1 });
+    const concatenatedPathAliasFacts = sourceReaderCandidateFacts(
+      "concatenated-path-source-oracle.test.ts",
+      [
+        'import { readFileSync } from "node:fs";',
+        'const sourcePath = "../src/" + "server.ts";',
+        'readFileSync(sourcePath, "utf8");'
+      ].join("\n")
+    );
+    expect(concatenatedPathAliasFacts).toMatchObject({ candidateReads: 1 });
+    const templatePathFacts = sourceReaderCandidateFacts(
+      "template-path-source-oracle.test.ts",
+      [
+        'import { readFileSync } from "node:fs";',
+        'const name = "server";',
+        'readFileSync(new URL(`../src/${name}.ts`, import.meta.url), "utf8");'
+      ].join("\n")
+    );
+    expect(templatePathFacts).toMatchObject({ candidateReads: 1 });
+    const mutableReaderAliasFacts = sourceReaderCandidateFacts(
+      "mutable-reader-source-oracle.test.ts",
+      [
+        'import { readFileSync } from "node:fs";',
+        "let read = readFileSync;",
+        'read("src/server.ts", "utf8");'
+      ].join("\n")
+    );
+    expect(mutableReaderAliasFacts).toMatchObject({ candidateReads: 1 });
+    const assignedReaderAliasFacts = sourceReaderCandidateFacts(
+      "assigned-reader-source-oracle.test.ts",
+      [
+        'import { readFileSync } from "node:fs";',
+        "let read: typeof readFileSync;",
+        "read = readFileSync;",
+        'read("src/server.ts", "utf8");'
+      ].join("\n")
+    );
+    expect(assignedReaderAliasFacts).toMatchObject({ candidateReads: 1 });
+    const composedReaderFixtures = [
+      [
+        "conditional-reader-source-oracle.test.ts",
+        'import { readFileSync } from "node:fs"; const read = condition ? readFileSync : fake; ' +
+          'read("src/server.ts", "utf8");'
+      ],
+      [
+        "logical-reader-source-oracle.test.ts",
+        'import { readFileSync } from "node:fs"; const read = readFileSync || fake; ' +
+          'read("src/server.ts", "utf8");'
+      ],
+      [
+        "comma-reader-source-oracle.test.ts",
+        'import { readFileSync } from "node:fs"; const read = (0, readFileSync); ' +
+          'read("src/server.ts", "utf8");'
+      ],
+      [
+        "assignment-result-reader-source-oracle.test.ts",
+        'import { readFileSync } from "node:fs"; let alias; const read = (alias = readFileSync); ' +
+          'read("src/server.ts", "utf8");'
+      ],
+      [
+        "bound-reader-source-oracle.test.ts",
+        'import { readFileSync } from "node:fs"; const read = readFileSync.bind(undefined); ' +
+          'read("src/server.ts", "utf8");'
+      ],
+      [
+        "partially-bound-reader-source-oracle.test.ts",
+        'import { readFileSync } from "node:fs"; ' +
+          'const read = readFileSync.bind(undefined, "src/server.ts", "utf8"); read();'
+      ],
+      [
+        "computed-reader-source-oracle.test.ts",
+        'import fs from "node:fs"; const method = "readFileSync"; const read = fs[method]; ' +
+          'read("src/server.ts", "utf8");'
+      ],
+      [
+        "nested-promises-reader-source-oracle.test.ts",
+        'import fs from "node:fs"; const { promises: fsp } = fs; fsp.readFile("src/server.ts", "utf8");'
+      ],
+      [
+        "assigned-destructured-reader-source-oracle.test.ts",
+        'import fs from "node:fs"; let read; ({ readFileSync: read } = fs); read("src/server.ts", "utf8");'
+      ],
+      [
+        "nested-destructured-reader-source-oracle.test.ts",
+        'import fs from "node:fs"; const { promises: { readFile: read } } = fs; read("src/server.ts", "utf8");'
+      ],
+      [
+        "nested-assigned-reader-source-oracle.test.ts",
+        'import fs from "node:fs"; let read; ({ promises: { readFile: read } } = fs); read("src/server.ts", "utf8");'
+      ],
+      [
+        "call-reader-source-oracle.test.ts",
+        'import { readFileSync } from "node:fs"; readFileSync.call(undefined, "src/server.ts", "utf8");'
+      ],
+      [
+        "apply-reader-source-oracle.test.ts",
+        'import { readFileSync } from "node:fs"; readFileSync.apply(undefined, ["src/server.ts", "utf8"]);'
+      ],
+      [
+        "reflect-apply-reader-source-oracle.test.ts",
+        'import { readFileSync } from "node:fs"; Reflect.apply(readFileSync, undefined, ["src/server.ts", "utf8"]);'
+      ],
+      [
+        "get-builtin-module-source-oracle.test.ts",
+        'const fs = process.getBuiltinModule("node:fs"); fs.readFileSync("src/server.ts", "utf8");'
+      ],
+      [
+        "aliased-get-builtin-module-source-oracle.test.ts",
+        'const load = process.getBuiltinModule.bind(process); const fs = load("node:fs"); ' +
+          'fs.readFileSync("src/server.ts", "utf8");'
+      ],
+      [
+        "create-require-source-oracle.test.ts",
+        'import { createRequire } from "node:module"; const load = createRequire(import.meta.url); ' +
+          'const fs = load("node:fs"); fs.readFileSync("src/server.ts", "utf8");'
+      ]
+    ] as const;
+    for (const [fixtureFilename, fixtureSource] of composedReaderFixtures) {
+      expect(sourceReaderCandidateFacts(fixtureFilename, fixtureSource), fixtureFilename).toMatchObject({
+        candidateReads: 1
+      });
+    }
+    const dynamicBasenameFacts = sourceReaderCandidateFacts(
+      "dynamic-basename-source-oracle.test.ts",
+      [
+        'import path from "node:path";',
+        'import { readFileSync } from "node:fs";',
+        'readFileSync(path.join(repoRoot, "src", file), "utf8");'
+      ].join("\n")
+    );
+    expect(dynamicBasenameFacts).toMatchObject({ candidateReads: 1 });
+    const conditionalPathFacts = sourceReaderCandidateFacts(
+      "conditional-path-source-oracle.test.ts",
+      [
+        'import { readFileSync } from "node:fs";',
+        'readFileSync(condition ? "src/server.ts" : "tests/fixture.ts", "utf8");'
+      ].join("\n")
+    );
+    expect(conditionalPathFacts).toMatchObject({ candidateReads: 1 });
+    const shadowedBuiltinAcquisitionFixtures = [
+      [
+        "shadowed-process-reader.test.ts",
+        'const process = { getBuiltinModule: () => ({ readFileSync: () => "safe" }) }; ' +
+          'process.getBuiltinModule("node:fs").readFileSync("src/server.ts", "utf8");'
+      ],
+      [
+        "shadowed-create-require-reader.test.ts",
+        'const createRequire = () => () => ({ readFileSync: () => "safe" }); ' +
+          'createRequire(import.meta.url)("node:fs").readFileSync("src/server.ts", "utf8");'
+      ],
+      [
+        "fake-nested-reader.test.ts",
+        'const fs = { promises: { readFile: () => "safe" } }; ' +
+          'const { promises: { readFile: read } } = fs; read("src/server.ts", "utf8");'
+      ]
+    ] as const;
+    for (const [fixtureFilename, fixtureSource] of shadowedBuiltinAcquisitionFixtures) {
+      expect(sourceReaderCandidateFacts(fixtureFilename, fixtureSource), fixtureFilename).toMatchObject({
+        candidateReads: 0
+      });
+    }
+    const nonSourceBoundReaderFacts = sourceReaderCandidateFacts(
+      "non-source-bound-reader.test.ts",
+      'import { readFileSync } from "node:fs"; ' +
+        'const read = readFileSync.bind(undefined, "tests/fixture.ts", "utf8"); read();'
+    );
+    expect(nonSourceBoundReaderFacts).toMatchObject({ candidateReads: 0 });
+    const loopCarriedReaderFacts = sourceReaderCandidateFacts(
+      "loop-carried-source-oracle.test.ts",
+      [
+        'import { readFileSync } from "node:fs";',
+        'import path from "node:path";',
+        "function files(dir: string): string[] { return enumerate(dir); }",
+        'for (const file of files(path.join(repoRoot, "src"))) readFileSync(file, "utf8");'
+      ].join("\n")
+    );
+    expect(loopCarriedReaderFacts).toMatchObject({ candidateReads: 1 });
+    const temporaryLoopReaderFacts = sourceReaderCandidateFacts(
+      "temporary-loop-reader.test.ts",
+      [
+        'import { readFileSync } from "node:fs";',
+        'import path from "node:path";',
+        "function files(dir: string): string[] { return enumerate(dir); }",
+        'for (const file of files(path.join(temporaryRoot, "src"))) readFileSync(file, "utf8");'
+      ].join("\n")
+    );
+    expect(temporaryLoopReaderFacts).toMatchObject({ candidateReads: 0 });
+    const conservativeSameFileCandidateFacts = sourceReaderCandidateFacts(
+      "same-file-source-evidence-candidate.test.ts",
+      [
+        'import { readFileSync } from "node:fs";',
+        'import path from "node:path";',
+        'const unused = path.join(repoRoot, "src");',
+        'readFileSync("tests/fixture.ts", "utf8");',
+        "void unused;"
+      ].join("\n")
+    );
+    // Fail-closed by design: the rooted src evidence and authentic read need
+    // not be linked by a complete interprocedural path-flow proof.
+    expect(conservativeSameFileCandidateFacts).toMatchObject({ candidateReads: 1 });
+    const destructuredReaderAliasFacts = sourceReaderCandidateFacts(
+      "destructured-reader-source-oracle.test.ts",
+      [
+        'import fs from "node:fs";',
+        "const { readFileSync: read } = fs;",
+        'read("src/server.ts", "utf8");'
+      ].join("\n")
+    );
+    expect(destructuredReaderAliasFacts).toMatchObject({ candidateReads: 1 });
+    const requiredReaderFacts = sourceReaderCandidateFacts(
+      "required-reader-source-oracle.test.ts",
+      [
+        'const fs = require("node:fs") as typeof import("node:fs");',
+        'fs.readFileSync("src/server.ts", "utf8");'
+      ].join("\n")
+    );
+    expect(requiredReaderFacts).toMatchObject({ candidateReads: 1 });
+    const shadowedRequireFacts = sourceReaderCandidateFacts(
+      "shadowed-require-source-oracle.test.ts",
+      [
+        'const require = (_name: string) => ({ readFileSync: () => "source" });',
+        'const fs = require("node:fs");',
+        'fs.readFileSync("src/server.ts", "utf8");'
+      ].join("\n")
+    );
+    expect(shadowedRequireFacts).toMatchObject({ candidateReads: 0 });
+    const nonSourcePathAliasFacts = sourceReaderCandidateFacts(
+      "non-source-path-alias.test.ts",
+      [
+        'import { readFileSync } from "node:fs";',
+        'const sourcePath = "tests/server.test.ts";',
+        'readFileSync(sourcePath, "utf8");'
+      ].join("\n")
+    );
+    expect(nonSourcePathAliasFacts).toMatchObject({ candidateReads: 0 });
+    const extractedRawMethodFixture = [
+      'import { readFileSync } from "node:fs";',
+      'const source = readFileSync("src/server.ts", "utf8");',
+      "const mutate = source.replace;",
+      'mutate.call(source, "old", "new");'
+    ].join("\n");
+    expect(sourceReaderCandidateFacts("extracted-method-source-oracle.test.ts", extractedRawMethodFixture)).toMatchObject({
+      candidateReads: 1
+    });
+    expect(repositoryMutationOracleProblems("extracted-method-source-oracle.test.ts", extractedRawMethodFixture)).toEqual(
+      expect.arrayContaining([expect.stringMatching(/unclassified raw \.replace access/)])
+    );
+
+    const completeSourceOracleSet = new Set<string>(EXPECTED_SOURCE_READER_CANDIDATE_FILES);
+    expect(() => assertSourceReaderCandidateMembershipSeal(completeSourceOracleSet)).not.toThrow();
+    const missingHttpSourceOracle = new Set(completeSourceOracleSet);
+    missingHttpSourceOracle.delete("http-transport.test.ts");
+    expect(() => assertSourceReaderCandidateMembershipSeal(missingHttpSourceOracle)).toThrow(
+      /source-reader candidate census mismatch \(missing: http-transport\.test\.ts; membership sha256:/
+    );
+    const swappedSourceOracle = new Set(completeSourceOracleSet);
+    swappedSourceOracle.delete("embeddings-offline.test.ts");
+    swappedSourceOracle.add("future-source-oracle.test.ts");
+    expect(() => assertSourceReaderCandidateMembershipSeal(swappedSourceOracle)).toThrow(
+      /missing: embeddings-offline\.test\.ts; unexpected: future-source-oracle\.test\.ts; membership sha256:/
     );
 
     expect(() => replaceExactly("alpha", "missing", "omega")).toThrow(/expected 1 occurrence\(s\), found 0/);
@@ -8680,6 +10640,182 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       )
     ).toEqual([]);
 
+    for (const helper of [...EXACT_MUTATION_HELPERS].sort()) {
+      const concealedHelper = [
+        "const holder = {};",
+        `Object.defineProperty(holder, ${JSON.stringify(helper)}, { value: () => "concealed" });`,
+        `Reflect.get(holder, ${JSON.stringify(helper)})("source", "needle", "replacement");`
+      ].join("\n");
+      expect(
+        exactMutationHelperMemberSurfaceProblems(unmappedHelperFilename, concealedHelper),
+        `reflective concealment of ${helper}`
+      ).toEqual([
+        expect.stringMatching(new RegExp(`exposes exact mutation helper ${helper} through a member/property surface`)),
+        expect.stringMatching(new RegExp(`exposes exact mutation helper ${helper} through a member/property surface`))
+      ]);
+      const reflectiveWriterFixtures = [
+        [
+          "Reflect.defineProperty",
+          [
+            "const holder = {};",
+            `Reflect.defineProperty(holder, ${JSON.stringify(helper)}, { value: () => "concealed" });`,
+            'Object.values(holder)[0]("source", "needle", "replacement");'
+          ].join("\n")
+        ],
+        [
+          "aliased Reflect.defineProperty",
+          [
+            "const holder = {};",
+            "const define = Reflect.defineProperty;",
+            `define(holder, ${JSON.stringify(helper)}, { value: () => "concealed" });`
+          ].join("\n")
+        ],
+        [
+          "Reflect.set",
+          [
+            "const holder = {};",
+            `Reflect.set(holder, ${JSON.stringify(helper)}, () => "concealed");`
+          ].join("\n")
+        ],
+        [
+          "Object.defineProperties",
+          [
+            "const holder = {};",
+            `const key = ${JSON.stringify(helper)};`,
+            'const descriptors = { [key]: { value: () => "concealed" } };',
+            "Object.defineProperties(holder, descriptors);"
+          ].join("\n")
+        ],
+        [
+          "Object.assign plus Object.fromEntries",
+          [
+            "const holder = {};",
+            `const key = ${JSON.stringify(helper)};`,
+            'Object.assign(holder, Object.fromEntries([[key, () => "concealed"]]));'
+          ].join("\n")
+        ],
+        [
+          "aliased Object.fromEntries with entry carrier",
+          [
+            `const key = ${JSON.stringify(helper)};`,
+            'const entries = [[key, () => "concealed"]];',
+            "const fromEntries = Object.fromEntries;",
+            "void fromEntries(entries);"
+          ].join("\n")
+        ]
+      ] as const;
+      for (const [label, fixture] of reflectiveWriterFixtures) {
+        expect(exactMutationHelperMemberSurfaceProblems(unmappedHelperFilename, fixture), `${label}: ${helper}`).toEqual(
+          expect.arrayContaining([
+            expect.stringMatching(
+              new RegExp(`exposes exact mutation helper ${helper} through a member/property surface`)
+            )
+          ])
+        );
+      }
+      const reflectiveWrapperFixtures = [
+        [
+          "Reflect.defineProperty.call",
+          `const holder = {}; Reflect.defineProperty.call(Reflect, holder, ${JSON.stringify(helper)}, ` +
+            '{ value: () => "concealed" });'
+        ],
+        [
+          "Object.getOwnPropertyDescriptor.call",
+          `const holder = {}; Object.getOwnPropertyDescriptor.call(Object, holder, ${JSON.stringify(helper)});`
+        ],
+        [
+          "Reflect.apply Reflect.getOwnPropertyDescriptor",
+          `const holder = {}; Reflect.apply(Reflect.getOwnPropertyDescriptor, Reflect, ` +
+            `[holder, ${JSON.stringify(helper)}]);`
+        ],
+        [
+          "Reflect.defineProperty.apply",
+          `const holder = {}; Reflect.defineProperty.apply(Reflect, [holder, ${JSON.stringify(helper)}, ` +
+            '{ value: () => "concealed" }]);'
+        ],
+        [
+          "Reflect.apply Reflect.defineProperty",
+          `const holder = {}; Reflect.apply(Reflect.defineProperty, Reflect, [holder, ${JSON.stringify(helper)}, ` +
+            '{ value: () => "concealed" }]);'
+        ],
+        [
+          "partially bound Reflect.defineProperty",
+          `const holder = {}; const define = Reflect.defineProperty.bind(Reflect, holder, ${JSON.stringify(helper)}); ` +
+            'define({ value: () => "concealed" });'
+        ],
+        [
+          "Reflect.set.call",
+          `const holder = {}; Reflect.set.call(Reflect, holder, ${JSON.stringify(helper)}, () => "concealed");`
+        ],
+        [
+          "Object.defineProperties.apply",
+          `const holder = {}; const key = ${JSON.stringify(helper)}; ` +
+            'Object.defineProperties.apply(Object, [holder, { [key]: { value: () => "concealed" } }]);'
+        ],
+        [
+          "Object.assign.call plus Object.fromEntries",
+          `const holder = {}; Object.assign.call(Object, holder, ` +
+            `Object.fromEntries([[${JSON.stringify(helper)}, () => "concealed"]]));`
+        ],
+        [
+          "Object.fromEntries.call",
+          `void Object.fromEntries.call(Object, [[${JSON.stringify(helper)}, () => "concealed"]]);`
+        ]
+      ] as const;
+      for (const [label, fixture] of reflectiveWrapperFixtures) {
+        expect(exactMutationHelperMemberSurfaceProblems(unmappedHelperFilename, fixture), `${label}: ${helper}`).toEqual(
+          expect.arrayContaining([
+            expect.stringMatching(
+              new RegExp(`exposes exact mutation helper ${helper} through a member/property surface`)
+            )
+          ])
+        );
+      }
+    }
+    expect(
+      exactMutationHelperMemberSurfaceProblems(
+        unmappedHelperFilename,
+        [
+          "const holder = {};",
+          'Object.defineProperty(holder, "safeMutation", { value: () => "safe" });',
+          'Reflect.get(holder, "safeMutation")();',
+          'Object.getOwnPropertyDescriptor(holder, "safeMutation");',
+          'Reflect.getOwnPropertyDescriptor(holder, "safeMutation");'
+        ].join("\n")
+      )
+    ).toEqual([]);
+    expect(
+      exactMutationHelperMemberSurfaceProblems(
+        unmappedHelperFilename,
+        [
+          "const holder = {};",
+          "const Reflect = { defineProperty: () => true, getOwnPropertyDescriptor: () => undefined, set: () => true };",
+          "const Object = { assign: () => holder, defineProperties: () => holder, fromEntries: () => holder, getOwnPropertyDescriptor: () => undefined };",
+          'Reflect.defineProperty(holder, "replaceExactly", { value: () => "safe" });',
+          'Reflect.set(holder, "replaceAllExactly", () => "safe");',
+          'Reflect.defineProperty.call(Reflect, holder, "replaceExactly", { value: () => "safe" });',
+          'Reflect.apply(Reflect.set, Reflect, [holder, "replaceAllExactly", () => "safe"]);',
+          'Object.defineProperties(holder, Object.fromEntries([["replaceIntegerAllExactly", { value: () => "safe" }]]));',
+          'Object.assign(holder, Object.fromEntries([["replaceExactly", () => "safe"]]));',
+          'Object.fromEntries.call(Object, [["replaceIntegerAllExactly", () => "safe"]]);',
+          'Object.getOwnPropertyDescriptor(holder, "replaceExactly");',
+          'Reflect.getOwnPropertyDescriptor(holder, "replaceAllExactly");'
+        ].join("\n")
+      )
+    ).toEqual([]);
+    expect(
+      exactMutationHelperMemberSurfaceProblems(
+        unmappedHelperFilename,
+        [
+          "const holder = {};",
+          "const Object = { defineProperty: () => holder };",
+          'const Reflect = { get: () => () => "safe" };',
+          'Object.defineProperty(holder, "replaceExactly", { value: () => "safe" });',
+          'Reflect.get(holder, "replaceAllExactly")();'
+        ].join("\n")
+      )
+    ).toEqual([]);
+
     const mutationInventoryFile = "abs-path-leak-invariant.test.ts";
     expect(
       repositoryMutationOracleProblems(
@@ -8840,6 +10976,58 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       'source["includes"]`needle`;'
     ]) {
       expect(repositoryMutationOracleProblems(mutationInventoryFile, knownSafeComputedCall)).toEqual([]);
+    }
+    const staticArrayCarrier = [
+      "const slot = 0;",
+      "const carrier = [source[getMethod()]];",
+      'carrier[slot]("old", "new");'
+    ].join("\n");
+    expect(repositoryMutationOracleProblems(mutationInventoryFile, staticArrayCarrier)).toEqual([
+      expect.stringMatching(/invokes a value extracted from an unresolved dynamic computed method/)
+    ]);
+    const safeStaticArrayCarrier = [
+      "const slot = 0;",
+      'const carrier = [source["includes"]];',
+      'carrier[slot]("needle");'
+    ].join("\n");
+    expect(repositoryMutationOracleProblems(mutationInventoryFile, safeStaticArrayCarrier)).toEqual([]);
+    for (const arrayCarrierInvocation of [
+      'const [rawMutation] = [source[getMethod()]]; rawMutation("old", "new");',
+      'let rawMutation; const carrier = [source[getMethod()]]; [rawMutation] = carrier; rawMutation("old", "new");',
+      'const invoke = ([rawMutation]) => rawMutation("old", "new"); invoke([source[getMethod()]]);',
+      'const carrier = [source[getMethod()]]; carrier.at(0)("old", "new");',
+      'const carrier = [...[source[getMethod()]]]; carrier[0]("old", "new");',
+      'const [...rest] = [source[getMethod()]]; rest[0]("old", "new");',
+      'const carrier = [source[getMethod()]]; const rawMutation = carrier[getIndex()]; ' +
+        'rawMutation("old", "new");',
+      'const [[rawMutation]] = [[source[getMethod()]]]; rawMutation("old", "new");',
+      'let rawMutation; const carrier = [[source[getMethod()]]]; [[rawMutation]] = carrier; rawMutation("old", "new");',
+      'for (const rawMutation of [source[getMethod()]]) rawMutation("old", "new");',
+      'for (const [rawMutation] of [[source[getMethod()]]]) rawMutation("old", "new");',
+      '[source[getMethod()]].forEach((rawMutation) => rawMutation("old", "new"));',
+      'const invoke = (rawMutation) => rawMutation("old", "new"); [source[getMethod()]].forEach(invoke);',
+      'const invokeLast = (...args: unknown[]) => { const rawMutation = args[args.length - 1]; ' +
+        'rawMutation("old", "new"); }; invokeLast(0, source[getMethod()]);'
+    ]) {
+      expect(repositoryMutationOracleProblems(mutationInventoryFile, arrayCarrierInvocation), arrayCarrierInvocation).toEqual([
+        expect.stringMatching(/invokes a value extracted from an unresolved dynamic computed method/)
+      ]);
+    }
+    for (const safeArrayCarrierInvocation of [
+      'const [method] = [source["includes"]]; method.call(source, "needle");',
+      'let method; const carrier = [source["includes"]]; [method] = carrier; method.call(source, "needle");',
+      'const invoke = ([method]) => method.call(source, "needle"); invoke([source["includes"]]);',
+      'const carrier = [source["includes"]]; carrier.at(0).call(source, "needle");',
+      'const carrier = [...[source["includes"]]]; carrier[0].call(source, "needle");',
+      'for (const method of [source["includes"]]) method.call(source, "needle");',
+      '[source["includes"]].forEach((method) => method.call(source, "needle"));',
+      'const invokeLast = (...args: unknown[]) => { const callback = args[args.length - 1]; ' +
+        'if (typeof callback === "function") callback(); }; invokeLast(0, () => undefined);'
+    ]) {
+      expect(
+        repositoryMutationOracleProblems(mutationInventoryFile, safeArrayCarrierInvocation),
+        safeArrayCarrierInvocation
+      ).toEqual([]);
     }
     for (const extractedDynamicMethod of [
       'const rawMutation = source[getMethod()]; rawMutation.call(source, "old", "new");',
@@ -9244,6 +11432,10 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       `expected exactly ${EXPECTED_STRUCTURAL_FILE_COUNT} structural-invariant files ` +
         "(*-invariant.test.ts + curated EXTRA_STRUCTURAL_FILES)"
     ).toBe(EXPECTED_STRUCTURAL_FILE_COUNT);
+    const sourceOracleFiles = await collectSourceReaderCandidateFiles();
+    expect(sourceOracleFiles.map((file) => path.relative(path.join(repoRoot, "tests"), file))).toEqual(
+      EXPECTED_SOURCE_READER_CANDIDATE_FILES
+    );
 
     const violations: string[] = [];
     for (const file of files) {
@@ -9262,6 +11454,9 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       [...EXPECTED_REPOSITORY_MUTATION_HELPER_IMPORTS.keys()].sort()
     );
     const rawMutationInventorySet = new Set<string>(RAW_REPLACE_INVENTORY_FILES);
+    expect(
+      EXPECTED_SOURCE_READER_CANDIDATE_FILES.filter((filename) => !rawMutationInventorySet.has(filename))
+    ).toEqual([]);
     expect(entryKeysOutside(EXPECTED_REPOSITORY_MUTATION_HELPER_CALL_ENTRIES, rawMutationInventorySet)).toEqual([]);
     expect([...LOCAL_EXACT_MUTATION_HELPER_AUTHORITIES]).toEqual([
       ["release-integrity.test.ts", ["replaceAllExactly", "replaceExactly"]]

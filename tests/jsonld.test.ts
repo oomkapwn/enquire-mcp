@@ -14,7 +14,15 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 // @ts-expect-error — .mjs build script, no type declarations (CLI guarded by isEntrypoint).
-import { buildJsonLdGraph, FAQ_ENTRIES, SEO_KEYWORDS } from "../scripts/inject-jsonld.mjs";
+import {
+  buildJsonLdGraph,
+  FAQ_ENTRIES,
+  injectJsonLdIntoHtml,
+  inspectJsonLdScripts,
+  renderEnquireJsonLdTag,
+  SEO_KEYWORDS
+} from "../scripts/inject-jsonld.mjs";
+import { replaceExactly } from "./helpers/exact-source-mutation.js";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const pkg = JSON.parse(readFileSync(resolve(repoRoot, "package.json"), "utf8"));
@@ -129,5 +137,285 @@ describe("FAQ_ENTRIES ↔ README FAQ parity (v3.9.0-rc.17 drift guard)", () => {
       readmeQuestions.length,
       `README FAQ has ${readmeQuestions.length} questions but FAQ_ENTRIES has ${FAQ_ENTRIES.length} — keep scripts/inject-jsonld.mjs in sync with the README FAQ`
     ).toBe(FAQ_ENTRIES.length);
+  });
+});
+
+describe("injectJsonLdIntoHtml", () => {
+  const emptyInspection = {
+    validCount: 0,
+    ownedCount: 0,
+    staleOwnedCount: 0,
+    unrelatedCount: 0,
+    malformedCount: 0,
+    htmlMalformedCount: 0
+  };
+
+  it("injects exactly one real JSON-LD script when the MIME type appears only in text or comments", () => {
+    const source = `<!doctype html><html><head>
+<!-- example only: <script type="application/ld+json">{}</script> -->
+<!-- outer <!-- <script type="application/ld+json">{"hidden":true}</script> --> outer -->
+<meta data-example="<script type='application/ld+json'>{}</script>">
+<script data-note='type="application/ld+json" data-enquire-jsonld="graph-v1"'>{"ignored":true}</script>
+<script>const mimeExample = "application/ld+json";</script>
+</head><body>
+<script-example type="application/ld+json">{}</script-example>
+<script_fake type="application/ld+json">{}</script_fake>
+<script.fake type="application/ld+json">{}</script.fake>
+<script  type="application/ld+json">{}</script >
+application/ld+json
+</body></html>`;
+
+    expect(inspectJsonLdScripts(source, pkg)).toEqual(emptyInspection);
+    const result = injectJsonLdIntoHtml(source, pkg);
+
+    expect(result.injected).toBe(true);
+    expect(inspectJsonLdScripts(result.html, pkg)).toEqual({
+      ...emptyInspection,
+      validCount: 1,
+      ownedCount: 1
+    });
+    expect(result.html).toContain('data-enquire-jsonld="graph-v1"');
+    expect(result.html).toContain('<!-- example only: <script type="application/ld+json">{}</script> -->');
+    expect(result.html).toContain("application/ld+json");
+    expect(result.html).toContain(`"softwareVersion": "${pkg.version}"`);
+  });
+
+  it("injects alongside unrelated valid JSON-LD instead of treating it as idempotency authority", () => {
+    const unrelated = `<script type="application/ld+json" data-note='data-enquire-jsonld="graph-v1" type="fake"'>
+{"@context":"https://schema.org","@type":"Thing","note":"<!-- literal payload bytes -->"}
+</script>`;
+    const namedThing =
+      '<script type="application/ld+json">{"@context":"https://schema.org","@type":"Thing","name":"enquire-mcp"}</script>';
+    const source = `<html><head>${unrelated}${unrelated}${namedThing}</head><body></body></html>`;
+
+    expect(inspectJsonLdScripts(source, pkg)).toEqual({
+      ...emptyInspection,
+      validCount: 3,
+      unrelatedCount: 3
+    });
+    const result = injectJsonLdIntoHtml(source, pkg);
+    expect(result.injected).toBe(true);
+    expect(inspectJsonLdScripts(result.html, pkg)).toEqual({
+      ...emptyInspection,
+      validCount: 4,
+      ownedCount: 1,
+      unrelatedCount: 3
+    });
+  });
+
+  it("ignores owned lookalikes hidden in raw-text, RCDATA, and inert containers", () => {
+    const canonical = renderEnquireJsonLdTag(pkg);
+    const hidden = ["style", "title", "textarea", "xmp", "iframe", "noembed", "noframes", "noscript", "template"]
+      .map((name) => `<${name}>${canonical}</${name}>`)
+      .join("");
+    const nestedTemplate = `<template><template></template>${canonical}</template>`;
+    const escapedScript = `<script><!--<script></script>${canonical}</script>`;
+    const source = `<html><head></head><body>${hidden}${nestedTemplate}${escapedScript}</body></html>`;
+
+    expect(inspectJsonLdScripts(source, pkg)).toEqual(emptyInspection);
+    const result = injectJsonLdIntoHtml(source, pkg);
+    expect(result.injected).toBe(true);
+    expect(inspectJsonLdScripts(result.html, pkg)).toEqual({
+      ...emptyInspection,
+      validCount: 1,
+      ownedCount: 1
+    });
+  });
+
+  it("skips one current owned graph, including the structural legacy fallback", () => {
+    const marked = `<html><head>${renderEnquireJsonLdTag(pkg)}</head><body></body></html>`;
+    const legacy = replaceExactly(marked, ' data-enquire-jsonld="graph-v1"', "", 1);
+    const decimalType = replaceExactly(marked, "application/ld+json", "application/ld&#43;json", 1);
+    const hexadecimalType = replaceExactly(marked, "application/ld+json", "application/ld&#x2b;json", 1);
+    const namedType = replaceExactly(marked, "application/ld+json", "application/ld&plus;json", 1);
+    const encodedOwner = replaceExactly(marked, "graph-v1", "graph&#45;v1", 1);
+    const minimalPackage = { name: "@oomkapwn/enquire-mcp", version: "1.0.0" };
+    const minimal = `<html><head>${renderEnquireJsonLdTag(minimalPackage)}</head><body></body></html>`;
+    const ownedTag = renderEnquireJsonLdTag(pkg);
+    const escapedReturnsToData = `<html><head><script><!--<script>--><script></script>${ownedTag}</script></head><body></body></html>`;
+    const attributedScriptClose = `<html><head><script>ignored</script x>${ownedTag}</script></head><body></body></html>`;
+    const slashedScriptClose = `<html><head><script>ignored</script/>${ownedTag}</script></head><body></body></html>`;
+    const attributedStyleClose = `<html><head><style>ignored</style x>${ownedTag}</head><body></body></html>`;
+
+    for (const source of [
+      marked,
+      legacy,
+      decimalType,
+      hexadecimalType,
+      namedType,
+      encodedOwner,
+      escapedReturnsToData,
+      attributedScriptClose,
+      slashedScriptClose,
+      attributedStyleClose
+    ]) {
+      expect(inspectJsonLdScripts(source, pkg)).toEqual({
+        ...emptyInspection,
+        validCount: 1,
+        ownedCount: 1
+      });
+      expect(injectJsonLdIntoHtml(source, pkg)).toEqual({ html: source, injected: false, tagLength: 0 });
+    }
+    expect(inspectJsonLdScripts(minimal, minimalPackage)).toEqual({
+      ...emptyInspection,
+      validCount: 1,
+      ownedCount: 1
+    });
+    expect(injectJsonLdIntoHtml(minimal, minimalPackage)).toEqual({ html: minimal, injected: false, tagLength: 0 });
+  });
+
+  it("rejects duplicate current owned graphs instead of silently skipping (causal negative control)", () => {
+    const tag = renderEnquireJsonLdTag(pkg);
+    const source = `<html><head>${tag}${tag}</head><body></body></html>`;
+
+    expect(inspectJsonLdScripts(source, pkg)).toEqual({
+      ...emptyInspection,
+      validCount: 2,
+      ownedCount: 2
+    });
+    expect(() => injectJsonLdIntoHtml(source, pkg)).toThrow(
+      "expected at most one current enquire-owned JSON-LD script; found 2"
+    );
+  });
+
+  it("fails closed on stale or mismatched owned graphs (causal negative controls)", () => {
+    const current = renderEnquireJsonLdTag(pkg);
+    const staleVersion = replaceExactly(
+      current,
+      `"softwareVersion": "${pkg.version}"`,
+      '"softwareVersion": "0.0.0-stale"',
+      1
+    );
+    const staleLegacy = replaceExactly(staleVersion, ' data-enquire-jsonld="graph-v1"', "", 1);
+    const mismatchedMarker =
+      '<script type="application/ld+json" data-enquire-jsonld="graph-v1">{"@type":"Thing"}</script>';
+    const wrongMarker = replaceExactly(
+      current,
+      'data-enquire-jsonld="graph-v1"',
+      'data-enquire-jsonld="graph-v0"',
+      1
+    );
+    const wrongMime = replaceExactly(current, 'type="application/ld+json"', 'type="text/javascript"', 1);
+    const doubleEncodedMime = replaceExactly(
+      current,
+      "application/ld+json",
+      "application/ld&#38;plus;json",
+      1
+    );
+    const currentGraph = buildJsonLdGraph(pkg);
+    const software = currentGraph["@graph"][0];
+    const topLevelNode = `<script type="application/ld+json">${JSON.stringify(software)}</script>`;
+    const topLevelArray = `<script type="application/ld+json">${JSON.stringify([software])}</script>`;
+    const nestedGraphArray = `<script type="application/ld+json">${JSON.stringify([{ "@graph": [software] }])}</script>`;
+    const arrayTypeNode = `<script type="application/ld+json">${JSON.stringify({
+      "@type": ["Thing", "SoftwareApplication"],
+      name: "enquire-mcp"
+    })}</script>`;
+
+    for (const [tag, validCount] of [
+      [staleVersion, 1],
+      [staleLegacy, 1],
+      [mismatchedMarker, 1],
+      [wrongMarker, 1],
+      [wrongMime, 0],
+      [doubleEncodedMime, 0],
+      [topLevelNode, 1],
+      [topLevelArray, 1],
+      [nestedGraphArray, 1],
+      [arrayTypeNode, 1]
+    ] as const) {
+      const source = `<html><head>${tag}</head><body></body></html>`;
+      expect(inspectJsonLdScripts(source, pkg)).toEqual({
+        ...emptyInspection,
+        validCount,
+        staleOwnedCount: 1
+      });
+      expect(() => injectJsonLdIntoHtml(source, pkg)).toThrow(
+        "found 1 stale or mismatched enquire-owned JSON-LD script(s)"
+      );
+    }
+  });
+
+  it("uses the real head close outside comments and script raw-text as the injection anchor", () => {
+    const hiddenHeadCloses = [
+      "script",
+      "style",
+      "title",
+      "noscript",
+      "template"
+    ]
+      .map((name) => `<${name}>fake </head></${name}>`)
+      .join("");
+    const nestedTemplateHeadClose = "<template><template></template>fake </head></template>";
+    const escapedScriptHeadClose = "<script><!--<script></script>fake </head></script>";
+    const source = `<html><head><!-- fake </head> -->${hiddenHeadCloses}${nestedTemplateHeadClose}${escapedScriptHeadClose}
+<meta name="proof" data-fake="</head>" content="after fake closes"></head><body></body></html>`;
+    const result = injectJsonLdIntoHtml(source, pkg);
+
+    expect(result.injected).toBe(true);
+    expect(result.html).toContain('<!-- fake </head> -->');
+    expect(result.html.indexOf('data-enquire-jsonld="graph-v1"')).toBeGreaterThan(
+      result.html.indexOf('<meta name="proof" data-fake="</head>" content="after fake closes">')
+    );
+    expect(result.html).toContain("<style>fake </head></style><title>fake </head></title>");
+    expect(result.html).toContain("<noscript>fake </head></noscript><template>fake </head></template>");
+    expect(result.html).toContain("</script>\n</head><body>");
+
+    for (const malformedHead of [
+      "<html></head><body></body></html>",
+      "<html><head><body></head></body></html>",
+      "<html><head><main></main></head><body></body></html>",
+      "<html><head>body text</head><body></body></html>",
+      "<html><head></head><body></body><body></body></html>"
+    ]) {
+      expect(() => injectJsonLdIntoHtml(malformedHead, pkg), malformedHead).toThrow(
+        "no real </head> in active HTML context; cannot inject"
+      );
+    }
+  });
+
+  it("fails closed on malformed JSON-LD script candidates (causal negative controls)", () => {
+    const malformed = [
+      '<html><head><script type="application/ld+json">not-json</script></head></html>',
+      '<html><head><script type="application/ld+json">"scalar-json"</script></head></html>',
+      '<html><head><script type="application/ld+json">{"x":<!--bad-->1}</script></head></html>',
+      '<html><head><script type="application/ld+json">{"open":true}</head></html>',
+      '<html><head><script type="application/ld+json"</head><body></body></html>',
+      '<html><head><script type="application/ld+json" type="text/javascript">{}</script></head></html>',
+      `<html><head>${replaceExactly(renderEnquireJsonLdTag(pkg), "<script type=", "<script / type=", 1)}</head></html>`
+    ];
+
+    for (const source of malformed) {
+      expect(inspectJsonLdScripts(source, pkg), source).toEqual({ ...emptyInspection, malformedCount: 1 });
+      expect(() => injectJsonLdIntoHtml(source, pkg), source).toThrow(
+        "found 1 malformed JSON-LD script(s); refusing injection"
+      );
+    }
+
+    const owned = renderEnquireJsonLdTag(pkg);
+    for (const source of [
+      `<html><head><!x ${owned}></head><body></body></html>`,
+      `<html><head><?x ${owned}></head><body></body></html>`,
+      `<html><head><!-->${owned}</head><body></body></html>`,
+      `<!doctype html "><script type="application/ld+json">${JSON.stringify(buildJsonLdGraph(pkg))}</script><x "><html><head></head><body></body></html>`,
+      `<html><head><!-- unclosed ${owned}</head><body></body></html>`,
+      `<html><head><template><!x </template>${owned}</template></head><body></body></html>`
+    ]) {
+      expect(inspectJsonLdScripts(source, pkg), source).toEqual({ ...emptyInspection, htmlMalformedCount: 1 });
+      expect(() => injectJsonLdIntoHtml(source, pkg), source).toThrow(
+        "found 1 malformed active HTML construct(s); refusing injection"
+      );
+    }
+
+    const strayQuotedAttribute = `<html><head><div ">${owned}</head><body></body></html>`;
+    expect(inspectJsonLdScripts(strayQuotedAttribute, pkg)).toEqual({
+      ...emptyInspection,
+      validCount: 1,
+      ownedCount: 1,
+      htmlMalformedCount: 1
+    });
+    expect(() => injectJsonLdIntoHtml(strayQuotedAttribute, pkg)).toThrow(
+      "found 1 malformed active HTML construct(s); refusing injection"
+    );
   });
 });

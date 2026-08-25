@@ -13,6 +13,7 @@ import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
+import { replaceExactly } from "./helpers/exact-source-mutation.js";
 
 const repoRoot = path.resolve(__dirname, "..");
 
@@ -878,10 +879,13 @@ describe("watcher startup activation ordering (v3.12.0-rc.25 S-8c)", () => {
     expect(frozenEmbedCapabilityViolations(GOOD_FROZEN_CAPABILITY)).toEqual([]);
     expect(startupPureValidationViolations(GOOD_STARTUP)).toEqual([]);
 
-    const wrappedRecovery = GOOD_STARTUP.replace(
+    const wrappedRecovery = replaceExactly(
+      GOOD_STARTUP,
       "      await watcher.close();\n      throw error;\n    }\n  }\n  const feedbackStore",
       "      await watcher.close();\n      throw watcherActivationRecoveryError(error);\n    }\n  }\n  const feedbackStore"
     );
+    expect(wrappedRecovery).not.toBe(GOOD_STARTUP);
+    expect(wrappedRecovery).toContain("throw watcherActivationRecoveryError(error);");
     expect(watcherStartupOrderViolations(wrappedRecovery)).toEqual([]);
   });
 
@@ -893,10 +897,11 @@ describe("watcher startup activation ordering (v3.12.0-rc.25 S-8c)", () => {
   });
 
   it("NEGATIVE: rejects a missing barrier or an activation failure swallowed before cleanup", () => {
-    const source = GOOD_STARTUP.replace("      await watcher.activate();\n", "");
+    const source = replaceExactly(GOOD_STARTUP, "      await watcher.activate();\n", "");
     expect(watcherStartupOrderViolations(source)).toContain("expected exactly one watcher.activate() barrier, found 0");
 
-    const swallowed = GOOD_STARTUP.replace(
+    const swallowed = replaceExactly(
+      GOOD_STARTUP,
       "      await watcher.close();\n      throw error;\n    }\n  }\n  const feedbackStore",
       "      await watcher.close();\n    }\n  }\n  const feedbackStore"
     );
@@ -904,7 +909,8 @@ describe("watcher startup activation ordering (v3.12.0-rc.25 S-8c)", () => {
       "watcher.activate() failure must rethrow the caught error after cleanup"
     );
 
-    const conditionallyRethrown = GOOD_STARTUP.replace(
+    const conditionallyRethrown = replaceExactly(
+      GOOD_STARTUP,
       "      await watcher.close();\n      throw error;\n    }\n  }\n  const feedbackStore",
       "      await watcher.close();\n      if (opts.strict) throw error;\n    }\n  }\n  const feedbackStore"
     );
@@ -912,7 +918,8 @@ describe("watcher startup activation ordering (v3.12.0-rc.25 S-8c)", () => {
       "watcher.activate() failure must rethrow the caught error after cleanup"
     );
 
-    const rethrownBeforeCleanup = GOOD_STARTUP.replace(
+    const rethrownBeforeCleanup = replaceExactly(
+      GOOD_STARTUP,
       "      await watcher.close();\n      throw error;",
       "      throw error;\n      await watcher.close();"
     );
@@ -920,7 +927,8 @@ describe("watcher startup activation ordering (v3.12.0-rc.25 S-8c)", () => {
       "watcher.close() cleanup must complete before activation failure is rethrown"
     );
 
-    const missingStartupEmbedCleanup = GOOD_STARTUP.replace(
+    const missingStartupEmbedCleanup = replaceExactly(
+      GOOD_STARTUP,
       '      await closeWatcherEmbedDbAfterFailure(watcherEmbedDb, "watcher startup");\n',
       ""
     );
@@ -928,7 +936,8 @@ describe("watcher startup activation ordering (v3.12.0-rc.25 S-8c)", () => {
       "watcher startup catch must close watcher EmbedDb before rethrow/return"
     );
 
-    const unawaitedStartupEmbedCleanup = GOOD_STARTUP.replace(
+    const unawaitedStartupEmbedCleanup = replaceExactly(
+      GOOD_STARTUP,
       '      await closeWatcherEmbedDbAfterFailure(watcherEmbedDb, "watcher startup");\n',
       '      closeWatcherEmbedDbAfterFailure(watcherEmbedDb, "watcher startup");\n'
     );
@@ -936,7 +945,8 @@ describe("watcher startup activation ordering (v3.12.0-rc.25 S-8c)", () => {
       "watcher startup catch must close watcher EmbedDb before rethrow/return"
     );
 
-    const missingActivationEmbedCleanup = GOOD_STARTUP.replace(
+    const missingActivationEmbedCleanup = replaceExactly(
+      GOOD_STARTUP,
       '      await closeWatcherEmbedDbAfterFailure(watcherEmbedDb, "watcher activation");\n',
       ""
     );
@@ -944,7 +954,8 @@ describe("watcher startup activation ordering (v3.12.0-rc.25 S-8c)", () => {
       "watcher activation catch must close watcher EmbedDb before rethrow/return"
     );
 
-    const unawaitedActivationEmbedCleanup = GOOD_STARTUP.replace(
+    const unawaitedActivationEmbedCleanup = replaceExactly(
+      GOOD_STARTUP,
       '      await closeWatcherEmbedDbAfterFailure(watcherEmbedDb, "watcher activation");\n',
       '      closeWatcherEmbedDbAfterFailure(watcherEmbedDb, "watcher activation");\n'
     );
@@ -952,23 +963,30 @@ describe("watcher startup activation ordering (v3.12.0-rc.25 S-8c)", () => {
       "watcher activation catch must close watcher EmbedDb before rethrow/return"
     );
 
-    const lateStartupEmbedCleanup = GOOD_STARTUP.replace(
+    const withoutStartupEmbedCleanup = replaceExactly(
+      GOOD_STARTUP,
       '      await closeWatcherEmbedDbAfterFailure(watcherEmbedDb, "watcher startup");\n',
       ""
-    ).replace(
+    );
+    const lateStartupEmbedCleanup = replaceExactly(
+      withoutStartupEmbedCleanup,
       "      throw error;\n    }\n  }\n  if (opts.useHnsw)",
       '      throw error;\n      await closeWatcherEmbedDbAfterFailure(watcherEmbedDb, "watcher startup");\n    }\n  }\n  if (opts.useHnsw)'
+    );
+    expect(lateStartupEmbedCleanup).toContain(
+      'throw error;\n      await closeWatcherEmbedDbAfterFailure(watcherEmbedDb, "watcher startup");'
     );
     expect(watcherStartupOrderViolations(lateStartupEmbedCleanup)).toContain(
       "watcher startup catch must close watcher EmbedDb before rethrow/return"
     );
 
-    const missingDriftCapture = GOOD_STARTUP.replace("      await watcher.captureAttachedSinkDrift();\n", "");
+    const missingDriftCapture = replaceExactly(GOOD_STARTUP, "      await watcher.captureAttachedSinkDrift();\n", "");
     expect(watcherStartupOrderViolations(missingDriftCapture)).toContain(
       "expected exactly one watcher.captureAttachedSinkDrift() call, found 0"
     );
 
-    const unawaitedDriftCapture = GOOD_STARTUP.replace(
+    const unawaitedDriftCapture = replaceExactly(
+      GOOD_STARTUP,
       "await watcher.captureAttachedSinkDrift()",
       "watcher.captureAttachedSinkDrift()"
     );
@@ -976,27 +994,36 @@ describe("watcher startup activation ordering (v3.12.0-rc.25 S-8c)", () => {
       "watcher.captureAttachedSinkDrift() must be directly awaited"
     );
 
-    const missingPostReadyFts = GOOD_STARTUP.replace("        await syncFtsIndex(vault, ftsIndex);\n", "");
+    const missingPostReadyFts = replaceExactly(GOOD_STARTUP, "        await syncFtsIndex(vault, ftsIndex);\n", "");
     expect(watcherStartupOrderViolations(missingPostReadyFts)).toContain(
       "expected exactly one post-ready syncFtsIndex reconciliation before activation, found 0"
     );
 
-    const missingPostReadyPdf = GOOD_STARTUP.replace("          await syncPdfFtsIndex(vault, ftsIndex);\n", "");
+    const missingPostReadyPdf = replaceExactly(
+      GOOD_STARTUP,
+      "          await syncPdfFtsIndex(vault, ftsIndex);\n",
+      ""
+    );
     expect(watcherStartupOrderViolations(missingPostReadyPdf)).toContain(
       "expected exactly one post-ready syncPdfFtsIndex reconciliation before activation, found 0"
     );
   });
 
   it("NEGATIVE: rejects unawaited barriers and misplaced durable-guard transitions", () => {
-    const source = GOOD_STARTUP.replace("await watcher.activate()", "watcher.activate()");
+    const source = replaceExactly(GOOD_STARTUP, "await watcher.activate()", "watcher.activate()");
     expect(watcherStartupOrderViolations(source)).toContain("watcher.activate() must be directly awaited");
 
-    const missingClearAssertion = GOOD_STARTUP.replace("  await assertWatcherActivationGuardClear(embedFile);\n", "");
+    const missingClearAssertion = replaceExactly(
+      GOOD_STARTUP,
+      "  await assertWatcherActivationGuardClear(embedFile);\n",
+      ""
+    );
     expect(watcherStartupOrderViolations(missingClearAssertion)).toContain(
       "expected exactly one activation-guard clear assertion, found 0"
     );
 
-    const unawaitedClearAssertion = GOOD_STARTUP.replace(
+    const unawaitedClearAssertion = replaceExactly(
+      GOOD_STARTUP,
       "await assertWatcherActivationGuardClear(embedFile)",
       "assertWatcherActivationGuardClear(embedFile)"
     );
@@ -1004,18 +1031,25 @@ describe("watcher startup activation ordering (v3.12.0-rc.25 S-8c)", () => {
       "assertWatcherActivationGuardClear() must be directly awaited"
     );
 
-    const lateClearAssertion = GOOD_STARTUP.replace(
+    const withoutClearAssertion = replaceExactly(
+      GOOD_STARTUP,
       "  await assertWatcherActivationGuardClear(embedFile);\n",
       ""
-    ).replace(
+    );
+    const lateClearAssertion = replaceExactly(
+      withoutClearAssertion,
       "      await watcher.start();",
       "      await watcher.start();\n      await assertWatcherActivationGuardClear(embedFile);"
+    );
+    expect(lateClearAssertion).toContain(
+      "await watcher.start();\n      await assertWatcherActivationGuardClear(embedFile);"
     );
     expect(watcherStartupOrderViolations(lateClearAssertion)).toContain(
       "activation guard must be asserted clear before FTS/watcher/HNSW acquisition"
     );
 
-    const unawaitedArm = GOOD_STARTUP.replace(
+    const unawaitedArm = replaceExactly(
+      GOOD_STARTUP,
       "await armWatcherActivationGuard(embedFile)",
       "armWatcherActivationGuard(embedFile)"
     );
@@ -1023,7 +1057,8 @@ describe("watcher startup activation ordering (v3.12.0-rc.25 S-8c)", () => {
       "armWatcherActivationGuard() must be directly awaited"
     );
 
-    const armAfterStart = GOOD_STARTUP.replace(
+    const armAfterStart = replaceExactly(
+      GOOD_STARTUP,
       "        guardArmAttempted = true;\n        watcherActivationGuard = await armWatcherActivationGuard(embedFile);\n      }\n      await watcher.start();",
       "      }\n      await watcher.start();\n      if (startupEmbedDbAvailable) {\n        guardArmAttempted = true;\n        watcherActivationGuard = await armWatcherActivationGuard(embedFile);\n      }"
     );
@@ -1031,15 +1066,21 @@ describe("watcher startup activation ordering (v3.12.0-rc.25 S-8c)", () => {
       "activation guard must be armed before watcher.start()"
     );
 
-    const openAfterArm = GOOD_STARTUP.replace("        await watcherEmbedDb.open();\n", "").replace(
+    const withoutWatcherEmbedDbOpen = replaceExactly(GOOD_STARTUP, "        await watcherEmbedDb.open();\n", "");
+    const openAfterArm = replaceExactly(
+      withoutWatcherEmbedDbOpen,
       "        watcherActivationGuard = await armWatcherActivationGuard(embedFile);\n",
       "        watcherActivationGuard = await armWatcherActivationGuard(embedFile);\n        await watcherEmbedDb.open();\n"
+    );
+    expect(openAfterArm).toContain(
+      "watcherActivationGuard = await armWatcherActivationGuard(embedFile);\n        await watcherEmbedDb.open();"
     );
     expect(watcherStartupOrderViolations(openAfterArm)).toContain(
       "watcher EmbedDb must open before activation guard arm"
     );
 
-    const duplicateOpen = GOOD_STARTUP.replace(
+    const duplicateOpen = replaceExactly(
+      GOOD_STARTUP,
       "        await watcherEmbedDb.open();",
       "        await watcherEmbedDb.open();\n        await watcherEmbedDb.open();"
     );
@@ -1047,10 +1088,11 @@ describe("watcher startup activation ordering (v3.12.0-rc.25 S-8c)", () => {
       "expected exactly one watcher EmbedDb open, found 2"
     );
 
-    const unawaitedOpen = GOOD_STARTUP.replace("await watcherEmbedDb.open()", "watcherEmbedDb.open()");
+    const unawaitedOpen = replaceExactly(GOOD_STARTUP, "await watcherEmbedDb.open()", "watcherEmbedDb.open()");
     expect(watcherStartupOrderViolations(unawaitedOpen)).toContain("watcher EmbedDb open must be directly awaited");
 
-    const lateArmAttempt = GOOD_STARTUP.replace(
+    const lateArmAttempt = replaceExactly(
+      GOOD_STARTUP,
       "        guardArmAttempted = true;\n        watcherActivationGuard = await armWatcherActivationGuard(embedFile);",
       "        watcherActivationGuard = await armWatcherActivationGuard(embedFile);\n        guardArmAttempted = true;"
     );
@@ -1058,7 +1100,8 @@ describe("watcher startup activation ordering (v3.12.0-rc.25 S-8c)", () => {
       "guardArmAttempted must be set immediately before awaited guard arm"
     );
 
-    const availabilityWrappedStartup = GOOD_STARTUP.replace(
+    const availabilityWrappedStartup = replaceExactly(
+      GOOD_STARTUP,
       "if (guardArmAttempted) throw watcherActivationRecoveryError(error);",
       "if (startupEmbedDbAvailable) throw watcherActivationRecoveryError(error);"
     );
@@ -1066,7 +1109,8 @@ describe("watcher startup activation ordering (v3.12.0-rc.25 S-8c)", () => {
       "watcher startup recovery must wrap iff guard arm was attempted"
     );
 
-    const releaseBeforeActivation = GOOD_STARTUP.replace(
+    const releaseBeforeActivation = replaceExactly(
+      GOOD_STARTUP,
       "      await watcher.activate();\n      if (watcherActivationGuard) {\n        await releaseWatcherActivationGuard(watcherActivationGuard);\n        watcherActivationGuard = null;\n      }",
       "      if (watcherActivationGuard) {\n        await releaseWatcherActivationGuard(watcherActivationGuard);\n        watcherActivationGuard = null;\n      }\n      await watcher.activate();"
     );
@@ -1074,7 +1118,8 @@ describe("watcher startup activation ordering (v3.12.0-rc.25 S-8c)", () => {
       "activation guard release must run after awaited watcher.activate()"
     );
 
-    const unawaitedRelease = GOOD_STARTUP.replace(
+    const unawaitedRelease = replaceExactly(
+      GOOD_STARTUP,
       "await releaseWatcherActivationGuard(watcherActivationGuard)",
       "releaseWatcherActivationGuard(watcherActivationGuard)"
     );
@@ -1082,7 +1127,8 @@ describe("watcher startup activation ordering (v3.12.0-rc.25 S-8c)", () => {
       "releaseWatcherActivationGuard() must be directly awaited"
     );
 
-    const swallowedRelease = GOOD_STARTUP.replace(
+    const swallowedRelease = replaceExactly(
+      GOOD_STARTUP,
       "        await releaseWatcherActivationGuard(watcherActivationGuard);",
       "        try {\n          await releaseWatcherActivationGuard(watcherActivationGuard);\n        } catch (releaseError) {\n          warn(releaseError);\n        }"
     );
@@ -1090,7 +1136,8 @@ describe("watcher startup activation ordering (v3.12.0-rc.25 S-8c)", () => {
       "activation guard release must stay on watcher.activate() successful try path"
     );
 
-    const releaseAfterClose = GOOD_STARTUP.replace(
+    const releaseAfterClose = replaceExactly(
+      GOOD_STARTUP,
       "      await watcher.activate();",
       "      await watcher.activate();\n      await watcher.close();"
     );
@@ -1098,18 +1145,25 @@ describe("watcher startup activation ordering (v3.12.0-rc.25 S-8c)", () => {
       "activation guard release may not run after watcher.close()"
     );
 
-    const releaseInFailureCatch = GOOD_STARTUP.replace(
+    const withoutSuccessfulRelease = replaceExactly(
+      GOOD_STARTUP,
       "      if (watcherActivationGuard) {\n        await releaseWatcherActivationGuard(watcherActivationGuard);\n        watcherActivationGuard = null;\n      }\n",
       ""
-    ).replace(
+    );
+    const releaseInFailureCatch = replaceExactly(
+      withoutSuccessfulRelease,
       '    } catch (error) {\n      await closeWatcherEmbedDbAfterFailure(watcherEmbedDb, "watcher activation");\n      watcherEmbedDb = null;\n      await watcher.close();',
       '    } catch (error) {\n      await closeWatcherEmbedDbAfterFailure(watcherEmbedDb, "watcher activation");\n      watcherEmbedDb = null;\n      if (watcherActivationGuard) {\n        await releaseWatcherActivationGuard(watcherActivationGuard);\n        watcherActivationGuard = null;\n      }\n      await watcher.close();'
+    );
+    expect(releaseInFailureCatch).toContain(
+      'catch (error) {\n      await closeWatcherEmbedDbAfterFailure(watcherEmbedDb, "watcher activation");\n      watcherEmbedDb = null;\n      if (watcherActivationGuard)'
     );
     expect(watcherStartupOrderViolations(releaseInFailureCatch)).toContain(
       "activation guard release must stay on watcher.activate() successful try path"
     );
 
-    const omittedFrozenCapability = GOOD_FROZEN_CAPABILITY.replace(
+    const omittedFrozenCapability = replaceExactly(
+      GOOD_FROZEN_CAPABILITY,
       "  registerReadTools(server, vault, deps.embedDbFile, deps.watcherHealth);",
       "  registerReadTools(server, vault, deps.watcherHealth);"
     );
@@ -1117,7 +1171,8 @@ describe("watcher startup activation ordering (v3.12.0-rc.25 S-8c)", () => {
       "buildMcpServer must forward deps.embedDbFile without a late disk probe"
     );
 
-    const dynamicLateCapability = GOOD_FROZEN_CAPABILITY.replace(
+    const dynamicLateCapability = replaceExactly(
+      GOOD_FROZEN_CAPABILITY,
       "  registerReadTools(server, vault, deps.embedDbFile, deps.watcherHealth);",
       "  registerReadTools(server, vault, existsSync(embedDbPath(deps.vault.root)) ? embedDbPath(deps.vault.root) : null, deps.watcherHealth);"
     );
@@ -1125,12 +1180,13 @@ describe("watcher startup activation ordering (v3.12.0-rc.25 S-8c)", () => {
       "buildMcpServer must forward deps.embedDbFile without a late disk probe"
     );
 
-    const omittedWatcherHealth = GOOD_FROZEN_CAPABILITY.replace(", deps.watcherHealth", "");
+    const omittedWatcherHealth = replaceExactly(GOOD_FROZEN_CAPABILITY, ", deps.watcherHealth", "");
     expect(frozenEmbedCapabilityViolations(omittedWatcherHealth)).toContain(
       "buildMcpServer must forward deps.watcherHealth to read tools"
     );
 
-    const resampledCapability = GOOD_FROZEN_CAPABILITY.replace(
+    const resampledCapability = replaceExactly(
+      GOOD_FROZEN_CAPABILITY,
       "embeddingIndexEnabled && existsSync(startupEmbedFile)",
       "embeddingIndexEnabled && existsSync(startupEmbedFile) && existsSync(startupEmbedFile)"
     );
@@ -1138,7 +1194,8 @@ describe("watcher startup activation ordering (v3.12.0-rc.25 S-8c)", () => {
       "expected exactly one frozen EmbedDb existsSync snapshot, found 2"
     );
 
-    const unisolatedFrozenCapability = GOOD_FROZEN_CAPABILITY.replace(
+    const unisolatedFrozenCapability = replaceExactly(
+      GOOD_FROZEN_CAPABILITY,
       `    embedDbFile:
       opts.embeddingIndex === false
         ? null
@@ -1153,11 +1210,15 @@ describe("watcher startup activation ordering (v3.12.0-rc.25 S-8c)", () => {
       "prepareServerDeps must return the isolated and frozen embedDbFile capability"
     );
 
-    const latePureValidation = GOOD_STARTUP.replace(REQUIRED_PURE_VALIDATION_BLOCK, "").replace(
+    const withoutPureValidation = replaceExactly(GOOD_STARTUP, REQUIRED_PURE_VALIDATION_BLOCK, "");
+    const latePureValidation = replaceExactly(
+      withoutPureValidation,
       "      await watcher.start();",
       `      await watcher.start();
 ${REQUIRED_PURE_VALIDATION_BLOCK}`
     );
+    expect(latePureValidation).toContain(`await watcher.start();
+${REQUIRED_PURE_VALIDATION_BLOCK}`);
     expect(startupPureValidationViolations(latePureValidation)).toContain(
       "--ocr-pdfs compatibility validation must run before startup guard/resource acquisition"
     );
@@ -1173,20 +1234,25 @@ ${REQUIRED_PURE_VALIDATION_BLOCK}`
   });
 
   it("NEGATIVE: rejects activation before any late-bound watcher setup", () => {
-    const lateHnsw = GOOD_STARTUP.replace(
-      "    try {\n      await watcher.activate();",
-      "    watcher.attachHnsw(lateIndex, lateRows);\n    try {\n      await watcher.activate();"
-    ).replace(
+    const lateHnsw = replaceExactly(
+      GOOD_STARTUP,
       "  const feedbackStore = await openFeedback();",
       "  watcher.attachHnsw(latestIndex, latestRows);\n  const feedbackStore = await openFeedback();"
+    );
+    expect(lateHnsw).toContain(
+      "watcher.attachHnsw(latestIndex, latestRows);\n  const feedbackStore = await openFeedback();"
     );
     expect(watcherStartupOrderViolations(lateHnsw)).toContain(
       "watcher.activate() must run after every attachEmbed()/setOcrPdfs()/attachHnsw() branch"
     );
 
-    const lateOcr = GOOD_STARTUP.replace("        watcher.setOcrPdfs(true, opts.ocrLangs);\n", "").replace(
+    const lateOcr = replaceExactly(
+      GOOD_STARTUP,
       "  const feedbackStore = await openFeedback();",
       "  watcher.setOcrPdfs(true, opts.ocrLangs);\n  const feedbackStore = await openFeedback();"
+    );
+    expect(lateOcr).toContain(
+      "watcher.setOcrPdfs(true, opts.ocrLangs);\n  const feedbackStore = await openFeedback();"
     );
     expect(watcherStartupOrderViolations(lateOcr)).toContain(
       "watcher.activate() must run after every attachEmbed()/setOcrPdfs()/attachHnsw() branch"
@@ -1194,7 +1260,8 @@ ${REQUIRED_PURE_VALIDATION_BLOCK}`
   });
 
   it("NEGATIVE: rejects activation gated by --use-hnsw", () => {
-    const source = GOOD_STARTUP.replace(
+    const source = replaceExactly(
+      GOOD_STARTUP,
       "  if (watcher) {\n    try {\n      await watcher.activate();",
       "  if (opts.useHnsw) {\n    try {\n      await watcher.activate();"
     );

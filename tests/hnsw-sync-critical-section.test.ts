@@ -25,6 +25,7 @@ import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
+import { replaceExactly } from "./helpers/exact-source-mutation.js";
 
 const repoRoot = path.resolve(__dirname, "..");
 
@@ -212,25 +213,28 @@ describe("HNSW shared-state critical section is synchronous (rc.9, T-MED-1)", ()
   it("live-generation detectors reject deferred locking, early blessing, and detached server wiring", () => {
     expect(
       conditionalEmbedMutationOwnsImmediateWriteLock(
-        embedRaw.replace("return transaction.immediate();", "return transaction();")
+        replaceExactly(embedRaw, "return transaction.immediate();", "return transaction();")
       )
     ).toBe(false);
 
-    const earlyBlessing = watcherRaw.replace(
+    const earlyBlessing = replaceExactly(
+      watcherRaw,
       "hnswResult = this.syncHnswForFile(\n        relPath,",
       "this.publishCommittedHnswGeneration(committedGeneration);\n      hnswResult = this.syncHnswForFile(\n        relPath,"
     );
     expect(earlyBlessing).not.toBe(watcherRaw);
     expect(watcherPublishesGenerationAfterGraphDiff(earlyBlessing, "upsertEmbedAndSyncHnsw")).toBe(false);
 
-    const uncheckedAttachment = watcherRaw.replace(
+    const uncheckedAttachment = replaceExactly(
+      watcherRaw,
       "!sameEmbedDbGenerationIdentity(sharedGenerationAuthority, currentGeneration)",
       "false"
     );
     expect(uncheckedAttachment).not.toBe(watcherRaw);
     expect(watcherRevalidatesSharedAuthorityAtAttachment(uncheckedAttachment)).toBe(false);
 
-    const detachedServer = serverRaw.replace(
+    const detachedServer = replaceExactly(
+      serverRaw,
       "opts.hnswPersist !== false ? persistFile : undefined,\n                    hnswContext",
       "opts.hnswPersist !== false ? persistFile : undefined"
     );
@@ -250,7 +254,7 @@ describe("HNSW shared-state critical section is synchronous (rc.9, T-MED-1)", ()
     const core = sliceBetween(bad, "for (const label of removeLabels)", "return { removed, added }");
     expect(containsAwait(core)).toBe(true);
     // POSITIVE control: the same body without the await is clean.
-    const good = bad.replace("await somethingAsync();", "ctor.resizeIndex(n);");
+    const good = replaceExactly(bad, "await somethingAsync();", "ctor.resizeIndex(n);");
     expect(containsAwait(sliceBetween(good, "for (const label of removeLabels)", "return { removed, added }"))).toBe(
       false
     );
@@ -260,7 +264,7 @@ describe("HNSW shared-state critical section is synchronous (rc.9, T-MED-1)", ()
     for (const start of ["this.ftsIndex?.reindexFile(", "this.ftsIndex?.reindexPdfFile("]) {
       const badCommit = [start, "await remoteSink();", "return embedNote;"].join("\n");
       expect(containsAwait(sliceBetween(badCommit, start, "return embedNote;"))).toBe(true);
-      const goodCommit = badCommit.replace("await remoteSink();", "this.embedDb?.totalChunks();");
+      const goodCommit = replaceExactly(badCommit, "await remoteSink();", "this.embedDb?.totalChunks();");
       expect(containsAwait(sliceBetween(goodCommit, start, "return embedNote;"))).toBe(false);
     }
   });

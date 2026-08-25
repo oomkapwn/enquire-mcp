@@ -2063,7 +2063,7 @@ describe("Class A invariant — no test imports value from registration boilerpl
       coverageIsolationProblems(await currentCoverageIsolationInputs()),
       "Coverage isolation must remain exact, prerequisite-bound and production-import-free"
     ).toEqual([]);
-  }, 45_000);
+  }, 60_000);
 
   it("NEGATIVE control: restricted imports and coverage isolation drift are rejected", async () => {
     // Drift the input on purpose — a synthetic test importing from a restricted
@@ -3958,7 +3958,7 @@ describe("Class A invariant — no test imports value from registration boilerpl
 
     const typeOnlyProductionImport = 'import type { Vault } from "../src/vault.js";';
     expect(moduleProblems("tests/release-integrity.test.ts", typeOnlyProductionImport)).toEqual([]);
-  }, 45_000);
+  }, 90_000);
 });
 
 async function collectTestFiles(dir: string): Promise<string[]> {

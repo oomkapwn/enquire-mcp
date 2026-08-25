@@ -18,6 +18,7 @@ import ts from "typescript";
 import { describe, expect, it, vi } from "vitest";
 import { type ServerDeps, startServer } from "../src/index.js";
 import { PreparedServerCleanupError } from "../src/shutdown.js";
+import { replaceExactly } from "./helpers/exact-source-mutation.js";
 
 const stdioHarness = vi.hoisted(() => ({ serveStdio: vi.fn() }));
 vi.mock("@modelcontextprotocol/server/stdio", () => ({ serveStdio: stdioHarness.serveStdio }));
@@ -502,7 +503,7 @@ describe("server startup owns every acquired persistence lifetime", () => {
   it("NEGATIVE control — missing a direct HTTP owner close is rejected", async () => {
     const src = await fs.readFile(path.join(repoRoot, "src", "http-transport.ts"), "utf8");
     const fnSrc = extractStartHttpServer(src);
-    const mutated = fnSrc.replace("handlerOut.modern?.close()", "Promise.resolve()");
+    const mutated = replaceExactly(fnSrc, "handlerOut.modern?.close()", "Promise.resolve()");
     expect(mutated).not.toBe(fnSrc);
     expect(httpStartupCleanupViolations(mutated)).toContain("HTTP startup rollback omits handlerOut.modern?.close()");
   });

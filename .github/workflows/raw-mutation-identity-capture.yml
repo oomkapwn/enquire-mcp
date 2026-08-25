@@ -1,0 +1,184 @@
+name: Raw mutation identity capture
+
+on:
+  push:
+    branches: [codex/guard-raw-mutation-oracle]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: raw-mutation-identity-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    defaults:
+      run:
+        shell: /bin/bash --noprofile --norc -e -o pipefail {0}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Assert exact pushed source and remove disposable workflow
+        run: |
+          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
+          mv .github/workflows/raw-mutation-identity-capture.yml "$RUNNER_TEMP/raw-mutation-identity-capture.yml"
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install declared dependencies with the reviewed bounded helper
+        run: node scripts/npm-ci-with-retry.mjs
+      - name: Apply the hosted formatter to every changed TypeScript surface
+        run: |
+          ./node_modules/.bin/biome format --write \
+            scripts/build-pages.mjs \
+            scripts/capture-raw-mutation-identities.mjs \
+            scripts/inject-jsonld.mjs \
+            tests/cli-parity.test.ts \
+            tests/docker-glama-invariant.test.ts \
+            tests/embed-persistence-coordination.test.ts \
+            tests/embeddings-offline.test.ts \
+            tests/enforcement-guard-invariant.test.ts \
+            tests/erasure-invariant.test.ts \
+            tests/fts-persistence-coordination.test.ts \
+            tests/fts5.test.ts \
+            tests/hnsw-sync-critical-section.test.ts \
+            tests/http-transport.test.ts \
+            tests/jsonld.test.ts \
+            tests/k1-class-invariant.test.ts \
+            tests/meta-invariant-coverage.test.ts \
+            tests/name-fold-invariant.test.ts \
+            tests/no-internal-imports.test.ts \
+            tests/ocr-admission.test.ts \
+            tests/pages.test.ts \
+            tests/prepare-deps-failfast.test.ts \
+            tests/release-integrity.test.ts \
+            tests/release-mutation-identity-audit.ts \
+            tests/release-mutation-transition.test.ts \
+            tests/resource-bound-invariant.test.ts \
+            tests/resource-list-admission.test.ts \
+            tests/smoke-default-vault-invariant.test.ts \
+            tests/tool-input-admission.test.ts \
+            tests/watcher-startup-order.test.ts \
+            tests/workflow-privilege-invariant.test.ts
+      - name: Regenerate the synchronized social preview
+        run: npm run render:preview
+      - name: Refresh the release-mutation identity chain
+        run: |
+          node scripts/capture-raw-mutation-identities.mjs release-pre
+          transition="$RUNNER_TEMP/release-mutation-transition.v3.json"
+          node scripts/generate-release-mutation-transition.mjs --authority-current > "$transition"
+          mv "$transition" tests/fixtures/release-mutation-transition.v3.json
+          node scripts/capture-raw-mutation-identities.mjs release-post
+      - name: Freeze helper-call count before position-sensitive digests
+        run: |
+          node scripts/capture-raw-mutation-identities.mjs count
+          ./node_modules/.bin/biome format --write tests/meta-invariant-coverage.test.ts
+      - name: Capture exact helper-call and ordinary-owner identities
+        run: |
+          node scripts/capture-raw-mutation-identities.mjs hashes > "$RUNNER_TEMP/raw-mutation-identities.json"
+          mv scripts/capture-raw-mutation-identities.mjs "$RUNNER_TEMP/capture-raw-mutation-identities.mjs"
+      - name: Verify the generated tree and focused audit surfaces
+        run: |
+          [[ ! -e .github/workflows/raw-mutation-identity-capture.yml ]]
+          [[ ! -e scripts/capture-raw-mutation-identities.mjs ]]
+          regenerated="$RUNNER_TEMP/release-mutation-transition.regenerated.json"
+          node scripts/generate-release-mutation-transition.mjs --authority-current > "$regenerated"
+          cmp tests/fixtures/release-mutation-transition.v3.json "$regenerated"
+          ./node_modules/.bin/biome check . --max-diagnostics=200 --error-on-warnings
+          git diff --check
+          ./node_modules/.bin/vitest run \
+            tests/cli-parity.test.ts \
+            tests/docker-glama-invariant.test.ts \
+            tests/docs-consistency.test.ts \
+            tests/embed-persistence-coordination.test.ts \
+            tests/embeddings-offline.test.ts \
+            tests/enforcement-guard-invariant.test.ts \
+            tests/erasure-invariant.test.ts \
+            tests/fts-persistence-coordination.test.ts \
+            tests/fts5.test.ts \
+            tests/hnsw-sync-critical-section.test.ts \
+            tests/http-transport.test.ts \
+            tests/jsonld.test.ts \
+            tests/k1-class-invariant.test.ts \
+            tests/meta-invariant-coverage.test.ts \
+            tests/name-fold-invariant.test.ts \
+            tests/no-internal-imports.test.ts \
+            tests/ocr-admission.test.ts \
+            tests/pages.test.ts \
+            tests/prepare-deps-failfast.test.ts \
+            tests/release-integrity.test.ts \
+            tests/release-mutation-transition.test.ts \
+            tests/resource-bound-invariant.test.ts \
+            tests/resource-list-admission.test.ts \
+            tests/smoke-default-vault-invariant.test.ts \
+            tests/tool-input-admission.test.ts \
+            tests/watcher-startup-order.test.ts \
+            tests/workflow-privilege-invariant.test.ts \
+            --reporter=verbose
+      - name: Upload exact formatted identity tree
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: raw-mutation-identity-${{ github.sha }}
+          if-no-files-found: error
+          retention-days: 1
+          path: |
+            ${{ runner.temp }}/raw-mutation-identities.json
+            AGENTS.md
+            CLAUDE.md
+            CHANGELOG.md
+            ROADMAP.md
+            README.ar.md
+            README.de.md
+            README.es.md
+            README.fr.md
+            README.hi.md
+            README.ja.md
+            README.ko.md
+            README.md
+            README.pt.md
+            README.ru.md
+            README.zh.md
+            assets/social-preview.png
+            assets/social-preview.svg
+            docs/COMPARISON.md
+            llms-ctx.txt
+            llms.txt
+            package.json
+            scripts/build-pages.mjs
+            scripts/inject-jsonld.mjs
+            site/index.html
+            tests/cli-parity.test.ts
+            tests/docker-glama-invariant.test.ts
+            tests/embed-persistence-coordination.test.ts
+            tests/embeddings-offline.test.ts
+            tests/enforcement-guard-invariant.test.ts
+            tests/erasure-invariant.test.ts
+            tests/fixtures/release-mutation-transition.v3.json
+            tests/fts-persistence-coordination.test.ts
+            tests/fts5.test.ts
+            tests/hnsw-sync-critical-section.test.ts
+            tests/http-transport.test.ts
+            tests/jsonld.test.ts
+            tests/k1-class-invariant.test.ts
+            tests/meta-invariant-coverage.test.ts
+            tests/name-fold-invariant.test.ts
+            tests/no-internal-imports.test.ts
+            tests/ocr-admission.test.ts
+            tests/pages.test.ts
+            tests/prepare-deps-failfast.test.ts
+            tests/release-integrity.test.ts
+            tests/release-mutation-identity-audit.ts
+            tests/release-mutation-transition.test.ts
+            tests/resource-bound-invariant.test.ts
+            tests/resource-list-admission.test.ts
+            tests/smoke-default-vault-invariant.test.ts
+            tests/tool-input-admission.test.ts
+            tests/watcher-startup-order.test.ts
+            tests/workflow-privilege-invariant.test.ts

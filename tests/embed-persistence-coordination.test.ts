@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { EmbedDb } from "../src/embed-db.js";
 import { PersistenceLeaseConflictError } from "../src/persistence-lease.js";
+import { replaceExactly } from "./helpers/exact-source-mutation.js";
 
 const fixture = path.resolve(__dirname, "fixtures", "embed-persistence-child.mjs");
 const repoRoot = path.resolve(__dirname, "..");
@@ -103,12 +104,12 @@ describe("EmbedDb cross-process semantic-family coordination", () => {
     };
 
     expect(lifecycleProblems(cliSource, searchSource)).toEqual([]);
-    expect(lifecycleProblems(cliSource.replace("await db.closeAndRelease();", "db.close();"), searchSource)).toContain(
-      "production EmbedDb owner still uses synchronous close"
-    );
-    expect(lifecycleProblems(cliSource.replace("await vault.closePersistence();", "void 0;"), searchSource)).toContain(
-      "clear-cache does not release Vault persistence in finally"
-    );
+    expect(
+      lifecycleProblems(replaceExactly(cliSource, "await db.closeAndRelease();", "db.close();", 2), searchSource)
+    ).toContain("production EmbedDb owner still uses synchronous close");
+    expect(
+      lifecycleProblems(replaceExactly(cliSource, "await vault.closePersistence();", "void 0;"), searchSource)
+    ).toContain("clear-cache does not release Vault persistence in finally");
   });
 
   it.each(["db", "context"] as const)(

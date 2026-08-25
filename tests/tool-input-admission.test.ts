@@ -6,6 +6,7 @@ import type { FtsIndex } from "../src/fts5.js";
 import { readChunkResource } from "../src/resource-admission.js";
 import { RENAME_NOTE_INPUT_SCHEMA } from "../src/tool-input-admission.js";
 import { Vault } from "../src/vault.js";
+import { replaceExactly } from "./helpers/exact-source-mutation.js";
 
 describe("tool input authority admission", () => {
   let root = "";
@@ -35,7 +36,7 @@ describe("tool input authority admission", () => {
     expect(registrySource).not.toMatch(/inputSchema:\s*z\.object\(\{/u);
     expect(admissionSource).not.toMatch(/RENAME_NOTE_INPUT_SCHEMA\s*=\s*z\.object\(\{/u);
 
-    const mutant = registrySource.replace("inputSchema: z.strictObject({", "inputSchema: z.object({");
+    const mutant = replaceExactly(registrySource, "inputSchema: z.strictObject({", "inputSchema: z.object({", 45);
     expect(mutant).toMatch(/inputSchema:\s*z\.object\(\{/u);
   });
 

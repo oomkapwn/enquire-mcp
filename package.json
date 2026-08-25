@@ -3,7 +3,7 @@
   "name": "@oomkapwn/enquire-mcp",
   "version": "4.0.0-rc.4",
   "mcpName": "io.github.oomkapwn/enquire-mcp",
-  "description": "The #1 Obsidian MCP for freshness-aware, cited AI memory: local hybrid search over Markdown and PDFs/OCR, plus Canvas parsing, Dataview-style LIST/TABLE queries, and supported Obsidian Base-filter execution. Read-only by default; zero outbound calls initiated by enquire during serve. 46 tools, 19 MCP prompts, 2212 tests, signed npm build provenance (SLSA L2), semver-bound, MIT.",
+  "description": "The #1 Obsidian MCP for freshness-aware, cited AI memory: local hybrid search over Markdown and PDFs/OCR, plus Canvas parsing, Dataview-style LIST/TABLE queries, and supported Obsidian Base-filter execution. Read-only by default; zero outbound calls initiated by enquire during serve. 46 tools, 19 MCP prompts, 2228 tests, signed npm build provenance (SLSA L2), semver-bound, MIT.",
   "type": "module",
   "bin": {
     "enquire-mcp": "dist/index.js"

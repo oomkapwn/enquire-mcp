@@ -289,19 +289,9 @@ application/ld+json
     const staleLegacy = replaceExactly(staleVersion, ' data-enquire-jsonld="graph-v1"', "", 1);
     const mismatchedMarker =
       '<script type="application/ld+json" data-enquire-jsonld="graph-v1">{"@type":"Thing"}</script>';
-    const wrongMarker = replaceExactly(
-      current,
-      'data-enquire-jsonld="graph-v1"',
-      'data-enquire-jsonld="graph-v0"',
-      1
-    );
+    const wrongMarker = replaceExactly(current, 'data-enquire-jsonld="graph-v1"', 'data-enquire-jsonld="graph-v0"', 1);
     const wrongMime = replaceExactly(current, 'type="application/ld+json"', 'type="text/javascript"', 1);
-    const doubleEncodedMime = replaceExactly(
-      current,
-      "application/ld+json",
-      "application/ld&#38;plus;json",
-      1
-    );
+    const doubleEncodedMime = replaceExactly(current, "application/ld+json", "application/ld&#38;plus;json", 1);
     const currentGraph = buildJsonLdGraph(pkg);
     const software = currentGraph["@graph"][0];
     const topLevelNode = `<script type="application/ld+json">${JSON.stringify(software)}</script>`;
@@ -337,13 +327,7 @@ application/ld+json
   });
 
   it("uses the real head close outside comments and script raw-text as the injection anchor", () => {
-    const hiddenHeadCloses = [
-      "script",
-      "style",
-      "title",
-      "noscript",
-      "template"
-    ]
+    const hiddenHeadCloses = ["script", "style", "title", "noscript", "template"]
       .map((name) => `<${name}>fake </head></${name}>`)
       .join("");
     const nestedTemplateHeadClose = "<template><template></template>fake </head></template>";
@@ -353,7 +337,7 @@ application/ld+json
     const result = injectJsonLdIntoHtml(source, pkg);
 
     expect(result.injected).toBe(true);
-    expect(result.html).toContain('<!-- fake </head> -->');
+    expect(result.html).toContain("<!-- fake </head> -->");
     expect(result.html.indexOf('data-enquire-jsonld="graph-v1"')).toBeGreaterThan(
       result.html.indexOf('<meta name="proof" data-fake="</head>" content="after fake closes">')
     );

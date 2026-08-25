@@ -69,9 +69,7 @@ describe("GitHub Pages artifact", () => {
     expect(publish).not.toContain("path: docs/api-reference");
     expect(publishPreviewProblems(publish)).toEqual([]);
     expect(
-      publishPreviewProblems(
-        replaceExactly(publish, "- run: npm run render:preview", "- run: echo stale preview", 1)
-      )
+      publishPreviewProblems(replaceExactly(publish, "- run: npm run render:preview", "- run: echo stale preview", 1))
     ).toContain("missing remote preview render");
     const withoutPreviewRender = replaceExactly(publish, "      - run: npm run render:preview\n", "", 1);
     expect(
@@ -277,9 +275,7 @@ describe("GitHub Pages artifact", () => {
       "<script><!--<script></script>__ENQUIRE_VERSION__</script>"
     ]) {
       const { apiSource, outDir, root } = await typeDocFixture();
-      const siteSource = await siteFixture(root, (source) =>
-        replaceExactly(source, "__ENQUIRE_VERSION__", hidden, 2)
-      );
+      const siteSource = await siteFixture(root, (source) => replaceExactly(source, "__ENQUIRE_VERSION__", hidden, 2));
       await expect(buildPagesArtifact({ repoRoot, apiSource, siteSource, outDir })).rejects.toThrow(
         "Landing page placeholder __ENQUIRE_VERSION__ must occur exactly 2 time(s); found 1"
       );
@@ -352,9 +348,7 @@ describe("GitHub Pages artifact", () => {
       1
     );
     await writeFile(landingPath, nestedElementAnswer, "utf8");
-    await expect(validatePagesArtifact(outDir, pkg)).rejects.toThrow(
-      "FAQ entry 1 does not have one direct <p> child"
-    );
+    await expect(validatePagesArtifact(outDir, pkg)).rejects.toThrow("FAQ entry 1 does not have one direct <p> child");
     const hiddenDetails = replaceExactly(landing, "<details open>", "<details open hidden>", 1);
     await writeFile(landingPath, hiddenDetails, "utf8");
     await expect(validatePagesArtifact(outDir, pkg)).rejects.toThrow(
@@ -412,24 +406,12 @@ describe("GitHub Pages artifact", () => {
     for (const [needle, replacement, problem] of [
       [
         '<main id="main">',
-        '<div data-note="<main id=\'main\'>">',
+        "<div data-note=\"<main id='main'>\">",
         'expected exactly one live direct <main id="main">; found 0'
       ],
-      [
-        '<main id="main">',
-        '<!-- <main id="main"> -->',
-        'expected exactly one live direct <main id="main">; found 0'
-      ],
-      [
-        '<main id="main">',
-        '<main.fake id="main">',
-        'expected exactly one live direct <main id="main">; found 0'
-      ],
-      [
-        '<main id="main">',
-        '<main id="main" hidden>',
-        'expected exactly one live direct <main id="main">; found 0'
-      ],
+      ['<main id="main">', '<!-- <main id="main"> -->', 'expected exactly one live direct <main id="main">; found 0'],
+      ['<main id="main">', '<main.fake id="main">', 'expected exactly one live direct <main id="main">; found 0'],
+      ['<main id="main">', '<main id="main" hidden>', 'expected exactly one live direct <main id="main">; found 0'],
       [
         '<link rel="canonical" href="https://oomkapwn.github.io/enquire-mcp/">',
         '<meta data-note=\'rel="canonical" href="https://oomkapwn.github.io/enquire-mcp/"\'>',
@@ -442,24 +424,15 @@ describe("GitHub Pages artifact", () => {
       ],
       [
         'id="install"',
-        'data-note=\'id="install"\'',
+        "data-note='id=\"install\"'",
         'expected exactly one live direct <section id="install">; found 0'
       ],
-      [
-        'id="faq"',
-        'data-note=\'id="faq"\'',
-        'expected exactly one live direct <section id="faq">; found 0'
-      ]
+      ['id="faq"', "data-note='id=\"faq\"'", 'expected exactly one live direct <section id="faq">; found 0']
     ] as const) {
       await writeFile(landingPath, replaceExactly(landing, needle, replacement, 1), "utf8");
       await expect(validatePagesArtifact(outDir, pkg)).rejects.toThrow(problem);
     }
-    const base = replaceExactly(
-      landing,
-      "</head>",
-      '<base href="https://evil.example/">\n</head>',
-      1
-    );
+    const base = replaceExactly(landing, "</head>", '<base href="https://evil.example/">\n</head>', 1);
     await writeFile(landingPath, base, "utf8");
     await expect(validatePagesArtifact(outDir, pkg)).rejects.toThrow("active <base> is forbidden; found 1");
 
@@ -599,15 +572,10 @@ describe("GitHub Pages artifact", () => {
     const pkg = JSON.parse(await readFile(join(repoRoot, "package.json"), "utf8"));
     for (const fakeTarget of [
       '<!-- id="ghost-target" -->',
-      '<div data-note=\'id="ghost-target"\'></div>',
+      "<div data-note='id=\"ghost-target\"'></div>",
       '<script><!--<script></script><div id="ghost-target"></div></script>'
     ]) {
-      const mutant = replaceExactly(
-        landing,
-        "</body>",
-        `<a href="#ghost-target">broken</a>${fakeTarget}</body>`,
-        1
-      );
+      const mutant = replaceExactly(landing, "</body>", `<a href="#ghost-target">broken</a>${fakeTarget}</body>`, 1);
       await writeFile(landingPath, mutant, "utf8");
       await expect(validatePagesArtifact(outDir, pkg)).rejects.toThrow(
         "Landing page has broken local links: missing fragment target #ghost-target"
@@ -642,7 +610,7 @@ describe("GitHub Pages artifact", () => {
     const pkg = JSON.parse(await readFile(join(repoRoot, "package.json"), "utf8"));
     for (const fakeLink of [
       '<!-- href="./missing-hidden/" -->',
-      '<div data-note=\'href="./missing-hidden/"\'></div>',
+      "<div data-note='href=\"./missing-hidden/\"'></div>",
       '<template><a href="./missing-hidden/">hidden</a></template>',
       '<script><!--<script></script><a href="./missing-hidden/">hidden</a></script>',
       '<!-- <base href="https://evil.example/"> -->',
@@ -660,11 +628,7 @@ describe("GitHub Pages artifact", () => {
     await buildPagesArtifact({ repoRoot, apiSource, siteSource: join(repoRoot, "site"), outDir });
     const landingPath = join(outDir, "index.html");
     const landing = await readFile(landingPath, "utf8");
-    await writeFile(
-      landingPath,
-      replaceExactly(landing, 'href="./api/"', 'href="./missing-api/"', 4),
-      "utf8"
-    );
+    await writeFile(landingPath, replaceExactly(landing, 'href="./api/"', 'href="./missing-api/"', 4), "utf8");
 
     await expect(validatePagesArtifact(outDir)).rejects.toThrow(
       "Landing page has broken local links: missing local href ./missing-api/"

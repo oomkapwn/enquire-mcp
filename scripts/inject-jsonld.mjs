@@ -296,15 +296,12 @@ function decodeAttributeReferences(value) {
     ["quot", '"'],
     ["sol", "/"]
   ]);
-  return value.replace(
-    /&#(?:[xX]([0-9a-fA-F]+)|([0-9]+));?|&([a-z]+);/g,
-    (reference, hex, decimal, name) => {
-      if (name) return named.get(String(name)) ?? reference;
-      const codePoint = Number.parseInt(hex ?? decimal, hex ? 16 : 10);
-      if (codePoint === 0 || codePoint > 0x10ffff || (codePoint >= 0xd800 && codePoint <= 0xdfff)) return "�";
-      return String.fromCodePoint(codePoint);
-    }
-  );
+  return value.replace(/&#(?:[xX]([0-9a-fA-F]+)|([0-9]+));?|&([a-z]+);/g, (reference, hex, decimal, name) => {
+    if (name) return named.get(String(name)) ?? reference;
+    const codePoint = Number.parseInt(hex ?? decimal, hex ? 16 : 10);
+    if (codePoint === 0 || codePoint > 0x10ffff || (codePoint >= 0xd800 && codePoint <= 0xdfff)) return "�";
+    return String.fromCodePoint(codePoint);
+  });
 }
 
 /**
@@ -615,9 +612,7 @@ function attributeValues(attributes, name) {
 
 /** @param {Array<{name: string, value: string | null}>} attributes */
 function jsonLdTypeStatus(attributes) {
-  const values = attributeValues(attributes, "type").map((value) =>
-    asciiLower(trimHtmlWhitespace(value ?? ""))
-  );
+  const values = attributeValues(attributes, "type").map((value) => asciiLower(trimHtmlWhitespace(value ?? "")));
   const hasJsonLdValue = values.some((value) => value.includes("application/ld+json"));
   if (values.length !== 1) return hasJsonLdValue ? "malformed" : "other";
   if (values[0] === "application/ld+json") return "jsonld";
@@ -648,10 +643,7 @@ function isEnquireJsonLdNode(node) {
     return true;
   }
   const types = Array.isArray(node["@type"]) ? node["@type"] : [node["@type"]];
-  return (
-    node.name === "enquire-mcp" &&
-    (types.includes("SoftwareApplication") || types.includes("SoftwareSourceCode"))
-  );
+  return node.name === "enquire-mcp" && (types.includes("SoftwareApplication") || types.includes("SoftwareSourceCode"));
 }
 
 /** @param {unknown} left @param {unknown} right */
@@ -725,12 +717,7 @@ export function inspectJsonLdScripts(html, pkg = {}) {
       }
       continue;
     }
-    if (
-      node.kind === "startTag" &&
-      node.name !== "script" &&
-      RAW_TEXT_ELEMENTS.has(node.name) &&
-      !node.closed
-    ) {
+    if (node.kind === "startTag" && node.name !== "script" && RAW_TEXT_ELEMENTS.has(node.name) && !node.closed) {
       htmlMalformedCount += 1;
       continue;
     }
@@ -803,10 +790,7 @@ function headCloseIndex(html) {
     const node = nodes[index];
     if (node?.kind === "comment") continue;
     if (node?.kind === "text" && trimHtmlWhitespace(String(node.data ?? "")) === "") continue;
-    if (
-      (node?.kind === "startTag" || node?.kind === "endTag") &&
-      HEAD_CONTENT_ELEMENTS.has(String(node.name))
-    ) {
+    if ((node?.kind === "startTag" || node?.kind === "endTag") && HEAD_CONTENT_ELEMENTS.has(String(node.name))) {
       continue;
     }
     return -1;

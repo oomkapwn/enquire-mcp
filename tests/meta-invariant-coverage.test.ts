@@ -34,7 +34,7 @@ import { releaseMutationVersionedTransitionAuditProblems } from "./release-mutat
 
 const repoRoot = path.resolve(__dirname, "..");
 const RELEASE_MUTATION_IDENTITY_FIXTURE_SHA256 = "8205d24e6d42dd4cb8986368611514131abe701434beb30150e33ea08f4b1288";
-const RELEASE_MUTATION_TRANSITION_FIXTURE_SHA256 = "8ee9661611a64622c0d35fef32f0673e89726ac602f69b598a43f36a654fd3b0";
+const RELEASE_MUTATION_TRANSITION_FIXTURE_SHA256 = "69e9aaca8742402a6a2a039eb455659e80ce4e8056dca755cb1cfde898d5bfc3";
 const releaseMutationIdentityFixturePath = path.join(repoRoot, "tests/fixtures/release-mutation-identity.v2.json");
 const releaseMutationTransitionFixturePath = path.join(repoRoot, "tests/fixtures/release-mutation-transition.v3.json");
 const releaseIntegritySourcePath = path.join(repoRoot, "tests/release-integrity.test.ts");
@@ -298,27 +298,21 @@ const EXPECTED_REPOSITORY_MUTATION_HELPER_CALL_ENTRIES = [
   ],
   [
     "embeddings-offline.test.ts",
-    { count: 12, sha256: "0000000000000000000000000000000000000000000000000000000000000000" }
+    { count: 12, sha256: "43c410329a4f1b5688ed4341f989b72f2aacf76b07722d9210eba9830b271ae1" }
   ],
   [
     "embed-persistence-coordination.test.ts",
-    { count: 2, sha256: "0000000000000000000000000000000000000000000000000000000000000000" }
+    { count: 2, sha256: "0b0831620a47264e3bd14af455336c2cb2a2cd24871f8447993f7d4b4a4e8ae2" }
   ],
   [
     "fts-persistence-coordination.test.ts",
-    { count: 1, sha256: "0000000000000000000000000000000000000000000000000000000000000000" }
+    { count: 1, sha256: "713c5e208f8b73dbe4423916973e77f95b6de5ecdf50ddf6ddd4d3778925c71d" }
   ],
-  [
-    "fts5.test.ts",
-    { count: 5, sha256: "0000000000000000000000000000000000000000000000000000000000000000" }
-  ],
-  [
-    "http-transport.test.ts",
-    { count: 1, sha256: "0000000000000000000000000000000000000000000000000000000000000000" }
-  ],
+  ["fts5.test.ts", { count: 5, sha256: "be662228a553da37b716611c7cc83e4a9d05b3532c77db61397e2d8db6ead21f" }],
+  ["http-transport.test.ts", { count: 1, sha256: "08b50871e63451decf0a616987d5c2ca2bacf79a6bdf28399177d8b66cb5f0b3" }],
   [
     "hnsw-sync-critical-section.test.ts",
-    { count: 6, sha256: "0000000000000000000000000000000000000000000000000000000000000000" }
+    { count: 6, sha256: "c8d9ddbc97806bdbf377279de1c49f62d801a5b1e7969ff98a56beb6878f8103" }
   ],
   [
     "k1-ast-invariant.test.ts",
@@ -328,29 +322,20 @@ const EXPECTED_REPOSITORY_MUTATION_HELPER_CALL_ENTRIES = [
     "k1-class-invariant.test.ts",
     { count: 102, sha256: "5a006450ce8fc1967a904c7d61a197519c2fb3259af3426d87eda826725d939e" }
   ],
-  [
-    "jsonld.test.ts",
-    { count: 11, sha256: "0000000000000000000000000000000000000000000000000000000000000000" }
-  ],
+  ["jsonld.test.ts", { count: 11, sha256: "ec02eb24004f2c975daa1b3a668451217e2884cec7cf301e33f91f8bce98d05b" }],
   [
     "meta-invariant-coverage.test.ts",
-    { count: 246, sha256: "448f506710382ce86186a253eaf1ee0f12b091d7944a89c8c5db1c2698c8b448" }
+    { count: 246, sha256: "235f871020f678d1a149d61186595cfe6f6c8cbb766e8bf85e69efe9526f1afc" }
   ],
   [
     "no-internal-imports.test.ts",
-    { count: 79, sha256: "2d72dcd050c19d5112e4f1d2e4abfdaa699dd0a1dfe70c4e97b9761e3e4ab51e" }
+    { count: 79, sha256: "5ed3320ec2b9a2aa04afcce4c737955b4819d1bb9a11dcf1cb989a01d456846d" }
   ],
-  [
-    "ocr-admission.test.ts",
-    { count: 2, sha256: "0000000000000000000000000000000000000000000000000000000000000000" }
-  ],
-  [
-    "pages.test.ts",
-    { count: 53, sha256: "0000000000000000000000000000000000000000000000000000000000000000" }
-  ],
+  ["ocr-admission.test.ts", { count: 2, sha256: "90087510a75587d7bc1e3f94812692b128d5466f4aba05638305fa2815809faa" }],
+  ["pages.test.ts", { count: 53, sha256: "bce9e4ba732c418f8f9779814cb9febc937844730cb224933b931df6bed8f21e" }],
   [
     "prepare-deps-failfast.test.ts",
-    { count: 1, sha256: "0000000000000000000000000000000000000000000000000000000000000000" }
+    { count: 1, sha256: "2a19343d6f9170babadb5554d0ec29a0dc115e05a00f71bf50216a3361b4328a" }
   ],
   [
     "release-mutation-transition.test.ts",
@@ -362,7 +347,7 @@ const EXPECTED_REPOSITORY_MUTATION_HELPER_CALL_ENTRIES = [
   ],
   [
     "resource-list-admission.test.ts",
-    { count: 1, sha256: "0000000000000000000000000000000000000000000000000000000000000000" }
+    { count: 1, sha256: "cfcd83f72055e3b8b8f16124045a540024faa84554365eb1c0b23ec1c77ab84a" }
   ],
   [
     "sink-parity-invariant.test.ts",
@@ -374,11 +359,11 @@ const EXPECTED_REPOSITORY_MUTATION_HELPER_CALL_ENTRIES = [
   ],
   [
     "tool-input-admission.test.ts",
-    { count: 1, sha256: "0000000000000000000000000000000000000000000000000000000000000000" }
+    { count: 1, sha256: "341ceb2e14508a125c2565c64fd389b688c5ba54b1372b16c0fc4cabb30b5512" }
   ],
   [
     "watcher-startup-order.test.ts",
-    { count: 44, sha256: "0000000000000000000000000000000000000000000000000000000000000000" }
+    { count: 44, sha256: "65f8cee2e6cb825d1911c9fddea5447fefac3e2dc8fffa6eee39d31d49f1a6b0" }
   ],
   [
     "write-lifecycle-invariant.test.ts",
@@ -869,7 +854,8 @@ const REVIEWED_ORDINARY_TRANSFORMS = [
     filename: "redos-trailing-strip.test.ts",
     id: "ReDoS catastrophic control transform",
     method: "replace",
-    owner: "test:the old /\\/+$/ regex IS catastrophic on the same shape (NEGATIVE control — proves the timing test discriminates)",
+    owner:
+      "test:the old /\\/+$/ regex IS catastrophic on the same shape (NEGATIVE control — proves the timing test discriminates)",
     pattern: String.raw`/\/+$/`,
     receiverRoot: "evil",
     replacement: '""'
@@ -1012,60 +998,42 @@ const EXPECTED_REVIEWED_ORDINARY_OWNER_SHA256_ENTRIES = [
   ["K-1 line-comment stripping", "e4ab04178c078637e0f4c686592e4c087735af6fae66bd301df5dcb3affd29e1"],
   ["K-1 module-extension normalization", "d3bedd44899b1fe192310c42f374374aa7dc4ca4fe6e39e8fc181e0ca5ce50c2"],
   ["K-1 source-path separator normalization", "38192dee61fd22c70e6eb075f1bf10e4dca81a981418a621d41d35c1a12fa0e9"],
-  [
-    "line-terminator block-comment stripping",
-    "0000000000000000000000000000000000000000000000000000000000000000"
-  ],
-  [
-    "line-terminator line-comment stripping",
-    "0000000000000000000000000000000000000000000000000000000000000000"
-  ],
-  [
-    "ReDoS source-path separator normalization",
-    "0000000000000000000000000000000000000000000000000000000000000000"
-  ],
-  [
-    "ReDoS trailing-slash parity transform",
-    "0000000000000000000000000000000000000000000000000000000000000000"
-  ],
-  [
-    "ReDoS catastrophic control transform",
-    "0000000000000000000000000000000000000000000000000000000000000000"
-  ],
+  ["line-terminator block-comment stripping", "61bbbea7aac48eafa3a24d78998eb49e81a6e7911953f3c25ead27692923a80d"],
+  ["line-terminator line-comment stripping", "61bbbea7aac48eafa3a24d78998eb49e81a6e7911953f3c25ead27692923a80d"],
+  ["ReDoS source-path separator normalization", "1b31e3478ce12f357ad0de08f669cdd462aef1c92b5e40ea2b7252bf483dc9bd"],
+  ["ReDoS trailing-slash parity transform", "da213c559846b1ddae967edd355c3323911a49da4c734fa09cdda0395dee8939"],
+  ["ReDoS catastrophic control transform", "99358421ccbe92052218efb7bcf19e31029854d36548144c4a1ac4d68ec5540b"],
   [
     "Embed synchronous admission label normalization",
-    "0000000000000000000000000000000000000000000000000000000000000000"
+    "09f8bd9c9cb086f7752537d401cd7439a667ae3dcf99edaba6b7529960bbb8ce"
   ],
-  [
-    "Embed sidecar route label normalization",
-    "0000000000000000000000000000000000000000000000000000000000000000"
-  ],
+  ["Embed sidecar route label normalization", "0616c3ca30a3dc84efbfc0d1174b02dd5b6f9c98cf1618507e271970c06ec952"],
   [
     "Embed malformed-generation value normalization",
-    "0000000000000000000000000000000000000000000000000000000000000000"
+    "547eab56be4e6aeea23b87b7796b4af182c032956240736ea847c5df6a945346"
   ],
-  ["embedding index extension mapping", "0000000000000000000000000000000000000000000000000000000000000000"],
-  ["FTS route slug normalization", "0000000000000000000000000000000000000000000000000000000000000000"],
-  ["FTS shadow schema fixture extension", "0000000000000000000000000000000000000000000000000000000000000000"],
+  ["embedding index extension mapping", "b021eae06f28db3236207da2977207d34457531f2e29357549556b607fe5347c"],
+  ["FTS route slug normalization", "4c85c74d066bfaf4b0177ad8da61b867bc62ae819b9e5b98becb13d8fbf80028"],
+  ["FTS shadow schema fixture extension", "4126dfbeab9070f30db8b4c1ff125d53bd417558b83755adff0511b63c4a4242"],
   [
     "watcher existence-guard whitespace normalization",
-    "0000000000000000000000000000000000000000000000000000000000000000"
+    "2e02b86949da126f4b7df90da07e0f01b4a1f40628ae8223f6e401ee10d7af24"
   ],
   [
     "watcher guard-arm predecessor whitespace normalization",
-    "0000000000000000000000000000000000000000000000000000000000000000"
+    "418a0503c3bcf2b1f5c24eb0791a4461a8086a1f2a6a09a08ea32198228372a4"
   ],
   [
     "watcher recovery-catch whitespace normalization",
-    "0000000000000000000000000000000000000000000000000000000000000000"
+    "418a0503c3bcf2b1f5c24eb0791a4461a8086a1f2a6a09a08ea32198228372a4"
   ],
   [
     "watcher frozen capability whitespace normalization",
-    "0000000000000000000000000000000000000000000000000000000000000000"
+    "8e320f79912edc92fec898f95bab43ae82380e4cead1960a78dc2b00e3716c53"
   ],
   [
     "watcher startup validation whitespace normalization",
-    "0000000000000000000000000000000000000000000000000000000000000000"
+    "cc3b4b08d762b89edf67eb7bd624c03c6935f8e965808fe4d8aa53e531380ede"
   ]
 ] as const satisfies readonly (readonly [ReviewedOrdinaryTransformId, string])[];
 const EXPECTED_REVIEWED_ORDINARY_OWNER_SHA256 = new Map<ReviewedOrdinaryTransformId, string>(
@@ -3629,9 +3597,7 @@ function exactMutationHelperMemberSurfaceProblems(filename: string, source: stri
           sources.unshift(declaration.initializer);
         }
       }
-      return sources.flatMap((sourceExpression) =>
-        helperNamesFromEntryIterable(sourceExpression, nextResolving)
-      );
+      return sources.flatMap((sourceExpression) => helperNamesFromEntryIterable(sourceExpression, nextResolving));
     }
     if (ts.isNewExpression(current)) {
       const firstArgument = current.arguments?.[0];
@@ -3735,9 +3701,7 @@ function exactMutationHelperMemberSurfaceProblems(filename: string, source: stri
         return entries === undefined ? [] : helperNamesFromEntryIterable(entries, resolving);
       }
       if (operations.has("object.assign")) {
-        return current.arguments
-          .slice(1)
-          .flatMap((argument) => helperNamesFromObjectCarrier(argument, resolving));
+        return current.arguments.slice(1).flatMap((argument) => helperNamesFromObjectCarrier(argument, resolving));
       }
     }
     return [];
@@ -4353,13 +4317,12 @@ function sourceReaderCandidateFacts(filename: string, source: string): SourceRea
     }
     return null;
   };
-  function isCreateRequireFactory(
-    expression: ts.Expression,
-    resolving: ReadonlySet<ts.Symbol> = new Set()
-  ): boolean {
+  function isCreateRequireFactory(expression: ts.Expression, resolving: ReadonlySet<ts.Symbol> = new Set()): boolean {
     const current = unwrapStaticExpression(expression);
     if (ts.isConditionalExpression(current)) {
-      return isCreateRequireFactory(current.whenTrue, resolving) || isCreateRequireFactory(current.whenFalse, resolving);
+      return (
+        isCreateRequireFactory(current.whenTrue, resolving) || isCreateRequireFactory(current.whenFalse, resolving)
+      );
     }
     if (ts.isCommaListExpression(current)) {
       const result = current.elements[current.elements.length - 1];
@@ -4404,10 +4367,7 @@ function sourceReaderCandidateFacts(filename: string, source: string): SourceRea
     return false;
   }
 
-  function isNodeModuleContainer(
-    expression: ts.Expression,
-    resolving: ReadonlySet<ts.Symbol> = new Set()
-  ): boolean {
+  function isNodeModuleContainer(expression: ts.Expression, resolving: ReadonlySet<ts.Symbol> = new Set()): boolean {
     const current = unwrapStaticExpression(expression);
     if (ts.isConditionalExpression(current)) {
       return isNodeModuleContainer(current.whenTrue, resolving) || isNodeModuleContainer(current.whenFalse, resolving);
@@ -4431,10 +4391,7 @@ function sourceReaderCandidateFacts(filename: string, source: string): SourceRea
     );
   }
 
-  function isNodeRequireFunction(
-    expression: ts.Expression,
-    resolving: ReadonlySet<ts.Symbol> = new Set()
-  ): boolean {
+  function isNodeRequireFunction(expression: ts.Expression, resolving: ReadonlySet<ts.Symbol> = new Set()): boolean {
     const current = unwrapStaticExpression(expression);
     if (ts.isConditionalExpression(current)) {
       return isNodeRequireFunction(current.whenTrue, resolving) || isNodeRequireFunction(current.whenFalse, resolving);
@@ -4572,8 +4529,7 @@ function sourceReaderCandidateFacts(filename: string, source: string): SourceRea
     }
     if (ts.isCallExpression(current)) {
       return (
-        isAuthenticModuleAcquisition(current, "node:fs") ||
-        isAuthenticModuleAcquisition(current, "node:fs/promises")
+        isAuthenticModuleAcquisition(current, "node:fs") || isAuthenticModuleAcquisition(current, "node:fs/promises")
       );
     }
     if (ts.isPropertyAccessExpression(current) || ts.isElementAccessExpression(current)) {
@@ -4643,9 +4599,7 @@ function sourceReaderCandidateFacts(filename: string, source: string): SourceRea
     const members = ts.isPropertyAccessExpression(current)
       ? new Set([current.name.text])
       : methodResolver.resolve(current.argumentExpression).values;
-    return (
-      (members.has("readFile") || members.has("readFileSync")) && isFsContainer(current.expression, resolving)
-    );
+    return (members.has("readFile") || members.has("readFileSync")) && isFsContainer(current.expression, resolving);
   };
   const arrayArgument = (expression: ts.Expression | undefined, index: number): ts.Expression | undefined => {
     if (expression === undefined) return undefined;
@@ -9942,8 +9896,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
 
     const exactHookRegistration = "  beforeAll(async () => {}, 45_000);";
     const exactTestRegistrations = FOCUS_TIMEOUT_TEST_REGISTRATIONS.map(
-      (registration) =>
-        `  it(${JSON.stringify(registration.title)}, async () => {}, ${registration.timeout});`
+      (registration) => `  it(${JSON.stringify(registration.title)}, async () => {}, ${registration.timeout});`
     );
     const exactSource = [
       'import { beforeAll, describe, it } from "vitest";',
@@ -10106,7 +10059,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
         'import path from "node:path";',
         'import { readFileSync } from "node:fs";',
         'const sourcePath = path.join("src", "server.ts");',
-        'const read = readFileSync;',
+        "const read = readFileSync;",
         'read(sourcePath, "utf8");'
       ].join("\n")
     );
@@ -10125,17 +10078,15 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       [
         'import { readFileSync } from "node:fs";',
         'const name = "server";',
-        'readFileSync(new URL(`../src/$' + '{name}.ts`, import.meta.url), "utf8");'
+        "readFileSync(new URL(`../src/$" + '{name}.ts`, import.meta.url), "utf8");'
       ].join("\n")
     );
     expect(templatePathFacts).toMatchObject({ candidateReads: 1 });
     const mutableReaderAliasFacts = sourceReaderCandidateFacts(
       "mutable-reader-source-oracle.test.ts",
-      [
-        'import { readFileSync } from "node:fs";',
-        "let read = readFileSync;",
-        'read("src/server.ts", "utf8");'
-      ].join("\n")
+      ['import { readFileSync } from "node:fs";', "let read = readFileSync;", 'read("src/server.ts", "utf8");'].join(
+        "\n"
+      )
     );
     expect(mutableReaderAliasFacts).toMatchObject({ candidateReads: 1 });
     const assignedReaderAliasFacts = sourceReaderCandidateFacts(
@@ -10156,13 +10107,11 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       ],
       [
         "logical-reader-source-oracle.test.ts",
-        'import { readFileSync } from "node:fs"; const read = readFileSync || fake; ' +
-          'read("src/server.ts", "utf8");'
+        'import { readFileSync } from "node:fs"; const read = readFileSync || fake; ' + 'read("src/server.ts", "utf8");'
       ],
       [
         "comma-reader-source-oracle.test.ts",
-        'import { readFileSync } from "node:fs"; const read = (0, readFileSync); ' +
-          'read("src/server.ts", "utf8");'
+        'import { readFileSync } from "node:fs"; const read = (0, readFileSync); ' + 'read("src/server.ts", "utf8");'
       ],
       [
         "assignment-result-reader-source-oracle.test.ts",
@@ -10312,19 +10261,14 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
     expect(conservativeSameFileCandidateFacts).toMatchObject({ candidateReads: 1 });
     const destructuredReaderAliasFacts = sourceReaderCandidateFacts(
       "destructured-reader-source-oracle.test.ts",
-      [
-        'import fs from "node:fs";',
-        "const { readFileSync: read } = fs;",
-        'read("src/server.ts", "utf8");'
-      ].join("\n")
+      ['import fs from "node:fs";', "const { readFileSync: read } = fs;", 'read("src/server.ts", "utf8");'].join("\n")
     );
     expect(destructuredReaderAliasFacts).toMatchObject({ candidateReads: 1 });
     const requiredReaderFacts = sourceReaderCandidateFacts(
       "required-reader-source-oracle.test.ts",
-      [
-        'const fs = require("node:fs") as typeof import("node:fs");',
-        'fs.readFileSync("src/server.ts", "utf8");'
-      ].join("\n")
+      ['const fs = require("node:fs") as typeof import("node:fs");', 'fs.readFileSync("src/server.ts", "utf8");'].join(
+        "\n"
+      )
     );
     expect(requiredReaderFacts).toMatchObject({ candidateReads: 1 });
     const shadowedRequireFacts = sourceReaderCandidateFacts(
@@ -10351,12 +10295,14 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       "const mutate = source.replace;",
       'mutate.call(source, "old", "new");'
     ].join("\n");
-    expect(sourceReaderCandidateFacts("extracted-method-source-oracle.test.ts", extractedRawMethodFixture)).toMatchObject({
+    expect(
+      sourceReaderCandidateFacts("extracted-method-source-oracle.test.ts", extractedRawMethodFixture)
+    ).toMatchObject({
       candidateReads: 1
     });
-    expect(repositoryMutationOracleProblems("extracted-method-source-oracle.test.ts", extractedRawMethodFixture)).toEqual(
-      expect.arrayContaining([expect.stringMatching(/unclassified raw \.replace access/)])
-    );
+    expect(
+      repositoryMutationOracleProblems("extracted-method-source-oracle.test.ts", extractedRawMethodFixture)
+    ).toEqual(expect.arrayContaining([expect.stringMatching(/unclassified raw \.replace access/)]));
 
     const completeSourceOracleSet = new Set<string>(EXPECTED_SOURCE_READER_CANDIDATE_FILES);
     expect(() => assertSourceReaderCandidateMembershipSeal(completeSourceOracleSet)).not.toThrow();
@@ -10672,10 +10618,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
         ],
         [
           "Reflect.set",
-          [
-            "const holder = {};",
-            `Reflect.set(holder, ${JSON.stringify(helper)}, () => "concealed");`
-          ].join("\n")
+          ["const holder = {};", `Reflect.set(holder, ${JSON.stringify(helper)}, () => "concealed");`].join("\n")
         ],
         [
           "Object.defineProperties",
@@ -10705,7 +10648,10 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
         ]
       ] as const;
       for (const [label, fixture] of reflectiveWriterFixtures) {
-        expect(exactMutationHelperMemberSurfaceProblems(unmappedHelperFilename, fixture), `${label}: ${helper}`).toEqual(
+        expect(
+          exactMutationHelperMemberSurfaceProblems(unmappedHelperFilename, fixture),
+          `${label}: ${helper}`
+        ).toEqual(
           expect.arrayContaining([
             expect.stringMatching(
               new RegExp(`exposes exact mutation helper ${helper} through a member/property surface`)
@@ -10763,7 +10709,10 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
         ]
       ] as const;
       for (const [label, fixture] of reflectiveWrapperFixtures) {
-        expect(exactMutationHelperMemberSurfaceProblems(unmappedHelperFilename, fixture), `${label}: ${helper}`).toEqual(
+        expect(
+          exactMutationHelperMemberSurfaceProblems(unmappedHelperFilename, fixture),
+          `${label}: ${helper}`
+        ).toEqual(
           expect.arrayContaining([
             expect.stringMatching(
               new RegExp(`exposes exact mutation helper ${helper} through a member/property surface`)
@@ -10998,20 +10947,20 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       'const carrier = [source[getMethod()]]; carrier.at(0)("old", "new");',
       'const carrier = [...[source[getMethod()]]]; carrier[0]("old", "new");',
       'const [...rest] = [source[getMethod()]]; rest[0]("old", "new");',
-      'const carrier = [source[getMethod()]]; const rawMutation = carrier[getIndex()]; ' +
-        'rawMutation("old", "new");',
+      "const carrier = [source[getMethod()]]; const rawMutation = carrier[getIndex()]; " + 'rawMutation("old", "new");',
       'const [[rawMutation]] = [[source[getMethod()]]]; rawMutation("old", "new");',
       'let rawMutation; const carrier = [[source[getMethod()]]]; [[rawMutation]] = carrier; rawMutation("old", "new");',
       'for (const rawMutation of [source[getMethod()]]) rawMutation("old", "new");',
       'for (const [rawMutation] of [[source[getMethod()]]]) rawMutation("old", "new");',
       '[source[getMethod()]].forEach((rawMutation) => rawMutation("old", "new"));',
       'const invoke = (rawMutation) => rawMutation("old", "new"); [source[getMethod()]].forEach(invoke);',
-      'const invokeLast = (...args: unknown[]) => { const rawMutation = args[args.length - 1]; ' +
+      "const invokeLast = (...args: unknown[]) => { const rawMutation = args[args.length - 1]; " +
         'rawMutation("old", "new"); }; invokeLast(0, source[getMethod()]);'
     ]) {
-      expect(repositoryMutationOracleProblems(mutationInventoryFile, arrayCarrierInvocation), arrayCarrierInvocation).toEqual([
-        expect.stringMatching(/invokes a value extracted from an unresolved dynamic computed method/)
-      ]);
+      expect(
+        repositoryMutationOracleProblems(mutationInventoryFile, arrayCarrierInvocation),
+        arrayCarrierInvocation
+      ).toEqual([expect.stringMatching(/invokes a value extracted from an unresolved dynamic computed method/)]);
     }
     for (const safeArrayCarrierInvocation of [
       'const [method] = [source["includes"]]; method.call(source, "needle");',
@@ -11021,7 +10970,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       'const carrier = [...[source["includes"]]]; carrier[0].call(source, "needle");',
       'for (const method of [source["includes"]]) method.call(source, "needle");',
       '[source["includes"]].forEach((method) => method.call(source, "needle"));',
-      'const invokeLast = (...args: unknown[]) => { const callback = args[args.length - 1]; ' +
+      "const invokeLast = (...args: unknown[]) => { const callback = args[args.length - 1]; " +
         'if (typeof callback === "function") callback(); }; invokeLast(0, () => undefined);'
     ]) {
       expect(
@@ -11454,9 +11403,9 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       [...EXPECTED_REPOSITORY_MUTATION_HELPER_IMPORTS.keys()].sort()
     );
     const rawMutationInventorySet = new Set<string>(RAW_REPLACE_INVENTORY_FILES);
-    expect(
-      EXPECTED_SOURCE_READER_CANDIDATE_FILES.filter((filename) => !rawMutationInventorySet.has(filename))
-    ).toEqual([]);
+    expect(EXPECTED_SOURCE_READER_CANDIDATE_FILES.filter((filename) => !rawMutationInventorySet.has(filename))).toEqual(
+      []
+    );
     expect(entryKeysOutside(EXPECTED_REPOSITORY_MUTATION_HELPER_CALL_ENTRIES, rawMutationInventorySet)).toEqual([]);
     expect([...LOCAL_EXACT_MUTATION_HELPER_AUTHORITIES]).toEqual([
       ["release-integrity.test.ts", ["replaceAllExactly", "replaceExactly"]]

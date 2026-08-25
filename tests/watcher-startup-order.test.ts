@@ -999,11 +999,7 @@ describe("watcher startup activation ordering (v3.12.0-rc.25 S-8c)", () => {
       "expected exactly one post-ready syncFtsIndex reconciliation before activation, found 0"
     );
 
-    const missingPostReadyPdf = replaceExactly(
-      GOOD_STARTUP,
-      "          await syncPdfFtsIndex(vault, ftsIndex);\n",
-      ""
-    );
+    const missingPostReadyPdf = replaceExactly(GOOD_STARTUP, "          await syncPdfFtsIndex(vault, ftsIndex);\n", "");
     expect(watcherStartupOrderViolations(missingPostReadyPdf)).toContain(
       "expected exactly one post-ready syncPdfFtsIndex reconciliation before activation, found 0"
     );

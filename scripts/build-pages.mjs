@@ -3,12 +3,7 @@
 import { cp, mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import {
-  FAQ_ENTRIES,
-  inspectJsonLdScripts,
-  renderEnquireJsonLdTag,
-  scanActiveHtml
-} from "./inject-jsonld.mjs";
+import { FAQ_ENTRIES, inspectJsonLdScripts, renderEnquireJsonLdTag, scanActiveHtml } from "./inject-jsonld.mjs";
 import { isEntrypoint } from "./lib/entrypoint.mjs";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
@@ -125,9 +120,7 @@ function assertLandingPlaceholderCardinality(source) {
   for (const name of LANDING_COMMENT_PLACEHOLDERS) {
     const actual = nodes.filter((node) => node.kind === "comment" && String(node.data ?? "").trim() === name).length;
     if (actual !== 1) {
-      throw new Error(
-        `Landing page placeholder <!-- ${name} --> must occur exactly 1 time(s); found ${actual}`
-      );
+      throw new Error(`Landing page placeholder <!-- ${name} --> must occur exactly 1 time(s); found ${actual}`);
     }
   }
   const versionCount = nodes
@@ -243,10 +236,7 @@ function headContentIsMetadataOnly(nodes, headStart, headEnd) {
     const node = nodes[index];
     if (node?.kind === "comment") continue;
     if (node?.kind === "text" && /^[\t\n\f\r ]*$/.test(String(node.data ?? ""))) continue;
-    if (
-      (node?.kind === "startTag" || node?.kind === "endTag") &&
-      HEAD_CONTENT_ELEMENTS.has(String(node.name))
-    ) {
+    if ((node?.kind === "startTag" || node?.kind === "endTag") && HEAD_CONTENT_ELEMENTS.has(String(node.name))) {
       continue;
     }
     return false;
@@ -280,11 +270,7 @@ function isDirectElementChild(nodes, parentStart, parentEnd, childIndex) {
 
 /** @param {string} value */
 function decodeRenderedText(value) {
-  return value
-    .replaceAll("&quot;", '"')
-    .replaceAll("&gt;", ">")
-    .replaceAll("&lt;", "<")
-    .replaceAll("&amp;", "&");
+  return value.replaceAll("&quot;", '"').replaceAll("&gt;", ">").replaceAll("&lt;", "<").replaceAll("&amp;", "&");
 }
 
 /** @param {Array<Record<string, any>>} nodes @param {number} startIndex @param {number} endIndex */
@@ -406,9 +392,7 @@ function liveFaqProblems(html) {
 /** @param {string} html */
 function landingShellProblems(html) {
   const nodes = scanActiveHtml(html);
-  const tags = nodes
-    .map((node, index) => ({ node, index }))
-    .filter(({ node }) => node.kind === "startTag");
+  const tags = nodes.map((node, index) => ({ node, index })).filter(({ node }) => node.kind === "startTag");
   const head = uniqueElementRange(nodes, "head");
   const body = uniqueElementRange(nodes, "body");
   const validHead =
@@ -417,11 +401,7 @@ function landingShellProblems(html) {
     head.start >= 0 &&
     head.end > head.start &&
     headContentIsMetadataOnly(nodes, head.start, head.end);
-  const validBody =
-    body.startCount === 1 &&
-    body.endCount === 1 &&
-    body.start > head.end &&
-    body.end > body.start;
+  const validBody = body.startCount === 1 && body.endCount === 1 && body.start > head.end && body.end > body.start;
   const allMains = tags.filter(({ node }) => node.name === "main");
   const mains = allMains.filter(({ node, index }) => {
     const ids = tagAttributeValues(node, "id");
@@ -470,16 +450,12 @@ function landingShellProblems(html) {
   });
   const allCanonicals = tags.filter(({ node }) => {
     const relValues = tagAttributeValues(node, "rel");
-    const rels = relValues
-      .flatMap((value) => (value ?? "").split(/[\t\n\f\r ]+/))
-      .map((value) => value.toLowerCase());
+    const rels = relValues.flatMap((value) => (value ?? "").split(/[\t\n\f\r ]+/)).map((value) => value.toLowerCase());
     return node.name === "link" && rels.includes("canonical");
   });
   const canonicals = allCanonicals.filter(({ node, index }) => {
     const relValues = tagAttributeValues(node, "rel");
-    const rels = relValues
-      .flatMap((value) => (value ?? "").split(/[\t\n\f\r ]+/))
-      .map((value) => value.toLowerCase());
+    const rels = relValues.flatMap((value) => (value ?? "").split(/[\t\n\f\r ]+/)).map((value) => value.toLowerCase());
     const hrefs = tagAttributeValues(node, "href");
     return (
       node.name === "link" &&
@@ -504,12 +480,14 @@ function landingShellProblems(html) {
     problems.push(`expected exactly one live direct <section id="faq">; found ${faqs.length}`);
   }
   if (head.startCount !== 1) problems.push(`expected exactly one live <head>; found ${head.startCount}`);
-  if (head.startCount === 1 && (head.endCount !== 1 || head.end < 0)) problems.push("live <head> is not closed exactly once");
+  if (head.startCount === 1 && (head.endCount !== 1 || head.end < 0))
+    problems.push("live <head> is not closed exactly once");
   if (head.startCount === 1 && head.end >= 0 && !headContentIsMetadataOnly(nodes, head.start, head.end)) {
     problems.push("live <head> contains body-content markup");
   }
   if (body.startCount !== 1) problems.push(`expected exactly one live <body>; found ${body.startCount}`);
-  if (body.startCount === 1 && (body.endCount !== 1 || body.end < 0)) problems.push("live <body> is not closed exactly once");
+  if (body.startCount === 1 && (body.endCount !== 1 || body.end < 0))
+    problems.push("live <body> is not closed exactly once");
   if (head.end >= body.start && body.start >= 0) problems.push("live <head> must close before <body>");
   if (bases.length > 0) problems.push(`active <base> is forbidden; found ${bases.length}`);
   if (canonicals.length !== 1) problems.push(`expected exactly one live canonical link; found ${canonicals.length}`);
@@ -615,8 +593,7 @@ export async function validatePagesArtifact(outDir, expectedPackage) {
     throw new Error(`Landing page shell is not structurally live: ${shellProblems.join(", ")}`);
   }
 
-  const pkg =
-    expectedPackage ?? JSON.parse(await readFile(join(defaultRepoRoot, "package.json"), "utf8"));
+  const pkg = expectedPackage ?? JSON.parse(await readFile(join(defaultRepoRoot, "package.json"), "utf8"));
   const jsonLd = inspectJsonLdScripts(landing, pkg);
   if (
     jsonLd.ownedCount !== 1 ||
@@ -624,9 +601,7 @@ export async function validatePagesArtifact(outDir, expectedPackage) {
     jsonLd.malformedCount !== 0 ||
     jsonLd.htmlMalformedCount !== 0
   ) {
-    throw new Error(
-      `Landing page JSON-LD is not exactly one current active owned graph: ${JSON.stringify(jsonLd)}`
-    );
+    throw new Error(`Landing page JSON-LD is not exactly one current active owned graph: ${JSON.stringify(jsonLd)}`);
   }
   const faqProblems = liveFaqProblems(landing);
   if (faqProblems.length > 0) throw new Error(`Landing page FAQ is not current and live: ${faqProblems.join(", ")}`);

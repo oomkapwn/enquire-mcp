@@ -735,7 +735,7 @@ const REVIEWED_ORDINARY_TRANSFORMS = [
     id: "SQLite positive-shape label normalization",
     method: "replaceAll",
     owner: "test:SQLite preflight admits a $shape family",
-    pattern: String.raw`/[^a-z]+/gi`,
+    pattern: "/[^a-z]+/gi",
     receiverRoot: "shape",
     replacement: '"-"'
   },
@@ -789,7 +789,7 @@ const REVIEWED_ORDINARY_TRANSFORMS = [
     id: "K-1 statement semicolon normalization",
     method: "replace",
     owner: "function:isBoundRefusalCondition",
-    pattern: String.raw`/;$/u`,
+    pattern: "/;$/u",
     receiverRoot: "statement",
     replacement: '""'
   },
@@ -10125,7 +10125,7 @@ describe("META-invariant: exact structural census + NEGATIVE control coverage", 
       [
         'import { readFileSync } from "node:fs";',
         'const name = "server";',
-        'readFileSync(new URL(`../src/${name}.ts`, import.meta.url), "utf8");'
+        'readFileSync(new URL(`../src/$' + '{name}.ts`, import.meta.url), "utf8");'
       ].join("\n")
     );
     expect(templatePathFacts).toMatchObject({ candidateReads: 1 });

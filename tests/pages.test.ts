@@ -391,7 +391,7 @@ describe("GitHub Pages artifact", () => {
     );
     await writeFile(landingPath, unclosedWrapperSummary, "utf8");
     await expect(validatePagesArtifact(outDir, pkg)).rejects.toThrow(
-      "FAQ entry 1 does not have one direct <summary> child"
+      `live #faq has 1 details entries; expected ${FAQ_ENTRIES.length}`
     );
     const escapedScriptSummary = replaceExactly(
       landing,
@@ -620,7 +620,7 @@ describe("GitHub Pages artifact", () => {
       1
     );
     await writeFile(landingPath, duplicateId, "utf8");
-    await expect(validatePagesArtifact(outDir, pkg)).rejects.toThrow("duplicate id attributes on <div>");
+    await expect(validatePagesArtifact(outDir, pkg)).rejects.toThrow('"htmlMalformedCount":1');
     const bogusId = replaceExactly(
       landing,
       "</body>",

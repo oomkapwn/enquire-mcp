@@ -147,6 +147,146 @@ describe("rollback-safe batch write cancellation", () => {
     } else if (process.platform === "linux" && process.env.CI) {
       throw new Error("mandatory Linux case-sensitive filesystem precondition failed for CancelCase/cancelcase");
     }
+
+    // Third phase — the reverse rename FAILS and the source has NO
+    // self-reference, so nothing else holds its bytes. Before the fix the
+    // destination snapshot was restored unconditionally whenever the forward
+    // rename had happened, overwriting the only surviving copy of the source and
+    // destroying the note permanently. This phase is the causal negative
+    // control: it fails if the `sourceAbsent` guard in src/tools/write.ts is
+    // removed. The fourth phase below is its counterpart — the case where the
+    // source IS recoverable and the destination therefore MUST still be
+    // restored.
+    const reverseRoot = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-reverse-fail-"));
+    try {
+      const sourceContent = "# Source\n\nSOURCE-CONTENT-SENTINEL\n";
+      await fs.writeFile(path.join(reverseRoot, "Source.md"), sourceContent);
+      await fs.writeFile(path.join(reverseRoot, "Dest.md"), "# Dest\n\nDEST-ORIGINAL-SENTINEL\n");
+      await fs.writeFile(path.join(reverseRoot, "Caller-A.md"), "A points to [[Source]].\n");
+      const reverseVault = new Vault(reverseRoot, { enableWrite: true });
+      await reverseVault.ensureExists();
+
+      const reverseAbort = new AbortController();
+      const reverseWrite = reverseVault.writeNote.bind(reverseVault);
+      reverseVault.writeNote = async (...args: Parameters<Vault["writeNote"]>) => {
+        const result = await reverseWrite(...args);
+        const [relPath, content] = args;
+        if (!reverseAbort.signal.aborted && relPath.startsWith("Caller-") && content.includes("[[Dest")) {
+          reverseAbort.abort(new Error("deterministic post-rename cancellation"));
+        }
+        return result;
+      };
+      const reverseRename = reverseVault.renameFile.bind(reverseVault);
+      let reverseAttempts = 0;
+      reverseVault.renameFile = async (...args: Parameters<Vault["renameFile"]>) => {
+        const [from, to] = args;
+        if (from === "Dest.md" && to === "Source.md") {
+          reverseAttempts += 1;
+          throw new Error("deterministic reverse-rename failure");
+        }
+        return reverseRename(...args);
+      };
+
+      const rejection = await renameNote(
+        reverseVault,
+        { from: "Source.md", to: "Dest.md", overwrite: true },
+        { signal: reverseAbort.signal }
+      ).then(
+        () => null,
+        (err: unknown) => err
+      );
+      // `throwCancelledAfterRollback` throws a plain Error rather than
+      // WriteRequestAbortedError whenever the failure list is non-empty.
+      expect(rejection).toBeInstanceOf(Error);
+      expect(rejection).not.toBeInstanceOf(WriteRequestAbortedError);
+      expect(reverseAttempts).toBe(1);
+
+      // THE PROPERTY: the source note's content still exists on disk. It is
+      // stuck at the destination path, but it was not overwritten.
+      expect(await fs.readFile(path.join(reverseRoot, "Dest.md"), "utf8")).toBe(sourceContent);
+      expect(await statOrNullIfMissing(path.join(reverseRoot, "Source.md"))).toBeNull();
+
+      const message = rejection instanceof Error ? rejection.message : String(rejection);
+      expect(message).toContain("rollback failed");
+      expect(message).toContain("deterministic reverse-rename failure");
+      expect(message).toContain("pre-rename destination bytes NOT restored");
+      // The corrected wording, not just the shared prefix: the refused branch is
+      // now reached by PROVEN absence of the source, not by a failed reverse.
+      expect(message).toContain("no regular file is present at");
+      expect(message).toContain("may hold the only copy");
+      expect(message).toContain("NOT recoverable");
+      // The destination's own pre-rename bytes are deliberately NOT written back
+      // here: they exist only in memory, while the source exists only on disk at
+      // this path, so preserving the source is the correct trade.
+      expect(await fs.readFile(path.join(reverseRoot, "Dest.md"), "utf8")).not.toContain("DEST-ORIGINAL");
+    } finally {
+      await fs.rm(reverseRoot, { recursive: true, force: true });
+    }
+
+    // Fourth phase — the reverse rename fails, but the source note DOES carry a
+    // self-reference, so the `sourcePlan` rollback recreates it at the old path.
+    // The source is then safe and the destination snapshot MUST still be
+    // restored. Guarding on "did the reverse rename return?" instead of "does
+    // the source exist?" silently abandons the destination here, which is a
+    // regression against the pre-fix behaviour rather than a fix — this phase is
+    // the positive control that pins it.
+    const recoverableRoot = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-reverse-recover-"));
+    try {
+      const selfRefSource = "# Source\n\nSelf [[Source]] plus SOURCE-RECOVERABLE-SENTINEL\n";
+      const destinationOriginal = "# Dest\n\nDEST-MUST-SURVIVE-SENTINEL\n";
+      await fs.writeFile(path.join(recoverableRoot, "Source.md"), selfRefSource);
+      await fs.writeFile(path.join(recoverableRoot, "Dest.md"), destinationOriginal);
+      await fs.writeFile(path.join(recoverableRoot, "Caller-A.md"), "A points to [[Source]].\n");
+      const recoverVault = new Vault(recoverableRoot, { enableWrite: true });
+      await recoverVault.ensureExists();
+
+      const recoverAbort = new AbortController();
+      const recoverWrite = recoverVault.writeNote.bind(recoverVault);
+      recoverVault.writeNote = async (...args: Parameters<Vault["writeNote"]>) => {
+        const result = await recoverWrite(...args);
+        const [relPath, content] = args;
+        if (!recoverAbort.signal.aborted && relPath.startsWith("Caller-") && content.includes("[[Dest")) {
+          recoverAbort.abort(new Error("deterministic post-rename cancellation"));
+        }
+        return result;
+      };
+      const recoverRename = recoverVault.renameFile.bind(recoverVault);
+      let recoverForward = 0;
+      let recoverReverse = 0;
+      recoverVault.renameFile = async (...args: Parameters<Vault["renameFile"]>) => {
+        const [from, to] = args;
+        if (from === "Dest.md" && to === "Source.md") {
+          recoverReverse += 1;
+          throw new Error("deterministic reverse-rename failure");
+        }
+        recoverForward += 1;
+        return recoverRename(...args);
+      };
+
+      const recoverRejection = await renameNote(
+        recoverVault,
+        { from: "Source.md", to: "Dest.md", overwrite: true },
+        { signal: recoverAbort.signal }
+      ).then(
+        () => null,
+        (err: unknown) => err
+      );
+      // Witnesses: the path really executed. Without these the phase would pass
+      // against a preflight refusal or any no-op that never renamed at all,
+      // because both final properties are already true before the call.
+      expect(recoverForward).toBe(1);
+      expect(recoverReverse).toBe(1);
+      expect(recoverRejection).toBeInstanceOf(Error);
+
+      // Both notes survive: the source was recreated by its self-reference
+      // rollback, so restoring the destination destroys nothing.
+      // Exact bytes, not just the sentinel: a rollback that restored the
+      // REWRITTEN form would keep the sentinel while leaving `[[Dest]]` behind.
+      expect(await fs.readFile(path.join(recoverableRoot, "Source.md"), "utf8")).toBe(selfRefSource);
+      expect(await fs.readFile(path.join(recoverableRoot, "Dest.md"), "utf8")).toBe(destinationOriginal);
+    } finally {
+      await fs.rm(recoverableRoot, { recursive: true, force: true });
+    }
   });
 
   it("(negative-control) the same replace fixture commits fully when its signal remains active", async () => {

@@ -459,7 +459,76 @@ export async function renameNote(
         failures.push(...(await restoreNoteSnapshots(vault, [{ path: sourcePlan.path, before: sourcePlan.before }])));
       }
       if (destinationBefore && renamed) {
-        failures.push(...(await restoreNoteSnapshots(vault, [destinationBefore])));
+        // Restoring the destination snapshot overwrites whatever now sits at
+        // `toRelNorm`, which after a successful forward move is the SOURCE
+        // note's content. A source with no self-reference is not snapshotted in
+        // memory, so that write can destroy it permanently.
+        //
+        // Refuse only when the source path is PROVEN to hold no regular file —
+        // a non-file result, ENOENT, or ENOTDIR. An unresolved probe error
+        // leaves the question open, and refusing there would abandon the
+        // destination in states where the source is in fact safe, which is
+        // strictly worse than the pre-fix behaviour.
+        //
+        // BOUNDED CLAIM, deliberately — read it as written, it is narrow.
+        // A stat cannot establish content identity, so this does NOT prove the
+        // destination holds the only copy: a third hardlink may exist. Nor is
+        // the probe locked to the later write — `src/vault.ts` already documents
+        // that rename validation "cannot eliminate an out-of-process check/use
+        // or ABA race", and the same is true here: a concurrent actor can change
+        // the source path between this probe and the restore below.
+        //
+        // The one concrete instance of that, worth naming so nobody assumes it
+        // is covered: `Vault.stat` resolves through realpath, so if an actor
+        // plants `fromRel` as a symlink pointing AT the destination, the probe
+        // reads PRESENT and the restore then overwrites the renamed content.
+        // Closing it needs a non-following probe, and `lstatIfExistsSafe` is
+        // private — exposing one is a separate change with its own review, not
+        // something to bolt onto a data-loss fix. Absent a concurrent mutator of
+        // the source path, the branch behaves as documented.
+        //
+        // What the branch buys is the property that was actually broken: the
+        // renamed note's content is no longer overwritten on the strength of a
+        // reverse rename that did not return it. Where withholding the restore
+        // costs the destination's pre-rename bytes, the trade is deliberate —
+        // it prefers the note the caller was renaming — and it is reported
+        // rather than presented as a completed rollback. Preserving BOTH sides
+        // requires writing the destination snapshot to a recovery artifact
+        // instead of discarding it; that is a separate change with its own
+        // privacy and erasure surface.
+        // Three different paths leave the source safe and no single flag sees
+        // all of them: the reverse rename returned it to `fromRel`; the
+        // self-reference rollback recreated it there; or the reverse rename
+        // physically committed and then threw on its fallible post-commit
+        // metadata read. Asking the filesystem covers all three; treating a
+        // probe FAILURE as absence would not.
+        let sourceAbsent = false;
+        let probeFailure: string | null = null;
+        try {
+          sourceAbsent = !(await vault.stat(fromRel)).isFile;
+        } catch (probeErr) {
+          // ENOENT and ENOTDIR both PROVE no regular file is reachable at that
+          // path: ENOTDIR means a parent component is not a directory, so the
+          // leaf cannot exist. Every other errno (EACCES, EIO, ELOOP, …) leaves
+          // the question open and must not be read as absence.
+          const probeCode = (probeErr as { code?: string } | null)?.code;
+          if (probeCode === "ENOENT" || probeCode === "ENOTDIR") sourceAbsent = true;
+          else probeFailure = probeErr instanceof Error ? probeErr.message : String(probeErr);
+        }
+        if (sourceAbsent) {
+          failures.push(
+            `${toRelCheck}: pre-rename destination bytes NOT restored and NOT recoverable — no regular ` +
+              `file is present at ${fromRel}, so ${toRelCheck} may hold the only copy of that note's ` +
+              `content and overwriting it could destroy it. Check ${toRelCheck}: if it holds the ` +
+              `renamed content, moving it back to ${fromRel} by hand recovers THAT note only — the ` +
+              `destination's own pre-rename content is gone either way.`
+          );
+        } else {
+          if (probeFailure !== null) {
+            failures.push(`${fromRel}: could not confirm the source is present (${probeFailure})`);
+          }
+          failures.push(...(await restoreNoteSnapshots(vault, [destinationBefore])));
+        }
       }
       throwCancelledAfterRollback("rename_note", options.signal, failures);
     }

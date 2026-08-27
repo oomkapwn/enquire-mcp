@@ -1092,6 +1092,28 @@ describe("CLI subcommands E2E (against built dist/)", () => {
     expect(sharedExcludeResult.matches?.some((match) => match.path === "Private/Secret.md")).toBe(false);
     assertSharedRows(true);
 
+    const sharedExplicitDefault = spawnSync(
+      process.execPath,
+      [
+        distEntry,
+        "query",
+        "zephyrprivacy",
+        "--vault",
+        vault,
+        "--index-file",
+        sharedIndex,
+        "--read-paths",
+        "Public/**",
+        "--json"
+      ],
+      { encoding: "utf8", timeout: 20_000 }
+    );
+    expect(sharedExplicitDefault.status, sharedExplicitDefault.stderr).toBe(0);
+    const sharedExplicitResult = JSON.parse(sharedExplicitDefault.stdout) as { matches?: Array<{ path?: string }> };
+    expect(sharedExplicitResult.matches?.some((match) => match.path === "Public/Visible.md")).toBe(true);
+    expect(sharedExplicitResult.matches?.some((match) => match.path === "Private/Secret.md")).toBe(false);
+    assertSharedRows(true);
+
     const sharedEval = spawnSync(
       process.execPath,
       [

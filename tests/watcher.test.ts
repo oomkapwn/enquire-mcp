@@ -1705,6 +1705,8 @@ describe("VaultWatcher HNSW disk persistence (v3.9.0-rc.6)", () => {
         await expect(watcherInternals.purgeStoredIdentity("stale.md", "md")).rejects.toThrow(
           /synthetic stored-identity purge failure/
         );
+        // Assignment-sensitive only: this method is activation-only and still
+        // rethrows, so dropping the latch does not restore a live search path.
         expect(embedDb.getQuarantinedPaths("md")).toContain("stale.md");
         expect(w.searchHealth.semanticUsable).toBe(true);
       } finally {

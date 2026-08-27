@@ -86,12 +86,20 @@ function sameHnswRowManifest(
  * intact and does not change these flags. PDF/OCR page failures use that same
  * quarantined preparation path.
  *
- * A per-path sink mutation failure (markdown/PDF commit, stored-identity
- * purge, embed-db unlink) records a source-scoped quarantine and does **not**
- * latch `semanticUsable`. Brute-force EmbedDb search stays available for every
- * other note; the failed path is withheld by its quarantine marker. HNSW may
- * still be process-quarantined (`hnswUsable`) because a graph that omitted the
- * withheld label would under-fill recall around it.
+ * After activation has completed, a per-path sink mutation failure
+ * (markdown/PDF commit, embed-db unlink) records a source-scoped quarantine
+ * and does **not** latch `semanticUsable`. Brute-force EmbedDb search stays
+ * available for every other note when the EmbedDb quarantine marker is
+ * successfully persisted. The failed path is withheld by that marker.
+ * HNSW may still be process-quarantined (`hnswUsable`) because a graph that
+ * omitted the withheld label would under-fill recall around it.
+ *
+ * `purgeStoredIdentity` also no longer latches `semanticUsable`, but it runs
+ * only from activation replay and still rethrows, so a failed purge still
+ * refuses startup. Dropping that assignment is class-consistency.
+ *
+ * A quarantine-marker write failure is logged per sink without a broad route
+ * latch; a fail-stop policy for that residual needs explicit authorization.
  *
  * `semanticUsable` is latched false only when the watcher can no longer keep
  * derived indexes aligned with disk at all — currently the live pending-event
@@ -1287,7 +1295,9 @@ export class VaultWatcher {
       }
     } catch (err) {
       this.quarantineFailedGeneration(relPath, kind);
-      // Do not latch semanticUsable: quarantine is per-path. See WatcherSearchHealth.
+      // Do not latch semanticUsable: quarantine is per-path. This method runs
+      // only from activation replay and still rethrows, so startup still fails
+      // closed — the latch was redundant with the rethrow. See WatcherSearchHealth.
       if (!this.silent) {
         process.stderr.write(
           `enquire: watcher stored-identity purge failed for ${relPath} — ${

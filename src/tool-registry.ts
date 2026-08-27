@@ -104,6 +104,19 @@ const MAX_FRONTMATTER_KEY_LEN = 256;
  * A real frontmatter value is short; 8 KiB is very generous.
  */
 const MAX_FRONTMATTER_VALUE_LEN = 8192;
+/**
+ * Upper bound on how many keys `obsidian_search.filter_frontmatter` may AND
+ * together. The matcher is a cross-product per fused candidate and is forwarded
+ * into each hybrid fan-out pipeline. Zod records have no `.max()`, so the bound
+ * is a `.refine()` on `Object.keys(rec).length` — the cardinality sibling of
+ * the rc.21 stringify cap. 32 is generous for real YAML frontmatter.
+ */
+const MAX_FRONTMATTER_FILTER_KEYS = 32;
+/**
+ * Upper bound on OR-alternatives per `filter_frontmatter` key. The array arm
+ * previously capped only element strings, not element count.
+ */
+const MAX_FRONTMATTER_FILTER_ALTERNATIVES = 32;
 /** Default location for the persistent embedding index, alongside .fts5.db. */
 export function embedDbPath(vaultRoot: string): string {
   // Match the FTS5 location convention by stripping the .fts5.db extension
@@ -1094,12 +1107,18 @@ export function registerReadTools(
               z.string().max(MAX_FRONTMATTER_VALUE_LEN),
               z.number(),
               z.boolean(),
-              z.array(z.union([z.string().max(MAX_FRONTMATTER_VALUE_LEN), z.number(), z.boolean()]))
+              z
+                .array(z.union([z.string().max(MAX_FRONTMATTER_VALUE_LEN), z.number(), z.boolean()]))
+                .max(MAX_FRONTMATTER_FILTER_ALTERNATIVES)
             ])
           )
+          // Zod records have no `.max()`; this refine is the key-count bound.
+          .refine((rec) => Object.keys(rec).length <= MAX_FRONTMATTER_FILTER_KEYS, {
+            message: `filter_frontmatter has too many keys (max ${MAX_FRONTMATTER_FILTER_KEYS})`
+          })
           .optional()
           .describe(
-            "v3.10: optional YAML-frontmatter filter — a {key: value} map. A hit is kept only if its note's frontmatter satisfies EVERY pair (AND across keys). Per key: strings match case-insensitively, an array frontmatter value matches by membership (e.g. {tags: 'project'} matches `tags: [project, x]`), and the filter value may itself be an array for OR ({type: ['meeting','decision']}). Notes with no frontmatter or missing a filtered key are excluded. Omit for no filtering (default). Filters the fused candidate pool, so a strict filter can return fewer than `limit` hits."
+            "v3.10: optional YAML-frontmatter filter — a {key: value} map. A hit is kept only if its note's frontmatter satisfies EVERY pair (AND across keys). At most 32 keys; an array value is OR and at most 32 alternatives. Per key: strings match case-insensitively, an array frontmatter value matches by membership (e.g. {tags: 'project'} matches `tags: [project, x]`), and the filter value may itself be an array for OR ({type: ['meeting','decision']}). Notes with no frontmatter or missing a filtered key are excluded. Omit for no filtering (default). Filters the fused candidate pool, so a strict filter can return fewer than `limit` hits."
           ),
         explain: z
           .boolean()

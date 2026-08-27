@@ -4,6 +4,18 @@ All notable changes to this project will be documented here. The format follows 
 
 ## [4.0.0-rc.4] — 2026-08-21
 
+### Hybrid search rejects an unbounded frontmatter filter
+
+> **TL;DR:** **`obsidian_search.filter_frontmatter` capped every individual string but not how many keys or OR-alternatives a caller could send.** The matcher is a cross-product per fused candidate and is forwarded into each hybrid fan-out pipeline, always-on and `serve-http`-reachable, with no abort. rc.24 copied `MAX_FRONTMATTER_VALUE_LEN` onto the string arms but not the bound *form* that makes `obsidian_frontmatter_search` load-bearing (`JSON.stringify` length, which also caps count). The array arm now has `.max(32)` alternatives; the record has a `.refine()` of at most 32 keys — Zod records have no `.max()`. Ordinary `{status: "active", type: ["meeting","decision"]}` is unchanged.
+>
+> **Bounded claim.** This is a schema admission bound, not a change to matching semantics. It does **not** cap `frontmatter_set` key count, does **not** stringify the whole filter object, and does **not** add a time budget inside the matcher. Per-string length caps are unchanged.
+>
+> **Method note:** BACKLOG §1.CC **A2**, found by the 2026-08-26 ten-lens audit. Coverage is two new inventory rows on the existing parser-input-cap POSITIVE plus extra phases of that file's NEGATIVE detector test, so the source `it()` census does not move. Under D-45 all executable proof is GitHub-hosted; no local package-manager, lint or test workload was used.
+
+- **OR-alternatives are cardinality-capped.** The array arm of the value union keeps its per-element string cap and gains `.max(MAX_FRONTMATTER_FILTER_ALTERNATIVES)` (32).
+- **Key count is cardinality-capped.** A `.refine()` rejects a record with more than `MAX_FRONTMATTER_FILTER_KEYS` (32) keys. Zod has no `z.record().max()`.
+- **The inventory now pins both dimensions.** Removing either constant from this field's schema slice turns the existing POSITIVE red; a value-length-only mutant is a NEGATIVE that those new rows must not accept.
+
 ### A failed note no longer disables semantic search for the whole process
 
 > **TL;DR:** **One ordinary note could permanently disable semantic search for the life of a running `--watch` server.** `reindexFile` throws on a note with more than 256 distinct wikilink targets (a Map-of-Content is the usual shape). The watcher catch correctly quarantined that path, then also latched `searchHealth.semanticUsable = false`. From then on `obsidian_embeddings_search`, `obsidian_hyde_search` and the embeddings arm of `obsidian_search` all threw "quarantined … Restart the server" — including for every other note. The same latch sat on the PDF-commit, stored-identity-purge and embed-db-unlink catches. Under `--enable-write --watch` with FTS (`--persistent-index`) and embeddings attached — the hybrid `--watch` configuration — a bearer client reaches the live path with one `create_note`. The four per-path catches now leave the global flag alone. After activation has completed, a markdown/PDF commit failure or an embed-db unlink failure keeps brute-force EmbedDb search available for every other note. The live pending-event queue overflow still latches the flag, because that is backpressure with no per-path quarantine to fall back on. The user-facing embeddings-quarantine diagnostic names this server generation rather than a sink-commit or a watcher-only availability failure: restart recovers a backlog overflow; a durable embedding-integrity refusal (which can fire without `--watch`) needs the index repaired or rebuilt, then a restart.

@@ -1081,6 +1081,17 @@ describe("CLI subcommands E2E (against built dist/)", () => {
     expect(sharedQueryResult.matches?.some((match) => match.path === "Private/Secret.md")).toBe(false);
     assertSharedRows(true);
 
+    const sharedExcludeQuery = spawnSync(
+      process.execPath,
+      [distEntry, "query", "zephyrprivacy", "--vault", vault, "--exclude-glob", "Private/**", "--json"],
+      { encoding: "utf8", timeout: 20_000 }
+    );
+    expect(sharedExcludeQuery.status, sharedExcludeQuery.stderr).toBe(0);
+    const sharedExcludeResult = JSON.parse(sharedExcludeQuery.stdout) as { matches?: Array<{ path?: string }> };
+    expect(sharedExcludeResult.matches?.some((match) => match.path === "Public/Visible.md")).toBe(true);
+    expect(sharedExcludeResult.matches?.some((match) => match.path === "Private/Secret.md")).toBe(false);
+    assertSharedRows(true);
+
     const sharedEval = spawnSync(
       process.execPath,
       [

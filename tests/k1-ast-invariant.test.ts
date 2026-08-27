@@ -124,7 +124,7 @@ const PRODUCTION_FILE_PINS: Readonly<Record<string, ProductionFilePin>> = {
       "./fts5.js|discoverFtsIndexConfig|discoverFtsIndexConfig"
     ],
     k1Opens: 4,
-    sha256: "e22f406d20066db455aba2727ed115f7db76c51542b11e3daf0ed6d0b799de89"
+    sha256: "a577f4eb5ec7a973bba9def32f43c75110ec7bec5c8ff6eed104b46697387496"
   },
   "src/tools/search.ts": {
     constructors: { EmbedDb: 1, FtsIndex: 0 },
@@ -140,7 +140,7 @@ const PRODUCTION_FILE_PINS: Readonly<Record<string, ProductionFilePin>> = {
       "../embeddings.js|resolveStoredEmbeddingConfiguration|resolveStoredEmbeddingConfiguration"
     ],
     k1Opens: 1,
-    sha256: "74242750a3bb8e93cf76ac0319c047b90a5abb9938f10eea18230db23ff142cf"
+    sha256: "03802ec30de27b37d5bbb9e5aad3ac3ba6812b18f251e50e872e4770b895816d"
   }
 };
 

@@ -546,7 +546,7 @@ describe("durable PDF generation admission", () => {
     }
   });
 
-  it("watcher OCR staging quarantines a failed OCR page without mutating FTS/embed/HNSW", async () => {
+  it("watcher OCR staging quarantines a failed OCR page without committing replacement FTS/embed/HNSW rows", async () => {
     await mockPdfExtraction("empty");
     vi.doMock("../src/ocr.js", async () => {
       const actual = await vi.importActual<typeof import("../src/ocr.js")>("../src/ocr.js");

@@ -1404,6 +1404,9 @@ function watcherSemanticRouteIsQuarantined(health?: Readonly<{ semanticUsable: b
   return health?.semanticUsable === false;
 }
 
+const SEMANTIC_ROUTE_QUARANTINED =
+  "Embedding search is quarantined for this server generation. Restart recovers a watcher backlog overflow; a durable embedding-integrity refusal needs the embedding index repaired or rebuilt, then a restart.";
+
 /**
  * Refuse every embedding-search route while the watched index is quarantined
  * after an incomplete startup activation.
@@ -1568,8 +1571,9 @@ export function pickEmbedTextForHyde(args: { query: string; hypothetical_answer?
  *   checked before any model load so the error message is fast and clear.
  * @param hnsw - Optional HNSW index context. When passed, k-NN routes
  *   through HNSW instead of brute-force cosine.
- * @param watcherHealth - Optional live watcher route health. A quarantined
- *   semantic route rejects instead of returning a stale post-failure index.
+ * @param watcherHealth - Optional semantic-route health for this prepared
+ *   server generation. A quarantined semantic route rejects instead of
+ *   returning a stale post-failure index.
  * @returns An {@link EmbedSearchResponse} with chunk-level matches and a
  *   `hyde: true` marker iff HyDE actually fired.
  * @throws {TypeError} If a non-null `embedFile` does not end exactly in
@@ -1624,9 +1628,7 @@ export async function embeddingsSearch(
     );
   }
   if (watcherSemanticRouteIsQuarantined(watcherHealth)) {
-    throw new Error(
-      "Embedding search is quarantined after a watcher sink-commit failure. Restart the server to reconcile the derived indexes."
-    );
+    throw new Error(SEMANTIC_ROUTE_QUARANTINED);
   }
   await assertEmbeddingIndexNotQuarantined(embedFile, vault.root);
   // v3.1.0 — pick the actual text to embed. HyDE prefers the
@@ -1714,9 +1716,7 @@ export async function embeddingsSearch(
     let total = db.totalChunks();
     if (total === 0) {
       if (watcherSemanticRouteIsQuarantined(watcherHealth)) {
-        throw new Error(
-          "Embedding search is quarantined after a watcher sink-commit failure. Restart the server to reconcile the derived indexes."
-        );
+        throw new Error(SEMANTIC_ROUTE_QUARANTINED);
       }
       return { query: args.query, method: "embeddings-cosine", model: model.alias, total_chunks: 0, matches: [] };
     }
@@ -1764,9 +1764,7 @@ export async function embeddingsSearch(
       ({ hnswResultsToReceiptHits } = await import("../hnsw.js"));
     }
     if (watcherSemanticRouteIsQuarantined(watcherHealth)) {
-      throw new Error(
-        "Embedding search is quarantined after a watcher sink-commit failure. Restart the server to reconcile the derived indexes."
-      );
+      throw new Error(SEMANTIC_ROUTE_QUARANTINED);
     }
     const healthyHnsw = selectUsableHnswContext(hnsw);
     // Health is necessary but not sufficient: another process can advance the
@@ -2615,9 +2613,10 @@ export async function searchHybrid(
      */
     hnsw?: HnswSearchContext | null;
     /**
-     * Mutable route health for a watcher-enabled prepared server generation.
-     * A sink-commit failure quarantines embeddings until restart so hybrid
-     * search degrades to its coherent lexical signals.
+     * Semantic-route health for this prepared server generation. False
+     * `semanticUsable` is a live watcher backlog overflow or a startup
+     * embedding-integrity refusal (the latter can fire without `--watch`).
+     * Hybrid search then degrades to its coherent lexical signals.
      */
     watcherHealth?: Readonly<{ semanticUsable: boolean }>;
     /**
@@ -2829,8 +2828,7 @@ export async function searchHybrid(
     indexed_revision: number;
   }> = [];
   if (watcherSemanticRouteIsQuarantined(ctx.watcherHealth)) {
-    signalErrors.embeddings =
-      "Embedding search is quarantined after a watcher sink-commit failure; restart the server to reconcile indexes.";
+    signalErrors.embeddings = SEMANTIC_ROUTE_QUARANTINED;
   } else if (ctx.embedFile !== null && existsSync(ctx.embedFile)) {
     try {
       // v2.0.0-beta.1 P1 fix: pass `min_score: 0` to fan-out the embeddings

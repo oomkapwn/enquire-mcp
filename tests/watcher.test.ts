@@ -1551,6 +1551,25 @@ describe("VaultWatcher HNSW disk persistence (v3.9.0-rc.6)", () => {
       const watcherInternals = w as unknown as {
         hnswPersistUnsafe: boolean;
         handle(absPath: string, kind: "add" | "change" | "unlink"): Promise<void>;
+        commitPdfGeneration(
+          relPath: string,
+          generation: {
+            dev: bigint;
+            ino: bigint;
+            nlink: bigint;
+            size: bigint;
+            mtimeNs: bigint;
+            ctimeNs: bigint;
+            mtimeMs: number;
+          },
+          staged: {
+            pages: ReadonlyArray<{ pageNumber: number; text: string }>;
+            embedResult: undefined;
+            embedSource: null;
+          }
+        ): string | undefined;
+        commitUnlinkPath(relPath: string, isPdf: boolean): void;
+        purgeStoredIdentity(relPath: string, kind: "md" | "pdf"): Promise<void>;
         syncHnswForFile(
           relPath: string,
           kind: "md" | "pdf",
@@ -1596,8 +1615,8 @@ describe("VaultWatcher HNSW disk persistence (v3.9.0-rc.6)", () => {
       expect(w.searchHealth.hnswUsable).toBe(false);
 
       // Class sibling: zipHnswAddPoints runs after the EmbedDb transaction but
-      // before syncHnswForFile. Prove the surrounding markdown catch sets the
-      // same permanent latch instead of laundering that stale graph on close.
+      // before syncHnswForFile. Prove the surrounding markdown catch still sets
+      // the HNSW persistence latch instead of laundering that stale graph on close.
       watcherInternals.hnswPersistUnsafe = false;
       w.searchHealth.hnswUsable = true;
       const originalConditionalUpsert = embedDb.upsertNoteWithCanonicalVectorsIfGeneration.bind(embedDb);
@@ -1620,7 +1639,79 @@ describe("VaultWatcher HNSW disk persistence (v3.9.0-rc.6)", () => {
       }
       expect(mismatchInjectedAfterCommit).toBe(true);
       expect(watcherInternals.hnswPersistUnsafe).toBe(true);
-      expect(w.searchHealth.semanticUsable).toBe(false);
+      // Per-path quarantine is the correct scope. The markdown catch used to
+      // latch semanticUsable globally, which disabled embeddings search for
+      // every other note until restart. Each phase below is a causal negative
+      // control for one of the four sites that carried that latch: restoring
+      // `searchHealth.semanticUsable = false` at that site turns the phase red.
+      // The live-queue overflow in scheduleLiveEvent remains latched and is
+      // covered by tests/vault-bounded-listing.test.ts.
+      expect(embedDb.getQuarantinedPaths("md")).toContain("a.md");
+      expect(w.searchHealth.semanticUsable).toBe(true);
+
+      const dummyGeneration = {
+        dev: 0n,
+        ino: 0n,
+        nlink: 1n,
+        size: 1n,
+        mtimeNs: 0n,
+        ctimeNs: 0n,
+        mtimeMs: 1
+      };
+
+      const originalReindexPdfFile = fts.reindexPdfFile.bind(fts);
+      fts.reindexPdfFile = () => {
+        throw new Error("synthetic pdf commit failure");
+      };
+      try {
+        w.searchHealth.semanticUsable = true;
+        expect(
+          watcherInternals.commitPdfGeneration("paper.pdf", dummyGeneration, {
+            pages: [{ pageNumber: 1, text: "pdf" }],
+            embedResult: undefined,
+            embedSource: null
+          })
+        ).toBeUndefined();
+        expect(embedDb.getQuarantinedPaths("pdf")).toEqual(["paper.pdf"]);
+        expect(w.searchHealth.semanticUsable).toBe(true);
+      } finally {
+        fts.reindexPdfFile = originalReindexPdfFile;
+      }
+
+      const originalDeleteNote = embedDb.deleteNote.bind(embedDb);
+      const originalDeleteNoteIfGeneration = embedDb.deleteNoteIfGeneration.bind(embedDb);
+      embedDb.deleteNote = () => {
+        throw new Error("synthetic embed-db delete failure");
+      };
+      embedDb.deleteNoteIfGeneration = () => {
+        throw new Error("synthetic embed-db delete failure");
+      };
+      try {
+        w.searchHealth.semanticUsable = true;
+        watcherInternals.commitUnlinkPath("gone.md", false);
+        expect(embedDb.getQuarantinedPaths("md")).toContain("gone.md");
+        expect(w.searchHealth.semanticUsable).toBe(true);
+      } finally {
+        embedDb.deleteNote = originalDeleteNote;
+        embedDb.deleteNoteIfGeneration = originalDeleteNoteIfGeneration;
+      }
+
+      const originalDropFile = fts.dropFile.bind(fts);
+      fts.dropFile = () => {
+        throw new Error("synthetic stored-identity purge failure");
+      };
+      try {
+        w.searchHealth.semanticUsable = true;
+        await expect(watcherInternals.purgeStoredIdentity("stale.md", "md")).rejects.toThrow(
+          /synthetic stored-identity purge failure/
+        );
+        // Assignment-sensitive only: this method is activation-only and still
+        // rethrows, so dropping the latch does not restore a live search path.
+        expect(embedDb.getQuarantinedPaths("md")).toContain("stale.md");
+        expect(w.searchHealth.semanticUsable).toBe(true);
+      } finally {
+        fts.dropFile = originalDropFile;
+      }
 
       await expect(w.flushHnswToDisk()).resolves.toBe(false);
       await expect(fs.access(`${persistFile}.meta.json`)).rejects.toMatchObject({ code: "ENOENT" });

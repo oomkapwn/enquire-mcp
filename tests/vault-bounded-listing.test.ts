@@ -248,6 +248,8 @@ describe("bounded vault inventories", () => {
     internals.onFsEvent(path.join(root, "A.md"), "change");
     internals.onFsEvent(path.join(root, "B.md"), "change");
     expect(() => internals.onFsEvent(path.join(root, "C.md"), "change")).toThrow(/exceeded 1 pending distinct paths/);
+    // Queue overflow is the remaining justified global latch: there is no
+    // per-path quarantine to fall back on when events are dropped.
     expect(watcher.searchHealth).toEqual({ semanticUsable: false, hnswUsable: false });
 
     releaseActive?.();

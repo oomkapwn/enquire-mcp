@@ -83,10 +83,31 @@ function sameHnswRowManifest(
  * Mutable search-route health shared with the prepared server generation.
  *
  * A fatal staged watcher preparation failure leaves the prior generation
- * intact and does not change these flags. PDF/OCR page failures use that same
- * quarantined preparation path. A sink mutation failure is different: the current
- * route can no longer prove it matches the other enabled sinks, so the affected
- * optimization is quarantined until restart.
+ * intact and does not latch `semanticUsable`. PDF/OCR page failures use that
+ * same quarantined preparation path. Staging may still process-quarantine
+ * HNSW (`hnswUsable`) via the per-path quarantine helper.
+ *
+ * After activation has completed, a per-path sink mutation failure
+ * (markdown/PDF commit, embed-db unlink) records a source-scoped quarantine
+ * and does **not** latch `semanticUsable`. Brute-force EmbedDb search stays
+ * available for every other note when the EmbedDb quarantine marker is
+ * successfully persisted. The failed path is withheld by that marker.
+ * HNSW may still be process-quarantined (`hnswUsable`) because a graph that
+ * omitted the withheld label would under-fill recall around it.
+ *
+ * `purgeStoredIdentity` also no longer latches `semanticUsable`, but it runs
+ * only from activation replay and still rethrows, so a failed purge still
+ * refuses startup. Dropping that assignment is class-consistency.
+ *
+ * A quarantine-marker write failure is logged per sink without a broad route
+ * latch; a fail-stop policy for that residual needs explicit authorization.
+ *
+ * `semanticUsable` is latched false by (1) live pending-event queue overflow
+ * (`LiveWatcherAdmissionLimitError`) when a watcher exists, and (2) startup
+ * embedding-integrity refusal on the server-owned health object — which is
+ * `watcher.searchHealth` when `--watch` is on, or a fallback object when it
+ * is not. Bare restart recovers (1). (2) is a durable snapshot mismatch:
+ * repair or rebuild the embedding index, then restart.
  */
 export interface WatcherSearchHealth {
   semanticUsable: boolean;
@@ -181,9 +202,9 @@ export interface WatcherOptions {
    * Requires `tesseract.js` + `@napi-rs/canvas` optional dependencies
    * + the requested language trained-data files pre-installed via
    * `enquire-mcp install-ocr-lang <code>` (see v3.7.16 P1-1 offline
-   * enforcement). If those aren't available, the PDF generation is
-   * quarantined and every prior FTS/embed/HNSW row is retained until a later
-   * complete extraction succeeds.
+   * enforcement). If those aren't available, the watcher attempts to
+   * quarantine the PDF generation and every prior FTS/embed/HNSW row is
+   * retained until a later complete extraction succeeds.
    *
    * Recommended pairing: `--ocr-pdfs` + `--watch` + `--include-pdfs`
    * for users with scanned-document vaults that change during sessions.
@@ -197,9 +218,9 @@ export interface WatcherOptions {
   ocrLangs?: string;
   /**
    * v3.9.0-rc.1 — page cap for OCR runs. Mirrors `DEFAULT_OCR_MAX_PAGES`
-   * (200). Exceeding it quarantines the entire changed PDF generation and
-   * preserves every prior FTS/embed/HNSW row. Operators can lift the cap when
-   * they trust their PDF set.
+   * (200). Exceeding it attempts to quarantine the entire changed PDF
+   * generation and preserves every prior FTS/embed/HNSW row. Operators can
+   * lift the cap when they trust their PDF set.
    */
   ocrMaxPages?: number;
   /**
@@ -1192,6 +1213,9 @@ export class VaultWatcher {
     if (this.liveEventPending.size >= this.liveEventPendingLimit) {
       const error = new LiveWatcherAdmissionLimitError(this.liveEventPendingLimit);
       this.liveAdmissionError = error;
+      // Queue overflow is backpressure, not one bad path: dropped events mean
+      // the indexes may diverge from disk, so the global latch is justified.
+      // Per-path quarantine has nothing to fall back on here.
       this.searchHealth.semanticUsable = false;
       this.searchHealth.hnswUsable = false;
       this.hnswPersistUnsafe = true;
@@ -1274,7 +1298,10 @@ export class VaultWatcher {
       }
     } catch (err) {
       this.quarantineFailedGeneration(relPath, kind);
-      this.searchHealth.semanticUsable = false;
+      // Do not latch semanticUsable: quarantine is per-path when the marker
+      // persists. This method runs
+      // only from activation replay and still rethrows, so startup still fails
+      // closed — the latch was redundant with the rethrow. See WatcherSearchHealth.
       if (!this.silent) {
         process.stderr.write(
           `enquire: watcher stored-identity purge failed for ${relPath} — ${
@@ -1971,13 +1998,15 @@ export class VaultWatcher {
 
   /**
    * Derive markdown lexical input and optional embeddings from one note
-   * snapshot. No index mutation happens here.
+   * snapshot. No replacement generation is committed here. A preparation
+   * failure attempts source-scoped quarantine (and may process-quarantine
+   * HNSW); the marker is not guaranteed if the store write fails.
    *
    * @param absPath - Canonical note path.
    * @param relPath - Public vault-relative note path.
    * @param generation - Captured filesystem generation.
-   * @returns Staged work, or undefined when reading, parsing, or optional
-   *   embedding preparation failed and the source was quarantined.
+   * @returns Staged work, or undefined after a fail-soft preparation failure
+   *   and an attempted source quarantine.
    */
   private async stageMarkdownGeneration(
     absPath: string,
@@ -2016,15 +2045,16 @@ export class VaultWatcher {
 
   /**
    * Derive PDF lexical pages and optional embeddings from one binary snapshot.
-   * OCR, when enabled, consumes the same captured bytes. No index mutation
-   * happens here.
+   * OCR, when enabled, consumes the same captured bytes. No replacement
+   * generation is committed here. A preparation failure attempts source-scoped
+   * quarantine (and may process-quarantine HNSW); the marker is not guaranteed
+   * if the store write fails.
    *
    * @param absPath - Canonical PDF path.
    * @param relPath - Public vault-relative PDF path.
    * @param generation - Captured filesystem generation.
-   * @returns Staged work, or undefined when binary reading, PDF extraction,
-   *   OCR, or optional embedding preparation failed and the source was
-   *   quarantined.
+   * @returns Staged work, or undefined after a fail-soft preparation failure
+   *   and an attempted source quarantine.
    */
   private async stagePdfGeneration(
     absPath: string,
@@ -2143,7 +2173,8 @@ export class VaultWatcher {
       return embedNote;
     } catch (err) {
       this.quarantineFailedGeneration(relPath, "md");
-      this.searchHealth.semanticUsable = false;
+      // Do not latch semanticUsable: quarantine is per-path when the marker
+      // persists. See WatcherSearchHealth.
       if (this.hnsw) this.hnswPersistUnsafe = true;
       if (!this.silent) {
         process.stderr.write(
@@ -2201,7 +2232,8 @@ export class VaultWatcher {
       return embedNote;
     } catch (err) {
       this.quarantineFailedGeneration(relPath, "pdf");
-      this.searchHealth.semanticUsable = false;
+      // Do not latch semanticUsable: quarantine is per-path when the marker
+      // persists. See WatcherSearchHealth.
       if (this.hnsw) this.hnswPersistUnsafe = true;
       if (!this.silent) {
         process.stderr.write(
@@ -2250,7 +2282,8 @@ export class VaultWatcher {
         }
       } catch (err) {
         this.quarantineFailedGeneration(relPath, isPdf ? "pdf" : "md");
-        this.searchHealth.semanticUsable = false;
+        // Do not latch semanticUsable: quarantine is per-path when the marker
+        // persists. See WatcherSearchHealth.
         if (!this.silent) {
           process.stderr.write(
             `enquire: watcher embed-db delete failed for ${relPath} — ${err instanceof Error ? err.message : String(err)}\n`
@@ -2270,7 +2303,8 @@ export class VaultWatcher {
   }
 
   /**
-   * Stage one exact alias without mutating any sink.
+   * Stage one exact alias without committing a replacement generation.
+   * A preparation failure still attempts source-scoped quarantine.
    *
    * @param live - Re-admitted live path and captured generation.
    * @returns Staged path work, or undefined after a fail-soft preparation error.
@@ -2312,7 +2346,7 @@ export class VaultWatcher {
    * Only after all awaited work succeeds are inadmissible/stale-key purges and
    * live-path commits performed in one no-await section. Membership drift asks
    * the caller for a global replan; generation-only drift and transient
-   * admission failure retry without mutating any sink.
+   * admission failure retry without committing a replacement generation.
    *
    * @param originAbsPath - Exact event path.
    * @param plannedEvidence - Latest pre-lock admission for every inspected path.
@@ -2374,8 +2408,8 @@ export class VaultWatcher {
     const stagedPaths: StagedAliasPath[] = [];
     for (const live of liveByCanonicalPath.values()) {
       const staged = await this.stageAliasPath(live);
-      // stageMarkdownGeneration/stagePdfGeneration already quarantine the
-      // exact failed path. Keep preparing the remaining independently-admitted
+      // stageMarkdownGeneration/stagePdfGeneration already attempt to
+      // quarantine the exact failed path. Keep preparing the remaining independently-admitted
       // aliases so one unreadable hardlink spelling cannot strand later
       // equal-mtime spellings with live retained bytes.
       if (!staged) continue;
@@ -2413,9 +2447,9 @@ export class VaultWatcher {
     }
     for (const prepared of stagedPaths) {
       const eventKind = prepared.live.absPath === originAbsPath && kind !== "unlink" ? kind : ("change" as const);
-      // A live commit failure source-quarantines this exact alias in the
-      // commit catch. Continue the already-staged/revalidated group so every
-      // remaining hardlink alias independently converges or quarantines; an
+      // A live commit failure attempts to source-quarantine this exact alias in
+      // the commit catch. Continue the already-staged/revalidated group so every
+      // remaining hardlink alias independently converges or attempts quarantine; an
       // early return would leave later equal-mtime aliases serving old bytes.
       if (!this.commitAliasPath(prepared, eventKind)) continue;
       if (prepared.live.physicalIdentity) {
@@ -2702,7 +2736,8 @@ export class VaultWatcher {
 
     // Add/change: derive every enabled sink from one captured path generation
     // for an ordinary update.
-    // All awaited preparation finishes before any store mutation; a final
+    // All awaited preparation finishes before any replacement-generation
+    // commit; a final
     // lstat revalidation either authorizes one run-to-completion commit or
     // retries the latest disk generation once.
     try {

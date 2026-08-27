@@ -4,6 +4,17 @@ All notable changes to this project will be documented here. The format follows 
 
 ## [4.0.0-rc.4] — 2026-08-21
 
+### Chat thread read keeps headings inside messages
+
+> **TL;DR:** **`obsidian_chat_thread_read` no longer treats a `#` or `##` line inside a message as the end of the thread.** The parser stopped at the first such heading, flushed the current message, set `inThread = false`, and reported `message_count` for only the truncated prefix. A later `### user|assistant|system ·` message in the same `## Chat:` block was dropped. `chatThreadAppend` writes message bodies verbatim, so a plan that contains `## Step 1` was enough. The chat region now runs until EOF or a later `## Chat:` title line.
+>
+> **Bounded claim.** This does **not** fence-scan message bodies, so a heading-shaped line inside a code fence is still a `### role` delimiter if it matches `CHAT_HEADING_RE`, and is otherwise kept as content. A `## Chat:` line still starts a new title. Trailing vault sections after the last message (`## Notes`) are absorbed into that last message rather than truncating the thread. It does **not** change `chatThreadAppend`, search, or write tools.
+>
+> **Method note:** BACKLOG §1.CC-ter **B5**, remaining MED. Coverage is an extra phase of the existing `handles multi-line message content correctly (preserves markdown)` test, so the source `it()` census does not move. Under D-45 all executable proof is GitHub-hosted; no local package-manager, lint or test workload was used.
+
+- **In-message `#` / `##` stay content.** Removing the terminator lets the existing `### role · timestamp` walker continue to later messages.
+- **`message_count` matches surviving messages.** The extra phase appends a user message that contains both heading levels, then an assistant reply, and requires `message_count === 2` with both heading strings in the user body.
+
 ### One-shot query does not rewrite the shared FTS from privacy filters
 
 > **TL;DR:** **`enquire-mcp query` (and `eval --persistent-index`) no longer persist one invocation's `--exclude-glob` / `--read-paths` as FTS deletions into the shared default per-vault index.** `syncFtsIndex` diffs live admitted Markdown against stored rows and `dropFile`s the rest. Both commands construct a privacy-filtered Vault, then opened the same `defaultIndexFile` that `serve --persistent-index` uses, so a one-shot search with `--read-paths Public/**` deleted every other note from the on-disk BM25 index. Hits were already filtered at response-build (`vault.isExcluded`); the write was a silent side effect of a read/runtime path. Skip is by **resolved path identity** with `defaultIndexFile(vaultRoot)`, so `--index-file` that spells that same path also skips. A *different* `--index-file` still syncs (M-8). `index` / `setup` / `serve` / `serve-http` are unchanged writers of the Vault they were started with.

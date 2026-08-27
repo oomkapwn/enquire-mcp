@@ -1054,11 +1054,12 @@ export async function chatThreadAppend(
 /**
  * Parse a note's chat thread into structured messages.
  *
- * Reads the chat block delimited by `## Chat: <title>` and parses each
+ * Reads the chat block starting at `## Chat: <title>` and parses each
  * `### <role> · <timestamp>` sub-heading into a {@link ChatThreadMessage}.
- * Non-chat content (anything outside the chat block) is ignored. Returns
- * `thread_title: null` and an empty `messages` array if the note has no
- * chat block.
+ * Content before that title is ignored. `#` / `##` lines inside a message
+ * are kept as markdown. A later `## Chat:` title starts a new title in the
+ * same parse; the walk continues to EOF. Returns `thread_title: null` and
+ * an empty `messages` array if the note has no chat block.
  *
  * @param vault - The vault.
  * @param args - `note_path` is the vault-relative path to the thread note.
@@ -1106,21 +1107,9 @@ export async function chatThreadRead(vault: Vault, args: { note_path: string }):
       continue;
     }
     if (!inThread) continue;
-    // Higher-level heading or a different `## Chat:` block ends the thread.
-    if (/^# /.test(ln) || (/^## /.test(ln) && !CHAT_THREAD_TITLE_RE.test(ln))) {
-      if (current) {
-        messages.push({
-          role: current.role,
-          timestamp: current.timestamp,
-          content: current.lines.join("\n").trim(),
-          line_start: current.line_start,
-          line_end: i
-        });
-        current = null;
-      }
-      inThread = false;
-      continue;
-    }
+    // `#` / `##` lines inside a message are markdown content, not a thread
+    // terminator. A later `## Chat:` title is handled above. The region runs
+    // to EOF or that next title — not to the first heading in a message.
     const headingMatch = CHAT_HEADING_RE.exec(ln);
     if (headingMatch?.[1] && headingMatch[2]) {
       if (current) {

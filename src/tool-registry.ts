@@ -1159,7 +1159,7 @@ export function registerReadTools(
     {
       title: "Read parsed chat thread from a note",
       description:
-        "Parse a note's `## Chat: <title>` block into structured messages with role/timestamp/content/line-range. Non-chat content in the same note is ignored. Read-only.",
+        "Parse a note's `## Chat: <title>` block into structured messages with role/timestamp/content/line-range. `#`/`##` lines inside a message are kept. Read-only.",
       annotations: { ...READ_ONLY, title: "Read chat thread" },
       inputSchema: z.strictObject({
         note_path: z.string().min(1).describe("Vault-relative path to the note hosting the thread")

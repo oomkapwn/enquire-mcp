@@ -169,5 +169,20 @@ describe("chat_thread_read (v2.2.0)", () => {
     expect(result.messages[0]?.content).toContain("Line 1");
     expect(result.messages[0]?.content).toContain("Line 3 after blank");
     expect(result.messages[0]?.content).toContain("- bullet 1");
+
+    // Extra phase: a `#` / `##` line inside a message must not end the thread
+    // or drop later messages. chatThreadAppend writes those bytes verbatim.
+    await chatThreadAppend(v, {
+      note_path: "headed.md",
+      role: "user",
+      content: "Plan:\n\n## Step 1\ndo thing\n\n# Overview"
+    });
+    await chatThreadAppend(v, { note_path: "headed.md", role: "assistant", content: "ok" });
+    const headed = await chatThreadRead(v, { note_path: "headed.md" });
+    expect(headed.message_count).toBe(2);
+    expect(headed.messages[0]?.content).toContain("## Step 1");
+    expect(headed.messages[0]?.content).toContain("# Overview");
+    expect(headed.messages[1]?.role).toBe("assistant");
+    expect(headed.messages[1]?.content).toBe("ok");
   });
 });

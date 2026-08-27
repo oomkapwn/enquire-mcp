@@ -611,7 +611,7 @@ Given a question, retrieves top-relevant Markdown notes (via `obsidian_search`),
 
 ## `obsidian_chat_thread_read`
 
-Parse a note's `## Chat: <title>` block into structured messages with role / timestamp / content / line-range. Non-chat content in the same note is ignored.
+Parse a note's `## Chat: <title>` block into structured messages with role / timestamp / content / line-range. `#` / `##` lines inside a message are kept.
 
 | Argument    | Type     | Notes                                                |
 |-------------|----------|------------------------------------------------------|

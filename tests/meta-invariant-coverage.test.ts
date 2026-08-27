@@ -1012,7 +1012,7 @@ const EXPECTED_REVIEWED_ORDINARY_OWNER_SHA256_ENTRIES = [
     "Embed malformed-generation value normalization",
     "547eab56be4e6aeea23b87b7796b4af182c032956240736ea847c5df6a945346"
   ],
-  ["embedding index extension mapping", "b021eae06f28db3236207da2977207d34457531f2e29357549556b607fe5347c"],
+  ["embedding index extension mapping", "9b30b5965abe1f6de24f5b0de8392a92859489f735556e39c5f83bac285d87d1"],
   ["FTS route slug normalization", "4c85c74d066bfaf4b0177ad8da61b867bc62ae819b9e5b98becb13d8fbf80028"],
   ["FTS shadow schema fixture extension", "4126dfbeab9070f30db8b4c1ff125d53bd417558b83755adff0511b63c4a4242"],
   [

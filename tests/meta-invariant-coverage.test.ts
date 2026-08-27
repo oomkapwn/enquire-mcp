@@ -298,7 +298,7 @@ const EXPECTED_REPOSITORY_MUTATION_HELPER_CALL_ENTRIES = [
   ],
   [
     "embeddings-offline.test.ts",
-    { count: 12, sha256: "43c410329a4f1b5688ed4341f989b72f2aacf76b07722d9210eba9830b271ae1" }
+    { count: 12, sha256: "43fced810a2826c7a642ba7c5337dc623db63fd628ed66ab74a65ccfa3f64967" }
   ],
   [
     "embed-persistence-coordination.test.ts",
@@ -320,7 +320,7 @@ const EXPECTED_REPOSITORY_MUTATION_HELPER_CALL_ENTRIES = [
   ],
   [
     "k1-class-invariant.test.ts",
-    { count: 102, sha256: "4219053e3b5c172eb81748f680100420729b95fa0eebf98ece4bfe6ad85d03b4" }
+    { count: 102, sha256: "0d3ae28d0035c5baa7a319c61420f8fd28b99cbe09f71eb954684347a1923f06" }
   ],
   ["jsonld.test.ts", { count: 11, sha256: "ec02eb24004f2c975daa1b3a668451217e2884cec7cf301e33f91f8bce98d05b" }],
   [
@@ -993,9 +993,9 @@ const EXPECTED_REVIEWED_ORDINARY_OWNER_SHA256_ENTRIES = [
   ["sensitive-reader growth label normalization", "57522a53037186bd73e6009e064f56527b9995826ece3c7c88fdfd2756e6fd23"],
   ["publisher kind label normalization", "dbdbeceb385475c63fdd65c52a02d69f0df72f270fc1733841d7bed3ecc02623"],
   ["hardlink route label normalization", "8869c89d87f15f690cdfbfc352a1d9006a415c200d3880a4e35ad1b3fc148988"],
-  ["K-1 statement semicolon normalization", "ceb6cd851bf023ca1484a3ce9656770c015cdfd37eb3566f545d20beb63f956a"],
-  ["K-1 block-comment stripping", "e4ab04178c078637e0f4c686592e4c087735af6fae66bd301df5dcb3affd29e1"],
-  ["K-1 line-comment stripping", "e4ab04178c078637e0f4c686592e4c087735af6fae66bd301df5dcb3affd29e1"],
+  ["K-1 statement semicolon normalization", "c2175a68d2170c6522439bf902f016362959eb2e3f310649d37f174d80cdeee1"],
+  ["K-1 block-comment stripping", "69d0a93af70fcf0a28a62d2f4b69cbcab1eeabe0eace7dfc1b18b34020d3f53c"],
+  ["K-1 line-comment stripping", "69d0a93af70fcf0a28a62d2f4b69cbcab1eeabe0eace7dfc1b18b34020d3f53c"],
   ["K-1 module-extension normalization", "432236d6a9e45f291e32f5a5ae7a12be0e23474cb942d86b23c09a451b9a2c74"],
   ["K-1 source-path separator normalization", "2d130e46fcde1c547faa467de907b4e2e560017a54ccf3280c3da01496d3c4cb"],
   ["line-terminator block-comment stripping", "61bbbea7aac48eafa3a24d78998eb49e81a6e7911953f3c25ead27692923a80d"],

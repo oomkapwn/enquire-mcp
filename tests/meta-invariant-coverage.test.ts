@@ -290,7 +290,7 @@ const EXPECTED_REPOSITORY_MUTATION_HELPER_CALL_ENTRIES = [
   ],
   [
     "enforcement-guard-invariant.test.ts",
-    { count: 41, sha256: "c7c768aa140f935cd63500477e2ff754334566d785b9f9b771bd5549265168d0" }
+    { count: 41, sha256: "4fdffd84b3b673fa29e2a467c5fcf7210866606a01e28c6972fe94918616544f" }
   ],
   [
     "erasure-invariant.test.ts",

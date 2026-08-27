@@ -321,7 +321,10 @@ export async function validateNoteProposal(vault: Vault, args: ValidateProposalA
   }
 
   // 4. Tag pre-classification (existing vs new).
-  const existingTags = new Set((await listTags(vault, {})).map((t) => foldTag(t.tag)));
+  // listTags defaults to a 200-row dashboard slice; classification must use the
+  // function's existing 2000 ceiling so a live tag sorted after the top 200 is
+  // not reported as new. Vaults with more than 2000 distinct tags remain bounded.
+  const existingTags = new Set((await listTags(vault, { limit: 2000 })).map((t) => foldTag(t.tag)));
   const proposedTagsRaw = new Set<string>();
   // Frontmatter tags.
   const fmData = yamlReport.parsed ? parseFrontmatter(args.content).data : {};

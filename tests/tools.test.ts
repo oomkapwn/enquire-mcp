@@ -709,6 +709,27 @@ describe("validateNoteProposal — anti-slop write linter (v0.12)", () => {
     expect(newTags.map((t) => t.name)).toContain("brand-new-tag-xyzzy");
     expect(result.tags.find((t) => t.name === "planning")?.status).toBe("existing");
     expect(result.warnings.some((w) => w.kind === "new-tag" && w.message.includes("brand-new-tag-xyzzy"))).toBe(true);
+
+    // Extra phase: default listTags limit is 200 (dashboard). Classification
+    // must not treat a real vault tag as new just because 200 other tags sort
+    // ahead of it. Isolated vault so the shared fixture stays at 3 notes.
+    const crowded = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-validate-tags-"));
+    try {
+      await fs.writeFile(path.join(crowded, "planning.md"), "---\ntags: [planning]\n---\n\nbody.\n");
+      for (let i = 0; i < 200; i++) {
+        const tag = `a${String(i).padStart(3, "0")}`;
+        await fs.writeFile(path.join(crowded, `${tag}.md`), `---\ntags: [${tag}]\n---\n\nbody.\n`);
+      }
+      const crowdedVault = new Vault(crowded);
+      const crowdedResult = await validateNoteProposal(crowdedVault, {
+        path: "Inbox/reuse-planning.md",
+        content: "---\ntags: [planning]\n---\n\nbody.\n"
+      });
+      expect(crowdedResult.tags.find((t) => t.name === "planning")?.status).toBe("existing");
+      expect(crowdedResult.warnings.some((w) => w.kind === "new-tag" && w.message.includes("planning"))).toBe(false);
+    } finally {
+      await fs.rm(crowded, { recursive: true, force: true });
+    }
   });
 
   it("path collision in mode=create blocks (errors), in mode=overwrite warns instead", async () => {

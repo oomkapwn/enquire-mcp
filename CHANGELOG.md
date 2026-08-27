@@ -4,6 +4,17 @@ All notable changes to this project will be documented here. The format follows 
 
 ## [4.0.0-rc.4] — 2026-08-21
 
+### Note-proposal tag classification uses the listTags API ceiling
+
+> **TL;DR:** **`obsidian_validate_note_proposal` no longer classifies a live vault tag as `new` just because it is not in the top 200 by count.** Tag pre-classification called `listTags(vault, {})`, which defaults to a 200-row dashboard slice. Existing tags sorted after that slice were missing from the lookup set, so a proposal that reused them got `status: "new"` and a `new-tag` warning. The call now passes `limit: 2000`, the same ceiling the `listTags` function and `obsidian_list_tags` MCP schema already enforce.
+>
+> **Bounded claim.** This does **not** raise the `listTags` presentation ceiling, does **not** scan past `MAX_TAG_DISTINCT` / incomplete inventory throws, and does **not** change `obsidian_list_tags` default 200. Vaults with more than 2000 distinct tags can still misclassify tags outside that slice. It does **not** change wikilink, YAML, or path-collision arms.
+>
+> **Method note:** BACKLOG §1.CC-ter **B5**, remaining MED. Coverage is an extra phase of the existing `flags new tags so the LLM doesn't fork a tag forest` test, so the source `it()` census does not move. Under D-45 all executable proof is GitHub-hosted; no local package-manager, lint or test workload was used.
+
+- **Classification uses `limit: 2000`.** That is the existing `listTags` TypeError ceiling, not a new API.
+- **A 201st-by-sort existing tag stays `existing`.** The extra phase builds an isolated vault with `planning` plus 200 `a000`–`a199` tags (equal count, earlier alphabet) and requires a proposal that reuses `planning` not to warn `new-tag`.
+
 ### Chat thread read keeps headings inside messages
 
 > **TL;DR:** **`obsidian_chat_thread_read` no longer treats a `#` or `##` line inside a message as the end of the thread.** The parser stopped at the first such heading, flushed the current message, set `inThread = false`, and reported `message_count` for only the truncated prefix. A later `### user|assistant|system ·` message in the same `## Chat:` block was dropped. `chatThreadAppend` writes message bodies verbatim, so a plan that contains `## Step 1` was enough. The chat region now runs until EOF or a later `## Chat:` title line.

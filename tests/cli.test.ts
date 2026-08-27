@@ -1173,8 +1173,18 @@ describe("CLI subcommands E2E (against built dist/)", () => {
         const insertChunk = legacy.prepare(
           "INSERT INTO chunks (content, title, aliases, rel_path, chunk_index, line_start, line_end, tags, raw_content, kind) VALUES (?, ?, '', ?, 0, 1, 1, '', ?, 'md')"
         );
-        insertChunk.run("zephyrprivacy visible evidence", "Visible", "Public/Visible.md", "zephyrprivacy visible evidence");
-        insertChunk.run("zephyrprivacy forbidden evidence", "Secret", "Private/Secret.md", "zephyrprivacy forbidden evidence");
+        insertChunk.run(
+          "zephyrprivacy visible evidence",
+          "Visible",
+          "Public/Visible.md",
+          "zephyrprivacy visible evidence"
+        );
+        insertChunk.run(
+          "zephyrprivacy forbidden evidence",
+          "Secret",
+          "Private/Secret.md",
+          "zephyrprivacy forbidden evidence"
+        );
         const insertState = legacy.prepare(
           "INSERT INTO source_state (rel_path, mtime_ms, n_chunks, kind, indexed_at) VALUES (?, 1000, 1, 'md', 'now')"
         );

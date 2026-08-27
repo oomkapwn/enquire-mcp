@@ -49,9 +49,9 @@ import {
   defaultIndexFile,
   discoverFtsIndexConfig,
   FtsIndex,
+  type FtsIndexDiscovery,
   syncFtsIndex,
   syncPdfFtsIndex,
-  type FtsIndexDiscovery,
   type TokenizeMode
 } from "./fts5.js";
 import { VERSION } from "./index.js";

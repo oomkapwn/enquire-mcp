@@ -28,11 +28,29 @@ const repoRoot = path.resolve(__dirname, "..");
 
 /**
  * Strip line comments and block comments so a prose mention of a guard symbol
- * is not treated as the code guard. Same shape as entrypoint-guard-invariant
- * and fence-toggle-invariant.
+ * is not treated as the code guard. Scanner form — this file is in the raw
+ * `.replace` inventory, so String#replace would be an unclassified mutation.
  */
 function stripComments(src: string): string {
-  return src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/[^\n]*/g, "$1");
+  let out = "";
+  let i = 0;
+  while (i < src.length) {
+    const a = src[i];
+    const b = src[i + 1];
+    if (a === "/" && b === "*") {
+      const end = src.indexOf("*/", i + 2);
+      i = end < 0 ? src.length : end + 2;
+      continue;
+    }
+    if (a === "/" && b === "/" && (i === 0 || src[i - 1] !== ":")) {
+      const nl = src.indexOf("\n", i);
+      i = nl < 0 ? src.length : nl;
+      continue;
+    }
+    out += a;
+    i += 1;
+  }
+  return out;
 }
 
 /** Concatenated comment-stripped text of every `src/**.ts` — the guard-symbol search space. */

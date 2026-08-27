@@ -84,9 +84,19 @@ function sameHnswRowManifest(
  *
  * A fatal staged watcher preparation failure leaves the prior generation
  * intact and does not change these flags. PDF/OCR page failures use that same
- * quarantined preparation path. A sink mutation failure is different: the current
- * route can no longer prove it matches the other enabled sinks, so the affected
- * optimization is quarantined until restart.
+ * quarantined preparation path.
+ *
+ * A per-path sink mutation failure (markdown/PDF commit, stored-identity
+ * purge, embed-db unlink) records a source-scoped quarantine and does **not**
+ * latch `semanticUsable`. Brute-force EmbedDb search stays available for every
+ * other note; the failed path is withheld by its quarantine marker. HNSW may
+ * still be process-quarantined (`hnswUsable`) because a graph that omitted the
+ * withheld label would under-fill recall around it.
+ *
+ * `semanticUsable` is latched false only when the watcher can no longer keep
+ * derived indexes aligned with disk at all — currently the live pending-event
+ * queue overflowing (`LiveWatcherAdmissionLimitError`). Startup embedding
+ * integrity failures write the same flag on the server-owned health object.
  */
 export interface WatcherSearchHealth {
   semanticUsable: boolean;
@@ -1192,6 +1202,9 @@ export class VaultWatcher {
     if (this.liveEventPending.size >= this.liveEventPendingLimit) {
       const error = new LiveWatcherAdmissionLimitError(this.liveEventPendingLimit);
       this.liveAdmissionError = error;
+      // Queue overflow is backpressure, not one bad path: dropped events mean
+      // the indexes may diverge from disk, so the global latch is justified.
+      // Per-path quarantine has nothing to fall back on here.
       this.searchHealth.semanticUsable = false;
       this.searchHealth.hnswUsable = false;
       this.hnswPersistUnsafe = true;
@@ -1274,7 +1287,7 @@ export class VaultWatcher {
       }
     } catch (err) {
       this.quarantineFailedGeneration(relPath, kind);
-      this.searchHealth.semanticUsable = false;
+      // Do not latch semanticUsable: quarantine is per-path. See WatcherSearchHealth.
       if (!this.silent) {
         process.stderr.write(
           `enquire: watcher stored-identity purge failed for ${relPath} — ${
@@ -2143,7 +2156,7 @@ export class VaultWatcher {
       return embedNote;
     } catch (err) {
       this.quarantineFailedGeneration(relPath, "md");
-      this.searchHealth.semanticUsable = false;
+      // Do not latch semanticUsable: quarantine is per-path. See WatcherSearchHealth.
       if (this.hnsw) this.hnswPersistUnsafe = true;
       if (!this.silent) {
         process.stderr.write(
@@ -2201,7 +2214,7 @@ export class VaultWatcher {
       return embedNote;
     } catch (err) {
       this.quarantineFailedGeneration(relPath, "pdf");
-      this.searchHealth.semanticUsable = false;
+      // Do not latch semanticUsable: quarantine is per-path. See WatcherSearchHealth.
       if (this.hnsw) this.hnswPersistUnsafe = true;
       if (!this.silent) {
         process.stderr.write(
@@ -2250,7 +2263,7 @@ export class VaultWatcher {
         }
       } catch (err) {
         this.quarantineFailedGeneration(relPath, isPdf ? "pdf" : "md");
-        this.searchHealth.semanticUsable = false;
+        // Do not latch semanticUsable: quarantine is per-path. See WatcherSearchHealth.
         if (!this.silent) {
           process.stderr.write(
             `enquire: watcher embed-db delete failed for ${relPath} — ${err instanceof Error ? err.message : String(err)}\n`

@@ -392,7 +392,7 @@ export interface ServerDeps {
     dbMutationEpoch: number;
     /** Shared semantic-family lifetime retained after the snapshot DB closes. */
     persistenceLifetime?: Pick<PersistenceFamilyLeaseHandle, "release">;
-  /** Shared semantic-route health; HNSW falls back after an uncertain diff. */
+    /** Shared semantic-route health; HNSW falls back after an uncertain diff. */
     health?: Readonly<import("./watcher.js").WatcherSearchHealth>;
   } | null;
   /** Shared semantic-route health for this prepared generation. Startup integrity can latch it even when watching is disabled. */

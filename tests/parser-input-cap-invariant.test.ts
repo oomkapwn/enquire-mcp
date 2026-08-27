@@ -75,6 +75,10 @@ const PARSER_FED_TOOLS = [
   // value predicates (single-note YAML materialization). Both capped via the value-length form
   // (filter: `.max` on the string arms; set: a `.refine()`), recognized by the generalized detector.
   { tool: "obsidian_search", field: "filter_frontmatter", cap: "MAX_FRONTMATTER_VALUE_LEN" },
+  // Key count and OR-alternatives were the dimensions rc.24's value-length cap missed.
+  // Zod records have no `.max()`, so the key bound is a `.refine()`; the array arm uses `.max()`.
+  { tool: "obsidian_search", field: "filter_frontmatter", cap: "MAX_FRONTMATTER_FILTER_KEYS" },
+  { tool: "obsidian_search", field: "filter_frontmatter", cap: "MAX_FRONTMATTER_FILTER_ALTERNATIVES" },
   { tool: "obsidian_frontmatter_set", field: "set", cap: "MAX_FRONTMATTER_VALUE_LEN" },
   // v3.11.6-rc.12 (pre-promotion re-sweep) — the rc.7 multi-query fan-out array. The caps
   // were LIVE since rc.7 (`.max(MAX_QUERY_LEN)` per phrasing × `.max(MAX_FANOUT_QUERIES)`
@@ -181,6 +185,19 @@ describe("parser-input length-cap invariant (rc.57)", () => {
       'query: z\n    .string()\n    .min(1)\n    .describe("x"),\n  hypothetical_answer: z\n    .string()\n    .min(1)\n    .max(MAX_QUERY_LEN)\n    .describe("y")';
     expect(fieldHasCap(multiLineTwoField, "query", "MAX_QUERY_LEN")).toBe(false); // uncapped → flagged
     expect(fieldHasCap(multiLineTwoField, "hypothetical_answer", "MAX_QUERY_LEN")).toBe(true); // its sibling is capped
+    // A2 — key-count refine and alternatives-array `.max()` are distinct dimensions: a
+    // value-length cap must not satisfy either cardinality pin.
+    const filterValueOnly =
+      "filter_frontmatter: z.record(z.string().max(MAX_FRONTMATTER_KEY_LEN), z.string().max(MAX_FRONTMATTER_VALUE_LEN))";
+    expect(fieldHasCap(filterValueOnly, "filter_frontmatter", "MAX_FRONTMATTER_VALUE_LEN")).toBe(true);
+    expect(fieldHasCap(filterValueOnly, "filter_frontmatter", "MAX_FRONTMATTER_FILTER_KEYS")).toBe(false);
+    expect(fieldHasCap(filterValueOnly, "filter_frontmatter", "MAX_FRONTMATTER_FILTER_ALTERNATIVES")).toBe(false);
+    const filterKeys =
+      "filter_frontmatter: z.record(z.string(), z.string()).refine((rec) => Object.keys(rec).length <= MAX_FRONTMATTER_FILTER_KEYS)";
+    expect(fieldHasCap(filterKeys, "filter_frontmatter", "MAX_FRONTMATTER_FILTER_KEYS")).toBe(true);
+    const filterAlts =
+      "filter_frontmatter: z.record(z.string(), z.array(z.string()).max(MAX_FRONTMATTER_FILTER_ALTERNATIVES))";
+    expect(fieldHasCap(filterAlts, "filter_frontmatter", "MAX_FRONTMATTER_FILTER_ALTERNATIVES")).toBe(true);
   });
 
   it("registerBlock locates a real tool block and returns null for an absent tool (control)", () => {

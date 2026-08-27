@@ -12,7 +12,7 @@
       "enum": 5,
       "format": 1,
       "items": 6,
-      "maxItems": 5,
+      "maxItems": 6,
       "maxLength": 26,
       "maximum": 42,
       "minItems": 3,
@@ -25,7 +25,7 @@
       "required": 25
     },
     "maxSchemaBytes": {
-      "bytes": 3576,
+      "bytes": 3657,
       "name": "obsidian_search"
     },
     "maxSchemaDepth": {
@@ -234,7 +234,7 @@
         "name": "obsidian_resolve_wikilink"
       },
       {
-        "bytes": 3576,
+        "bytes": 3657,
         "depth": 9,
         "name": "obsidian_search"
       },
@@ -264,9 +264,9 @@
         "name": "obsidian_validate_note_proposal"
       }
     ],
-    "totalSchemaBytes": 27570
+    "totalSchemaBytes": 27651
   },
-  "schemaDigest": "sha256:e1e70d9713acfc4c83508040fd8f646fc8b387f3a75d4d36417d2577f18f4dd4",
+  "schemaDigest": "sha256:9aae5143f4a142ac3bb8286dd352d2683f4972724b0596542d0ba00277c6e3b4",
   "toolCount": 46,
   "tools": [
     {
@@ -1468,11 +1468,12 @@
                       }
                     ]
                   },
+                  "maxItems": 32,
                   "type": "array"
                 }
               ]
             },
-            "description": "v3.10: optional YAML-frontmatter filter — a {key: value} map. A hit is kept only if its note's frontmatter satisfies EVERY pair (AND across keys). Per key: strings match case-insensitively, an array frontmatter value matches by membership (e.g. {tags: 'project'} matches `tags: [project, x]`), and the filter value may itself be an array for OR ({type: ['meeting','decision']}). Notes with no frontmatter or missing a filtered key are excluded. Omit for no filtering (default). Filters the fused candidate pool, so a strict filter can return fewer than `limit` hits.",
+            "description": "v3.10: optional YAML-frontmatter filter — a {key: value} map. A hit is kept only if its note's frontmatter satisfies EVERY pair (AND across keys). At most 32 keys; an array value is OR and at most 32 alternatives. Per key: strings match case-insensitively, an array frontmatter value matches by membership (e.g. {tags: 'project'} matches `tags: [project, x]`), and the filter value may itself be an array for OR ({type: ['meeting','decision']}). Notes with no frontmatter or missing a filtered key are excluded. Omit for no filtering (default). Filters the fused candidate pool, so a strict filter can return fewer than `limit` hits.",
             "propertyNames": {
               "maxLength": 256,
               "type": "string"

@@ -4,6 +4,14 @@ All notable changes to this project will be documented here. The format follows 
 
 ## [4.0.0-rc.4] — 2026-08-21
 
+### Assurance gates stop treating comments as enforcement
+
+> **TL;DR:** **Two of the project's own false-green gates are closed.** `enforcement-guard-invariant` concatenated every `src/**/*.ts` file without stripping comments, so a comment mentioning a SECURITY.md guard symbol was enough to keep the gate green after the live identifier was deleted. `srcBlob()` now strips line and block comments, the same shape as `entrypoint-guard-invariant`. The existing SECURITY-marker NEGATIVE also proves a `//` or block-comment mention of `resolveSafePath` is not a guard, while a live function declaration still is. Separately, `tests/reranker-smoke.test.ts` said "CI smoke (release.yml only)"; no workflow sets `ENQUIRE_LOAD_RERANKER_SMOKE`, so that header was an overclaim. The header now says the file is maintainer-gated and does not run in CI. This does **not** add a model-download job, does **not** change `fieldHasCap` / other token inventories, and does **not** move the `it()` census.
+>
+> **Bounded claim.** Comment stripping is the same naive block-then-line pass other invariants use; a string literal that contains those delimiters can be over-stripped. Every curated guard identifier still occurs in non-comment `src/` text. Wiring the real-model reranker smoke into CI remains a separate, expensive decision.
+>
+> **Method note:** BACKLOG §1.CC-ter **B4**. Coverage is extra phases of an existing NEGATIVE plus the production `srcBlob()` change, so the source `it()` census does not move. Under D-45 all executable proof is GitHub-hosted; no local package-manager, lint or test workload was used.
+
 ### Hybrid search rejects an unbounded frontmatter filter
 
 > **TL;DR:** **`obsidian_search.filter_frontmatter` capped every individual string but not how many keys or OR-alternatives a caller could send.** The matcher is a cross-product per fused candidate and is forwarded into each hybrid fan-out pipeline, always-on and `serve-http`-reachable, with no abort. rc.24 copied `MAX_FRONTMATTER_VALUE_LEN` onto the string arms but not the bound *form* that makes `obsidian_frontmatter_search` load-bearing (`JSON.stringify` length, which also caps count). The array arm now has `.max(32)` alternatives; the record has a `.refine()` of at most 32 keys — Zod records have no `.max()`. Ordinary `{status: "active", type: ["meeting","decision"]}` is unchanged.

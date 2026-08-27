@@ -26,14 +26,23 @@ import { replaceAllExactly, replaceExactly } from "./helpers/exact-source-mutati
 
 const repoRoot = path.resolve(__dirname, "..");
 
-/** Concatenated text of every `src/**.ts` — the guard-symbol search space. */
+/**
+ * Strip line comments and block comments so a prose mention of a guard symbol
+ * is not treated as the code guard. Same shape as entrypoint-guard-invariant
+ * and fence-toggle-invariant.
+ */
+function stripComments(src: string): string {
+  return src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/[^\n]*/g, "$1");
+}
+
+/** Concatenated comment-stripped text of every `src/**.ts` — the guard-symbol search space. */
 function srcBlob(): string {
   const parts: string[] = [];
   const walk = (dir: string) => {
     for (const e of readdirSync(dir, { withFileTypes: true })) {
       const p = path.join(dir, e.name);
       if (e.isDirectory()) walk(p);
-      else if (e.name.endsWith(".ts")) parts.push(readFileSync(p, "utf8"));
+      else if (e.name.endsWith(".ts")) parts.push(stripComments(readFileSync(p, "utf8")));
     }
   };
   walk(path.join(repoRoot, "src"));
@@ -1116,5 +1125,18 @@ describe("enforcement-guarantee → code-guard invariant (rc.3, overclaim #15/#1
       "const resolveSafePath = 1;"
     );
     expect(err).toMatch(/no longer contains/);
+
+    // B4 — a comment that names the guard is not a code guard. The previous
+    // srcBlob() searched raw text, comments included.
+    const marker = "resolve outside are rejected";
+    const g = { label: "path/symlink escape rejected", marker, symbol: "resolveSafePath" };
+    const security = `hidden and ${marker} at the vault root.`;
+    expect(checkGuarantee(g, security, stripComments("export function resolveSafePath() { return 1; }\n"))).toBe(null);
+    expect(
+      checkGuarantee(g, security, stripComments("// resolveSafePath is the path/symlink guard\nexport const x = 1;\n"))
+    ).toMatch(/MISSING from src/);
+    expect(checkGuarantee(g, security, stripComments("/* resolveSafePath */\nexport const x = 1;\n"))).toMatch(
+      /MISSING from src/
+    );
   });
 });

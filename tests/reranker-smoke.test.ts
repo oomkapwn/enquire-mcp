@@ -24,7 +24,9 @@ import { loadReranker, RERANKER_MODELS } from "../src/embeddings.js";
 // **Manual smoke before major releases**:
 //   ENQUIRE_LOAD_RERANKER_SMOKE=1 npm test -- tests/reranker-smoke.test.ts
 //
-// CI smoke (release.yml only — not on every PR): same.
+// This file does not run in any automated lane, including release.yml.
+// Wiring it to CI would download ~30-280 MB of HuggingFace weights per job
+// (historical M6; still maintainer-gated). The skip below is the live path.
 
 const SMOKE_ENABLED = process.env.ENQUIRE_LOAD_RERANKER_SMOKE === "1";
 

@@ -102,10 +102,12 @@ function sameHnswRowManifest(
  * A quarantine-marker write failure is logged per sink without a broad route
  * latch; a fail-stop policy for that residual needs explicit authorization.
  *
- * `semanticUsable` is latched false only when the watcher can no longer keep
- * derived indexes aligned with disk at all — currently the live pending-event
- * queue overflowing (`LiveWatcherAdmissionLimitError`). Startup embedding
- * integrity failures write the same flag on the server-owned health object.
+ * `semanticUsable` is latched false by (1) live pending-event queue overflow
+ * (`LiveWatcherAdmissionLimitError`) when a watcher exists, and (2) startup
+ * embedding-integrity refusal on the server-owned health object — which is
+ * `watcher.searchHealth` when `--watch` is on, or a fallback object when it
+ * is not. Bare restart recovers (1). (2) is a durable snapshot mismatch:
+ * repair or rebuild the embedding index, then restart.
  */
 export interface WatcherSearchHealth {
   semanticUsable: boolean;
@@ -1296,7 +1298,8 @@ export class VaultWatcher {
       }
     } catch (err) {
       this.quarantineFailedGeneration(relPath, kind);
-      // Do not latch semanticUsable: quarantine is per-path. This method runs
+      // Do not latch semanticUsable: quarantine is per-path when the marker
+      // persists. This method runs
       // only from activation replay and still rethrows, so startup still fails
       // closed — the latch was redundant with the rethrow. See WatcherSearchHealth.
       if (!this.silent) {
@@ -1995,13 +1998,15 @@ export class VaultWatcher {
 
   /**
    * Derive markdown lexical input and optional embeddings from one note
-   * snapshot. No index mutation happens here.
+   * snapshot. No replacement generation is committed here. A preparation
+   * failure attempts source-scoped quarantine (and may process-quarantine
+   * HNSW); the marker is not guaranteed if the store write fails.
    *
    * @param absPath - Canonical note path.
    * @param relPath - Public vault-relative note path.
    * @param generation - Captured filesystem generation.
-   * @returns Staged work, or undefined when reading, parsing, or optional
-   *   embedding preparation failed and the source was quarantined.
+   * @returns Staged work, or undefined after a fail-soft preparation failure
+   *   and an attempted source quarantine.
    */
   private async stageMarkdownGeneration(
     absPath: string,
@@ -2040,15 +2045,16 @@ export class VaultWatcher {
 
   /**
    * Derive PDF lexical pages and optional embeddings from one binary snapshot.
-   * OCR, when enabled, consumes the same captured bytes. No index mutation
-   * happens here.
+   * OCR, when enabled, consumes the same captured bytes. No replacement
+   * generation is committed here. A preparation failure attempts source-scoped
+   * quarantine (and may process-quarantine HNSW); the marker is not guaranteed
+   * if the store write fails.
    *
    * @param absPath - Canonical PDF path.
    * @param relPath - Public vault-relative PDF path.
    * @param generation - Captured filesystem generation.
-   * @returns Staged work, or undefined when binary reading, PDF extraction,
-   *   OCR, or optional embedding preparation failed and the source was
-   *   quarantined.
+   * @returns Staged work, or undefined after a fail-soft preparation failure
+   *   and an attempted source quarantine.
    */
   private async stagePdfGeneration(
     absPath: string,
@@ -2167,7 +2173,8 @@ export class VaultWatcher {
       return embedNote;
     } catch (err) {
       this.quarantineFailedGeneration(relPath, "md");
-      // Do not latch semanticUsable: quarantine is per-path. See WatcherSearchHealth.
+      // Do not latch semanticUsable: quarantine is per-path when the marker
+      // persists. See WatcherSearchHealth.
       if (this.hnsw) this.hnswPersistUnsafe = true;
       if (!this.silent) {
         process.stderr.write(
@@ -2225,7 +2232,8 @@ export class VaultWatcher {
       return embedNote;
     } catch (err) {
       this.quarantineFailedGeneration(relPath, "pdf");
-      // Do not latch semanticUsable: quarantine is per-path. See WatcherSearchHealth.
+      // Do not latch semanticUsable: quarantine is per-path when the marker
+      // persists. See WatcherSearchHealth.
       if (this.hnsw) this.hnswPersistUnsafe = true;
       if (!this.silent) {
         process.stderr.write(
@@ -2274,7 +2282,8 @@ export class VaultWatcher {
         }
       } catch (err) {
         this.quarantineFailedGeneration(relPath, isPdf ? "pdf" : "md");
-        // Do not latch semanticUsable: quarantine is per-path. See WatcherSearchHealth.
+        // Do not latch semanticUsable: quarantine is per-path when the marker
+      // persists. See WatcherSearchHealth.
         if (!this.silent) {
           process.stderr.write(
             `enquire: watcher embed-db delete failed for ${relPath} — ${err instanceof Error ? err.message : String(err)}\n`

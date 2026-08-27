@@ -174,8 +174,9 @@ describe("searchHybrid (v2.0 beta — RRF over available signals)", () => {
     // Per-signal must show only tfidf.
     expect(Object.keys(result.matches[0]?.per_signal ?? {})).toEqual(["tfidf"]);
 
-    // S-8d: a live watcher availability quarantine keeps lexical retrieval
-    // available but refuses the stale semantic route until restart.
+    // S-8d: a live semantic-route quarantine keeps lexical retrieval
+    // available but refuses the stale semantic route until this generation
+    // is replaced.
     const availabilityQuarantined = await searchHybrid(
       v,
       { query: "OAuth JWT tokens", limit: 5 },
@@ -186,12 +187,14 @@ describe("searchHybrid (v2.0 beta — RRF over available signals)", () => {
       }
     );
     expect(availabilityQuarantined.signals_used).toEqual(["tfidf"]);
-    expect(availabilityQuarantined.signal_errors?.embeddings).toMatch(/watcher availability failure/i);
+    expect(availabilityQuarantined.signal_errors?.embeddings).toMatch(
+      /quarantined for this server generation/i
+    );
     await expect(
       embeddingsSearch(v, { query: "OAuth JWT tokens", limit: 5 }, missingEmbedFile, undefined, {
         semanticUsable: false
       })
-    ).rejects.toThrow(/watcher availability failure/i);
+    ).rejects.toThrow(/quarantined for this server generation/i);
 
     // NEGATIVE control: a stranded watcher-startup interlock must quarantine
     // even an embedding DB that disappeared after preparation. Hybrid search

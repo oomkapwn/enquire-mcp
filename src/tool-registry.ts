@@ -226,8 +226,9 @@ export function registerReadTools(
    */
   embeddingDbFile: string | null | undefined = undefined,
   /**
-   * Mutable watcher route health. A watcher availability failure quarantines the
-   * affected semantic route for this prepared server generation.
+   * Mutable semantic-route health for this prepared server generation. A live
+   * watcher backlog overflow or a startup embedding-integrity refusal
+   * quarantines the semantic route. The object may exist even without `--watch`.
    */
   watcherHealth: Readonly<import("./watcher.js").WatcherSearchHealth> | null = null
 ): void {

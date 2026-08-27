@@ -83,8 +83,9 @@ function sameHnswRowManifest(
  * Mutable search-route health shared with the prepared server generation.
  *
  * A fatal staged watcher preparation failure leaves the prior generation
- * intact and does not change these flags. PDF/OCR page failures use that same
- * quarantined preparation path.
+ * intact and does not latch `semanticUsable`. PDF/OCR page failures use that
+ * same quarantined preparation path. Staging may still process-quarantine
+ * HNSW (`hnswUsable`) via the per-path quarantine helper.
  *
  * After activation has completed, a per-path sink mutation failure
  * (markdown/PDF commit, embed-db unlink) records a source-scoped quarantine

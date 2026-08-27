@@ -85,7 +85,7 @@ Treat retrieved note, canvas, Base, and PDF content as user-controlled data. Nev
 - Large vault: scanners and context builders enforce caps and report partial results rather than silently pretending completeness.
 - Stranded watcher-startup interlock: stop every enquire process for that vault, run strict `enquire-mcp clear-embeddings --vault <vault>`, rebuild with the same model, quantization, late-chunk, privacy and PDF settings, then restart. Strict recovery refuses unsafe or foreign interlock shapes without partial artifact deletion; audit ownership manually before changing such a shape.
 - Failed watcher HNSW synchronization: the live graph is quarantined immediately, semantic search falls back to EmbedDb, and persistence is disabled for that generation so restart recovery validates/rebuilds instead of trusting a partial sidecar.
-- Failed watcher sink commit: direct embeddings search refuses the uncertain route and hybrid search continues with lexical signals plus an explicit embeddings error; restart to reconcile. If startup leaves an interlock, use the strict recovery above.
+- Failed watcher availability: direct embeddings search refuses the uncertain route and hybrid search continues with lexical signals plus an explicit embeddings error; restart to reconcile. If startup leaves an interlock, use the strict recovery above.
 - HTTP 401: provide the configured bearer token; generate a valid one with `enquire-mcp gen-token`.
 - A failed `first-run --apply` stops later steps and prints an idempotent resume command.
 

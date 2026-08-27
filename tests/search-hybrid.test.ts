@@ -174,9 +174,9 @@ describe("searchHybrid (v2.0 beta — RRF over available signals)", () => {
     // Per-signal must show only tfidf.
     expect(Object.keys(result.matches[0]?.per_signal ?? {})).toEqual(["tfidf"]);
 
-    // S-8d: a live sink-commit failure keeps lexical retrieval available but
-    // quarantines the stale semantic route until restart.
-    const sinkQuarantined = await searchHybrid(
+    // S-8d: a live watcher availability quarantine keeps lexical retrieval
+    // available but refuses the stale semantic route until restart.
+    const availabilityQuarantined = await searchHybrid(
       v,
       { query: "OAuth JWT tokens", limit: 5 },
       {
@@ -185,13 +185,13 @@ describe("searchHybrid (v2.0 beta — RRF over available signals)", () => {
         watcherHealth: { semanticUsable: false }
       }
     );
-    expect(sinkQuarantined.signals_used).toEqual(["tfidf"]);
-    expect(sinkQuarantined.signal_errors?.embeddings).toMatch(/watcher sink-commit failure/i);
+    expect(availabilityQuarantined.signals_used).toEqual(["tfidf"]);
+    expect(availabilityQuarantined.signal_errors?.embeddings).toMatch(/watcher availability failure/i);
     await expect(
       embeddingsSearch(v, { query: "OAuth JWT tokens", limit: 5 }, missingEmbedFile, undefined, {
         semanticUsable: false
       })
-    ).rejects.toThrow(/watcher sink-commit failure/i);
+    ).rejects.toThrow(/watcher availability failure/i);
 
     // NEGATIVE control: a stranded watcher-startup interlock must quarantine
     // even an embedding DB that disappeared after preparation. Hybrid search

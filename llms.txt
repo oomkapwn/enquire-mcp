@@ -108,7 +108,7 @@ How an AI agent should drive enquire-mcp (every tool is MCP-native — its JSON 
 - **Empty results on a fresh vault** → no ML index yet; TF-IDF + substring search still work. Run the complete hybrid preflight above. Doctor READY verifies structural/runtime prerequisites, not index freshness or complete corpus coverage.
 - **Very large vault** → whole-vault scanners apply a built-in safety cap; partial results are flagged in the response, never returned silently.
 - **Stranded watcher-startup interlock** → stop every enquire process for that vault, run the strict `enquire-mcp clear-embeddings --vault <vault>` recovery, rebuild embeddings with the same model/quantization/late-chunk/privacy/PDF settings, then restart. Recovery refuses unsafe or foreign interlock shapes rather than deleting around them; inspect ownership manually before changing such a shape.
-- **Watcher sink-commit quarantine** → lexical search remains available, direct embeddings search explains that restart reconciliation is required, and hybrid search reports the embeddings signal error. Restart the server; if the startup interlock is stranded, follow the strict recovery above. An HNSW-only quarantine falls back to EmbedDb automatically.
+- **Watcher availability quarantine** → lexical search remains available, direct embeddings search explains that restart reconciliation is required, and hybrid search reports the embeddings signal error. Restart the server; if the startup interlock is stranded, follow the strict recovery above. An HNSW-only quarantine falls back to EmbedDb automatically.
 - **Remote (`serve-http`)** → requires a bearer token of at least 16 chars; HTTP 401 means the token is missing or too short (`enquire-mcp gen-token` mints a valid one).
 
 ## Optional

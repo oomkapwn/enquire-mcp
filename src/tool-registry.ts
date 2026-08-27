@@ -226,7 +226,7 @@ export function registerReadTools(
    */
   embeddingDbFile: string | null | undefined = undefined,
   /**
-   * Mutable watcher route health. A sink-commit failure quarantines the
+   * Mutable watcher route health. A watcher availability failure quarantines the
    * affected semantic route for this prepared server generation.
    */
   watcherHealth: Readonly<import("./watcher.js").WatcherSearchHealth> | null = null

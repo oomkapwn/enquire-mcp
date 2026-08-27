@@ -1625,7 +1625,7 @@ export async function embeddingsSearch(
   }
   if (watcherSemanticRouteIsQuarantined(watcherHealth)) {
     throw new Error(
-      "Embedding search is quarantined after a watcher sink-commit failure. Restart the server to reconcile the derived indexes."
+      "Embedding search is quarantined after a watcher availability failure. Restart the server to reconcile the derived indexes."
     );
   }
   await assertEmbeddingIndexNotQuarantined(embedFile, vault.root);
@@ -1715,7 +1715,7 @@ export async function embeddingsSearch(
     if (total === 0) {
       if (watcherSemanticRouteIsQuarantined(watcherHealth)) {
         throw new Error(
-          "Embedding search is quarantined after a watcher sink-commit failure. Restart the server to reconcile the derived indexes."
+          "Embedding search is quarantined after a watcher availability failure. Restart the server to reconcile the derived indexes."
         );
       }
       return { query: args.query, method: "embeddings-cosine", model: model.alias, total_chunks: 0, matches: [] };
@@ -1765,7 +1765,7 @@ export async function embeddingsSearch(
     }
     if (watcherSemanticRouteIsQuarantined(watcherHealth)) {
       throw new Error(
-        "Embedding search is quarantined after a watcher sink-commit failure. Restart the server to reconcile the derived indexes."
+        "Embedding search is quarantined after a watcher availability failure. Restart the server to reconcile the derived indexes."
       );
     }
     const healthyHnsw = selectUsableHnswContext(hnsw);
@@ -2616,8 +2616,9 @@ export async function searchHybrid(
     hnsw?: HnswSearchContext | null;
     /**
      * Mutable route health for a watcher-enabled prepared server generation.
-     * A sink-commit failure quarantines embeddings until restart so hybrid
-     * search degrades to its coherent lexical signals.
+     * A watcher availability failure (currently live-queue overflow, or a
+     * startup embedding-integrity refusal) quarantines embeddings until restart
+     * so hybrid search degrades to its coherent lexical signals.
      */
     watcherHealth?: Readonly<{ semanticUsable: boolean }>;
     /**
@@ -2830,7 +2831,7 @@ export async function searchHybrid(
   }> = [];
   if (watcherSemanticRouteIsQuarantined(ctx.watcherHealth)) {
     signalErrors.embeddings =
-      "Embedding search is quarantined after a watcher sink-commit failure; restart the server to reconcile indexes.";
+      "Embedding search is quarantined after a watcher availability failure; restart the server to reconcile indexes.";
   } else if (ctx.embedFile !== null && existsSync(ctx.embedFile)) {
     try {
       // v2.0.0-beta.1 P1 fix: pass `min_score: 0` to fan-out the embeddings

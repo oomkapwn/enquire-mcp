@@ -2768,8 +2768,8 @@ describe("K-1 class invariant (v3.6.3 methodological guard; recursive scan since
 
     const queryOpenFailureSwallowed = replaceExactly(
       cliSource,
-      "        } finally {\n          await ftsIndex.closeAndRelease();",
-      "        } catch {} finally {\n          await ftsIndex.closeAndRelease();"
+      "          } finally {\n            await ftsIndex.closeAndRelease();",
+      "          } catch {} finally {\n            await ftsIndex.closeAndRelease();"
     );
     expect(configurationDiscoveryOpenBindingProblems(queryOpenFailureSwallowed, serverSource, searchSource)).toContain(
       "CLI query FTS: reviewed open failure policy changed"
@@ -2777,8 +2777,8 @@ describe("K-1 class invariant (v3.6.3 methodological guard; recursive scan since
 
     const evalOpenRethrowRemoved = replaceExactly(
       cliSource,
-      "          } catch (err) {\n            await ftsIndex.closeAndRelease();\n            throw err;\n          }",
-      "          } catch {}"
+      "            } catch (err) {\n              await ftsIndex.closeAndRelease();\n              throw err;\n            }",
+      "            } catch {}"
     );
     expect(configurationDiscoveryOpenBindingProblems(evalOpenRethrowRemoved, serverSource, searchSource)).toContain(
       "CLI eval FTS: reviewed open failure policy changed"

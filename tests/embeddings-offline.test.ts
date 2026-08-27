@@ -605,7 +605,7 @@ describe("embeddings serve-offline enforcement (rc.42 F1)", () => {
       ).toContain("query");
 
       const queryCall =
-        "          const result = await searchHybrid(v, { query: text, limit }, { ftsIndex, embedFile: embedDbPath(v.root) });\n";
+        "            result = await searchHybrid(v, { query: text, limit }, { ftsIndex, embedFile: embedDbPath(v.root) });\n";
       const lateGuard = `${queryCall}        setEmbeddingsOffline();\n`;
       const lateCli = replaceExactly(cliWithoutQueryGuard, queryCall, lateGuard);
       expect(lateCli).not.toBe(cliWithoutQueryGuard);

@@ -49,6 +49,7 @@ import {
   defaultIndexFile,
   discoverFtsIndexConfig,
   FtsIndex,
+  type FtsIndexDiscovery,
   syncFtsIndex,
   syncPdfFtsIndex,
   type TokenizeMode
@@ -70,6 +71,7 @@ import {
 } from "./mcp-config.js";
 import { ocrLangIsInstalled, resolveTessdataDir } from "./ocr.js";
 import { validateServeHttpRetrievalOpts } from "./retrieval-opts.js";
+import { FTS_SCHEMA_VERSION } from "./schema-contract.js";
 import { type ServeOptions, startServer, syncEmbedDb, syncPdfEmbedDb } from "./server.js";
 import { embedDbPath, parsePositiveInt, parseQuantizationMode } from "./tool-registry.js";
 import { searchHybrid } from "./tools/index.js";
@@ -98,6 +100,51 @@ interface HttpServeCli extends Omit<ServeOptions, "tokenize"> {
   stateful?: boolean;
   sessionIdleTimeoutMs?: string;
   maxSessions?: string;
+}
+
+/**
+ * One-shot `query` and diagnostic `eval` honor `--exclude-glob` / `--read-paths`
+ * at search time via the Vault they construct. They must not persist those
+ * filters as FTS deletions into the shared default per-vault index
+ * (`defaultIndexFile`), which `serve --persistent-index` also uses. Identity is
+ * the resolved path, not whether `--index-file` was spelled: naming the default
+ * file is still the shared file. A different `--index-file` is a dedicated
+ * index the caller owns; privacy-filtered sync there remains the M-8 contract.
+ * `path.resolve` equality is the bound — not case-fold, realpath, or hardlink
+ * identity. Privacy on that shared destination also skips `open()` unless
+ * this invocation's discovery is already `owned` at the live `FTS_SCHEMA_VERSION`:
+ * missing, empty, and legacy files at discovery time are left untouched
+ * (search uses `ftsIndex: null`) because `open()` CREATE/DROP+rebuilds then
+ * skip-sync would empty the shared index. A current-schema shared `open()` still
+ * runs WAL/pragma/chmod/triggers. An owned discovery that races to missing
+ * before `open()` is the existing stale-discovery CREATE class, not a privacy
+ * sync. `serve` / `serve-http` are writers of the Vault they were started with
+ * and are unchanged.
+ */
+function shouldSyncPersistentFtsFromPrivacyVault(
+  opts: {
+    excludeGlob?: string[];
+    readPaths?: string[];
+  },
+  indexFile: string,
+  vaultRoot: string
+): boolean {
+  const privacyActive = (opts.excludeGlob?.length ?? 0) > 0 || (opts.readPaths?.length ?? 0) > 0;
+  if (!privacyActive) return true;
+  return path.resolve(indexFile) !== path.resolve(defaultIndexFile(vaultRoot));
+}
+
+function shouldOpenPersistentFtsForReadPath(
+  opts: {
+    excludeGlob?: string[];
+    readPaths?: string[];
+  },
+  indexFile: string,
+  vaultRoot: string,
+  discovered: FtsIndexDiscovery
+): boolean {
+  if (shouldSyncPersistentFtsFromPrivacyVault(opts, indexFile, vaultRoot)) return true;
+  return discovered.kind === "owned" && discovered.meta.schema_version === String(FTS_SCHEMA_VERSION);
 }
 
 async function resolveConfiguredVault(
@@ -524,13 +571,14 @@ export async function main(invocation?: ConfigInput["invocation"]): Promise<void
     });
 
   // v3.10.0-rc.14 (bug-report Issue 4) — one-shot CLI search for smoke-tests /
-  // CI / debugging without an MCP client. Builds (or reuses) the per-vault FTS5
-  // index, runs the SAME hybrid `searchHybrid` the MCP `obsidian_search` tool
-  // uses, and prints the results.
+  // CI / debugging without an MCP client. Reuses (and, without privacy flags,
+  // refreshes) the per-vault FTS5 index, runs the SAME hybrid `searchHybrid`
+  // the MCP `obsidian_search` tool uses, and prints the results. Privacy flags
+  // filter this invocation's hits; they do not rewrite the shared default index.
   program
     .command("query")
     .description(
-      "Run a one-shot hybrid search (BM25 + TF-IDF + embeddings, RRF-fused) from the CLI and print the results — for quick smoke-tests / CI / debugging without an MCP client. Reuses the persistent per-vault FTS5 index (same as `serve --persistent-index`)."
+      "Run a one-shot hybrid search (BM25 + TF-IDF + embeddings, RRF-fused) from the CLI and print the results — for quick smoke-tests / CI / debugging without an MCP client. Reuses the persistent per-vault FTS5 index (same as `serve --persistent-index`). `--exclude-glob` / `--read-paths` filter this invocation's results; they do not rewrite that shared index. Pass a path-distinct `--index-file` to persist a dedicated privacy-filtered index."
     )
     .argument("<text>", "Search query")
     .requiredOption("--vault <path>", "Path to the Obsidian vault root")
@@ -566,29 +614,37 @@ export async function main(invocation?: ConfigInput["invocation"]): Promise<void
           throw new Error("FTS index configuration could not be verified");
         }
         const honoredTokenize: TokenizeMode = discovered.kind === "owned" ? discovered.meta.tokenize_mode : "unicode61";
-        const ftsIndex = new FtsIndex({ file: indexFile, vaultRoot: v.root, tokenize: honoredTokenize });
-        try {
-          await ftsIndex.open(discovered);
-          await syncFtsIndex(v, ftsIndex);
-          const result = await searchHybrid(v, { query: text, limit }, { ftsIndex, embedFile: embedDbPath(v.root) });
-          if (opts.json) {
-            process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
-            return;
+        const openFts = shouldOpenPersistentFtsForReadPath(opts, indexFile, v.root, discovered);
+        let result: Awaited<ReturnType<typeof searchHybrid>>;
+        if (openFts) {
+          const ftsIndex = new FtsIndex({ file: indexFile, vaultRoot: v.root, tokenize: honoredTokenize });
+          try {
+            await ftsIndex.open(discovered);
+            if (shouldSyncPersistentFtsFromPrivacyVault(opts, indexFile, v.root)) {
+              await syncFtsIndex(v, ftsIndex);
+            }
+            result = await searchHybrid(v, { query: text, limit }, { ftsIndex, embedFile: embedDbPath(v.root) });
+          } finally {
+            await ftsIndex.closeAndRelease();
           }
-          if (result.signal_errors?.embeddings) {
-            process.stderr.write(`enquire query: embeddings unavailable — ${result.signal_errors.embeddings}\n`);
-          }
-          const signals = result.signals_used.length > 0 ? result.signals_used.join("+") : "none";
-          process.stdout.write(`\n${result.matches.length} result(s) for "${text}"  (signals: ${signals})\n\n`);
-          for (const m of result.matches) {
-            const loc = m.line_start ? `:${m.line_start}` : "";
-            const snippet = m.snippet.replace(/\s+/g, " ").trim().slice(0, 160);
-            process.stdout.write(`  ${m.path}${loc}  [${m.kind}]\n    ${snippet}\n`);
-          }
-          process.stdout.write("\n");
-        } finally {
-          await ftsIndex.closeAndRelease();
+        } else {
+          result = await searchHybrid(v, { query: text, limit }, { ftsIndex: null, embedFile: embedDbPath(v.root) });
         }
+        if (opts.json) {
+          process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+          return;
+        }
+        if (result.signal_errors?.embeddings) {
+          process.stderr.write(`enquire query: embeddings unavailable — ${result.signal_errors.embeddings}\n`);
+        }
+        const signals = result.signals_used.length > 0 ? result.signals_used.join("+") : "none";
+        process.stdout.write(`\n${result.matches.length} result(s) for "${text}"  (signals: ${signals})\n\n`);
+        for (const m of result.matches) {
+          const loc = m.line_start ? `:${m.line_start}` : "";
+          const snippet = m.snippet.replace(/\s+/g, " ").trim().slice(0, 160);
+          process.stdout.write(`  ${m.path}${loc}  [${m.kind}]\n    ${snippet}\n`);
+        }
+        process.stdout.write("\n");
       }
     );
 
@@ -1566,19 +1622,25 @@ export async function main(invocation?: ConfigInput["invocation"]): Promise<void
           // an eval run against a `--tokenize trigram`-built index would
           // silently DROP TABLE because the default `unicode61` mismatches.
           // Same historical K-1 class; doctor now uses immutable byte snapshots.
+          // B5: a privacy-filtered Vault must not sync deletions into the
+          // shared default index; a path-distinct `--index-file` still syncs (M-8).
           const discovered = await discoverFtsIndexConfig(indexFile, v.root);
           if (discovered.kind === "refused") {
             throw new Error("FTS index configuration could not be verified");
           }
           const honoredTokenize: TokenizeMode =
             discovered.kind === "owned" ? discovered.meta.tokenize_mode : "unicode61";
-          ftsIndex = new FtsIndex({ file: indexFile, vaultRoot: v.root, tokenize: honoredTokenize });
-          try {
-            await ftsIndex.open(discovered);
-            await syncFtsIndex(v, ftsIndex);
-          } catch (err) {
-            await ftsIndex.closeAndRelease();
-            throw err;
+          if (shouldOpenPersistentFtsForReadPath(opts, indexFile, v.root, discovered)) {
+            ftsIndex = new FtsIndex({ file: indexFile, vaultRoot: v.root, tokenize: honoredTokenize });
+            try {
+              await ftsIndex.open(discovered);
+              if (shouldSyncPersistentFtsFromPrivacyVault(opts, indexFile, v.root)) {
+                await syncFtsIndex(v, ftsIndex);
+              }
+            } catch (err) {
+              await ftsIndex.closeAndRelease();
+              throw err;
+            }
           }
         }
         const embedFile = embedDbPath(v.root);

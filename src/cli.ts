@@ -112,12 +112,14 @@ interface HttpServeCli extends Omit<ServeOptions, "tokenize"> {
  * index the caller owns; privacy-filtered sync there remains the M-8 contract.
  * `path.resolve` equality is the bound — not case-fold, realpath, or hardlink
  * identity. Privacy on that shared destination also skips `open()` unless
- * discovery is already `owned` at the live `FTS_SCHEMA_VERSION`: missing,
- * empty, and legacy files are left untouched (search uses `ftsIndex: null`)
- * because `open()` CREATE/DROP+rebuilds then skip-sync would empty the shared
- * index. A current-schema shared `open()` still runs WAL/pragma/chmod/triggers.
- * `serve` / `serve-http` are writers of the Vault they were started with and
- * are unchanged.
+ * this invocation's discovery is already `owned` at the live `FTS_SCHEMA_VERSION`:
+ * missing, empty, and legacy files at discovery time are left untouched
+ * (search uses `ftsIndex: null`) because `open()` CREATE/DROP+rebuilds then
+ * skip-sync would empty the shared index. A current-schema shared `open()` still
+ * runs WAL/pragma/chmod/triggers. An owned discovery that races to missing
+ * before `open()` is the existing stale-discovery CREATE class, not a privacy
+ * sync. `serve` / `serve-http` are writers of the Vault they were started with
+ * and are unchanged.
  */
 function shouldSyncPersistentFtsFromPrivacyVault(
   opts: {
@@ -621,20 +623,12 @@ export async function main(invocation?: ConfigInput["invocation"]): Promise<void
             if (shouldSyncPersistentFtsFromPrivacyVault(opts, indexFile, v.root)) {
               await syncFtsIndex(v, ftsIndex);
             }
-            result = await searchHybrid(
-              v,
-              { query: text, limit },
-              { ftsIndex, embedFile: embedDbPath(v.root) }
-            );
+            result = await searchHybrid(v, { query: text, limit }, { ftsIndex, embedFile: embedDbPath(v.root) });
           } finally {
             await ftsIndex.closeAndRelease();
           }
         } else {
-          result = await searchHybrid(
-            v,
-            { query: text, limit },
-            { ftsIndex: null, embedFile: embedDbPath(v.root) }
-          );
+          result = await searchHybrid(v, { query: text, limit }, { ftsIndex: null, embedFile: embedDbPath(v.root) });
         }
         if (opts.json) {
           process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);

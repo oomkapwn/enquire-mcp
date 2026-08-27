@@ -1044,6 +1044,61 @@ describe("CLI subcommands E2E (against built dist/)", () => {
         db.close();
       }
     }
+
+    // Shared default index: privacy flags must filter hits without deleting
+    // rows that a later unfiltered serve/query still needs. Seed the default
+    // path with both notes, then re-run query/eval with --read-paths only.
+    const sharedIndex = defaultIndexFile(await fs.realpath(vault));
+    const seedRun = spawnSync(process.execPath, [distEntry, "query", "zephyrprivacy", "--vault", vault, "--json"], {
+      encoding: "utf8",
+      timeout: 20_000
+    });
+    expect(seedRun.status, seedRun.stderr).toBe(0);
+    const assertSharedRows = (expectPrivate: boolean) => {
+      const db = new Database(sharedIndex, { readonly: true, fileMustExist: true });
+      try {
+        const rows = db.prepare("SELECT DISTINCT rel_path FROM chunks ORDER BY rel_path").all() as Array<{
+          rel_path: string;
+        }>;
+        const paths = rows.map((row) => row.rel_path);
+        expect(paths).toContain("Public/Visible.md");
+        if (expectPrivate) expect(paths).toContain("Private/Secret.md");
+        else expect(paths).not.toContain("Private/Secret.md");
+      } finally {
+        db.close();
+      }
+    };
+    assertSharedRows(true);
+
+    const sharedQuery = spawnSync(
+      process.execPath,
+      [distEntry, "query", "zephyrprivacy", "--vault", vault, "--read-paths", "Public/**", "--json"],
+      { encoding: "utf8", timeout: 20_000 }
+    );
+    expect(sharedQuery.status, sharedQuery.stderr).toBe(0);
+    const sharedQueryResult = JSON.parse(sharedQuery.stdout) as { matches?: Array<{ path?: string }> };
+    expect(sharedQueryResult.matches?.some((match) => match.path === "Public/Visible.md")).toBe(true);
+    expect(sharedQueryResult.matches?.some((match) => match.path === "Private/Secret.md")).toBe(false);
+    assertSharedRows(true);
+
+    const sharedEval = spawnSync(
+      process.execPath,
+      [
+        distEntry,
+        "eval",
+        "--vault",
+        vault,
+        "--queries",
+        queriesFile,
+        "--persistent-index",
+        "--read-paths",
+        "Public/**",
+        "--json"
+      ],
+      { encoding: "utf8", timeout: 20_000 }
+    );
+    expect(sharedEval.status, sharedEval.stderr).toBe(0);
+    assertSharedRows(true);
   });
 
   it("`enquire-mcp index` builds the FTS5 index and reports per-status counts", async (ctx) => {

@@ -100,6 +100,24 @@ interface HttpServeCli extends Omit<ServeOptions, "tokenize"> {
   maxSessions?: string;
 }
 
+/**
+ * One-shot `query` and diagnostic `eval` honor `--exclude-glob` / `--read-paths`
+ * at search time via the Vault they construct. They must not persist those
+ * filters as FTS deletions into the shared default per-vault index
+ * (`defaultIndexFile`), which `serve --persistent-index` also uses. An
+ * explicit `--index-file` is a dedicated index the caller owns; privacy-filtered
+ * sync there remains the M-8 contract.
+ */
+function shouldSyncPersistentFtsFromPrivacyVault(opts: {
+  indexFile?: string;
+  excludeGlob?: string[];
+  readPaths?: string[];
+}): boolean {
+  const privacyActive = (opts.excludeGlob?.length ?? 0) > 0 || (opts.readPaths?.length ?? 0) > 0;
+  if (!privacyActive) return true;
+  return typeof opts.indexFile === "string" && opts.indexFile.length > 0;
+}
+
 async function resolveConfiguredVault(
   vaultPath: string,
   privacy: { excludeGlobs?: string[]; readPaths?: string[] }
@@ -524,13 +542,14 @@ export async function main(invocation?: ConfigInput["invocation"]): Promise<void
     });
 
   // v3.10.0-rc.14 (bug-report Issue 4) — one-shot CLI search for smoke-tests /
-  // CI / debugging without an MCP client. Builds (or reuses) the per-vault FTS5
-  // index, runs the SAME hybrid `searchHybrid` the MCP `obsidian_search` tool
-  // uses, and prints the results.
+  // CI / debugging without an MCP client. Reuses (and, without privacy flags,
+  // refreshes) the per-vault FTS5 index, runs the SAME hybrid `searchHybrid`
+  // the MCP `obsidian_search` tool uses, and prints the results. Privacy flags
+  // filter this invocation's hits; they do not rewrite the shared default index.
   program
     .command("query")
     .description(
-      "Run a one-shot hybrid search (BM25 + TF-IDF + embeddings, RRF-fused) from the CLI and print the results — for quick smoke-tests / CI / debugging without an MCP client. Reuses the persistent per-vault FTS5 index (same as `serve --persistent-index`)."
+      "Run a one-shot hybrid search (BM25 + TF-IDF + embeddings, RRF-fused) from the CLI and print the results — for quick smoke-tests / CI / debugging without an MCP client. Reuses the persistent per-vault FTS5 index (same as `serve --persistent-index`). `--exclude-glob` / `--read-paths` filter this invocation's results; they do not rewrite that shared index. Pass `--index-file` to persist a dedicated privacy-filtered index."
     )
     .argument("<text>", "Search query")
     .requiredOption("--vault <path>", "Path to the Obsidian vault root")
@@ -569,7 +588,9 @@ export async function main(invocation?: ConfigInput["invocation"]): Promise<void
         const ftsIndex = new FtsIndex({ file: indexFile, vaultRoot: v.root, tokenize: honoredTokenize });
         try {
           await ftsIndex.open(discovered);
-          await syncFtsIndex(v, ftsIndex);
+          if (shouldSyncPersistentFtsFromPrivacyVault(opts)) {
+            await syncFtsIndex(v, ftsIndex);
+          }
           const result = await searchHybrid(v, { query: text, limit }, { ftsIndex, embedFile: embedDbPath(v.root) });
           if (opts.json) {
             process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
@@ -1566,6 +1587,8 @@ export async function main(invocation?: ConfigInput["invocation"]): Promise<void
           // an eval run against a `--tokenize trigram`-built index would
           // silently DROP TABLE because the default `unicode61` mismatches.
           // Same historical K-1 class; doctor now uses immutable byte snapshots.
+          // B5: a privacy-filtered Vault must not sync deletions into the
+          // shared default index; explicit `--index-file` still syncs (M-8).
           const discovered = await discoverFtsIndexConfig(indexFile, v.root);
           if (discovered.kind === "refused") {
             throw new Error("FTS index configuration could not be verified");
@@ -1575,7 +1598,9 @@ export async function main(invocation?: ConfigInput["invocation"]): Promise<void
           ftsIndex = new FtsIndex({ file: indexFile, vaultRoot: v.root, tokenize: honoredTokenize });
           try {
             await ftsIndex.open(discovered);
-            await syncFtsIndex(v, ftsIndex);
+            if (shouldSyncPersistentFtsFromPrivacyVault(opts)) {
+              await syncFtsIndex(v, ftsIndex);
+            }
           } catch (err) {
             await ftsIndex.closeAndRelease();
             throw err;

@@ -1132,6 +1132,95 @@ describe("CLI subcommands E2E (against built dist/)", () => {
     );
     expect(sharedEval.status, sharedEval.stderr).toBe(0);
     assertSharedRows(true);
+
+    // Privacy query must not DROP+rebuild a legacy shared default. Seed a
+    // physical schema-v5 file (same admission shape as fts5.test.ts) and
+    // require the stamp and private row to survive.
+    const realVault = await fs.realpath(vault);
+    for (const sidecar of [sharedIndex, `${sharedIndex}-wal`, `${sharedIndex}-shm`, `${sharedIndex}-journal`]) {
+      await fs.rm(sidecar, { force: true });
+    }
+    {
+      const legacy = new Database(sharedIndex);
+      try {
+        legacy.exec(`
+        CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        CREATE VIRTUAL TABLE chunks USING fts5(
+          content,
+          title,
+          aliases,
+          rel_path UNINDEXED,
+          chunk_index UNINDEXED,
+          line_start UNINDEXED,
+          line_end UNINDEXED,
+          tags UNINDEXED,
+          raw_content UNINDEXED,
+          kind UNINDEXED,
+          tokenize='unicode61 remove_diacritics 2'
+        );
+        CREATE TABLE source_state (
+          rel_path TEXT PRIMARY KEY,
+          mtime_ms INTEGER NOT NULL,
+          n_chunks INTEGER NOT NULL,
+          kind TEXT NOT NULL DEFAULT 'md',
+          indexed_at TEXT NOT NULL
+        );
+      `);
+        const insertMeta = legacy.prepare("INSERT INTO meta VALUES (?, ?)");
+        insertMeta.run("schema_version", "5");
+        insertMeta.run("vault_root", realVault);
+        insertMeta.run("tokenize_mode", "unicode61");
+        const insertChunk = legacy.prepare(
+          "INSERT INTO chunks (content, title, aliases, rel_path, chunk_index, line_start, line_end, tags, raw_content, kind) VALUES (?, ?, '', ?, 0, 1, 1, '', ?, 'md')"
+        );
+        insertChunk.run("zephyrprivacy visible evidence", "Visible", "Public/Visible.md", "zephyrprivacy visible evidence");
+        insertChunk.run("zephyrprivacy forbidden evidence", "Secret", "Private/Secret.md", "zephyrprivacy forbidden evidence");
+        const insertState = legacy.prepare(
+          "INSERT INTO source_state (rel_path, mtime_ms, n_chunks, kind, indexed_at) VALUES (?, 1000, 1, 'md', 'now')"
+        );
+        insertState.run("Public/Visible.md");
+        insertState.run("Private/Secret.md");
+      } finally {
+        legacy.close();
+      }
+    }
+    const legacyQuery = spawnSync(
+      process.execPath,
+      [distEntry, "query", "zephyrprivacy", "--vault", vault, "--read-paths", "Public/**", "--json"],
+      { encoding: "utf8", timeout: 20_000 }
+    );
+    expect(legacyQuery.status, legacyQuery.stderr).toBe(0);
+    const legacyResult = JSON.parse(legacyQuery.stdout) as { matches?: Array<{ path?: string }> };
+    expect(legacyResult.matches?.some((match) => match.path === "Public/Visible.md")).toBe(true);
+    expect(legacyResult.matches?.some((match) => match.path === "Private/Secret.md")).toBe(false);
+    {
+      const db = new Database(sharedIndex, { readonly: true, fileMustExist: true });
+      try {
+        expect(db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get()).toEqual({ value: "5" });
+        const paths = (
+          db.prepare("SELECT DISTINCT rel_path FROM chunks ORDER BY rel_path").all() as Array<{ rel_path: string }>
+        ).map((row) => row.rel_path);
+        expect(paths).toContain("Public/Visible.md");
+        expect(paths).toContain("Private/Secret.md");
+      } finally {
+        db.close();
+      }
+    }
+
+    // Missing shared default: privacy query must not CREATE an empty file.
+    for (const sidecar of [sharedIndex, `${sharedIndex}-wal`, `${sharedIndex}-shm`, `${sharedIndex}-journal`]) {
+      await fs.rm(sidecar, { force: true });
+    }
+    const missingQuery = spawnSync(
+      process.execPath,
+      [distEntry, "query", "zephyrprivacy", "--vault", vault, "--read-paths", "Public/**", "--json"],
+      { encoding: "utf8", timeout: 20_000 }
+    );
+    expect(missingQuery.status, missingQuery.stderr).toBe(0);
+    const missingResult = JSON.parse(missingQuery.stdout) as { matches?: Array<{ path?: string }> };
+    expect(missingResult.matches?.some((match) => match.path === "Public/Visible.md")).toBe(true);
+    expect(missingResult.matches?.some((match) => match.path === "Private/Secret.md")).toBe(false);
+    await expect(fs.stat(sharedIndex)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("`enquire-mcp index` builds the FTS5 index and reports per-status counts", async (ctx) => {

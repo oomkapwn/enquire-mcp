@@ -51,6 +51,7 @@ import {
   FtsIndex,
   syncFtsIndex,
   syncPdfFtsIndex,
+  type FtsIndexDiscovery,
   type TokenizeMode
 } from "./fts5.js";
 import { VERSION } from "./index.js";
@@ -70,6 +71,7 @@ import {
 } from "./mcp-config.js";
 import { ocrLangIsInstalled, resolveTessdataDir } from "./ocr.js";
 import { validateServeHttpRetrievalOpts } from "./retrieval-opts.js";
+import { FTS_SCHEMA_VERSION } from "./schema-contract.js";
 import { type ServeOptions, startServer, syncEmbedDb, syncPdfEmbedDb } from "./server.js";
 import { embedDbPath, parsePositiveInt, parseQuantizationMode } from "./tool-registry.js";
 import { searchHybrid } from "./tools/index.js";
@@ -109,8 +111,13 @@ interface HttpServeCli extends Omit<ServeOptions, "tokenize"> {
  * file is still the shared file. A different `--index-file` is a dedicated
  * index the caller owns; privacy-filtered sync there remains the M-8 contract.
  * `path.resolve` equality is the bound — not case-fold, realpath, or hardlink
- * identity. `serve` / `serve-http` are writers of the Vault they were started
- * with and are unchanged.
+ * identity. Privacy on that shared destination also skips `open()` unless
+ * discovery is already `owned` at the live `FTS_SCHEMA_VERSION`: missing,
+ * empty, and legacy files are left untouched (search uses `ftsIndex: null`)
+ * because `open()` CREATE/DROP+rebuilds then skip-sync would empty the shared
+ * index. A current-schema shared `open()` still runs WAL/pragma/chmod/triggers.
+ * `serve` / `serve-http` are writers of the Vault they were started with and
+ * are unchanged.
  */
 function shouldSyncPersistentFtsFromPrivacyVault(
   opts: {
@@ -123,6 +130,19 @@ function shouldSyncPersistentFtsFromPrivacyVault(
   const privacyActive = (opts.excludeGlob?.length ?? 0) > 0 || (opts.readPaths?.length ?? 0) > 0;
   if (!privacyActive) return true;
   return path.resolve(indexFile) !== path.resolve(defaultIndexFile(vaultRoot));
+}
+
+function shouldOpenPersistentFtsForReadPath(
+  opts: {
+    excludeGlob?: string[];
+    readPaths?: string[];
+  },
+  indexFile: string,
+  vaultRoot: string,
+  discovered: FtsIndexDiscovery
+): boolean {
+  if (shouldSyncPersistentFtsFromPrivacyVault(opts, indexFile, vaultRoot)) return true;
+  return discovered.kind === "owned" && discovered.meta.schema_version === String(FTS_SCHEMA_VERSION);
 }
 
 async function resolveConfiguredVault(
@@ -592,11 +612,16 @@ export async function main(invocation?: ConfigInput["invocation"]): Promise<void
           throw new Error("FTS index configuration could not be verified");
         }
         const honoredTokenize: TokenizeMode = discovered.kind === "owned" ? discovered.meta.tokenize_mode : "unicode61";
-        const ftsIndex = new FtsIndex({ file: indexFile, vaultRoot: v.root, tokenize: honoredTokenize });
+        const openFts = shouldOpenPersistentFtsForReadPath(opts, indexFile, v.root, discovered);
+        const ftsIndex = openFts
+          ? new FtsIndex({ file: indexFile, vaultRoot: v.root, tokenize: honoredTokenize })
+          : null;
         try {
-          await ftsIndex.open(discovered);
-          if (shouldSyncPersistentFtsFromPrivacyVault(opts, indexFile, v.root)) {
-            await syncFtsIndex(v, ftsIndex);
+          if (ftsIndex) {
+            await ftsIndex.open(discovered);
+            if (shouldSyncPersistentFtsFromPrivacyVault(opts, indexFile, v.root)) {
+              await syncFtsIndex(v, ftsIndex);
+            }
           }
           const result = await searchHybrid(v, { query: text, limit }, { ftsIndex, embedFile: embedDbPath(v.root) });
           if (opts.json) {
@@ -615,7 +640,7 @@ export async function main(invocation?: ConfigInput["invocation"]): Promise<void
           }
           process.stdout.write("\n");
         } finally {
-          await ftsIndex.closeAndRelease();
+          await ftsIndex?.closeAndRelease();
         }
       }
     );
@@ -1595,22 +1620,24 @@ export async function main(invocation?: ConfigInput["invocation"]): Promise<void
           // silently DROP TABLE because the default `unicode61` mismatches.
           // Same historical K-1 class; doctor now uses immutable byte snapshots.
           // B5: a privacy-filtered Vault must not sync deletions into the
-          // shared default index; explicit `--index-file` still syncs (M-8).
+          // shared default index; a path-distinct `--index-file` still syncs (M-8).
           const discovered = await discoverFtsIndexConfig(indexFile, v.root);
           if (discovered.kind === "refused") {
             throw new Error("FTS index configuration could not be verified");
           }
           const honoredTokenize: TokenizeMode =
             discovered.kind === "owned" ? discovered.meta.tokenize_mode : "unicode61";
-          ftsIndex = new FtsIndex({ file: indexFile, vaultRoot: v.root, tokenize: honoredTokenize });
-          try {
-            await ftsIndex.open(discovered);
-            if (shouldSyncPersistentFtsFromPrivacyVault(opts, indexFile, v.root)) {
-              await syncFtsIndex(v, ftsIndex);
+          if (shouldOpenPersistentFtsForReadPath(opts, indexFile, v.root, discovered)) {
+            ftsIndex = new FtsIndex({ file: indexFile, vaultRoot: v.root, tokenize: honoredTokenize });
+            try {
+              await ftsIndex.open(discovered);
+              if (shouldSyncPersistentFtsFromPrivacyVault(opts, indexFile, v.root)) {
+                await syncFtsIndex(v, ftsIndex);
+              }
+            } catch (err) {
+              await ftsIndex.closeAndRelease();
+              throw err;
             }
-          } catch (err) {
-            await ftsIndex.closeAndRelease();
-            throw err;
           }
         }
         const embedFile = embedDbPath(v.root);

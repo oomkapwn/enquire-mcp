@@ -27,9 +27,11 @@ import { replaceAllExactly, replaceExactly } from "./helpers/exact-source-mutati
 const repoRoot = path.resolve(__dirname, "..");
 
 /**
- * Strip line comments and block comments so a prose mention of a guard symbol
- * is not treated as the code guard. Scanner form — this file is in the raw
- * `.replace` inventory, so String#replace would be an unclassified mutation.
+ * Strip ordinary `//` line comments (not `://`) and block comments so a prose
+ * mention of a guard symbol is not treated as the code guard. `://` is kept so
+ * `http://` strings survive; a `label:// comment` is therefore also kept.
+ * Scanner form — this file is in the raw `.replace` inventory, so String#replace
+ * would be an unclassified mutation.
  */
 function stripComments(src: string): string {
   let out = "";
@@ -42,6 +44,7 @@ function stripComments(src: string): string {
       i = end < 0 ? src.length : end + 2;
       continue;
     }
+    // Skip :// so `http://` in strings is not a line comment.
     if (a === "/" && b === "/" && (i === 0 || src[i - 1] !== ":")) {
       const nl = src.indexOf("\n", i);
       i = nl < 0 ? src.length : nl;
@@ -53,7 +56,7 @@ function stripComments(src: string): string {
   return out;
 }
 
-/** Concatenated comment-stripped text of every `src/**.ts` — the guard-symbol search space. */
+/** Concatenated scanner-stripped text of every `src/**.ts` — the guard-symbol search space. */
 function srcBlob(): string {
   const parts: string[] = [];
   const walk = (dir: string) => {

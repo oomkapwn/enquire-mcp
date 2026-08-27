@@ -613,35 +613,44 @@ export async function main(invocation?: ConfigInput["invocation"]): Promise<void
         }
         const honoredTokenize: TokenizeMode = discovered.kind === "owned" ? discovered.meta.tokenize_mode : "unicode61";
         const openFts = shouldOpenPersistentFtsForReadPath(opts, indexFile, v.root, discovered);
-        const ftsIndex = openFts
-          ? new FtsIndex({ file: indexFile, vaultRoot: v.root, tokenize: honoredTokenize })
-          : null;
-        try {
-          if (ftsIndex) {
+        let result: Awaited<ReturnType<typeof searchHybrid>>;
+        if (openFts) {
+          const ftsIndex = new FtsIndex({ file: indexFile, vaultRoot: v.root, tokenize: honoredTokenize });
+          try {
             await ftsIndex.open(discovered);
             if (shouldSyncPersistentFtsFromPrivacyVault(opts, indexFile, v.root)) {
               await syncFtsIndex(v, ftsIndex);
             }
+            result = await searchHybrid(
+              v,
+              { query: text, limit },
+              { ftsIndex, embedFile: embedDbPath(v.root) }
+            );
+          } finally {
+            await ftsIndex.closeAndRelease();
           }
-          const result = await searchHybrid(v, { query: text, limit }, { ftsIndex, embedFile: embedDbPath(v.root) });
-          if (opts.json) {
-            process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
-            return;
-          }
-          if (result.signal_errors?.embeddings) {
-            process.stderr.write(`enquire query: embeddings unavailable — ${result.signal_errors.embeddings}\n`);
-          }
-          const signals = result.signals_used.length > 0 ? result.signals_used.join("+") : "none";
-          process.stdout.write(`\n${result.matches.length} result(s) for "${text}"  (signals: ${signals})\n\n`);
-          for (const m of result.matches) {
-            const loc = m.line_start ? `:${m.line_start}` : "";
-            const snippet = m.snippet.replace(/\s+/g, " ").trim().slice(0, 160);
-            process.stdout.write(`  ${m.path}${loc}  [${m.kind}]\n    ${snippet}\n`);
-          }
-          process.stdout.write("\n");
-        } finally {
-          await ftsIndex?.closeAndRelease();
+        } else {
+          result = await searchHybrid(
+            v,
+            { query: text, limit },
+            { ftsIndex: null, embedFile: embedDbPath(v.root) }
+          );
         }
+        if (opts.json) {
+          process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+          return;
+        }
+        if (result.signal_errors?.embeddings) {
+          process.stderr.write(`enquire query: embeddings unavailable — ${result.signal_errors.embeddings}\n`);
+        }
+        const signals = result.signals_used.length > 0 ? result.signals_used.join("+") : "none";
+        process.stdout.write(`\n${result.matches.length} result(s) for "${text}"  (signals: ${signals})\n\n`);
+        for (const m of result.matches) {
+          const loc = m.line_start ? `:${m.line_start}` : "";
+          const snippet = m.snippet.replace(/\s+/g, " ").trim().slice(0, 160);
+          process.stdout.write(`  ${m.path}${loc}  [${m.kind}]\n    ${snippet}\n`);
+        }
+        process.stdout.write("\n");
       }
     );
 

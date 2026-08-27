@@ -105,7 +105,7 @@ const PRODUCTION_FILE_PINS: Readonly<Record<string, ProductionFilePin>> = {
       "./tool-registry.js|parseQuantizationMode|parseQuantizationMode"
     ],
     k1Opens: 6,
-    sha256: "c632c035184ffc6322ed69425b43fcfcd6a429a457db2b6b41d04c6d5669a080"
+    sha256: "e5a22039fa7d08bf3c23b0bbd133d3f0279c2edb5fa235fed6d9e6f3c9ba3537"
   },
   "src/server.ts": {
     constructors: { EmbedDb: 3, FtsIndex: 1 },

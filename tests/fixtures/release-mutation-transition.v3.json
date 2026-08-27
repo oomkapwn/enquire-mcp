@@ -156,7 +156,7 @@
       "reason": "reviewed source bytes changed while catalogue identity stayed fixed",
       "witness": {
         "from": "sha256:1b4a7f3a9fa91765083c3a89d38e4ff8e74c9cbef0478207c06f4f4a31edbf33",
-        "to": "sha256:bc15f6aade77f576b21b6e30626cb3f94726c76b7b582af5a18893fe480a890c"
+        "to": "sha256:fcfd65e55a13353aa3e1b954c91cac4a76da9f6ae2bafe3cd48b999de3bad712"
       }
     },
     {

@@ -202,9 +202,9 @@ export interface WatcherOptions {
    * Requires `tesseract.js` + `@napi-rs/canvas` optional dependencies
    * + the requested language trained-data files pre-installed via
    * `enquire-mcp install-ocr-lang <code>` (see v3.7.16 P1-1 offline
-   * enforcement). If those aren't available, the PDF generation is
-   * quarantined and every prior FTS/embed/HNSW row is retained until a later
-   * complete extraction succeeds.
+   * enforcement). If those aren't available, the watcher attempts to
+   * quarantine the PDF generation and every prior FTS/embed/HNSW row is
+   * retained until a later complete extraction succeeds.
    *
    * Recommended pairing: `--ocr-pdfs` + `--watch` + `--include-pdfs`
    * for users with scanned-document vaults that change during sessions.
@@ -218,9 +218,9 @@ export interface WatcherOptions {
   ocrLangs?: string;
   /**
    * v3.9.0-rc.1 — page cap for OCR runs. Mirrors `DEFAULT_OCR_MAX_PAGES`
-   * (200). Exceeding it quarantines the entire changed PDF generation and
-   * preserves every prior FTS/embed/HNSW row. Operators can lift the cap when
-   * they trust their PDF set.
+   * (200). Exceeding it attempts to quarantine the entire changed PDF
+   * generation and preserves every prior FTS/embed/HNSW row. Operators can
+   * lift the cap when they trust their PDF set.
    */
   ocrMaxPages?: number;
   /**
@@ -2283,7 +2283,7 @@ export class VaultWatcher {
       } catch (err) {
         this.quarantineFailedGeneration(relPath, isPdf ? "pdf" : "md");
         // Do not latch semanticUsable: quarantine is per-path when the marker
-      // persists. See WatcherSearchHealth.
+        // persists. See WatcherSearchHealth.
         if (!this.silent) {
           process.stderr.write(
             `enquire: watcher embed-db delete failed for ${relPath} — ${err instanceof Error ? err.message : String(err)}\n`
@@ -2303,7 +2303,8 @@ export class VaultWatcher {
   }
 
   /**
-   * Stage one exact alias without mutating any sink.
+   * Stage one exact alias without committing a replacement generation.
+   * A preparation failure still attempts source-scoped quarantine.
    *
    * @param live - Re-admitted live path and captured generation.
    * @returns Staged path work, or undefined after a fail-soft preparation error.
@@ -2345,7 +2346,7 @@ export class VaultWatcher {
    * Only after all awaited work succeeds are inadmissible/stale-key purges and
    * live-path commits performed in one no-await section. Membership drift asks
    * the caller for a global replan; generation-only drift and transient
-   * admission failure retry without mutating any sink.
+   * admission failure retry without committing a replacement generation.
    *
    * @param originAbsPath - Exact event path.
    * @param plannedEvidence - Latest pre-lock admission for every inspected path.
@@ -2407,8 +2408,8 @@ export class VaultWatcher {
     const stagedPaths: StagedAliasPath[] = [];
     for (const live of liveByCanonicalPath.values()) {
       const staged = await this.stageAliasPath(live);
-      // stageMarkdownGeneration/stagePdfGeneration already quarantine the
-      // exact failed path. Keep preparing the remaining independently-admitted
+      // stageMarkdownGeneration/stagePdfGeneration already attempt to
+      // quarantine the exact failed path. Keep preparing the remaining independently-admitted
       // aliases so one unreadable hardlink spelling cannot strand later
       // equal-mtime spellings with live retained bytes.
       if (!staged) continue;
@@ -2446,9 +2447,9 @@ export class VaultWatcher {
     }
     for (const prepared of stagedPaths) {
       const eventKind = prepared.live.absPath === originAbsPath && kind !== "unlink" ? kind : ("change" as const);
-      // A live commit failure source-quarantines this exact alias in the
-      // commit catch. Continue the already-staged/revalidated group so every
-      // remaining hardlink alias independently converges or quarantines; an
+      // A live commit failure attempts to source-quarantine this exact alias in
+      // the commit catch. Continue the already-staged/revalidated group so every
+      // remaining hardlink alias independently converges or attempts quarantine; an
       // early return would leave later equal-mtime aliases serving old bytes.
       if (!this.commitAliasPath(prepared, eventKind)) continue;
       if (prepared.live.physicalIdentity) {
@@ -2735,7 +2736,8 @@ export class VaultWatcher {
 
     // Add/change: derive every enabled sink from one captured path generation
     // for an ordinary update.
-    // All awaited preparation finishes before any store mutation; a final
+    // All awaited preparation finishes before any replacement-generation
+    // commit; a final
     // lstat revalidation either authorizes one run-to-completion commit or
     // retries the latest disk generation once.
     try {

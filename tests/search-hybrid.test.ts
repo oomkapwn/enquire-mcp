@@ -187,9 +187,7 @@ describe("searchHybrid (v2.0 beta — RRF over available signals)", () => {
       }
     );
     expect(availabilityQuarantined.signals_used).toEqual(["tfidf"]);
-    expect(availabilityQuarantined.signal_errors?.embeddings).toMatch(
-      /quarantined for this server generation/i
-    );
+    expect(availabilityQuarantined.signal_errors?.embeddings).toMatch(/quarantined for this server generation/i);
     await expect(
       embeddingsSearch(v, { query: "OAuth JWT tokens", limit: 5 }, missingEmbedFile, undefined, {
         semanticUsable: false

@@ -1571,8 +1571,9 @@ export function pickEmbedTextForHyde(args: { query: string; hypothetical_answer?
  *   checked before any model load so the error message is fast and clear.
  * @param hnsw - Optional HNSW index context. When passed, k-NN routes
  *   through HNSW instead of brute-force cosine.
- * @param watcherHealth - Optional live watcher route health. A quarantined
- *   semantic route rejects instead of returning a stale post-failure index.
+ * @param watcherHealth - Optional semantic-route health for this prepared
+ *   server generation. A quarantined semantic route rejects instead of
+ *   returning a stale post-failure index.
  * @returns An {@link EmbedSearchResponse} with chunk-level matches and a
  *   `hyde: true` marker iff HyDE actually fired.
  * @throws {TypeError} If a non-null `embedFile` does not end exactly in
@@ -2612,7 +2613,6 @@ export async function searchHybrid(
      */
     hnsw?: HnswSearchContext | null;
     /**
-     * Mutable route health for a watcher-enabled prepared server generation.
      * Semantic-route health for this prepared server generation. False
      * `semanticUsable` is a live watcher backlog overflow or a startup
      * embedding-integrity refusal (the latter can fire without `--watch`).

@@ -132,8 +132,8 @@ export interface ServeOptions {
    *  via `enquire-mcp install-ocr-lang <code>` (no runtime download). */
   ocrLangs?: string;
   /** v3.9.0-rc.1 — page cap for OCR-on-watch runs. Default 200 (matches
-   *  `DEFAULT_OCR_MAX_PAGES`). Exceeding the cap quarantines the changed PDF
-   *  generation and preserves its prior FTS/embed/HNSW rows. */
+   *  `DEFAULT_OCR_MAX_PAGES`). Exceeding the cap attempts to quarantine the
+   *  changed PDF generation and preserves its prior FTS/embed/HNSW rows. */
   ocrMaxPages?: string;
   /** v2.9.0 — enable BGE cross-encoder reranking on top of RRF in
    *  obsidian_search. Off by default; adds ~30-50ms per query at top-50. */
@@ -392,10 +392,10 @@ export interface ServerDeps {
     dbMutationEpoch: number;
     /** Shared semantic-family lifetime retained after the snapshot DB closes. */
     persistenceLifetime?: Pick<PersistenceFamilyLeaseHandle, "release">;
-    /** Shared watcher route health; HNSW falls back after an uncertain diff. */
+  /** Shared semantic-route health; HNSW falls back after an uncertain diff. */
     health?: Readonly<import("./watcher.js").WatcherSearchHealth>;
   } | null;
-  /** Shared watcher semantic-route health, or null when watching is disabled. */
+  /** Shared semantic-route health for this prepared generation. Startup integrity can latch it even when watching is disabled. */
   watcherHealth?: Readonly<import("./watcher.js").WatcherSearchHealth> | null;
 }
 
@@ -1085,8 +1085,9 @@ export async function prepareServerDeps(opts: ServeOptions): Promise<ServerDeps>
     // replays every captured exact path only after all optional sink attempts
     // have terminated. rc.26 propagates fatal staging/commit failures during
     // activation; ordinary live events remain fail-soft by retaining the prior
-    // pre-mutation generation or quarantining an uncertain semantic route
-    // (optional OCR keeps its explicit empty-generation fallback). Activation
+    // pre-commit generation or recording a source-scoped quarantine (HNSW may
+    // still be process-quarantined; optional OCR keeps its explicit
+    // empty-generation fallback). Activation
     // never converts overflow or churn failure into startup success.
     if (watcher) {
       try {

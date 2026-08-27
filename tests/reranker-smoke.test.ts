@@ -24,7 +24,12 @@ import { loadReranker, RERANKER_MODELS } from "../src/embeddings.js";
 // **Manual smoke before major releases**:
 //   ENQUIRE_LOAD_RERANKER_SMOKE=1 npm test -- tests/reranker-smoke.test.ts
 //
-// CI smoke (release.yml only — not on every PR): same.
+// This file is collected by the default Vitest suite (CI and release.yml
+// include tests/**/*.test.ts). The real-model cases do not execute unless
+// ENQUIRE_LOAD_RERANKER_SMOKE=1; no workflow sets that variable. The
+// it.skip below is the live automated path. Wiring the real-model cases
+// into CI would download ~30-280 MB of HuggingFace weights per job
+// (historical M6; still maintainer-gated).
 
 const SMOKE_ENABLED = process.env.ENQUIRE_LOAD_RERANKER_SMOKE === "1";
 

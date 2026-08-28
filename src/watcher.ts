@@ -510,11 +510,7 @@ export class VaultWatcher {
     if (!this.embedDb) return;
     try {
       if (this.hnsw && this.hnswRowsByLabel && this.hnswGenerationAuthority && this.searchHealth.hnswUsable) {
-        const attempt = this.embedDb.quarantineSourceIfGeneration(
-          { ...this.hnswGenerationAuthority },
-          relPath,
-          kind
-        );
+        const attempt = this.embedDb.quarantineSourceIfGeneration({ ...this.hnswGenerationAuthority }, relPath, kind);
         if (attempt.kind === "committed") {
           this.dropQuarantinedPathFromLiveHnsw(relPath, kind, attempt.committedGeneration);
         } else {

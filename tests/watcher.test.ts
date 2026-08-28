@@ -1615,43 +1615,11 @@ describe("VaultWatcher HNSW disk persistence (v3.9.0-rc.6)", () => {
       expect(watcherInternals.hnswPersistUnsafe).toBe(true);
       expect(w.searchHealth.hnswUsable).toBe(false);
 
-      // Class sibling: zipHnswAddPoints runs after the EmbedDb transaction but
-      // before syncHnswForFile. Restore applyDiff so the unpublished-upsert
-      // drift path can process-quarantine rather than throw inside applyDiff.
+      // Restore applyDiff and a usable graph so the PDF FTS-only throw
+      // (lexical failure before any EmbedDb write — the Map-of-Content shape)
+      // is genuinely same-generation. The zip phase below commits EmbedDb
+      // without publishing, so it must run after this control.
       index.applyDiff = originalApplyDiff;
-      watcherInternals.hnswPersistUnsafe = false;
-      w.searchHealth.hnswUsable = true;
-      const originalConditionalUpsert = embedDb.upsertNoteWithCanonicalVectorsIfGeneration.bind(embedDb);
-      let mismatchInjectedAfterCommit = false;
-      embedDb.upsertNoteWithCanonicalVectorsIfGeneration = (
-        ...args: Parameters<typeof embedDb.upsertNoteWithCanonicalVectorsIfGeneration>
-      ) => {
-        const result = originalConditionalUpsert(...args);
-        if (result.kind !== "committed") return result;
-        mismatchInjectedAfterCommit = args[3].length > 0 && result.value.newIds.length === args[3].length;
-        return {
-          ...result,
-          value: { ...result.value, newIds: result.value.newIds.slice(1) }
-        };
-      };
-      try {
-        await watcherInternals.handle(v.resolveInside("a.md"), "change");
-      } finally {
-        embedDb.upsertNoteWithCanonicalVectorsIfGeneration = originalConditionalUpsert;
-      }
-      expect(mismatchInjectedAfterCommit).toBe(true);
-      // zipHnsw throws after a committed unpublished upsert. The live graph
-      // never applied that generation, so IfGeneration quarantine sees drift
-      // and process-quarantines persist instead of publishing the unpublished
-      // epoch.
-      expect(watcherInternals.hnswPersistUnsafe).toBe(true);
-      expect(w.searchHealth.hnswUsable).toBe(false);
-      expect(embedDb.getQuarantinedPaths("md")).toContain("a.md");
-      expect(w.searchHealth.semanticUsable).toBe(true);
-
-      // Re-arm a usable graph so the PDF FTS-only throw (lexical failure before
-      // any EmbedDb write — the Map-of-Content shape) can prove per-path
-      // quarantine does not latch persist.
       watcherInternals.hnswPersistUnsafe = false;
       w.searchHealth.hnswUsable = true;
 
@@ -1685,6 +1653,33 @@ describe("VaultWatcher HNSW disk persistence (v3.9.0-rc.6)", () => {
       } finally {
         fts.reindexPdfFile = originalReindexPdfFile;
       }
+
+      // Class sibling: zipHnswAddPoints runs after the EmbedDb transaction but
+      // before syncHnswForFile. The live graph never applied that generation,
+      // so IfGeneration quarantine sees drift and process-quarantines persist.
+      const originalConditionalUpsert = embedDb.upsertNoteWithCanonicalVectorsIfGeneration.bind(embedDb);
+      let mismatchInjectedAfterCommit = false;
+      embedDb.upsertNoteWithCanonicalVectorsIfGeneration = (
+        ...args: Parameters<typeof embedDb.upsertNoteWithCanonicalVectorsIfGeneration>
+      ) => {
+        const result = originalConditionalUpsert(...args);
+        if (result.kind !== "committed") return result;
+        mismatchInjectedAfterCommit = args[3].length > 0 && result.value.newIds.length === args[3].length;
+        return {
+          ...result,
+          value: { ...result.value, newIds: result.value.newIds.slice(1) }
+        };
+      };
+      try {
+        await watcherInternals.handle(v.resolveInside("a.md"), "change");
+      } finally {
+        embedDb.upsertNoteWithCanonicalVectorsIfGeneration = originalConditionalUpsert;
+      }
+      expect(mismatchInjectedAfterCommit).toBe(true);
+      expect(watcherInternals.hnswPersistUnsafe).toBe(true);
+      expect(w.searchHealth.hnswUsable).toBe(false);
+      expect(embedDb.getQuarantinedPaths("md")).toContain("a.md");
+      expect(w.searchHealth.semanticUsable).toBe(true);
 
       const originalDeleteNote = embedDb.deleteNote.bind(embedDb);
       const originalDeleteNoteIfGeneration = embedDb.deleteNoteIfGeneration.bind(embedDb);

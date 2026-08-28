@@ -4,6 +4,18 @@ All notable changes to this project will be documented here. The format follows 
 
 ## [4.0.0-rc.4] — 2026-08-21
 
+### Doctor hybrid READY requires the serve-time embedding index
+
+> **TL;DR:** **`enquire-mcp doctor --embed-file <custom>` can no longer report hybrid READY when the index `serve --persistent-index` actually opens is missing.** `serve`, `serve-http`, `query` and `eval` have `--index-file` (or, for eval, `--persistent-index` plus optional `--index-file`) but not `--embed-file`; embeddings always use `embedDbPath(vault.root)` (the `.embed.db` sibling of `defaultIndexFile`). Doctor inspected only `opts.embedFile ?? default`, so a valid custom file plus a missing serve-time default produced READY while live search had no embeddings. `index:embed` is now always that serve-time default. A path-distinct `--embed-file` is an additional `index:embed-selected` check — required for both hybrid tiers, advisory for `basic`, matching the selected watcher-activation guard — and is not a substitute.
+>
+> **Bounded claim.** Shared vs selected identity is `path.resolve` equality with `defaultEmbedDbFile(vault.root)` / `embedDbPath`, including an explicit `--embed-file` that names that same path (no second check). It does **not** case-fold, realpath, or compare inodes. FTS `--index-file` is unchanged because those runtimes actually honor it. `doctor --embed-file` still inspects the named file. Basic still treats hybrid indexes as advisory. `build-embeddings` / `clear-embeddings` keep `--embed-file` as writers of that path. `setup` also writes the default embed path and has no `--embed-file`.
+>
+> **Method note:** BACKLOG §1.CC-ter **B5**, remaining MED. Coverage is extra phases of the existing hybrid-ready and independent-prerequisite tests, so the source `it()` census does not move. Under D-45 all executable proof is GitHub-hosted; no local package-manager, lint or test workload was used.
+
+- **Serve-time default gates hybrid READY.** A valid custom `--embed-file` with a missing default `.embed.db` is NOT READY; `index:embed` reports the default path.
+- **Selected `--embed-file` remains a real inspect.** Path-distinct overrides still fail closed when that file is absent or incompatible (`index:embed-selected`), and their repair hint keeps `--embed-file`. The default repair hint does not.
+- **Naming the default path is not a selected index.** `--embed-file` that `path.resolve`s to the serve-time file does not emit the second check.
+
 ### Note-proposal tag classification uses the listTags API ceiling
 
 > **TL;DR:** **`obsidian_validate_note_proposal` no longer classifies a live vault tag as `new` just because it is not in the top 200 by count.** Tag pre-classification called `listTags(vault, {})`, which defaults to a 200-row dashboard slice. Existing tags sorted after that slice were missing from the lookup set, so a proposal that reused them got `status: "new"` and a `new-tag` warning. The call now passes `limit: 2000`, the same ceiling the `listTags` function and `obsidian_list_tags` MCP schema already enforce.

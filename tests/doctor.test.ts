@@ -55,9 +55,25 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  try {
+    const canonical = await fs.realpath(root);
+    await removeSqliteSidecars(serveTimeEmbedFile(canonical));
+  } catch {
+    // The vault temp dir is already gone.
+  }
   await fs.rm(root, { recursive: true, force: true });
   await fs.rm(cacheRoot, { recursive: true, force: true });
 });
+
+function serveTimeEmbedFile(vaultRoot: string): string {
+  return defaultIndexFile(vaultRoot).replace(/\.fts5\.db$/, ".embed.db");
+}
+
+async function removeSqliteSidecars(file: string): Promise<void> {
+  await Promise.all(
+    [file, `${file}-wal`, `${file}-shm`, `${file}-journal`].map((candidate) => fs.rm(candidate, { force: true }))
+  );
+}
 
 function diagnose(overrides: Partial<RunDoctorOptions> = {}) {
   return runDoctor({
@@ -170,10 +186,14 @@ async function snapshotDir(dir: string): Promise<FileSnapshot> {
 }
 
 async function createReadyHybridFixture(): Promise<{ indexFile: string; embedFile: string }> {
+  const canonical = await fs.realpath(root);
   const indexFile = path.join(cacheRoot, "ready.fts5.db");
   const embedFile = path.join(cacheRoot, "ready.embed.db");
-  await createFts(indexFile, await fs.realpath(root), true);
+  const serveEmbedFile = serveTimeEmbedFile(canonical);
+  await createFts(indexFile, canonical, true);
   await createEmbed(embedFile, undefined, "f32", true);
+  await fs.mkdir(path.dirname(serveEmbedFile), { recursive: true });
+  await createEmbed(serveEmbedFile, undefined, "f32", true);
   await cacheModel(embeddingModel);
   await cacheModel(rerankerModel, "model_quantized.onnx");
   return { indexFile, embedFile };
@@ -483,7 +503,14 @@ describe("runDoctor — tiers and readiness", () => {
     expect(result.ready).toBe(true);
     expect(result.checks.find((check) => check.id === "index:fts5")?.status).toBe("ok");
     expect(result.checks.find((check) => check.id === "index:embed")?.status).toBe("ok");
+    expect(result.checks.find((check) => check.id === "index:embed-selected")?.status).toBe("ok");
     expect(result.checks.find((check) => check.id === "model:reranker-cache")?.status).toBe("ok");
+
+    const serveEmbedFile = serveTimeEmbedFile(await fs.realpath(root));
+    const samePath = await diagnose({ ...paths, embedFile: serveEmbedFile });
+    expect(samePath.ready).toBe(true);
+    expect(samePath.checks.find((check) => check.id === "index:embed")?.status).toBe("ok");
+    expect(samePath.checks.find((check) => check.id === "index:embed-selected")).toBeUndefined();
   });
 
   it("each hybrid prerequisite independently blocks readiness", async (ctx) => {
@@ -506,13 +533,28 @@ describe("runDoctor — tiers and readiness", () => {
 
     for (const [id, overrides] of [
       ["index:fts5", { ...paths, indexFile: path.join(cacheRoot, "absent.fts5.db") }],
-      ["index:embed", { ...paths, embedFile: path.join(cacheRoot, "absent.embed.db") }]
+      ["index:embed-selected", { ...paths, embedFile: path.join(cacheRoot, "absent.embed.db") }]
     ] as const) {
       const result = await diagnose(overrides);
       const check = result.checks.find((candidate) => candidate.id === id);
       expect(check, id).toMatchObject({ status: "missing", required: true });
       expect(result.ready, id).toBe(false);
     }
+
+    const absentCustom = await diagnose({
+      ...paths,
+      embedFile: path.join(cacheRoot, "absent.embed.db")
+    });
+    expect(absentCustom.checks.find((check) => check.id === "index:embed")?.status).toBe("ok");
+
+    await removeSqliteSidecars(serveTimeEmbedFile(await fs.realpath(root)));
+    const customOnly = await diagnose(paths);
+    expect(customOnly.checks.find((check) => check.id === "index:embed")).toMatchObject({
+      status: "missing",
+      required: true
+    });
+    expect(customOnly.checks.find((check) => check.id === "index:embed-selected")?.status).toBe("ok");
+    expect(customOnly.ready).toBe(false);
 
     const rerankerOnly = path.join(cacheRoot, "reranker-only");
     await cacheModel(rerankerModel, "model_quantized.onnx", rerankerOnly);
@@ -740,7 +782,7 @@ describe("runDoctor — exact model cache", () => {
       indexFile: path.join(cacheRoot, "missing.fts5.db"),
       modelEntry: bge
     });
-    const explicitIndex = explicit.checks.find((check) => check.id === "index:embed");
+    const explicitIndex = explicit.checks.find((check) => check.id === "index:embed-selected");
     const explicitCache = explicit.checks.find((check) => check.id === "model:embedding-cache");
     expect(explicitIndex?.status).toBe("warn");
     expect(explicitIndex?.detail).toContain(`model alias ${embeddingModel.alias} ≠ selected ${bge.alias}`);
@@ -756,7 +798,7 @@ describe("runDoctor — exact model cache", () => {
       modelEntry: undefined,
       modelAlias: undefined
     });
-    expect(inferred.checks.find((check) => check.id === "index:embed")?.status).toBe("ok");
+    expect(inferred.checks.find((check) => check.id === "index:embed-selected")?.status).toBe("ok");
     expect(inferred.checks.find((check) => check.id === "model:embedding-cache")?.label).toContain(
       `(${embeddingModel.alias})`
     );
@@ -814,7 +856,7 @@ describe("runDoctor — strict source-state preservation", () => {
         indexFile: path.join(dir, "missing.fts5.db"),
         embedFile
       });
-      expect(result.checks.find((check) => check.id === "index:embed")?.status, quantization).toBe("ok");
+      expect(result.checks.find((check) => check.id === "index:embed-selected")?.status, quantization).toBe("ok");
       expect(await snapshotDir(dir), quantization).toEqual(before);
     }
   });
@@ -851,11 +893,11 @@ describe("runDoctor — strict source-state preservation", () => {
       await updateMeta(paths.embedFile, key, invalid);
       const before = await snapshotDir(cacheRoot);
       const result = await diagnose(paths);
-      expect(result.checks.find((check) => check.id === "index:embed")).toMatchObject({
+      expect(result.checks.find((check) => check.id === "index:embed-selected")).toMatchObject({
         status: "missing",
         required: true
       });
-      expect(result.checks.find((check) => check.id === "index:embed")?.detail).toContain(expected);
+      expect(result.checks.find((check) => check.id === "index:embed-selected")?.detail).toContain(expected);
       expect(await snapshotDir(cacheRoot)).toEqual(before);
       await updateMeta(paths.embedFile, key, valid);
     }
@@ -1194,7 +1236,7 @@ describe("runDoctor — strict source-state preservation", () => {
       indexFile: path.join(dir, "missing.fts5.db"),
       embedFile
     });
-    const check = result.checks.find((candidate) => candidate.id === "index:embed");
+    const check = result.checks.find((candidate) => candidate.id === "index:embed-selected");
     expect(check?.status).toBe("warn");
     expect(check?.detail).toContain("must be NOT NULL");
     expect(await snapshotDir(dir)).toEqual(before);
@@ -1275,7 +1317,7 @@ describe("runDoctor — strict source-state preservation", () => {
 
       const before = await snapshotDir(cacheRoot);
       const result = await diagnose({ indexFile: ready.indexFile, embedFile });
-      const check = result.checks.find((candidate) => candidate.id === "index:embed");
+      const check = result.checks.find((candidate) => candidate.id === "index:embed-selected");
       expect(check).toMatchObject({ status: "missing", required: true });
       expect(check?.detail).toContain(expected);
       expect(result.ready).toBe(false);
@@ -1320,7 +1362,7 @@ describe("runDoctor — strict source-state preservation", () => {
     partial.close();
     const partialBefore = await snapshotDir(cacheRoot);
     const partialResult = await diagnose({ indexFile: ready.indexFile, embedFile: partialFile });
-    expect(partialResult.checks.find((candidate) => candidate.id === "index:embed")?.detail).toContain(
+    expect(partialResult.checks.find((candidate) => candidate.id === "index:embed-selected")?.detail).toContain(
       "UNIQUE(rel_path, chunk_index)"
     );
     expect(partialResult.ready).toBe(false);
@@ -1443,7 +1485,7 @@ describe("runDoctor — strict source-state preservation", () => {
       embedFile
     });
     const after = await snapshotDir(dir);
-    const embed = result.checks.find((check) => check.id === "index:embed");
+    const embed = result.checks.find((check) => check.id === "index:embed-selected");
     expect(embed?.status).toBe("warn");
     expect(embed?.detail).toContain("schema 0");
     expect(after).toEqual(before);
@@ -1485,7 +1527,7 @@ describe("runDoctor — strict source-state preservation", () => {
       embedFile
     });
     const after = await snapshotDir(dir);
-    expect(result.checks.find((check) => check.id === "index:embed")?.detail).toContain("vector BLOB length");
+    expect(result.checks.find((check) => check.id === "index:embed-selected")?.detail).toContain("vector BLOB length");
     expect(after).toEqual(before);
   });
 });
@@ -1518,6 +1560,7 @@ describe("runDoctor — privacy", () => {
       expect(result.ready).toBe(false);
       expect(result.checks.find((check) => check.id === "index:fts5")?.hint).toBeUndefined();
       expect(result.checks.find((check) => check.id === "index:embed")?.hint).toBeUndefined();
+      expect(result.checks.find((check) => check.id === "index:embed-selected")?.hint).toBeUndefined();
     } finally {
       enumerate.mockRestore();
     }
@@ -1534,14 +1577,20 @@ describe("runDoctor — privacy", () => {
       repairCommandPrefix: "/usr/bin/node '/opt/enquire mcp/dist/index.js'"
     });
     const indexHint = result.checks.find((check) => check.id === "index:fts5")?.hint ?? "";
-    const embedHint = result.checks.find((check) => check.id === "index:embed")?.hint ?? "";
+    const serveEmbedHint = result.checks.find((check) => check.id === "index:embed")?.hint ?? "";
+    const selectedEmbedHint = result.checks.find((check) => check.id === "index:embed-selected")?.hint ?? "";
     const privacy = "--exclude-glob 'Private/**' 'semi;colon/**' --read-paths 'Projects/**'";
     const canonicalRoot = await fs.realpath(root);
     expect(indexHint).toContain(`index --vault ${canonicalRoot} --index-file '${indexFile}' ${privacy}`);
-    expect(embedHint).toContain(`build-embeddings --vault ${canonicalRoot} --embed-file '${embedFile}' ${privacy}`);
+    expect(serveEmbedHint).toContain(`build-embeddings --vault ${canonicalRoot} ${privacy}`);
+    expect(serveEmbedHint).not.toContain("--embed-file");
+    expect(selectedEmbedHint).toContain(
+      `build-embeddings --vault ${canonicalRoot} --embed-file '${embedFile}' ${privacy}`
+    );
     // NEGATIVE control: each repair command carries only its own storage override.
     expect(indexHint).not.toContain("--embed-file");
-    expect(embedHint).not.toContain("--index-file");
+    expect(serveEmbedHint).not.toContain("--index-file");
+    expect(selectedEmbedHint).not.toContain("--index-file");
   });
 });
 

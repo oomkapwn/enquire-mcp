@@ -1918,6 +1918,52 @@ describe("startHttpServer stateful sessions (v2.14.0)", () => {
     } finally {
       await s.close();
     }
+
+    const idleTimeoutMs = 25;
+    const occupied = await startHttpServer(
+      {
+        vault: root,
+        port: 0,
+        host: "127.0.0.1",
+        bearerToken: TOKEN,
+        mcpPath: "/mcp",
+        healthPath: "/health",
+        rateLimitPerMinute: 0,
+        corsOrigins: [],
+        stateful: true,
+        maxSessions: 100,
+        sessionIdleTimeoutMs: idleTimeoutMs,
+        installSignalHandlers: false
+      },
+      {
+        afterStatefulRequestAdmitted: async () => {
+          await new Promise<void>((resolve) => setTimeout(resolve, idleTimeoutMs + 20));
+        }
+      }
+    );
+    try {
+      const addr = occupied.address() as AddressInfo;
+      const url = `http://127.0.0.1:${addr.port}`;
+      const { sessionId, rawResponse } = await initSession(url);
+      await rawResponse.text();
+      const followUp = await fetch(`${url}/mcp`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json, text/event-stream",
+          Authorization: `Bearer ${TOKEN}`,
+          "Mcp-Session-Id": sessionId
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          method: "notifications/initialized"
+        })
+      });
+      expect(followUp.status).toBeLessThan(300);
+      await followUp.text();
+    } finally {
+      await shutdownHttpServer(occupied);
+    }
   });
 
   it("POST with unknown session id returns 404", async () => {

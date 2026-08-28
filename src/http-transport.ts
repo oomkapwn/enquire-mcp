@@ -95,6 +95,8 @@ export interface HttpTransportInternals {
   afterDeleteMarkedClosing?: (sessionId: string) => void | Promise<void>;
   /** Pause after a modern request owns an in-flight slot; used only by lifecycle tests. */
   afterModernRequestAdmitted?: () => void | Promise<void>;
+  /** Pause after a stateful session occupies an in-flight slot; used only by lifecycle tests. */
+  afterStatefulRequestAdmitted?: () => void | Promise<void>;
   /** Fault-injection point after listen and owner installation but before startup commits. */
   beforeStartupCommit?: (server: HttpServer, deps: ServerDeps) => void | Promise<void>;
   /** Replace TCP listener construction in ownership tests without binding an operating-system socket. */
@@ -668,7 +670,7 @@ function applyCors(req: IncomingMessage, res: ServerResponse, allowOrigins: stri
 interface StatefulSession {
   server: ReturnType<typeof buildMcpServer>;
   transport: InstanceType<typeof NodeStreamableHTTPServerTransport>;
-  /** Epoch-ms of the last `handleRequest` for this session. */
+  /** Epoch-ms of the last completed `handleRequest` occupancy for this session. */
   lastActivityMs: number;
   /**
    * v3.8.7 — count of ALL handlers currently inside `transport.handleRequest`
@@ -898,14 +900,17 @@ async function runWithRefcount<T>(
   session: StatefulSession,
   fn: () => Promise<T>,
   isCall = true,
-  isWrite = false
+  isWrite = false,
+  afterAdmitted?: () => void | Promise<void>
 ): Promise<T> {
   session.inFlight += 1;
   if (isCall) session.inFlightCalls += 1;
   if (isWrite) session.inFlightWrites = (session.inFlightWrites ?? 0) + 1;
   try {
+    if (afterAdmitted) await afterAdmitted();
     return await fn();
   } finally {
+    session.lastActivityMs = Date.now();
     session.inFlight -= 1;
     if (isCall) session.inFlightCalls -= 1;
     if (isWrite) {
@@ -1393,7 +1398,13 @@ export function createHttpHandler(
         registry.sessions.delete(sessionId);
         try {
           // The DELETE itself is a lifecycle op, not a drainable call.
-          await runWithRefcount(session, () => session.transport.handleRequest(req, res), false);
+          await runWithRefcount(
+            session,
+            () => session.transport.handleRequest(req, res),
+            false,
+            false,
+            internals.afterStatefulRequestAdmitted
+          );
         } catch {
           /* shutdown errors don't matter — we're killing the session anyway */
         }
@@ -1419,14 +1430,19 @@ export function createHttpHandler(
           sendJsonRpcError(res, 404, -32000, `Unknown session ${sessionId}`);
           return;
         }
-        session.lastActivityMs = Date.now();
         try {
           // v3.11.6-rc.21 (rc.20 re-sweep F1) — the SSE stream is `isCall: false`:
           // `handleRequest` stays pending for the whole stream lifetime, so it
           // must NOT be part of the DELETE/closeAll drain (which it would pin
           // forever). It still bumps `inFlight` so idle-sweep treats the session
           // as active; teardown TERMINATES this stream rather than waiting on it.
-          await runWithRefcount(session, () => session.transport.handleRequest(req, res), false);
+          await runWithRefcount(
+            session,
+            () => session.transport.handleRequest(req, res),
+            false,
+            false,
+            internals.afterStatefulRequestAdmitted
+          );
         } catch (err) {
           process.stderr.write(`enquire http: SSE error — ${err instanceof Error ? err.message : String(err)}\n`);
         }
@@ -1455,13 +1471,13 @@ export function createHttpHandler(
           sendJsonRpcError(res, 404, -32000, `Unknown session ${sessionId} (it may have expired)`);
           return;
         }
-        session.lastActivityMs = Date.now();
         try {
           await runWithRefcount(
             session,
             () => session.transport.handleRequest(req, res, body),
             true,
-            isPersistentWriteRequest(body)
+            isPersistentWriteRequest(body),
+            internals.afterStatefulRequestAdmitted
           );
         } catch (err) {
           process.stderr.write(
@@ -1582,7 +1598,13 @@ export function createHttpHandler(
               }
             };
             await server.connect(tr);
-            await runWithRefcount(session, () => tr.handleRequest(req, res, body));
+            await runWithRefcount(
+              session,
+              () => tr.handleRequest(req, res, body),
+              true,
+              false,
+              internals.afterStatefulRequestAdmitted
+            );
             if (session.closing) {
               await tr.close().catch(() => {});
               await server.close().catch(() => {});

@@ -4,6 +4,17 @@ All notable changes to this project will be documented here. The format follows 
 
 ## [4.0.0-rc.4] — 2026-08-21
 
+### HTTP session activity is stamped when the request finishes
+
+> **TL;DR:** **Stateful `serve-http` now records `lastActivityMs` when a session's `handleRequest` occupancy ends, not when it begins.** The idle sweep compares that stamp to `now - sessionIdleTimeoutMs`. A request longer than the TTL used to leave a start-time stamp, so the next request's lazy sweep could evict the session it had just used. Occupancy still skips the sweep while `inFlight > 0`.
+>
+> **Bounded claim.** This does **not** bound legacy stateful `transport.close`/`server.close` (A9). It does **not** change the request-driven lazy sweep, DELETE drain, or SSE `inFlight` skip. It does **not** reopen H1 process-listener teardown.
+>
+> **Method note:** BACKLOG §1.CC-HOLD **H2**. Coverage is an extra phase of the existing session-reuse test: initialize occupies longer than a 25ms idle TTL, then the immediate follow-up POST must still be accepted. No new `it()`. Under D-45 all executable proof is GitHub-hosted; no local package-manager, lint or test workload was used.
+
+- **Idle TTL measures quiet time after the last occupancy.** `runWithRefcount` stamps `lastActivityMs` in `finally` before dropping `inFlight`.
+- **Initialize, POST, GET, and DELETE share that occupancy.** Constructor `lastActivityMs` remains the pre-first-occupancy value.
+
 ### HTTP shutdown drops the process listeners it installed
 
 > **TL;DR:** **Normal `serve-http` shutdown now removes the SIGINT, SIGTERM, and `beforeExit` listeners it installed after listen.** Those `removeListener` calls lived only in the startup `catch`, so a later server in the same process could be terminated by a previous server's handler. `shutdownHttpServer` now drops the exact owners it published, including on the successful path.

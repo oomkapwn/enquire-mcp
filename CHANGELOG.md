@@ -4,6 +4,17 @@ All notable changes to this project will be documented here. The format follows 
 
 ## [4.0.0-rc.4] — 2026-08-21
 
+### Open-questions matching budget does not charge vault I/O as ReDoS
+
+> **TL;DR:** **`obsidian_open_questions` with a caller-supplied pattern no longer rejects a legitimate regex as catastrophic backtracking merely because uncached note reads consumed the matching wall clock.** After 93e rewrote the envelope, `matchDeadline` was `Date.now() + scanBudgetMs` before the uncached walk, and both the pre-`readNoteUncached` check and `flushCandidateBatch` remaining-time math treated vault I/O as matching. `matchingTimeout()` has no inner catcher, so one slow read returned zero questions with a ReDoS error. The budget now decrements only around `matchBatch` and is not reset per note. Incomplete listing still fails closed. The default inline matcher stays uncharged.
+>
+> **Bounded claim.** This does **not** raise `MAX_QUESTION_SCAN_MS`, weaken `isCatastrophicRegex`, or remove the worker sink-bound. A true worker overrun still rejects the pattern. It does **not** return a partial inventory when the bounded listing is incomplete.
+>
+> **Method note:** BACKLOG §1.CC-ter **B6**, fifth product slice of the `93e03f28` unit (what catches this throw, and what does that catcher then disable?). Coverage is an extra phase of the existing non-resetting-deadline test: a `readNoteUncached` delay longer than `scanBudgetMs` must still return the five questions. The detector-missed catastrophic pattern in `redos-guard` must still throw. No new `it()`. Under D-45 all executable proof is GitHub-hosted; no local package-manager, lint or test workload was used.
+
+- **Matching time is worker time.** `getOpenQuestions` charges `scanBudgetMs` only around `matchBatch`, not around `readNoteUncached`.
+- **The matching budget is still one walk.** Remaining milliseconds carry across sequential batches and are not reset per note.
+
 ### Per-path quarantine does not permanently skip HNSW persist
 
 > **TL;DR:** **One ordinary note's failed watcher commit no longer disables HNSW persistence (and the live graph) for every other note until restart.** After B0 dropped the process-wide `semanticUsable` latch, `quarantineFailedGeneration` still called `quarantineHnswGeneration` whenever EmbedDb and HNSW were both attached, and the md/pdf commit catchers also set `hnswPersistUnsafe` whenever `this.hnsw` existed. A Map-of-Content that trips `MAX_FTS_LINK_TARGETS` therefore stopped `flushHnswToDisk` for the life of the process even though brute EmbedDb search stayed up. Per-path quarantine now writes the EmbedDb marker with `quarantineSourceIfGeneration` and drops that source's live HNSW labels only while this watcher still owns the generation. Remaining notes can keep using and persisting the graph. A foreign EmbedDb epoch process-quarantines the graph instead of being published.

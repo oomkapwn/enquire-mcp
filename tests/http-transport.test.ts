@@ -14,11 +14,12 @@
 
 import { EventEmitter } from "node:events";
 import { promises as fs } from "node:fs";
-import { createServer } from "node:http";
+import { createServer, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
+import { NodeStreamableHTTPServerTransport } from "@modelcontextprotocol/node";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   closeServerBounded,
@@ -643,36 +644,38 @@ describe("SessionRegistry (v2.14.0)", () => {
       rateLimitPerMinute: 0,
       installSignalHandlers: false
     });
-    const hangServer = createServer((req, res) => {
+    const originalHandleRequest = NodeStreamableHTTPServerTransport.prototype.handleRequest;
+    const injectResponses = new WeakSet<ServerResponse>();
+    NodeStreamableHTTPServerTransport.prototype.handleRequest = async function (req, res, parsedBody) {
+      if (!injectResponses.has(res)) {
+        return originalHandleRequest.call(this, req, res, parsedBody);
+      }
       const writeHead = res.writeHead.bind(res);
-      const write = res.write.bind(res);
       const end = res.end.bind(res);
-      let injected = false;
-      const injectAfterHeaders = (): void => {
-        if (injected || !res.headersSent) return;
-        injected = true;
-        throw new Error("injected post-header failure");
-      };
-      // Close-delimited head so finishCaughtHttpResponse can complete the
-      // body. Throw on the first write/end AFTER writeHead returns — a throw
-      // inside writeHead is swallowed by @hono/node-server and never reaches
-      // the product catch.
+      // Close-delimited head so finishCaughtHttpResponse can complete the body.
+      // Leave end uncommitted during the Hono listener — a throw from
+      // write/end is swallowed by @hono/node-server and never reaches the
+      // product catch. Throw after that listener returns, still inside the
+      // product's await tr.handleRequest.
       res.writeHead = ((statusCode: number, ..._rest: unknown[]) =>
         writeHead(statusCode, { Connection: "close" })) as typeof res.writeHead;
-      res.write = ((...args: unknown[]) => {
-        injectAfterHeaders();
-        return (write as (...inner: unknown[]) => boolean)(...args);
-      }) as typeof res.write;
-      res.end = ((...args: unknown[]) => {
-        if (!res.headersSent) writeHead(res.statusCode || 200, { Connection: "close" });
-        injectAfterHeaders();
-        return (end as (...inner: unknown[]) => unknown)(...args);
-      }) as typeof res.end;
+      res.end = ((..._args: unknown[]) => res) as typeof res.end;
+      try {
+        await originalHandleRequest.call(this, req, res, parsedBody);
+      } finally {
+        res.end = end;
+      }
+      if (res.headersSent && !res.writableEnded) {
+        throw new Error("injected post-header failure");
+      }
+    };
+    const hangServer = createServer((req, res) => {
+      injectResponses.add(res);
       void hangHandler(req, res);
     });
-    await new Promise<void>((resolve) => hangServer.listen(0, "127.0.0.1", resolve));
     const hangStderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     try {
+      await new Promise<void>((resolve) => hangServer.listen(0, "127.0.0.1", resolve));
       const addr = hangServer.address() as AddressInfo;
       const response = await fetch(`http://127.0.0.1:${addr.port}/mcp`, {
         method: "POST",
@@ -697,6 +700,7 @@ describe("SessionRegistry (v2.14.0)", () => {
       const log = hangStderr.mock.calls.map(([chunk]) => String(chunk)).join("");
       expect(log).toMatch(/stateful initialize error.*injected post-header failure/is);
     } finally {
+      NodeStreamableHTTPServerTransport.prototype.handleRequest = originalHandleRequest;
       hangStderr.mockRestore();
       await closeServerBounded(hangServer);
     }

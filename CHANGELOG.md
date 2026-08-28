@@ -10,7 +10,7 @@ All notable changes to this project will be documented here. The format follows 
 >
 > **Bounded claim.** This does **not** change JSON-RPC error bodies for pre-header failures. It does **not** change H6 (`connect` overwriting stateful `onclose`). It does **not** reopen A9 bounded session close.
 >
-> **Method note:** BACKLOG §1.CC-HOLD **H5**. Coverage is an extra phase of the existing late-publication handler test: `writeHead` sends a close-delimited status, the first later `write`/`end` throws into the product catch (not inside `writeHead`, which `@hono/node-server` swallows), `fetch` must finish within 3s, and stderr names the injected initialize failure. No new `it()`. Under D-45 all executable proof is GitHub-hosted; no local package-manager, lint or test workload was used.
+> **Method note:** BACKLOG §1.CC-HOLD **H5**. Coverage is an extra phase of the existing late-publication handler test: a per-response wrap of `NodeStreamableHTTPServerTransport.handleRequest` sends a close-delimited `writeHead`, leaves `end` uncommitted during the Hono listener (which swallows `write`/`end` throws), then throws `injected post-header failure` after that listener returns so the product initialize catch runs. `fetch` must finish within 3s, and stderr names the injected initialize failure. No new `it()`. Under D-45 all executable proof is GitHub-hosted; no local package-manager, lint or test workload was used.
 
 - **Caught transport errors finish the HTTP response.** If headers are already sent, the catch path ends the body instead of returning with the socket still open.
 

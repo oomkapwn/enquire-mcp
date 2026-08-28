@@ -45,6 +45,10 @@ describe("wikilink source evidence", () => {
     expect(hits[0]?.snippet).toContain("real-one");
     expect(hits[1]?.snippet).toContain("real-two");
     expect(hits.map((hit) => hit.snippet).join("\n")).not.toContain("fenced-decoy");
+
+    await fs.writeFile(path.join(root, "Poison.md"), "See [[Missing|see `x`]]\n");
+    const poisoned = await getUnresolvedWikilinks(vault, { limit: 10 });
+    expect(poisoned.some((hit) => hit.from_path === "Source.md" && hit.snippet.includes("real-one"))).toBe(true);
   });
 
   it("uses admitted offsets for backlink snippets with duplicate literals", async () => {
@@ -70,6 +74,15 @@ describe("wikilink source evidence", () => {
     expect(hits[0]?.snippets[0]).toContain("real-one");
     expect(hits[0]?.snippets[1]).toContain("real-two");
     expect(hits[0]?.snippets.join("\n")).not.toContain("fenced-decoy");
+
+    // 93e03f28 admitted snippet offsets against the original file after
+    // parseNote masked inline code in place. A wikilink whose alias
+    // contains matched backticks then throws, aborting the vault walk.
+    // Poison.md sorts before Source.md, so an uncaught throw hides Source.
+    await fs.writeFile(path.join(root, "Poison.md"), "See [[Target|see `x`]]\n");
+    const poisoned = await getBacklinks(vault, { path: "Target.md", limit: 10 });
+    expect(poisoned.some((hit) => hit.path === "Source.md")).toBe(true);
+    expect(poisoned.some((hit) => hit.path === "Poison.md")).toBe(true);
   });
 
   it("preserves interleaved embed/wikilink source order", async () => {

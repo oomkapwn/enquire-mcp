@@ -4,6 +4,17 @@ All notable changes to this project will be documented here. The format follows 
 
 ## [4.0.0-rc.4] — 2026-08-21
 
+### Brute-force embedding search does not run the HNSW graph envelope
+
+> **TL;DR:** **`obsidian_embeddings_search` (and the embeddings arm of `obsidian_search`) no longer fail a whole brute-force query because HNSW snapshot admission refused the corpus.** `93e03f28` called `captureHnswReceiptSnapshot()` inside `searchReceiptRows` and discarded the return, so ranking inherited the HNSW envelope (`MAX_HNSW_SNAPSHOT_ROWS = 250_000`, 64 MiB text, complete `n_chunks`). One incomplete declared source or over-envelope corpus threw `EmbedSnapshotIntegrityError` / `EmbedSnapshotCapacityError` with no catcher, including `--use-hnsw` off. Ranking still uses one SQLite transaction; mixed-generation after awaited filesystem work is still refused by `captureGenerationIdentity`. HNSW build/load still use the snapshot helper.
+>
+> **Bounded claim.** This does **not** change `captureHnswReceiptSnapshot`, startup `semanticRouteHealth`, or `hnswPersistUnsafe`. Per-row ranking admission (`Embedding search row is outside the admitted durable generation`) is unchanged. Incomplete declared sources remain an HNSW-snapshot refusal.
+>
+> **Method note:** BACKLOG §1.CC-ter **B6**, second product slice of the `93e03f28` unit. Coverage is extra phases of the existing incomplete-source snapshot test: after an `n_chunks` poke and after deleting a chunk, the snapshot still throws and `searchWithReceipts` still returns the remaining well-formed rows. The same causal sibling in `assertDeleteAndOrphanHydration` (called from `getSourceStates returns the latest mtime per note for incremental rebuilds`): leftover embeddings after deleting `source_state` still refuse `captureHnswReceiptSnapshot` / `getAllVectors`; brute `search` / `searchWithReceipts` return no current-source hits instead of throwing. No new `it()`. Under D-45 all executable proof is GitHub-hosted; no local package-manager, lint or test workload was used.
+
+- **Brute cosine does not call the HNSW envelope.** `searchReceiptRows` ranks inside one transaction without `captureHnswReceiptSnapshot`.
+- **Incomplete sources still refuse the graph snapshot.** The extra phases require the snapshot throw to remain while brute search keeps the remaining rows.
+
 ### Wikilink evidence mismatch does not abort the vault walk
 
 > **TL;DR:** **`obsidian_get_backlinks` and `obsidian_get_unresolved_wikilinks` no longer fail the whole vault because one note's snippet offsets disagree with the original file.** `93e03f28` added `admittedLinkEvidence`, which requires `content.slice(sourceStart, sourceEnd) === "[["+raw+"]]"` after `parseNote` has masked inline code in place. A wikilink whose alias contains matched backticks then throws `"Parsed wikilink evidence no longer matches its source generation"` from the vault walk, with no catcher. The link was already counted (or already known unresolved); only the snippet is unprovable. Those two walkers now skip that snippet/row and continue.

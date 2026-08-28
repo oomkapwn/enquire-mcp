@@ -2046,8 +2046,13 @@ describe("EmbedDb", () => {
 
     const reopened = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
     await reopened.open();
-    expect(() => reopened.search(l2([1, 0, 0, 0]), 10)).toThrow(/not admissible for a complete HNSW snapshot/);
+    // Leftover embeddings without source_state refuse a complete HNSW snapshot
+    // (LEFT JOIN: state_rel_path !== rel_path). Brute ranking INNER JOINs
+    // source_state, so those rows are absent rather than failing the query.
+    expect(() => reopened.captureHnswReceiptSnapshot()).toThrow(/not admissible for a complete HNSW snapshot/);
     expect(() => reopened.getAllVectors()).toThrow(/not admissible for a complete HNSW snapshot/);
+    expect(reopened.search(l2([1, 0, 0, 0]), 10)).toEqual([]);
+    expect(reopened.searchWithReceipts(l2([1, 0, 0, 0]), 10)).toEqual([]);
     expect(reopened.getSearchRowsByIds(inserted.newIds).size).toBe(0);
     reopened.quarantineSource("orphan.md", "md");
     reopened.deleteNote("orphan.md");
@@ -4242,6 +4247,11 @@ describe("EmbedDb atomic HNSW receipt snapshots", () => {
         expect(() => db.captureHnswReceiptSnapshot()).toThrow(
           "Embedding source state is incomplete during HNSW snapshot capture"
         );
+        // 93e03f28 ran captureHnswReceiptSnapshot inside searchReceiptRows and
+        // discarded the return, so this poke also failed brute cosine. Ranking
+        // still sees both physical rows.
+        const poked = db.searchWithReceipts(l2([1, 0, 0, 0]), 10);
+        expect(poked.map((hit) => hit.text_preview).sort()).toEqual(["first", "second"]);
 
         raw.prepare("UPDATE source_state SET n_chunks = 2 WHERE rel_path = ? AND kind = 'md'").run("complete.md");
         expect(db.captureHnswReceiptSnapshot().receipt.activeRows).toBe(2);
@@ -4253,6 +4263,9 @@ describe("EmbedDb atomic HNSW receipt snapshots", () => {
         expect(() => db.captureHnswBuildSnapshot()).toThrow(
           "Embedding source state is incomplete during HNSW snapshot capture"
         );
+        const remaining = db.searchWithReceipts(l2([1, 0, 0, 0]), 10);
+        expect(remaining).toHaveLength(1);
+        expect(remaining[0]?.text_preview).toBe("first");
       } finally {
         raw.close();
       }

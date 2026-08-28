@@ -4,6 +4,17 @@ All notable changes to this project will be documented here. The format follows 
 
 ## [4.0.0-rc.4] — 2026-08-21
 
+### HTTP body-bomb docs match the live ×6 cap and 413 overflow
+
+> **TL;DR:** **SECURITY.md and the HTTP transport threat model no longer advertise a body cap four times too small, or a 400 for overflow.** Live `deriveHttpBodyCap` is `max(4 MiB, vaultMaxBytes × 6 + 64 KiB)` (~30.06 MiB at the default 5 MiB file cap). Overflow is `413 Request body too large`; `400 Parse error` is only for malformed JSON. The operator docs and the `cli-flag-docs-invariant` body-cap gate still required `× 1.5` / 7.5 MB / `400`, so the gate was false-green for the live formula. This is documentation and invariant honesty. The cap, the 413/400 dispatch, and `tests/http-transport.test.ts` are unchanged.
+>
+> **Bounded claim.** This does **not** change `MIN_HTTP_JSON_BODY_BYTES`, `HTTP_JSON_ESCAPE_EXPANSION`, `HTTP_JSON_ENVELOPE_HEADROOM_BYTES`, `MAX_HTTP_JSON_BODY_BYTES`, or `deriveHttpBodyCap`. Historical CHANGELOG / audit-brief entries that describe the v3.7.12-era ×1.5 ship stay historical. Parse failures remain 400. A 12 MiB `--max-file-bytes` still refuses at startup because worst-case wire form exceeds 64 MiB.
+>
+> **Method note:** BACKLOG §1.CC-ter **B5**, remaining MED. Coverage is extra phases of the existing SECURITY.md body-cap invariant test (live ×6, 64 KiB, 413; reject leftover `1.5` / `7.5`), so the source `it()` census does not move. Under D-45 all executable proof is GitHub-hosted; no local package-manager, lint or test workload was used.
+
+- **Operator docs name the live formula.** `SECURITY.md` and `docs/http-transport.md` now say `max(4 MiB, max-file-bytes × 6 + 64 KiB)` and `413` for overflow.
+- **The invariant pins ×6 and 413, not the stale ×1.5.** A body-bomb line that still says `1.5` or `7.5` fails the existing test.
+
 ### Doctor hybrid READY requires the serve-time embedding index
 
 > **TL;DR:** **`enquire-mcp doctor --embed-file <custom>` can no longer report hybrid READY when the index `serve --persistent-index` actually opens is missing.** `serve`, `serve-http`, `query` and `eval` have `--index-file` (or, for eval, `--persistent-index` plus optional `--index-file`) but not `--embed-file`; embeddings always use `embedDbPath(vault.root)` (the `.embed.db` sibling of `defaultIndexFile`). Doctor inspected only `opts.embedFile ?? default`, so a valid custom file plus a missing serve-time default produced READY while live search had no embeddings. `index:embed` is now always that serve-time default. A path-distinct `--embed-file` is an additional `index:embed-selected` check — required for both hybrid tiers, advisory for `basic`, matching the selected watcher-activation guard — and is not a substitute.

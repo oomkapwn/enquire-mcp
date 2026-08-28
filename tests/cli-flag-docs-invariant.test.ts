@@ -3,7 +3,7 @@
 // Closes the "phantom CLI flag in docs" drift class (re-audit DOC-HNSW-PERSIST-PHANTOM-FLAG:
 // docs/api.md described a `--hnsw-persist` flag that never existed — only `--no-hnsw-persist`
 // does) + the "stale security number" class (DOC-SECURITY-HTTP-BODY-CAP-STALE: SECURITY.md
-// claimed a fixed 4 MB HTTP body cap while the code DERIVES `max(4 MB, max-file-bytes × 1.5)`).
+// claimed a fixed 4 MB HTTP body cap while the code DERIVES `max(4 MiB, max-file-bytes × 6 + 64 KiB)`).
 //
 // OIA Check 3 validates SUBCOMMAND existence, not `--flag` tokens in prose; nothing pinned
 // the body-cap wording to its formula. These two assertions do.
@@ -52,11 +52,15 @@ describe("cli-flag-in-docs invariant (rc.51)", () => {
   });
 
   it("SECURITY.md body-cap is documented as DERIVED, not a bare fixed cap (rc.51 DOC-SECURITY)", () => {
-    // The code derives the cap (http-transport.ts deriveHttpBodyCap = max(4 MB, ×1.5)); the
-    // docs must describe the derivation, not assert a stale fixed number.
+    // The code derives the cap (http-transport.ts deriveHttpBodyCap = max(4 MiB, ×6 + 64 KiB));
+    // overflow is 413. The docs must describe that derivation, not a stale factor or status.
     const sec = read("SECURITY.md");
     const line = sec.split("\n").find((l) => /Body bombs/.test(l)) ?? "";
     expect(line, "SECURITY.md body-bomb line must reference the --max-file-bytes derivation").toMatch(/max-file-bytes/);
-    expect(line, "…and the 1.5× headroom factor").toMatch(/1\.5/);
+    expect(line, "…and the live ×6 JSON-escape expansion").toMatch(/× 6/);
+    expect(line, "…and the 64 KiB envelope headroom").toMatch(/64 KiB/);
+    expect(line, "…and 413 for overflow").toMatch(/413/);
+    expect(line, "stale ×1.5 factor must not remain on the body-bomb line").not.toMatch(/1\.5/);
+    expect(line, "stale 7.5 MB default must not remain on the body-bomb line").not.toMatch(/7\.5/);
   });
 });

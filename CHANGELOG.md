@@ -4,6 +4,17 @@ All notable changes to this project will be documented here. The format follows 
 
 ## [4.0.0-rc.4] — 2026-08-21
 
+### HTTP shutdown bounds legacy session protocol close
+
+> **TL;DR:** **Stateful `closeAll` no longer awaits hung SDK `transport.close` / `server.close` with no deadline.** Those awaits sat after the bounded call drain and write-integrity tail, and they blocked `shutdownHttpServer` before TCP force-close. Each session's protocol close now races the same 3s class as modern handler close and stdio protocol close, in parallel, so a stuck SDK close cannot pin teardown.
+>
+> **Bounded claim.** This does **not** bound DELETE-path or initialize-rollback `transport.close` / `server.close`. It does **not** change idle-sweep's fire-and-forget `void close()`. It does **not** reopen H1 process listeners or H2 activity stamps.
+>
+> **Method note:** BACKLOG §1.CC **A9**. Coverage is an extra phase of the existing `closeAll` drain test: one session's `transport.close` never settles, `closeAll(0)` must still return, and the hang is then released. No new `it()`. Under D-45 all executable proof is GitHub-hosted; no local package-manager, lint or test workload was used.
+
+- **Legacy protocol close is bounded.** `closeAll` uses `waitForBoundedSettlement` with `LEGACY_SESSION_CLOSE_MS` (3000).
+- **Hung closes run in parallel.** One stuck session cannot serialize every other session's 3s budget.
+
 ### HTTP session activity is stamped when the request finishes
 
 > **TL;DR:** **Stateful `serve-http` now records `lastActivityMs` when a session's `handleRequest` occupancy ends, not when it begins.** The idle sweep compares that stamp to `now - sessionIdleTimeoutMs`. A request longer than the TTL used to leave a start-time stamp, so the next request's lazy sweep could evict the session it had just used. Occupancy still skips the sweep while `inFlight > 0`.

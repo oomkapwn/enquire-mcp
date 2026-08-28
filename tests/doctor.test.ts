@@ -521,9 +521,17 @@ describe("runDoctor — tiers and readiness", () => {
           const relativeDefault = serveTimeEmbedFile(await fs.realpath(root));
           expect(path.isAbsolute(relativeDefault)).toBe(false);
           expect(path.resolve(relativeDefault)).toBe(path.resolve(serveEmbedFile));
+          const stillDistinct = await diagnose(paths);
+          expect(stillDistinct.ready).toBe(true);
+          expect(stillDistinct.checks.find((check) => check.id === "index:embed")?.status).toBe("ok");
+          expect(stillDistinct.checks.find((check) => check.id === "index:embed-selected")?.status).toBe("ok");
           const sameRelative = await diagnose({ ...paths, embedFile: relativeDefault });
+          expect(sameRelative.ready).toBe(true);
+          expect(sameRelative.checks.find((check) => check.id === "index:embed")?.status).toBe("ok");
           expect(sameRelative.checks.find((check) => check.id === "index:embed-selected")).toBeUndefined();
           const sameResolved = await diagnose({ ...paths, embedFile: path.resolve(relativeDefault) });
+          expect(sameResolved.ready).toBe(true);
+          expect(sameResolved.checks.find((check) => check.id === "index:embed")?.status).toBe("ok");
           expect(sameResolved.checks.find((check) => check.id === "index:embed-selected")).toBeUndefined();
         }
       }

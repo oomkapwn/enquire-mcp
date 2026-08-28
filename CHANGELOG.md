@@ -4,6 +4,17 @@ All notable changes to this project will be documented here. The format follows 
 
 ## [4.0.0-rc.4] — 2026-08-21
 
+### HTTP shutdown drops the process listeners it installed
+
+> **TL;DR:** **Normal `serve-http` shutdown now removes the SIGINT, SIGTERM, and `beforeExit` listeners it installed after listen.** Those `removeListener` calls lived only in the startup `catch`, so a later server in the same process could be terminated by a previous server's handler. `shutdownHttpServer` now drops the exact owners it published, including on the successful path.
+>
+> **Bounded claim.** This does **not** fold session-idle stamping at request start (H2). It does **not** bound legacy stateful `transport.close`/`server.close` (A9). It does **not** change `installSignalHandlers: false`.
+>
+> **Method note:** BACKLOG §1.CC-HOLD **H1**. Coverage is an extra phase of the existing stateless-shutdown test: after a successful listen with `installSignalHandlers: true`, `shutdownHttpServer` must restore the process listener counts. No new `it()`. Under D-45 all executable proof is GitHub-hosted; no local package-manager, lint or test workload was used.
+
+- **Process owners die with the listener.** `HttpServerExtras` holds the exact SIGINT/SIGTERM/`beforeExit` functions; shutdown removes them before protocol drain.
+- **Startup-failure rollback is unchanged.** The ownership `catch` still removes any partially installed handlers.
+
 ### Append does not report failure after the bytes are durable
 
 > **TL;DR:** **`appendNote` no longer rejects after a successful `writeFile` because a later handle `stat` or `close` failed.** A rejected append looks uncommitted to the caller, so a retry appends twice. The write is the commit; receipt metadata prefers a live dest stat and otherwise uses the pre-write size plus the appended byte count. Close after that write is best-effort.

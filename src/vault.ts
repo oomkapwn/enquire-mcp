@@ -2355,7 +2355,8 @@ export class Vault {
 
       const handle = await this.openSafe(abs, appendFlags);
       const additionBytes = Buffer.byteLength(addition, "utf8");
-      let after: import("node:fs").Stats;
+      let after: import("node:fs").Stats | undefined;
+      let publishedSize: number | undefined;
       try {
         const before = await handle.stat();
         if (!before.isFile()) {
@@ -2388,15 +2389,21 @@ export class Vault {
           throw new Error(`Refusing to grow ${vaultRelative(this.root, abs)} past ${this.maxFileBytes} bytes`);
         }
         await handle.writeFile(addition, "utf8");
-        after = await handle.stat();
+        publishedSize = before.size + additionBytes;
+        try {
+          after = await handle.stat();
+        } catch {
+          after = undefined;
+        }
       } finally {
-        await handle.close();
+        await handle.close().catch(() => {});
       }
       this.deleteCacheEntry(abs);
+      const receipt = await this.publishedReceiptStat(abs, after, publishedSize);
       return {
         absPath: abs,
         relPath: vaultRelative(this.root, abs),
-        mtimeMs: after.mtimeMs,
+        mtimeMs: receipt.mtimeMs,
         appended_bytes: additionBytes
       };
     });

@@ -655,6 +655,40 @@ describe("appendToNote", () => {
     await appendToNote(v, { path: "Log.md", content: "second", separator: "\n---\n" });
     const text = await fs.readFile(path.join(root, "Log.md"), "utf8");
     expect(text).toBe("first\n---\nsecond");
+
+    await createNote(v, { path: "AppendStat.md", content: "first" });
+    const appendInternals = v as unknown as {
+      openSafe(p: string, flags: string | number, mode?: number): Promise<import("node:fs/promises").FileHandle>;
+    };
+    const openSafe = appendInternals.openSafe.bind(v);
+    const openSpy = vi.spyOn(appendInternals, "openSafe").mockImplementation(async (p, flags, mode) => {
+      const handle = await openSafe(p, flags, mode);
+      let published = false;
+      const writeFile = handle.writeFile.bind(handle);
+      const stat = handle.stat.bind(handle);
+      const close = handle.close.bind(handle);
+      handle.writeFile = (async (...args: Parameters<typeof handle.writeFile>) => {
+        const result = await writeFile(...args);
+        published = true;
+        return result;
+      }) as typeof handle.writeFile;
+      handle.stat = (async (...args: Parameters<typeof handle.stat>) => {
+        if (published) throw new Error("synthetic post-commit append stat failure");
+        return stat(...args);
+      }) as typeof handle.stat;
+      handle.close = (async () => {
+        if (published) throw new Error("synthetic post-commit append close failure");
+        return close();
+      }) as typeof handle.close;
+      return handle;
+    });
+    try {
+      const receipt = await v.appendNote("AppendStat.md", "\nsecond");
+      expect(receipt.appended_bytes).toBe(Buffer.byteLength("\nsecond"));
+      expect(await fs.readFile(path.join(root, "AppendStat.md"), "utf8")).toBe("first\nsecond");
+    } finally {
+      openSpy.mockRestore();
+    }
   });
 
   it("can resolve target by title", async () => {

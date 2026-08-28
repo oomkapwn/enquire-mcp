@@ -4,6 +4,17 @@ All notable changes to this project will be documented here. The format follows 
 
 ## [4.0.0-rc.4] — 2026-08-21
 
+### Append does not report failure after the bytes are durable
+
+> **TL;DR:** **`appendNote` no longer rejects after a successful `writeFile` because a later handle `stat` or `close` failed.** A rejected append looks uncommitted to the caller, so a retry appends twice. The write is the commit; receipt metadata prefers a live dest stat and otherwise uses the pre-write size plus the appended byte count. Close after that write is best-effort.
+>
+> **Bounded claim.** This does **not** move caller-side `committedBacklinks.push` before `await` (A12). It does **not** reopen A3 source unlink or A4 write/rename receipts.
+>
+> **Method note:** BACKLOG §1.CC **H4**, sibling of A4. Coverage is an extra phase of the existing custom-separator append test: after `writeFile`, handle `stat` and `close` reject and `appendNote` must still resolve with the appended bytes on disk. No new `it()`. Under D-45 all executable proof is GitHub-hosted; no local package-manager, lint or test workload was used.
+
+- **Post-write stat/close is not a commit flag.** `appendNote` uses `publishedReceiptStat` after `writeFile`.
+- **Retry cannot double-append from a false failure.** The primitive returns success once the bytes are on the descriptor.
+
 ### Write and rename do not report failure after the bytes are durable
 
 > **TL;DR:** **`writeNoteContent` and `renameFile` no longer reject after the durable mutation because a later `stat` failed.** Callers treat a rejected primitive as uncommitted and skip rollback, so a published note or completed move could be left outside the restore set. The receipt now prefers a live dest stat and otherwise uses the inode snapshot taken beside the commit, the same shape as `sensitive-artifact` publication.

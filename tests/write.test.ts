@@ -409,7 +409,10 @@ describe("createNote", () => {
     const overwriteStatSafe = overwriteInternals.statSafe.bind(v);
     const overwriteStatSpy = vi.spyOn(overwriteInternals, "statSafe").mockImplementation(async (target: string) => {
       if (String(target).replace(/\\/g, "/").endsWith("StatOverwrite.md")) {
-        throw new Error("synthetic post-commit stat failure");
+        const live = await fs.readFile(target, "utf8").catch(() => "");
+        if (live === "after\n") {
+          throw new Error("synthetic post-commit stat failure");
+        }
       }
       return overwriteStatSafe(target);
     });

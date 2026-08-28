@@ -645,13 +645,29 @@ describe("SessionRegistry (v2.14.0)", () => {
     });
     const hangServer = createServer((req, res) => {
       const writeHead = res.writeHead.bind(res);
-      // Forwarding the SDK's Content-Length then throwing leaves an unfinished
-      // body; undici reports "other side closed". A close-delimited head is
-      // the post-header state finishCaughtHttpResponse can complete.
-      res.writeHead = ((statusCode: number, ..._rest: unknown[]) => {
-        writeHead(statusCode, { Connection: "close" });
+      const write = res.write.bind(res);
+      const end = res.end.bind(res);
+      let injected = false;
+      const injectAfterHeaders = (): void => {
+        if (injected || !res.headersSent) return;
+        injected = true;
         throw new Error("injected post-header failure");
-      }) as typeof res.writeHead;
+      };
+      // Close-delimited head so finishCaughtHttpResponse can complete the
+      // body. Throw on the first write/end AFTER writeHead returns — a throw
+      // inside writeHead is swallowed by @hono/node-server and never reaches
+      // the product catch.
+      res.writeHead = ((statusCode: number, ..._rest: unknown[]) =>
+        writeHead(statusCode, { Connection: "close" })) as typeof res.writeHead;
+      res.write = ((...args: unknown[]) => {
+        injectAfterHeaders();
+        return (write as (...inner: unknown[]) => boolean)(...args);
+      }) as typeof res.write;
+      res.end = ((...args: unknown[]) => {
+        if (!res.headersSent) writeHead(res.statusCode || 200, { Connection: "close" });
+        injectAfterHeaders();
+        return (end as (...inner: unknown[]) => unknown)(...args);
+      }) as typeof res.end;
       void hangHandler(req, res);
     });
     await new Promise<void>((resolve) => hangServer.listen(0, "127.0.0.1", resolve));

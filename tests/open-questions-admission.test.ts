@@ -105,6 +105,32 @@ describe("getOpenQuestions bounded producer admission", () => {
     expect(budgets.every((budget) => budget > 0 && budget <= 1000)).toBe(true);
     expect(budgets.every((budget, index) => index === 0 || budget <= (budgets[index - 1] ?? 0))).toBe(true);
     expect(out.map((question) => question.question)).toEqual(["one", "two", "three", "four", "five"]);
+
+    const originalRead = vault.readNoteUncached.bind(vault);
+    const read = vi.spyOn(vault, "readNoteUncached").mockImplementation(async (...args) => {
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      return originalRead(...args);
+    });
+    try {
+      const delayed = await getOpenQuestions(
+        vault,
+        { pattern: "^Q: (.+)$", scanBudgetMs: 80 },
+        {
+          limits: { maxWorkerBatchCandidates: 2, maxWorkerBatchUtf8Bytes: 32 },
+          matchBatch: async (pattern, lines) => {
+            const regex = new RegExp(pattern, "i");
+            return lines.flatMap((line, idx) => {
+              const match = regex.exec(line);
+              return match?.[1] === undefined ? [] : [{ idx, q: match[1] }];
+            });
+          }
+        }
+      );
+      expect(read).toHaveBeenCalled();
+      expect(delayed.map((question) => question.question)).toEqual(["one", "two", "three", "four", "five"]);
+    } finally {
+      read.mockRestore();
+    }
   });
 
   it("rejects an invalid batch result instead of trusting an amplified worker payload", async () => {

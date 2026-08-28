@@ -718,15 +718,16 @@ export const MAX_QUESTION_PATTERN_LEN = 200;
 
 /**
  * Hard wall-clock budget (ms) for matching a CALLER-SUPPLIED
- * `obsidian_open_questions` pattern against the vault, enforced by running the
- * match on a WORKER THREAD ({@link matchLinesBounded}). {@link isCatastrophicRegex}
- * is a best-effort static denylist (ReDoS detection is undecidable — a v3.10.0-rc.39
- * re-sweep confirmed a residual tail of nested patterns it under-flags); this is
- * the HARD backstop. Because matching runs off the main thread, the event loop can
- * NEVER hang regardless of pattern, and a pattern that blows the budget is rejected
+ * `obsidian_open_questions` pattern on a WORKER THREAD ({@link matchLinesBounded}).
+ * Charged only while the regex worker runs; uncached note reads and the bounded
+ * listing are not matching time. {@link isCatastrophicRegex} is a best-effort
+ * static denylist (ReDoS detection is undecidable — a v3.10.0-rc.39 re-sweep
+ * confirmed a residual tail of nested patterns it under-flags); this is the HARD
+ * backstop. Because matching runs off the main thread, the event loop can NEVER
+ * hang regardless of pattern, and a pattern that blows the budget is rejected
  * fail-closed. Generous enough that a legit linear pattern over a large vault
  * finishes well under it, while a catastrophic-backtracking pattern (effectively
- * unbounded) is killed.
+ * unbounded) is killed. The budget is not reset per note.
  * @internal v3.10.0-rc.39 — the hard ReDoS sink-bound (closes the static-detector
  *   residual the rc.36 re-sweep surfaced).
  */
@@ -1919,7 +1920,10 @@ export async function getOpenQuestions(
   const now = Date.now();
   const defaultMatcher = new RegExp(defaultPat, "i");
   const matchBatch = execution.matchBatch ?? matchLinesBounded;
-  const matchDeadline = args.pattern === undefined ? 0 : Date.now() + scanBudgetMs;
+  // Remaining matching budget is charged only around matchBatch. Starting a
+  // wall-clock deadline before the uncached walk would reject a legitimate
+  // pattern as ReDoS after a slow note read.
+  let matchingRemainingMs = args.pattern === undefined ? 0 : scanBudgetMs;
   const heap: RankedOpenQuestion[] = [];
   let retainedResultBytes = 0;
   let sequence = 0;
@@ -1959,11 +1963,11 @@ export async function getOpenQuestions(
 
   const flushCandidateBatch = async (): Promise<void> => {
     if (batch.length === 0 || args.pattern === undefined) return;
-    const remaining = Math.floor(matchDeadline - Date.now());
-    if (remaining < 1) throw matchingTimeout();
+    if (matchingRemainingMs < 1) throw matchingTimeout();
     const batchLines = batch.map((candidate) => candidate.text);
-    const rawMatches = await matchBatch(args.pattern, batchLines, Math.min(scanBudgetMs, remaining));
-    if (Date.now() > matchDeadline) throw matchingTimeout();
+    const matchingStartedMs = Date.now();
+    const rawMatches = await matchBatch(args.pattern, batchLines, Math.min(scanBudgetMs, matchingRemainingMs));
+    matchingRemainingMs -= Date.now() - matchingStartedMs;
     for (const match of validateOpenQuestionMatches(rawMatches, batch.length)) {
       const candidate = batch[match.idx];
       if (!candidate) throw new Error("obsidian_open_questions: regex worker returned an invalid match index");
@@ -1974,7 +1978,6 @@ export async function getOpenQuestions(
   };
 
   for (const entry of listing.entries) {
-    if (args.pattern !== undefined && Date.now() >= matchDeadline) throw matchingTimeout();
     const { content, parsed, mtimeMs } = await vault.readNoteUncached(entry.absPath, entry.mtimeMs);
     if (!Number.isFinite(mtimeMs) || Number.isNaN(new Date(mtimeMs).getTime())) {
       throw new Error("obsidian_open_questions: note has an invalid modification time");

@@ -4,6 +4,17 @@ All notable changes to this project will be documented here. The format follows 
 
 ## [4.0.0-rc.4] — 2026-08-21
 
+### Write and rename do not report failure after the bytes are durable
+
+> **TL;DR:** **`writeNoteContent` and `renameFile` no longer reject after the durable mutation because a later `stat` failed.** Callers treat a rejected primitive as uncommitted and skip rollback, so a published note or completed move could be left outside the restore set. The receipt now prefers a live dest stat and otherwise uses the inode snapshot taken beside the commit, the same shape as `sensitive-artifact` publication.
+>
+> **Bounded claim.** This does **not** fold `appendNote` post-write stat/close (H4). It does **not** move caller-side `committedBacklinks.push` before `await` (A12). It does **not** reopen exclusive-move source unlink (A3).
+>
+> **Method note:** BACKLOG §1.CC **A4**. Coverage is extra phases of existing tests: overwrite `writeNote` must resolve while dest `statSafe` rejects, and exclusive `renameFile` must return `{ from, to }` after source removal when dest `statSafe` rejects. No new `it()`. Under D-45 all executable proof is GitHub-hosted; no local package-manager, lint or test workload was used.
+
+- **Post-commit receipt-stat is not a commit flag.** `publishedReceiptStat` returns live dest metadata when it can, otherwise the snapshot from the durable mutation.
+- **`renameNote` can still record `renamed=true` after a completed move.** Exclusive unlink remains the move commit; dest receipt-stat no longer hides it.
+
 ### Exclusive rename does not report success when source unlink fails
 
 > **TL;DR:** **`renameFile` no longer returns success when the default exclusive move linked the destination but failed to remove the source path.** The swallowed `fs.unlink(fromAbs).catch(() => {})` left the note at both paths as two hardlinks; `renameNote` then rewrote vault-wide backlinks on a false premise, and the watcher never saw an unlink. Source removal now goes through `unlinkSafe` and the error surfaces. The leftover pair remains recoverable; the receipt is no longer a lie.

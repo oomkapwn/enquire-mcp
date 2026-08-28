@@ -328,6 +328,37 @@ describe("createNote", () => {
       unlinkSpy.mockRestore();
     }
 
+    const statRoot = path.join(root, "F2-post-commit-stat-root");
+    await fs.mkdir(statRoot, { recursive: true });
+    const statSourceRel = "StatSource.md";
+    const statDestRel = "StatDest.md";
+    const statSourceBytes = "post-commit stat sentinel\n";
+    await fs.writeFile(path.join(statRoot, statSourceRel), statSourceBytes);
+    const statVault = new Vault(statRoot, { enableWrite: true });
+    await statVault.ensureExists();
+    const statInternals = statVault as unknown as {
+      statSafe(target: string): Promise<import("node:fs").Stats>;
+    };
+    const statSafe = statInternals.statSafe.bind(statVault);
+    const statSpy = vi.spyOn(statInternals, "statSafe").mockImplementation(async (target: string) => {
+      if (String(target).replace(/\\/g, "/").endsWith("StatDest.md")) {
+        const sourcePresent = await fs.stat(path.join(statRoot, statSourceRel)).catch(() => null);
+        if (!sourcePresent) {
+          throw new Error("synthetic post-commit stat failure");
+        }
+      }
+      return statSafe(target);
+    });
+    try {
+      const receipt = await statVault.renameFile(statSourceRel, statDestRel);
+      expect(receipt.from).toBe(statSourceRel);
+      expect(receipt.to).toBe(statDestRel);
+      expect(await fs.stat(path.join(statRoot, statSourceRel)).catch(() => null)).toBeNull();
+      expect(await fs.readFile(path.join(statRoot, statDestRel), "utf8")).toBe(statSourceBytes);
+    } finally {
+      statSpy.mockRestore();
+    }
+
     // Cleanup
     await fs.rm(raceRoot, { recursive: true, force: true });
   });
@@ -369,6 +400,29 @@ describe("createNote", () => {
     expect(text).toBe("second");
     if (process.platform !== "win32") {
       expect((await fs.stat(path.join(root, "Twice.md"))).mode & 0o777).toBe(0o600);
+    }
+
+    await fs.writeFile(path.join(root, "StatOverwrite.md"), "before\n");
+    const overwriteInternals = v as unknown as {
+      statSafe(target: string): Promise<import("node:fs").Stats>;
+    };
+    const overwriteStatSafe = overwriteInternals.statSafe.bind(v);
+    const overwriteStatSpy = vi.spyOn(overwriteInternals, "statSafe").mockImplementation(async (target: string) => {
+      if (String(target).replace(/\\/g, "/").endsWith("StatOverwrite.md")) {
+        const live = await fs.readFile(target, "utf8").catch(() => "");
+        if (live === "after\n") {
+          throw new Error("synthetic post-commit stat failure");
+        }
+      }
+      return overwriteStatSafe(target);
+    });
+    try {
+      const receipt = await v.writeNote("StatOverwrite.md", "after\n", { overwrite: true });
+      expect(receipt.relPath).toBe("StatOverwrite.md");
+      expect(receipt.bytes).toBe(Buffer.byteLength("after\n"));
+      expect(await fs.readFile(path.join(root, "StatOverwrite.md"), "utf8")).toBe("after\n");
+    } finally {
+      overwriteStatSpy.mockRestore();
     }
   });
 

@@ -1400,6 +1400,52 @@ function embedSearchGenerationChangedError(): Error {
   return new Error("Embedding index changed during search; retry the request");
 }
 
+/** One receipt per ranked source so a sibling-note mutation is not a search key. */
+function uniqueEmbedSourceReceipts(hits: readonly EmbedReceiptSearchHit[]): EmbedSourceReceipt[] {
+  const seen = new Set<string>();
+  const receipts: EmbedSourceReceipt[] = [];
+  for (const hit of hits) {
+    const key = `${hit.kind}\0${hit.rel_path}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    receipts.push({
+      rel_path: hit.rel_path,
+      kind: hit.kind,
+      indexed_mtime_ms: hit.indexed_mtime_ms,
+      indexed_revision: hit.indexed_revision
+    });
+  }
+  return receipts;
+}
+
+/**
+ * Refuse mixed-generation ranked bytes: the physical EmbedDb instance must be
+ * unchanged, and every ranked source receipt must still be current. The
+ * whole-database mutation epoch is not a search equality key.
+ */
+function assertEmbedSearchGenerationStillCurrent(
+  db: {
+    captureGenerationIdentity(): EmbedDbGenerationIdentity;
+    currentSourceReceiptMask(receipts: readonly EmbedSourceReceipt[]): boolean[];
+  },
+  searchGeneration: EmbedDbGenerationIdentity,
+  rankedHits: readonly EmbedReceiptSearchHit[]
+): void {
+  const finalGeneration = db.captureGenerationIdentity();
+  if (finalGeneration.dbInstanceUuid !== searchGeneration.dbInstanceUuid) {
+    throw embedSearchGenerationChangedError();
+  }
+  const receipts = uniqueEmbedSourceReceipts(rankedHits);
+  const receiptBatch = 512;
+  for (let offset = 0; offset < receipts.length; offset += receiptBatch) {
+    const batch = receipts.slice(offset, offset + receiptBatch);
+    const mask = db.currentSourceReceiptMask(batch);
+    if (mask.length !== batch.length || mask.some((current) => current !== true)) {
+      throw embedSearchGenerationChangedError();
+    }
+  }
+}
+
 function watcherSemanticRouteIsQuarantined(health?: Readonly<{ semanticUsable: boolean }> | null): boolean {
   return health?.semanticUsable === false;
 }
@@ -1736,18 +1782,13 @@ export async function embeddingsSearch(
     const [qVec] = await embedder.embed([embedText]);
     if (!qVec) throw new Error("Embedder returned no vectors for the query");
     // Capture request authority only after the potentially slow model load.
-    // Every result below must still name this exact physical UUID and mutation
-    // epoch at terminal egress.
+    // Terminal egress keys the physical UUID plus ranked source receipts, not
+    // the whole-database mutation epoch (indexing an unrelated note must not
+    // fail the route).
     const searchGeneration = db.captureGenerationIdentity();
     total = db.totalChunks();
     if (total === 0) {
-      const finalGeneration = db.captureGenerationIdentity();
-      if (
-        finalGeneration.dbInstanceUuid !== searchGeneration.dbInstanceUuid ||
-        finalGeneration.dbMutationEpoch !== searchGeneration.dbMutationEpoch
-      ) {
-        throw embedSearchGenerationChangedError();
-      }
+      assertEmbedSearchGenerationStillCurrent(db, searchGeneration, []);
       return { query: args.query, method: "embeddings-cosine", model: model.alias, total_chunks: 0, matches: [] };
     }
     // v2.0.0-beta.2 P0 fix: filter excluded paths from the embedding-index
@@ -1835,15 +1876,9 @@ export async function embeddingsSearch(
       (receipts) => db.currentSourceReceiptMask(receipts)
     );
     // Live-vault validation awaits filesystem work, so a watcher or another
-    // process can advance EmbedDb. Refuse a mixed-generation response rather
-    // than returning ranking bytes and receipts from different snapshots.
-    const finalGeneration = db.captureGenerationIdentity();
-    if (
-      finalGeneration.dbInstanceUuid !== searchGeneration.dbInstanceUuid ||
-      finalGeneration.dbMutationEpoch !== searchGeneration.dbMutationEpoch
-    ) {
-      throw embedSearchGenerationChangedError();
-    }
+    // process can replace the physical database or reindex a ranked source.
+    // Unrelated-note epoch bumps are not a mixed-generation failure.
+    assertEmbedSearchGenerationStillCurrent(db, searchGeneration, stringAdmittedHits);
     const matches: EmbedHit[] = hits.map((h) => {
       const match: EmbedHit = {
         path: h.rel_path,

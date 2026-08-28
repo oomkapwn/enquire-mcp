@@ -4,6 +4,17 @@ All notable changes to this project will be documented here. The format follows 
 
 ## [4.0.0-rc.4] — 2026-08-21
 
+### Embeddings search does not fail because an unrelated note was indexed
+
+> **TL;DR:** **`embeddingsSearch` no longer treats the whole-database `mutation_epoch` as an equality key.** Indexing any note used to bump that counter on four tables, so a watcher (or a second writer) indexing an unrelated note during live-vault validation threw `Embedding index changed during search` and `obsidian_search` recorded `signal_errors.embeddings`. Terminal egress now keys the physical EmbedDb UUID plus the ranked source receipts. Reindexing a ranked hit still fails closed. HNSW still requires UUID+epoch before it is queried, and falls back to brute-force cosine when the graph is stale.
+>
+> **Bounded claim.** This does **not** stop bumping `mutation_epoch` on INSERT/UPDATE/DELETE. It does **not** change HNSW persist, watcher generation authority, or discovery stale-open equality. It does **not** reopen A5 schema 3→5 vector drop.
+>
+> **Method note:** BACKLOG §1.CC **A10**. Coverage is an extra phase of the existing live-vault-validation test: upserting `Unrelated.md` during `vault.stat` must still return `Semantic.md`; reindexing `Semantic.md` in the same test must still throw. No new `it()`. Under D-45 all executable proof is GitHub-hosted; no local package-manager, lint or test workload was used.
+
+- **Search equality is per ranked source.** `assertEmbedSearchGenerationStillCurrent` compares UUID and `currentSourceReceiptMask` of unique ranked receipts, not the database-wide epoch.
+- **Unrelated indexing cannot fail the route.** A sibling upsert during live-vault validation leaves the ranked hit's receipt current.
+
 ### HTTP shutdown bounds legacy session protocol close
 
 > **TL;DR:** **Stateful `closeAll` no longer awaits hung SDK `transport.close` / `server.close` with no deadline.** Those awaits sat after the bounded call drain and write-integrity tail, and they blocked `shutdownHttpServer` before TCP force-close. Each session's protocol close now races the same 3s class as modern handler close and stdio protocol close, in parallel, so a stuck SDK close cannot pin teardown.

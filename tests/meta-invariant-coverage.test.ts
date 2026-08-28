@@ -316,7 +316,7 @@ const EXPECTED_REPOSITORY_MUTATION_HELPER_CALL_ENTRIES = [
   ],
   [
     "k1-ast-invariant.test.ts",
-    { count: 4, sha256: "a7d88bfd4075380c588be49b8769f80c8df90e24427dc02b76a341e74b2b1f05" }
+    { count: 4, sha256: "6dfca383de8d53508a3b93d9e07f73e019b63dffa0696486938c60b13c64bb1a" }
   ],
   [
     "k1-class-invariant.test.ts",

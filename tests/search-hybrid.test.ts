@@ -1151,6 +1151,14 @@ describe("pruneExcludedHits (v3.10 rc.8 — fusion-stage isExcluded parity)", ()
     expect(pruneExcludedHits(csharp, () => false, "note").map((h) => h.id)).toEqual(["C# Notes.md"]);
     // And it's correctly excluded when the predicate matches the full name.
     expect(pruneExcludedHits(csharp, (p) => p === "C# Notes.md", "note")).toEqual([]);
+
+    // Block ids may be unsuffixed (TF-IDF) or `path#<digits>`. lastIndexOf("#")
+    // would treat `C# Notes.md` as path `C` and miss the exclusion.
+    expect(pruneExcludedHits(csharp, (p) => p === "C# Notes.md", "block")).toEqual([]);
+    expect(pruneExcludedHits(csharp, (p) => p === "C", "block").map((h) => h.id)).toEqual(["C# Notes.md"]);
+    const csharpChunk = [{ id: "C# Notes.md#0" }];
+    expect(pruneExcludedHits(csharpChunk, (p) => p === "C# Notes.md", "block")).toEqual([]);
+    expect(pruneExcludedHits(csharpChunk, (p) => p === "C", "block").map((h) => h.id)).toEqual(["C# Notes.md#0"]);
   });
 
   // NEGATIVE control: the prune MUST be driven by the predicate. A predicate

@@ -4,6 +4,16 @@ All notable changes to this project will be documented here. The format follows 
 
 ## [4.0.0-rc.4] — 2026-08-21
 
+### Search block ids strip only a numeric chunk suffix
+
+> **TL;DR:** **Block-granularity search no longer treats a `#` inside a filename as a chunk separator.** Graph boost already used `/#\d+$/`. Fusion prune, live-vault path, recency, feedback, the terminal privacy filter, and response split still used `lastIndexOf("#")`, so an unsuffixed id like `C# Notes.md` became `C`.
+>
+> **Bounded claim.** This does **not** give TF-IDF a `path#chunk` fusion key at block granularity (B3). It does **not** reopen Bases `tag`/`tags` folding or listPdfs walker size.
+>
+> **Method note:** BACKLOG §1.CC-ter **B2**. Coverage is an extra phase of the existing `C# Notes.md` prune test: block granularity must exclude the full name and must not consult path `C`. No new `it()`. Under D-45 all executable proof is GitHub-hosted; no local package-manager, lint or test workload was used.
+
+- **Chunk stripping is the numeric suffix only.** Shared `stripChunkSuffix` / `splitChunkSuffix` replace the five `lastIndexOf("#")` sites.
+
 ### Bases tag filters see the singular `tag` frontmatter key
 
 > **TL;DR:** **A Bases `tag ==` / `taggedWith` filter no longer misses notes that only declare `tag:`.** `extractFrontmatterTags`, `list_tags`, and write-path tag reads already fold `["tags", "tag"]`. Bases `collectTags` only looked up `tags`, so the Obsidian-documented singular key was invisible to `.base` filters.

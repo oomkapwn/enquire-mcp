@@ -470,6 +470,20 @@ function admittedLinkEvidence(content: string, candidate: LinkCandidate): { star
   return { start, length: end - start };
 }
 
+function tryAdmittedLinkEvidence(
+  content: string,
+  candidate: LinkCandidate
+): { start: number; length: number } | null {
+  try {
+    return admittedLinkEvidence(content, candidate);
+  } catch (err) {
+    if (err instanceof Error && err.message === "Parsed wikilink evidence no longer matches its source generation") {
+      return null;
+    }
+    throw err;
+  }
+}
+
 /**
  * Find every note that links to the target — the "who references this?"
  * query.
@@ -522,9 +536,11 @@ export async function getBacklinks(
       count += 1;
       kindFlags[kind] = true;
       if (snippets.length < 2) {
-        const evidence = admittedLinkEvidence(content, { link, kind });
-        const { snippet } = sliceSnippet(content, evidence.start, evidence.length);
-        if (snippet) snippets.push(snippet);
+        const evidence = tryAdmittedLinkEvidence(content, { link, kind });
+        if (evidence !== null) {
+          const { snippet } = sliceSnippet(content, evidence.start, evidence.length);
+          if (snippet) snippets.push(snippet);
+        }
       }
     }
     if (count === 0) continue;
@@ -643,7 +659,8 @@ export async function getUnresolvedWikilinks(
       if (!link.target) continue;
       const match = findBestMatch(all, link.target, e.relPath);
       if (match) continue;
-      const evidence = admittedLinkEvidence(content, { link, kind });
+      const evidence = tryAdmittedLinkEvidence(content, { link, kind });
+      if (evidence === null) continue;
       const { snippet, line } = sliceSnippet(content, evidence.start, evidence.length);
       out.push({
         from_path: e.relPath,

@@ -4,6 +4,17 @@ All notable changes to this project will be documented here. The format follows 
 
 ## [4.0.0-rc.4] — 2026-08-21
 
+### Wikilink evidence mismatch does not abort the vault walk
+
+> **TL;DR:** **`obsidian_get_backlinks` and `obsidian_get_unresolved_wikilinks` no longer fail the whole vault because one note's snippet offsets disagree with the original file.** `93e03f28` added `admittedLinkEvidence`, which requires `content.slice(sourceStart, sourceEnd) === "[["+raw+"]]"` after `parseNote` has masked inline code in place. A wikilink whose alias contains matched backticks then throws `"Parsed wikilink evidence no longer matches its source generation"` from the vault walk, with no catcher. The link was already counted (or already known unresolved); only the snippet is unprovable. Those two walkers now skip that snippet/row and continue.
+>
+> **Bounded claim.** This does **not** change `parseNote` / offset preservation, does **not** make `getOutboundLinks` admit snippets (it never called this helper), and does **not** stop a true parse/read failure from failing the tool. `admittedLinkEvidence` still throws for unexpected callers. Other `93e03f28` throw-then-disable sites (`hnswPersistUnsafe`, startup `semanticRouteHealth`, brute-force `captureHnswReceiptSnapshot`) are not this slice.
+>
+> **Method note:** BACKLOG §1.CC-ter **B6**, first product slice of the `93e03f28` unit (what catches this throw, and what does that catcher then disable?). Coverage is extra phases of the existing backlink and unresolved evidence tests: `Poison.md` sorts before `Source.md` and contains a backtick-in-payload wikilink, so an uncaught throw would hide `Source.md`. No new `it()`. Under D-45 all executable proof is GitHub-hosted; no local package-manager, lint or test workload was used.
+
+- **Snippet admission is local.** A mismatched evidence span drops that snippet or unresolved row; the rest of the walk continues.
+- **`Poison.md` cannot hide `Source.md`.** The extra phases require the well-formed note to remain in the result after the poison note is added.
+
 ### HTTP body-bomb docs match the live ×6 cap and 413 overflow
 
 > **TL;DR:** **SECURITY.md and the HTTP transport threat model no longer advertise a body cap four times too small, or a 400 for overflow.** Live `deriveHttpBodyCap` is `max(4 MiB, vaultMaxBytes × 6 + 64 KiB)` (~30.06 MiB at the default 5 MiB file cap). Overflow is `413 Request body too large`; `400 Parse error` is only for malformed JSON. The operator docs and the `cli-flag-docs-invariant` body-cap gate still required `× 1.5` / 7.5 MB / `400`, so the gate was false-green for the live formula. This is documentation and invariant honesty. The cap, the 413/400 dispatch, and `tests/http-transport.test.ts` are unchanged.

@@ -604,6 +604,15 @@ function sendJsonRpcError(res: ServerResponse, httpStatus: number, code: number,
   );
 }
 
+/** After a caught transport error, never leave a started HTTP response open. */
+function finishCaughtHttpResponse(res: ServerResponse): void {
+  if (!res.headersSent) {
+    sendJsonRpcError(res, 500, -32603, "Internal server error");
+    return;
+  }
+  if (!res.writableEnded) res.end();
+}
+
 /**
  * Apply browser CORS response headers after Origin admission succeeds.
  *
@@ -1426,8 +1435,11 @@ export function createHttpHandler(
             false,
             internals.afterStatefulRequestAdmitted
           );
-        } catch {
-          /* shutdown errors don't matter — we're killing the session anyway */
+        } catch (err) {
+          process.stderr.write(
+            `enquire http: stateful DELETE error — ${err instanceof Error ? err.message : String(err)}\n`
+          );
+          finishCaughtHttpResponse(res);
         }
         await session.transport.close().catch(() => {});
         await session.server.close().catch(() => {});
@@ -1466,6 +1478,7 @@ export function createHttpHandler(
           );
         } catch (err) {
           process.stderr.write(`enquire http: SSE error — ${err instanceof Error ? err.message : String(err)}\n`);
+          finishCaughtHttpResponse(res);
         }
         return;
       }
@@ -1504,9 +1517,7 @@ export function createHttpHandler(
           process.stderr.write(
             `enquire http: stateful transport error — ${err instanceof Error ? err.message : String(err)}\n`
           );
-          if (!res.headersSent) {
-            sendJsonRpcError(res, 500, -32603, "Internal server error");
-          }
+          finishCaughtHttpResponse(res);
         }
         return;
       }
@@ -1642,9 +1653,7 @@ export function createHttpHandler(
             if (sid) registry.sessions.delete(sid);
             if (transport) void transport.close().catch(() => {});
             if (server) void server.close().catch(() => {});
-            if (!res.headersSent) {
-              sendJsonRpcError(res, 500, -32603, "Internal server error");
-            }
+            finishCaughtHttpResponse(res);
           }
         });
       } catch (err) {
@@ -1667,9 +1676,7 @@ export function createHttpHandler(
       process.stderr.write(
         `enquire http: handler error — ${err instanceof Error ? (err.stack ?? err.message) : String(err)}\n`
       );
-      if (!res.headersSent) {
-        sendJsonRpcError(res, 500, -32603, "Internal server error");
-      }
+      finishCaughtHttpResponse(res);
     }
   };
 }
@@ -1710,9 +1717,7 @@ async function handleStatelessRequest(
     await transport.handleRequest(req, res, body);
   } catch (err) {
     process.stderr.write(`enquire http: transport error — ${err instanceof Error ? err.message : String(err)}\n`);
-    if (!res.headersSent) {
-      sendJsonRpcError(res, 500, -32603, "Internal server error");
-    }
+    finishCaughtHttpResponse(res);
     // Belt-and-suspenders: if the response stream never emits 'close' (e.g.
     // connect threw before the socket was wired), free the handles now.
     cleanup();

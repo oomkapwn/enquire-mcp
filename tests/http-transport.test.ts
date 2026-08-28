@@ -14,11 +14,12 @@
 
 import { EventEmitter } from "node:events";
 import { promises as fs } from "node:fs";
-import { createServer } from "node:http";
+import { createServer, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
+import { NodeStreamableHTTPServerTransport } from "@modelcontextprotocol/node";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   closeServerBounded,
@@ -94,6 +95,41 @@ function createStartupListenerFixture(options: { listenError?: Error; closeError
   server.closeIdleConnections = () => {};
   server.closeAllConnections = () => {};
   return { server, closeCalls: () => closes };
+}
+
+/** Extra-phase seam: Hono swallows write/end throws, so reject after it returns. */
+function installInjectedPostHeaderHandleRequestFailure(): {
+  track(res: ServerResponse): void;
+  restore(): void;
+} {
+  const originalHandleRequest = NodeStreamableHTTPServerTransport.prototype.handleRequest;
+  const injectResponses = new WeakSet<ServerResponse>();
+  NodeStreamableHTTPServerTransport.prototype.handleRequest = async function (req, res, parsedBody) {
+    if (!injectResponses.has(res)) {
+      return originalHandleRequest.call(this, req, res, parsedBody);
+    }
+    const writeHead = res.writeHead.bind(res);
+    const end = res.end.bind(res);
+    res.writeHead = ((statusCode: number, ..._rest: unknown[]) =>
+      writeHead(statusCode, { Connection: "close" })) as typeof res.writeHead;
+    res.end = ((..._args: unknown[]) => res) as typeof res.end;
+    try {
+      await originalHandleRequest.call(this, req, res, parsedBody);
+    } finally {
+      res.end = end;
+    }
+    if (res.headersSent && !res.writableEnded) {
+      throw new Error("injected post-header failure");
+    }
+  };
+  return {
+    track(res) {
+      injectResponses.add(res);
+    },
+    restore() {
+      NodeStreamableHTTPServerTransport.prototype.handleRequest = originalHandleRequest;
+    }
+  };
 }
 
 function modernHttpV2Problems(source: string): string[] {
@@ -632,6 +668,52 @@ describe("SessionRegistry (v2.14.0)", () => {
       expect(registry.acceptingInits).toBe(false);
     } finally {
       await closeServerBounded(httpServer);
+    }
+
+    const hangHandler = createHttpHandler(deps, {
+      vault: root,
+      port: 0,
+      host: "127.0.0.1",
+      bearerToken: "late-registration-test-token-1234567890",
+      stateful: true,
+      rateLimitPerMinute: 0,
+      installSignalHandlers: false
+    });
+    const injected = installInjectedPostHeaderHandleRequestFailure();
+    const hangServer = createServer((req, res) => {
+      injected.track(res);
+      void hangHandler(req, res);
+    });
+    const hangStderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      await new Promise<void>((resolve) => hangServer.listen(0, "127.0.0.1", resolve));
+      const addr = hangServer.address() as AddressInfo;
+      const response = await fetch(`http://127.0.0.1:${addr.port}/mcp`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json, text/event-stream",
+          Authorization: "Bearer late-registration-test-token-1234567890"
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "initialize",
+          params: {
+            protocolVersion: "2025-06-18",
+            capabilities: {},
+            clientInfo: { name: "late-registration-test", version: "0" }
+          }
+        }),
+        signal: AbortSignal.timeout(3000)
+      });
+      await response.text();
+      const log = hangStderr.mock.calls.map(([chunk]) => String(chunk)).join("");
+      expect(log).toMatch(/stateful initialize error.*injected post-header failure/is);
+    } finally {
+      injected.restore();
+      hangStderr.mockRestore();
+      await closeServerBounded(hangServer);
     }
   });
 });
@@ -2070,6 +2152,69 @@ describe("startHttpServer stateful sessions (v2.14.0)", () => {
       await after.text();
     } finally {
       await s.close();
+    }
+
+    const vault = new Vault(root);
+    await vault.ensureExists();
+    const deps: Parameters<typeof createHttpHandler>[0] = {
+      vault,
+      ftsIndex: null,
+      watcher: null,
+      watcherEmbedDb: null,
+      feedbackStore: null,
+      disabledTools: new Set(),
+      enabledTools: new Set(),
+      warningTracker: { printed: false },
+      hnswContext: null
+    };
+    const hangHandler = createHttpHandler(deps, {
+      vault: root,
+      port: 0,
+      host: "127.0.0.1",
+      bearerToken: TOKEN,
+      stateful: true,
+      rateLimitPerMinute: 0,
+      installSignalHandlers: false
+    });
+    const injected = installInjectedPostHeaderHandleRequestFailure();
+    const hangServer = createServer((req, res) => {
+      if (req.method === "DELETE") injected.track(res);
+      void hangHandler(req, res);
+    });
+    const hangStderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      await new Promise<void>((resolve) => hangServer.listen(0, "127.0.0.1", resolve));
+      const addr = hangServer.address() as AddressInfo;
+      const url = `http://127.0.0.1:${addr.port}`;
+      const { sessionId, rawResponse } = await initSession(url);
+      await rawResponse.text();
+      const del = await fetch(`${url}/mcp`, {
+        method: "DELETE",
+        headers: {
+          Authorization: `Bearer ${TOKEN}`,
+          "Mcp-Session-Id": sessionId
+        },
+        signal: AbortSignal.timeout(3000)
+      });
+      await del.text();
+      const log = hangStderr.mock.calls.map(([chunk]) => String(chunk)).join("");
+      expect(log).toMatch(/stateful DELETE error.*injected post-header failure/is);
+      const after = await fetch(`${url}/mcp`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json, text/event-stream",
+          Authorization: `Bearer ${TOKEN}`,
+          "Mcp-Session-Id": sessionId
+        },
+        body: JSON.stringify({ jsonrpc: "2.0", method: "tools/list", id: 1 })
+      });
+      expect(after.status).toBe(404);
+      await after.text();
+    } finally {
+      injected.restore();
+      hangStderr.mockRestore();
+      await closeServerBounded(hangServer);
     }
   });
 

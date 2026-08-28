@@ -4,6 +4,16 @@ All notable changes to this project will be documented here. The format follows 
 
 ## [4.0.0-rc.4] — 2026-08-21
 
+### HTTP catch paths end a response that already sent headers
+
+> **TL;DR:** **A post-header HTTP transport error no longer leaves the client socket open.** Catch paths on stateful POST, initialize, the outer handler, stateless dispatch, and SSE logged the error and called `sendJsonRpcError` only when headers were still unsent. Once the SDK had started the response, the handler returned without `res.end()`.
+>
+> **Bounded claim.** This does **not** change JSON-RPC error bodies for pre-header failures. It does **not** change H6 (`connect` overwriting stateful `onclose`). It does **not** reopen A9 bounded session close.
+>
+> **Method note:** BACKLOG §1.CC-HOLD **H5**. Coverage is an extra phase of the existing late-publication handler test: `writeHead` then throws, `fetch` must finish within 3s, and stderr names the injected failure. No new `it()`. Under D-45 all executable proof is GitHub-hosted; no local package-manager, lint or test workload was used.
+
+- **Caught transport errors finish the HTTP response.** If headers are already sent, the catch path ends the body instead of returning with the socket still open.
+
 ### Startup HNSW persist erases the family when EmbedDb drifts after saveTo
 
 > **TL;DR:** **Startup `--use-hnsw` persistence no longer leaves a published generation on disk after EmbedDb drifts and the in-memory graph is discarded.** `saveTo` can commit the immutable binary plus meta pointer and still throw on later lease-release; a receipt mismatch only logged and dropped the candidate. The watcher flush already erases that family. Startup now calls the same eraser, best-effort, when persist was attempted and the candidate is discarded. Compact v4 pointers omit `text_preview`; native vectors in the generation remain sensitive.

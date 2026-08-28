@@ -309,7 +309,7 @@ const EXPECTED_REPOSITORY_MUTATION_HELPER_CALL_ENTRIES = [
     { count: 1, sha256: "713c5e208f8b73dbe4423916973e77f95b6de5ecdf50ddf6ddd4d3778925c71d" }
   ],
   ["fts5.test.ts", { count: 5, sha256: "be662228a553da37b716611c7cc83e4a9d05b3532c77db61397e2d8db6ead21f" }],
-  ["http-transport.test.ts", { count: 1, sha256: "891a03bf908a6a4d2419eb105bfd290a9a7ae9fccbd3695efe182ac7fb9b21c9" }],
+  ["http-transport.test.ts", { count: 1, sha256: "93d3e97f0ea4ddf738b8adb1c2bfd7c07796a9d84f9f85195414a326628c1f04" }],
   [
     "hnsw-sync-critical-section.test.ts",
     { count: 6, sha256: "c8d9ddbc97806bdbf377279de1c49f62d801a5b1e7969ff98a56beb6878f8103" }

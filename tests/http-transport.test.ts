@@ -633,6 +633,57 @@ describe("SessionRegistry (v2.14.0)", () => {
     } finally {
       await closeServerBounded(httpServer);
     }
+
+    const hangHandler = createHttpHandler(
+      deps,
+      {
+        vault: root,
+        port: 0,
+        host: "127.0.0.1",
+        bearerToken: "late-registration-test-token-1234567890",
+        stateful: true,
+        rateLimitPerMinute: 0,
+        installSignalHandlers: false
+      }
+    );
+    const hangServer = createServer((req, res) => {
+      const writeHead = res.writeHead.bind(res);
+      res.writeHead = ((...args: unknown[]) => {
+        (writeHead as (...inner: unknown[]) => unknown)(...args);
+        throw new Error("injected post-header failure");
+      }) as typeof res.writeHead;
+      void hangHandler(req, res);
+    });
+    await new Promise<void>((resolve) => hangServer.listen(0, "127.0.0.1", resolve));
+    const hangStderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      const addr = hangServer.address() as AddressInfo;
+      const response = await fetch(`http://127.0.0.1:${addr.port}/mcp`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json, text/event-stream",
+          Authorization: "Bearer late-registration-test-token-1234567890"
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "initialize",
+          params: {
+            protocolVersion: "2025-06-18",
+            capabilities: {},
+            clientInfo: { name: "late-registration-test", version: "0" }
+          }
+        }),
+        signal: AbortSignal.timeout(3000)
+      });
+      await response.text();
+      const log = hangStderr.mock.calls.map(([chunk]) => String(chunk)).join("");
+      expect(log).toMatch(/stateful initialize error.*injected post-header failure/is);
+    } finally {
+      hangStderr.mockRestore();
+      await closeServerBounded(hangServer);
+    }
   });
 });
 

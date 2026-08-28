@@ -131,7 +131,9 @@ export interface ServeOptions {
   ocrLangs?: string;
   /** v3.9.0-rc.1 — page cap for OCR-on-watch runs. Default 200 (matches
    *  `DEFAULT_OCR_MAX_PAGES`). Exceeding the cap attempts to quarantine the
-   *  changed PDF generation and preserves its prior FTS/embed/HNSW rows. */
+   *  changed PDF generation. Prior FTS/embed rows stay physically recoverable;
+   *  live HNSW drops that path's labels when this watcher still owns the EmbedDb
+   *  generation. */
   ocrMaxPages?: string;
   /** v2.9.0 — enable BGE cross-encoder reranking on top of RRF in
    *  obsidian_search. Off by default; adds ~30-50ms per query at top-50. */

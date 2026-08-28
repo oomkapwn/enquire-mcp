@@ -828,14 +828,14 @@ describe("VaultWatcher physical-alias convergence (S-8e)", () => {
       expect(markerPaths(reconciled.ftsByMarker, "replacementracenewinodemarker")).toEqual(["B.md"]);
       expect(markerPaths(reconciled.embedByMarker, "replacementracenewinodemarker")).toEqual(["B.md"]);
       // The first plan observed a physical-membership drift after staging A.
-      // SQLite is fully replanned and authoritative, while the process-local
-      // graph is deliberately quarantined until restart rather than adopting
-      // a piecemeal generation. Its retained metadata cannot be an egress while
-      // hnswUsable is false.
-      expect(markerPathsInHnsw(reconciled, "replacementraceoldmarker")).toEqual(["A.md", "B.md"]);
+      // SQLite is fully replanned. Same-generation quarantine then drops the
+      // origin path (A.md) from live HNSW instead of latching persist. B.md's
+      // committed replacement labels remain; that is not a ghost of the old
+      // hardlink generation.
+      expect(markerPathsInHnsw(reconciled, "replacementraceoldmarker")).toEqual([]);
       expect(markerPathsInHnsw(reconciled, "replacementracegroupmarker")).toEqual([]);
-      expect(markerPathsInHnsw(reconciled, "replacementracenewinodemarker")).toEqual([]);
-      expect(fixture.watcher.searchHealth.hnswUsable).toBe(false);
+      expect(markerPathsInHnsw(reconciled, "replacementracenewinodemarker")).toEqual(["B.md"]);
+      expect(fixture.watcher.searchHealth.hnswUsable).toBe(true);
       expect(reconciled.embedPaths).toEqual(["A.md", "B.md"]);
       expect([...new Set(fixture.reindexedPaths)].sort()).toEqual(["A.md", "B.md"]);
       expect(reconciled.ftsAudit).toMatchObject({ declared_files: 2, indexed_files: 2, mismatched_files: 0 });
@@ -1337,10 +1337,11 @@ describe("VaultWatcher physical-alias convergence (S-8e)", () => {
       const retained = await snapshotWindowsWatcherState(fixture, markers);
       // Physical source_state/sidecar rows are retained for recovery, but the
       // source-scoped DB quarantine hides both lexical and semantic egress.
-      // The sidecar snapshot is deliberately not an output authority.
+      // Same-generation HNSW ownership drops the withheld path's labels.
       expect(markerPaths(retained.ftsByMarker, "admissionoldmarker")).toEqual([]);
       expect(markerPaths(retained.embedByMarker, "admissionoldmarker")).toEqual([]);
-      expect(markerPathsInHnsw(retained, "admissionoldmarker")).toEqual(["Protected.md"]);
+      expect(markerPathsInHnsw(retained, "admissionoldmarker")).toEqual([]);
+      expect(fixture.watcher.searchHealth.hnswUsable).toBe(true);
       expect(markerPaths(retained.ftsByMarker, "admissionnewmarker")).toEqual([]);
       expect(markerPaths(retained.embedByMarker, "admissionnewmarker")).toEqual([]);
       expect(markerPaths(retained.ftsByMarker, "admissiongonemarker")).toEqual([]);

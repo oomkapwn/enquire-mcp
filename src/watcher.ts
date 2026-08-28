@@ -92,10 +92,11 @@ function sameHnswRowManifest(
  * and does **not** latch `semanticUsable`. Brute-force EmbedDb search stays
  * available for every other note when the EmbedDb quarantine marker is
  * successfully persisted. The failed path is withheld by that marker.
- * Live HNSW drops that path's labels and adopts the post-quarantine EmbedDb
- * generation instead of process-quarantining persist/`hnswUsable` for every
- * other note. `applyDiff` failure and live pending-queue overflow still
- * process-quarantine HNSW.
+ * Live HNSW drops that path's labels and adopts only the committed
+ * post-quarantine generation from `quarantineSourceIfGeneration`. A foreign
+ * EmbedDb epoch process-quarantines the graph instead of being published.
+ * `applyDiff` failure and live pending-queue overflow still process-quarantine
+ * HNSW.
  *
  * `purgeStoredIdentity` also no longer latches `semanticUsable`, but it runs
  * only from activation replay and still rethrows, so a failed purge still
@@ -205,8 +206,9 @@ export interface WatcherOptions {
    * + the requested language trained-data files pre-installed via
    * `enquire-mcp install-ocr-lang <code>` (see v3.7.16 P1-1 offline
    * enforcement). If those aren't available, the watcher attempts to
-   * quarantine the PDF generation and every prior FTS/embed/HNSW row is
-   * retained until a later complete extraction succeeds.
+   * quarantine the PDF generation. Prior FTS/embed rows stay physically
+   * recoverable; live HNSW drops that path's labels when this watcher still
+   * owns the EmbedDb generation.
    *
    * Recommended pairing: `--ocr-pdfs` + `--watch` + `--include-pdfs`
    * for users with scanned-document vaults that change during sessions.
@@ -221,8 +223,9 @@ export interface WatcherOptions {
   /**
    * v3.9.0-rc.1 — page cap for OCR runs. Mirrors `DEFAULT_OCR_MAX_PAGES`
    * (200). Exceeding it attempts to quarantine the entire changed PDF
-   * generation and preserves every prior FTS/embed/HNSW row. Operators can
-   * lift the cap when they trust their PDF set.
+   * generation. Prior FTS/embed rows stay physically recoverable; live HNSW
+   * drops that path's labels when this watcher still owns the EmbedDb
+   * generation. Operators can lift the cap when they trust their PDF set.
    */
   ocrMaxPages?: number;
   /**
@@ -353,10 +356,10 @@ export function statsMtimeMsFromNs(mtimeNs: bigint): number {
  * `rowsByLabel` map, AND the persisted HNSW generation (a later
  * `markDelete(-1)` or a real row colliding on `-1` then scrambles results).
  * This throws (fail-closed) instead: the watcher's per-event try/catch logs it
- * and skips the HNSW update for that file. The surrounding embed-sync catch
- * permanently disables sidecar persistence for that watcher generation, so the
- * next serve rebuilds instead of trusting a stale graph under a fresh database
- * signature. A corrupt sentinel label is never inserted.
+ * and skips the HNSW update for that file. The surrounding commit catch
+ * quarantines the source and drops its live labels when this watcher still
+ * owns the EmbedDb generation; a foreign epoch process-quarantines persist
+ * instead of blessing an incomplete graph. A corrupt sentinel label is never inserted.
  *
  * @param rows - The embed rows (vector + chunk metadata), in insertion order.
  * @param newIds - The row ids `upsertNote` assigned, parallel to `rows`.
@@ -484,6 +487,11 @@ export class VaultWatcher {
    * not prevent the other from recording its quarantine. A broader fail-stop
    * policy for that storage-failure residual requires explicit authorization.
    *
+   * When live HNSW still owns the EmbedDb generation, the EmbedDb marker is
+   * written with `quarantineSourceIfGeneration` and this watcher publishes
+   * only that committed generation after dropping the path's labels. A foreign
+   * epoch process-quarantines the graph and writes the marker DB-only.
+   *
    * @param relPath - Vault-relative source whose attempted refresh failed.
    * @param kind - Content-source kind shared by both stores.
    */
@@ -499,8 +507,23 @@ export class VaultWatcher {
         );
       }
     }
+    if (!this.embedDb) return;
     try {
-      this.embedDb?.quarantineSource(relPath, kind);
+      if (this.hnsw && this.hnswRowsByLabel && this.hnswGenerationAuthority && this.searchHealth.hnswUsable) {
+        const attempt = this.embedDb.quarantineSourceIfGeneration(
+          { ...this.hnswGenerationAuthority },
+          relPath,
+          kind
+        );
+        if (attempt.kind === "committed") {
+          this.dropQuarantinedPathFromLiveHnsw(relPath, kind, attempt.committedGeneration);
+        } else {
+          this.quarantineHnswGeneration("another process advanced EmbedDb before a per-path quarantine");
+          this.embedDb.quarantineSource(relPath, kind);
+        }
+      } else {
+        this.embedDb.quarantineSource(relPath, kind);
+      }
     } catch (error) {
       if (!this.silent) {
         process.stderr.write(
@@ -510,21 +533,23 @@ export class VaultWatcher {
         );
       }
     }
-    // A quarantine marker withholds one source. Drop that path's live labels
-    // and adopt the post-quarantine generation so remaining notes can keep
-    // using and persisting HNSW. applyDiff failure still process-quarantines.
-    this.dropQuarantinedPathFromLiveHnsw(relPath, kind);
   }
 
   /**
-   * Remove one quarantined source from the live graph without latching persist.
+   * Remove one quarantined source from the live graph and publish only the
+   * committed post-quarantine generation. Does not recapture the current epoch.
    *
    * @param relPath - Public vault-relative identity now withheld by a marker.
    * @param kind - Content-source kind for HNSW metadata.
+   * @param committedGeneration - Exact UUID/epoch returned by `quarantineSourceIfGeneration`.
    * @returns Nothing.
    */
-  private dropQuarantinedPathFromLiveHnsw(relPath: string, kind: "md" | "pdf"): void {
-    if (!this.embedDb || !this.hnsw || !this.hnswRowsByLabel || !this.searchHealth.hnswUsable) {
+  private dropQuarantinedPathFromLiveHnsw(
+    relPath: string,
+    kind: "md" | "pdf",
+    committedGeneration: EmbedDbGenerationIdentity
+  ): void {
+    if (!this.hnsw || !this.hnswRowsByLabel || !this.searchHealth.hnswUsable) {
       return;
     }
     const oldIds: number[] = [];
@@ -533,7 +558,7 @@ export class VaultWatcher {
     }
     const hnswResult = this.syncHnswForFile(relPath, kind, oldIds, []);
     if (!hnswResult) return;
-    this.publishCommittedHnswGeneration(this.embedDb.captureGenerationIdentity());
+    this.publishCommittedHnswGeneration(committedGeneration);
   }
   // v3.9.0-rc.11 (audit H1) — per-file serialization. chokidar dispatches file
   // events concurrently; without this, two rapid saves to the SAME file
@@ -2047,9 +2072,9 @@ export class VaultWatcher {
       return { note, embedResult };
     } catch (err) {
       this.quarantineFailedGeneration(relPath, "md");
-      // Keep the previous lexical + semantic generation together when any
-      // read/parse/embed preparation step fails. The watcher remains fail-soft:
-      // it logs and waits for the next event/bulk reconciliation.
+      // Source-scoped quarantine withholds the failed path. Live HNSW drops
+      // that path's labels when this watcher still owns the EmbedDb generation;
+      // a foreign epoch process-quarantines persist instead of being published.
       if (!this.silent) {
         process.stderr.write(
           `enquire: watcher markdown preparation failed for ${relPath} — ${

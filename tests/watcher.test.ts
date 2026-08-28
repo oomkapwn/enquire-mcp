@@ -1616,8 +1616,8 @@ describe("VaultWatcher HNSW disk persistence (v3.9.0-rc.6)", () => {
       expect(w.searchHealth.hnswUsable).toBe(false);
 
       // Class sibling: zipHnswAddPoints runs after the EmbedDb transaction but
-      // before syncHnswForFile. Restore applyDiff so per-path quarantine can
-      // drop the withheld labels. The markdown catch must not re-arm persist.
+      // before syncHnswForFile. Restore applyDiff so the unpublished-upsert
+      // drift path can process-quarantine rather than throw inside applyDiff.
       index.applyDiff = originalApplyDiff;
       watcherInternals.hnswPersistUnsafe = false;
       w.searchHealth.hnswUsable = true;
@@ -1640,17 +1640,20 @@ describe("VaultWatcher HNSW disk persistence (v3.9.0-rc.6)", () => {
         embedDb.upsertNoteWithCanonicalVectorsIfGeneration = originalConditionalUpsert;
       }
       expect(mismatchInjectedAfterCommit).toBe(true);
-      expect(watcherInternals.hnswPersistUnsafe).toBe(false);
-      expect(w.searchHealth.hnswUsable).toBe(true);
-      // Per-path quarantine is the correct scope. The markdown catch used to
-      // latch semanticUsable globally, which disabled embeddings search for
-      // every other note until restart. Each phase below is a causal negative
-      // control for one of the four sites that carried that latch: restoring
-      // `searchHealth.semanticUsable = false` at that site turns the phase red.
-      // The live-queue overflow in scheduleLiveEvent remains latched and is
-      // covered by tests/vault-bounded-listing.test.ts.
+      // zipHnsw throws after a committed unpublished upsert. The live graph
+      // never applied that generation, so IfGeneration quarantine sees drift
+      // and process-quarantines persist instead of publishing the unpublished
+      // epoch.
+      expect(watcherInternals.hnswPersistUnsafe).toBe(true);
+      expect(w.searchHealth.hnswUsable).toBe(false);
       expect(embedDb.getQuarantinedPaths("md")).toContain("a.md");
       expect(w.searchHealth.semanticUsable).toBe(true);
+
+      // Re-arm a usable graph so the PDF FTS-only throw (lexical failure before
+      // any EmbedDb write — the Map-of-Content shape) can prove per-path
+      // quarantine does not latch persist.
+      watcherInternals.hnswPersistUnsafe = false;
+      w.searchHealth.hnswUsable = true;
 
       const dummyGeneration = {
         dev: 0n,

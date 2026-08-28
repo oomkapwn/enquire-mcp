@@ -398,7 +398,7 @@ async function seedPdfEmbedRow(db: import("../src/embed-db.js").EmbedDb, relPath
 }
 
 describe("durable PDF generation admission", () => {
-  it("server sync, embed sync, and watcher preserve prior FTS/embed/HNSW generations on any failed page", async () => {
+  it("server sync, embed sync, and watcher preserve prior FTS/embed generations on any failed page", async () => {
     await mockPdfExtraction("failed");
     const root = await temporaryRoot("enquire-pdf-generation-fail-");
     const relPath = "paper.pdf";

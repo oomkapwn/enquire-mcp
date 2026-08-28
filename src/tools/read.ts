@@ -470,10 +470,7 @@ function admittedLinkEvidence(content: string, candidate: LinkCandidate): { star
   return { start, length: end - start };
 }
 
-function tryAdmittedLinkEvidence(
-  content: string,
-  candidate: LinkCandidate
-): { start: number; length: number } | null {
+function tryAdmittedLinkEvidence(content: string, candidate: LinkCandidate): { start: number; length: number } | null {
   try {
     return admittedLinkEvidence(content, candidate);
   } catch (err) {

@@ -2046,8 +2046,13 @@ describe("EmbedDb", () => {
 
     const reopened = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
     await reopened.open();
-    expect(() => reopened.search(l2([1, 0, 0, 0]), 10)).toThrow(/not admissible for a complete HNSW snapshot/);
+    // Leftover embeddings without source_state refuse a complete HNSW snapshot
+    // (LEFT JOIN: state_rel_path !== rel_path). Brute ranking INNER JOINs
+    // source_state, so those rows are absent rather than failing the query.
+    expect(() => reopened.captureHnswReceiptSnapshot()).toThrow(/not admissible for a complete HNSW snapshot/);
     expect(() => reopened.getAllVectors()).toThrow(/not admissible for a complete HNSW snapshot/);
+    expect(reopened.search(l2([1, 0, 0, 0]), 10)).toEqual([]);
+    expect(reopened.searchWithReceipts(l2([1, 0, 0, 0]), 10)).toEqual([]);
     expect(reopened.getSearchRowsByIds(inserted.newIds).size).toBe(0);
     reopened.quarantineSource("orphan.md", "md");
     reopened.deleteNote("orphan.md");

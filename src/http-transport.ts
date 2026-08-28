@@ -1435,8 +1435,11 @@ export function createHttpHandler(
             false,
             internals.afterStatefulRequestAdmitted
           );
-        } catch {
-          /* shutdown errors don't matter — we're killing the session anyway */
+        } catch (err) {
+          process.stderr.write(
+            `enquire http: stateful DELETE error — ${err instanceof Error ? err.message : String(err)}\n`
+          );
+          finishCaughtHttpResponse(res);
         }
         await session.transport.close().catch(() => {});
         await session.server.close().catch(() => {});

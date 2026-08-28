@@ -386,6 +386,28 @@ describe("SessionRegistry (v2.14.0)", () => {
     expect(transportClosed).toBe(2);
     expect(serverClosed).toBe(2);
     expect(r.size()).toBe(0);
+
+    const hung = createSessionRegistry(60_000, 25);
+    let resolveHang: (() => void) | undefined;
+    const hang = new Promise<void>((resolve) => {
+      resolveHang = resolve;
+    });
+    hung.sessions.set("stuck", {
+      transport: {
+        close: async () => hang
+      },
+      server: {
+        close: async () => {}
+      },
+      lastActivityMs: Date.now(),
+      inFlight: 0,
+      closing: false
+    } as unknown as Parameters<typeof hung.sessions.set>[1]);
+    const started = Date.now();
+    const hungClosed = await hung.closeAll(0);
+    expect(hungClosed).toBe(1);
+    expect(Date.now() - started).toBeLessThan(1000);
+    resolveHang?.();
   });
 
   // v3.8.7 P2-11 — closeAll waits for in-flight handlers up to timeoutMs

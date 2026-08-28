@@ -59,6 +59,8 @@ const DELETE_DRAIN_MS = 5000;
 const MODERN_DRAIN_MS = 5000;
 /** Bound for the SDK handler's graceful protocol close after write integrity settles. */
 const MODERN_CLOSE_MS = 3000;
+/** Bound for one legacy stateful session's transport.close / server.close under closeAll. */
+const LEGACY_SESSION_CLOSE_MS = 3000;
 /** Minimum request budget retained for ordinary MCP envelopes. */
 const MIN_HTTP_JSON_BODY_BYTES = 4 * 1024 * 1024;
 /** Worst-case JSON string expansion: one decoded control byte becomes `\u00xx`. */
@@ -767,13 +769,16 @@ export interface SessionRegistry {
   /**
    * Graceful drain: mark all sessions as `closing`, wait up to `timeoutMs`
    * for ordinary in-flight requests, then preserve persistent-write integrity
-   * through rollback/finish before closing every transport + McpServer pair.
+   * through rollback/finish before bounding every transport + McpServer close.
    * Returns the number of sessions closed. Idempotent.
    */
   closeAll(timeoutMs?: number): Promise<number>;
 }
 
-export function createSessionRegistry(idleTimeoutMs: number): SessionRegistry {
+export function createSessionRegistry(
+  idleTimeoutMs: number,
+  protocolCloseMs: number = LEGACY_SESSION_CLOSE_MS
+): SessionRegistry {
   const sessions = new Map<string, StatefulSession>();
   let pendingInits = 0;
   let acceptingInits = true;
@@ -863,10 +868,16 @@ export function createSessionRegistry(idleTimeoutMs: number): SessionRegistry {
       // Close everything regardless — best-effort. After timeoutMs an
       // in-flight READ handler may be stuck and we'd rather hand back the port
       // than wait forever. Persistent mutations have completed or rolled back.
-      for (const s of snapshot) {
-        await s.transport.close().catch(() => {});
-        await s.server.close().catch(() => {});
-      }
+      // Protocol close is bounded: a hung SDK close must not pin shutdown
+      // ahead of TCP force-close.
+      await Promise.all(
+        snapshot.map(async (s) => {
+          await Promise.all([
+            waitForBoundedSettlement(Promise.resolve().then(() => s.transport.close()).catch(() => {}), protocolCloseMs),
+            waitForBoundedSettlement(Promise.resolve().then(() => s.server.close()).catch(() => {}), protocolCloseMs)
+          ]);
+        })
+      );
       return snapshot.length;
     }
   };

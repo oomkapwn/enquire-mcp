@@ -4,6 +4,16 @@ All notable changes to this project will be documented here. The format follows 
 
 ## [4.0.0-rc.4] — 2026-08-21
 
+### Bases tag filters see the singular `tag` frontmatter key
+
+> **TL;DR:** **A Bases `tag ==` / `taggedWith` filter no longer misses notes that only declare `tag:`.** `extractFrontmatterTags`, `list_tags`, and write-path tag reads already fold `["tags", "tag"]`. Bases `collectTags` only looked up `tags`, so the Obsidian-documented singular key was invisible to `.base` filters.
+>
+> **Bounded claim.** This does **not** change inline `#tag` extraction, NFC/case folding, or search `lastIndexOf("#")` chunk stripping. Canvas/base listings still open files for counts. It does **not** reopen the listPdfs walker-size slice.
+>
+> **Method note:** BACKLOG §1.CC-ter **B2**. Coverage is extra phases of the existing `tag == "book"` and `taggedWith(file.file, "book")` tests: a note with only `tag: book` must match both filters. No new `it()`. Under D-45 all executable proof is GitHub-hosted; no local package-manager, lint or test workload was used.
+
+- **Bases tag collection reads both keys.** `collectTags` uses the same `["tags", "tag"]` folded lookup as the other producers.
+
 ### listPdfs keeps unreadable PDFs and uses the walker size
 
 > **TL;DR:** **`obsidian_list_pdfs` no longer drops a PDF the directory walk already admitted.** `listCanvases` keeps a malformed or unreadable canvas with `size_bytes` from the successful read or `0` on open failure. `listPdfs` re-read every file for size and `continue`d on that open, so a permission race or unreadable PDF vanished from the listing. The walker already recorded `sizeBytes`.

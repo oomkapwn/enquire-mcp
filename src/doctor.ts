@@ -132,11 +132,15 @@ export function candidateModelCacheRoots(): string[] {
 }
 
 /**
- * Default `.embed.db` location for a given vault root — same convention as
- * the rest of the codebase. Mirrors `embedDbPath` in src/index.ts.
+ * Default `.embed.db` location for a given vault root. Same formula as
+ * `embedDbPath` in `src/tool-registry.ts`, which `serve` / `serve-http` /
+ * `query` / `eval` / `setup` use, then `path.resolve`d. Those commands have
+ * no `--embed-file`. `defaultIndexFile` ignores non-absolute `XDG_CACHE_HOME`
+ * so this path is CWD-independent; resolve still aligns `--embed-file`
+ * spelling with that default.
  */
 function defaultEmbedDbFile(vaultRoot: string): string {
-  return defaultIndexFile(vaultRoot).replace(/\.fts5\.db$/, ".embed.db");
+  return path.resolve(defaultIndexFile(vaultRoot).replace(/\.fts5\.db$/, ".embed.db"));
 }
 
 const MAX_SQLITE_SNAPSHOT_BYTES = 256 * 1024 * 1024;
@@ -1057,7 +1061,7 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
   // an independent guard as well, so doctor reports a second, tier-aware check
   // whenever the resolved override differs from the default.
   if (vaultExists) {
-    const defaultEmbedFile = defaultEmbedDbFile(vault.root);
+    const defaultEmbedFile = path.resolve(defaultEmbedDbFile(vault.root));
     const selectedEmbedFile = opts.embedFile !== undefined ? path.resolve(opts.embedFile) : defaultEmbedFile;
     const appendWatcherActivationGuardCheck = async ({
       embedFile,
@@ -1308,80 +1312,115 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
   }
 
   // 4. Embedding index — validate schema + vault/model/quantization metadata
-  // from the same immutable snapshot mechanism.
+  // from the same immutable snapshot mechanism. Hybrid READY follows the
+  // serve-time default (`embedDbPath` / this file's `defaultEmbedDbFile`):
+  // `serve`, `serve-http`, `query` and `eval` never take `--embed-file`. A
+  // path-distinct `--embed-file` is still inspected, like the selected
+  // watcher guard, but it cannot substitute for the default.
   if (vaultExists) {
-    const embedFile = opts.embedFile !== undefined ? path.resolve(opts.embedFile) : defaultEmbedDbFile(vault.root);
-    if (hasSqlite) {
-      const inspection = await inspectEmbedSnapshot(embedFile);
-      if (inspection.ok) {
-        const indexedModel =
-          inspection.value.modelAlias !== undefined ? EMBEDDING_MODELS[inspection.value.modelAlias] : undefined;
-        if (!explicitModelSelection && indexedModel) selectedModel = indexedModel;
-        const problems: string[] = [];
-        if (inspection.value.schemaVersion !== String(EMBED_DB_SCHEMA_VERSION)) {
-          problems.push(`schema ${inspection.value.schemaVersion ?? "missing"} ≠ ${EMBED_DB_SCHEMA_VERSION}`);
-        }
-        if (inspection.value.vaultRoot !== vault.root) {
-          problems.push(`vault root ${inspection.value.vaultRoot ?? "missing"} ≠ ${vault.root}`);
-        }
-        if (!indexedModel) {
-          problems.push(`model alias ${inspection.value.modelAlias ?? "missing"} is unknown`);
-        } else {
-          if (explicitModelSelection && indexedModel.alias !== selectedModel.alias) {
-            problems.push(`model alias ${indexedModel.alias} ≠ selected ${selectedModel.alias}`);
+    const defaultEmbedFile = path.resolve(defaultEmbedDbFile(vault.root));
+    const selectedEmbedFile = opts.embedFile !== undefined ? path.resolve(opts.embedFile) : defaultEmbedFile;
+    const appendEmbedIndexCheck = async ({
+      id,
+      label,
+      embedFile,
+      fileOverride,
+      adoptModel
+    }: {
+      id: string;
+      label: string;
+      embedFile: string;
+      fileOverride?: string;
+      adoptModel: boolean;
+    }): Promise<void> => {
+      if (hasSqlite) {
+        const inspection = await inspectEmbedSnapshot(embedFile);
+        if (inspection.ok) {
+          const indexedModel =
+            inspection.value.modelAlias !== undefined ? EMBEDDING_MODELS[inspection.value.modelAlias] : undefined;
+          if (adoptModel && !explicitModelSelection && indexedModel) selectedModel = indexedModel;
+          const problems: string[] = [];
+          if (inspection.value.schemaVersion !== String(EMBED_DB_SCHEMA_VERSION)) {
+            problems.push(`schema ${inspection.value.schemaVersion ?? "missing"} ≠ ${EMBED_DB_SCHEMA_VERSION}`);
           }
-          if (inspection.value.dim !== String(indexedModel.dim)) {
-            problems.push(`dim ${inspection.value.dim ?? "missing"} ≠ ${indexedModel.dim}`);
+          if (inspection.value.vaultRoot !== vault.root) {
+            problems.push(`vault root ${inspection.value.vaultRoot ?? "missing"} ≠ ${vault.root}`);
           }
-        }
-        if (inspection.value.quantization !== "f32" && inspection.value.quantization !== "int8") {
-          problems.push(`quantization ${inspection.value.quantization ?? "missing"} is invalid`);
-        }
-        if (problems.length === 0) {
-          checks.push({
-            id: "index:embed",
-            label: "Embedding index (.embed.db)",
-            status: "ok",
-            required: capabilityRequired(tier, "hybrid"),
-            detail: `${embedFile} — ${(inspection.bytes / 1024 / 1024).toFixed(1)} MB · ${
-              inspection.value.totalFiles
-            } files / ${inspection.value.totalChunks} chunks · model=${inspection.value.modelAlias} · quantization=${
-              inspection.value.quantization
-            }`
-          });
+          if (!indexedModel) {
+            problems.push(`model alias ${inspection.value.modelAlias ?? "missing"} is unknown`);
+          } else {
+            if (explicitModelSelection && indexedModel.alias !== selectedModel.alias) {
+              problems.push(`model alias ${indexedModel.alias} ≠ selected ${selectedModel.alias}`);
+            }
+            if (inspection.value.dim !== String(indexedModel.dim)) {
+              problems.push(`dim ${inspection.value.dim ?? "missing"} ≠ ${indexedModel.dim}`);
+            }
+          }
+          if (inspection.value.quantization !== "f32" && inspection.value.quantization !== "int8") {
+            problems.push(`quantization ${inspection.value.quantization ?? "missing"} is invalid`);
+          }
+          if (problems.length === 0) {
+            checks.push({
+              id,
+              label,
+              status: "ok",
+              required: capabilityRequired(tier, "hybrid"),
+              detail: `${embedFile} — ${(inspection.bytes / 1024 / 1024).toFixed(1)} MB · ${
+                inspection.value.totalFiles
+              } files / ${inspection.value.totalChunks} chunks · model=${inspection.value.modelAlias} · quantization=${
+                inspection.value.quantization
+              }`
+            });
+          } else {
+            checks.push({
+              id,
+              label,
+              status: requiredFailureStatus(tier, "hybrid"),
+              required: capabilityRequired(tier, "hybrid"),
+              detail: `${embedFile} is incompatible: ${problems.join("; ")}`,
+              hint: renderRepairHint("build-embeddings", "--embed-file", fileOverride)
+            });
+          }
         } else {
           checks.push({
-            id: "index:embed",
-            label: "Embedding index (.embed.db)",
-            status: requiredFailureStatus(tier, "hybrid"),
+            id,
+            label,
+            status: inspection.kind === "unverified" ? unverifiedStatus() : requiredFailureStatus(tier, "hybrid"),
             required: capabilityRequired(tier, "hybrid"),
-            detail: `${embedFile} is incompatible: ${problems.join("; ")}`,
-            hint: renderRepairHint("build-embeddings", "--embed-file", opts.embedFile)
+            detail: `${embedFile}: ${inspection.issue}`,
+            hint:
+              inspection.kind === "unverified"
+                ? inspection.issue.includes("active SQLite")
+                  ? "Stop active enquire-mcp processes, then run doctor again"
+                  : "The source was left untouched; inspect it separately or retry when it is stable"
+                : renderRepairHint("build-embeddings", "--embed-file", fileOverride)
           });
         }
       } else {
         checks.push({
-          id: "index:embed",
-          label: "Embedding index (.embed.db)",
-          status: inspection.kind === "unverified" ? unverifiedStatus() : requiredFailureStatus(tier, "hybrid"),
+          id,
+          label,
+          status: requiredFailureStatus(tier, "hybrid"),
           required: capabilityRequired(tier, "hybrid"),
-          detail: `${embedFile}: ${inspection.issue}`,
-          hint:
-            inspection.kind === "unverified"
-              ? inspection.issue.includes("active SQLite")
-                ? "Stop active enquire-mcp processes, then run doctor again"
-                : "The source was left untouched; inspect it separately or retry when it is stable"
-              : renderRepairHint("build-embeddings", "--embed-file", opts.embedFile)
+          detail: "cannot inspect without better-sqlite3",
+          hint: "Reinstall this exact enquire-mcp package copy without --omit=optional (missing better-sqlite3)"
         });
       }
-    } else {
-      checks.push({
-        id: "index:embed",
-        label: "Embedding index (.embed.db)",
-        status: requiredFailureStatus(tier, "hybrid"),
-        required: capabilityRequired(tier, "hybrid"),
-        detail: "cannot inspect without better-sqlite3",
-        hint: "Reinstall this exact enquire-mcp package copy without --omit=optional (missing better-sqlite3)"
+    };
+
+    await appendEmbedIndexCheck({
+      id: "index:embed",
+      label: "Embedding index (.embed.db)",
+      embedFile: defaultEmbedFile,
+      adoptModel: true
+    });
+    if (selectedEmbedFile !== defaultEmbedFile) {
+      await appendEmbedIndexCheck({
+        id: "index:embed-selected",
+        label: "Selected embedding index (--embed-file)",
+        embedFile: selectedEmbedFile,
+        fileOverride: opts.embedFile,
+        adoptModel: false
       });
     }
   }

@@ -587,10 +587,16 @@ export async function queryBase(vault: Vault, args: QueryBaseArgs): Promise<Base
   }
   const notes = listing.entries;
   for (const e of notes) {
+    let raw: string;
+    try {
+      raw = await vault.readFile(e.absPath);
+    } catch {
+      // A listed note that cannot be read makes total_matched inexact.
+      throw new Error(`obsidian_query_base cannot report an exact total; unreadable note ${e.relPath}`);
+    }
     let fm: Record<string, unknown> = {};
     let body = "";
     try {
-      const raw = await vault.readFile(e.absPath);
       const parsed = parseFrontmatter(raw);
       assertBoundedBaseJson(parsed.data, `Frontmatter in ${e.relPath}`);
       fm = (parsed.data as Record<string, unknown>) ?? {};

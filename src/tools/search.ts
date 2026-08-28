@@ -3008,12 +3008,7 @@ export async function searchHybrid(
   // path can't inject an excluded id into `fused` (the per-arm filters already
   // prevent it), so an integration test of this layer would be vacuous.
   fused = pruneExcludedHits(fused, (p) => vault.isExcluded(p), granularity);
-  fused = await filterLiveVaultHits(
-    vault,
-    fused,
-    (hit) => vaultPathOfHit(hit.id, granularity),
-    fused.length
-  );
+  fused = await filterLiveVaultHits(vault, fused, (hit) => vaultPathOfHit(hit.id, granularity), fused.length);
 
   // S-5 — snapshot the pure-RRF order/score BEFORE any re-rank stage runs.
   if (exRrf) {

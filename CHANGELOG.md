@@ -6,13 +6,13 @@ All notable changes to this project will be documented here. The format follows 
 
 ### Startup HNSW persist erases the family when EmbedDb drifts after saveTo
 
-> **TL;DR:** **Startup `--use-hnsw` persistence no longer leaves a just-published generation on disk after EmbedDb drifts and the in-memory graph is discarded.** `saveTo` already committed the immutable binary plus meta pointer; a later receipt mismatch only logged and dropped the candidate. The watcher flush already erases that family. Startup now calls the same eraser, best-effort, when persist actually committed. Compact v4 pointers omit `text_preview`; native vectors in the generation remain sensitive.
+> **TL;DR:** **Startup `--use-hnsw` persistence no longer leaves a published generation on disk after EmbedDb drifts and the in-memory graph is discarded.** `saveTo` can commit the immutable binary plus meta pointer and still throw on later lease-release; a receipt mismatch only logged and dropped the candidate. The watcher flush already erases that family. Startup now calls the same eraser, best-effort, when persist was attempted and the candidate is discarded. Compact v4 pointers omit `text_preview`; native vectors in the generation remain sensitive.
 >
-> **Bounded claim.** This does **not** erase on build-time drift (no `saveTo`) or `saveTo(false)` (pointer never committed). It does **not** change watcher `hnswPersistUnsafe`, load-time discard, or the empty-index erase. It does **not** reopen A5 schema 3→5 vector drop.
+> **Bounded claim.** This does **not** erase on build-time drift (no `saveTo`) or persist-disabled startup. Uncommitted `saveTo(false)` with matching receipts still keeps the in-memory candidate and the previous sidecar. It does **not** change watcher `hnswPersistUnsafe`, load-time discard, or the empty-index erase. It does **not** reopen A5 schema 3→5 vector drop.
 >
-> **Method note:** BACKLOG §1.CC-HOLD **H3**. Coverage is an extra phase of the existing `saveTo(false)` persist test: `saveTo` commits a pointer, an unrelated EmbedDb upsert runs during that await, `prepareServerDeps` must return `hnswContext: null`, brute search stays up, and the just-written meta pointer is gone. No new `it()`. Under D-45 all executable proof is GitHub-hosted; no local package-manager, lint or test workload was used.
+> **Method note:** BACKLOG §1.CC-HOLD **H3**. Coverage is extra phases of the existing `saveTo(false)` persist test: (1) `saveTo` commits a pointer, an unrelated EmbedDb upsert runs during that await; (2) `saveTo` writes the pointer then throws (lease-release shape) with the same upsert. Both must return `hnswContext: null`, keep brute search up, and leave the meta pointer gone. No new `it()`. Under D-45 all executable proof is GitHub-hosted; no local package-manager, lint or test workload was used.
 
-- **Post-save drift erases the published family.** After a committed startup `saveTo`, a changed HNSW receipt discards the candidate and clears the persist base.
+- **Post-persist-attempt drift erases the family.** After a startup persist attempt, a changed HNSW receipt discards the candidate and clears the persist base, including when `saveTo` throws after the pointer commits.
 - **Brute-force search stays up.** The discarded graph is not a `semanticUsable` latch.
 
 ### Mutation-census CHANGELOG names the workflow and script residuals

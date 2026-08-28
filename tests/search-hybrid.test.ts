@@ -2197,5 +2197,87 @@ describe("prepareServerDeps — complete semantic-generation admission", () => {
       resetSemanticAdmissionRuntimeMocks();
       await removeSemanticAdmissionFixture(drift);
     }
+
+    const throwDrift = await createSemanticAdmissionFixture();
+    const throwPersistFile = hnswPersistBase(throwDrift.embedFile);
+    const throwPersistEvents: string[] = [];
+    const throwClear = vi.fn(async (file: unknown, scopes: unknown) => {
+      throwPersistEvents.push("clear");
+      const actual = await vi.importActual<typeof import("../src/hnsw.js")>("../src/hnsw.js");
+      return actual.clearHnswPersistedArtifacts(file as string, scopes as never);
+    });
+    const throwSaveTo = vi.fn(async (file: unknown, ..._args: unknown[]) => {
+      throwPersistEvents.push("save");
+      await fs.writeFile(`${String(file)}.meta.json`, '{"formatVersion":4}\n');
+      const writer = new EmbedDb({
+        file: throwDrift.embedFile,
+        vaultRoot: throwDrift.vaultRoot,
+        modelAlias: "multilingual",
+        dim: 384,
+        quantization: "f32"
+      });
+      await writer.open();
+      try {
+        const vector = new Float32Array(384);
+        vector[0] = 1;
+        writer.upsertNote("Unrelated.md", Date.now(), [
+          {
+            chunkIndex: 0,
+            lineStart: 1,
+            lineEnd: 1,
+            textPreview: "unrelated note indexed during HNSW persist",
+            vector
+          }
+        ]);
+      } finally {
+        await writer.closeAndRelease();
+      }
+      throw new Error("injected publisher lease-release failure");
+    });
+    const throwBuild = vi.fn(async (..._args: unknown[]) => ({
+      dim: 384,
+      size: 1,
+      searchKnn: () => ({ labels: [1], distances: [0] }),
+      setEf: () => {},
+      applyDiff: async () => {},
+      saveTo: throwSaveTo
+    }));
+    installSemanticAdmissionRuntimeMocks(throwBuild, { clearHnswPersistedArtifacts: throwClear });
+    const throwStderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      const [{ prepareServerDeps }, { embeddingsSearch: isolatedEmbeddingsSearch }] = await Promise.all([
+        import("../src/server.js"),
+        import("../src/tools/search.js")
+      ]);
+      const deps = await prepareServerDeps({ vault: throwDrift.vaultRoot, useHnsw: true });
+
+      expect(throwBuild).toHaveBeenCalledTimes(1);
+      expect(throwSaveTo).toHaveBeenCalledTimes(1);
+      expect(throwSaveTo.mock.calls[0]?.[0]).toBe(throwPersistFile);
+      expect(throwPersistEvents).toEqual(["save", "clear"]);
+      expect(throwClear).toHaveBeenCalledWith(throwPersistFile, throwSaveTo.mock.calls[0]?.[4]);
+      expect(deps.hnswContext).toBeNull();
+      expect(deps.watcherHealth).toMatchObject({ semanticUsable: true, hnswUsable: true });
+      await expect(fs.lstat(`${throwPersistFile}.meta.json`)).rejects.toMatchObject({ code: "ENOENT" });
+
+      const result = await isolatedEmbeddingsSearch(
+        deps.vault,
+        { query: "semantic admission marker", limit: 1 },
+        throwDrift.embedFile,
+        deps.hnswContext,
+        deps.watcherHealth
+      );
+      expect(result.method).toBe("embeddings-cosine");
+      expect(result.matches.map((match) => match.path)).toEqual(["Semantic.md"]);
+
+      const log = throwStderr.mock.calls.map(([chunk]) => String(chunk)).join("");
+      expect(log).toMatch(/HNSW persist failed.*injected publisher lease-release failure/is);
+      expect(log).toMatch(/embedding database changed while HNSW was persisting/i);
+      expect(log).not.toMatch(/immutable generation \+ meta pointer persisted/i);
+    } finally {
+      throwStderr.mockRestore();
+      resetSemanticAdmissionRuntimeMocks();
+      await removeSemanticAdmissionFixture(throwDrift);
+    }
   });
 });

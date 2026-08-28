@@ -299,6 +299,35 @@ describe("createNote", () => {
     } else if (process.platform === "linux" && process.env.CI) {
       throw new Error("mandatory Linux case-sensitive filesystem precondition failed for Hardlink.md/hardlink.md");
     }
+
+    const unlinkRoot = path.join(root, "F2-source-unlink-root");
+    await fs.mkdir(unlinkRoot, { recursive: true });
+    const unlinkSourceRel = "UnlinkSource.md";
+    const unlinkDestRel = "UnlinkDest.md";
+    const unlinkSourceBytes = "source unlink sentinel\n";
+    await fs.writeFile(path.join(unlinkRoot, unlinkSourceRel), unlinkSourceBytes);
+    const unlinkVault = new Vault(unlinkRoot, { enableWrite: true });
+    await unlinkVault.ensureExists();
+    const unlinkInternals = unlinkVault as unknown as {
+      unlinkSafe(target: string): Promise<void>;
+    };
+    const unlinkSafe = unlinkInternals.unlinkSafe.bind(unlinkVault);
+    const unlinkSpy = vi.spyOn(unlinkInternals, "unlinkSafe").mockImplementation(async (target: string) => {
+      if (String(target).replace(/\\/g, "/").endsWith("UnlinkSource.md")) {
+        throw new Error("synthetic source unlink failure");
+      }
+      return unlinkSafe(target);
+    });
+    try {
+      await expect(unlinkVault.renameFile(unlinkSourceRel, unlinkDestRel)).rejects.toThrow(
+        /synthetic source unlink failure/
+      );
+      expect(await fs.readFile(path.join(unlinkRoot, unlinkSourceRel), "utf8")).toBe(unlinkSourceBytes);
+      expect(await fs.readFile(path.join(unlinkRoot, unlinkDestRel), "utf8")).toBe(unlinkSourceBytes);
+    } finally {
+      unlinkSpy.mockRestore();
+    }
+
     // Cleanup
     await fs.rm(raceRoot, { recursive: true, force: true });
   });

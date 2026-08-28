@@ -828,19 +828,18 @@ describe("VaultWatcher physical-alias convergence (S-8e)", () => {
       expect(markerPaths(reconciled.ftsByMarker, "replacementracenewinodemarker")).toEqual(["B.md"]);
       expect(markerPaths(reconciled.embedByMarker, "replacementracenewinodemarker")).toEqual(["B.md"]);
       // The first plan observed a physical-membership drift after staging A.
-      // SQLite is fully replanned. Same-generation quarantine then drops the
-      // origin path (A.md) from live HNSW instead of latching persist. B.md's
-      // committed replacement labels remain; that is not a ghost of the old
-      // hardlink generation.
+      // The second plan fully commits both distinct inodes into SQLite and
+      // live HNSW. Persist stays up; that is not a piecemeal ghost of the
+      // old hardlink generation.
       expect(markerPathsInHnsw(reconciled, "replacementraceoldmarker")).toEqual([]);
-      expect(markerPathsInHnsw(reconciled, "replacementracegroupmarker")).toEqual([]);
+      expect(markerPathsInHnsw(reconciled, "replacementracegroupmarker")).toEqual(["A.md"]);
       expect(markerPathsInHnsw(reconciled, "replacementracenewinodemarker")).toEqual(["B.md"]);
       expect(fixture.watcher.searchHealth.hnswUsable).toBe(true);
       expect(reconciled.embedPaths).toEqual(["A.md", "B.md"]);
       expect([...new Set(fixture.reindexedPaths)].sort()).toEqual(["A.md", "B.md"]);
       expect(reconciled.ftsAudit).toMatchObject({ declared_files: 2, indexed_files: 2, mismatched_files: 0 });
       expect(reconciled.embedAudit).toMatchObject({ indexed_files: 2, mismatched_files: 0 });
-      expect(watcherAuditsMatch(reconciled, 2)).toBe(false);
+      expect(watcherAuditsMatch(reconciled, 2)).toBe(true);
     } finally {
       stageSpy.mockRestore();
       await closeWindowsWatcherFixture(fixture);

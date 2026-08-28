@@ -2251,6 +2251,27 @@ async function filterCurrentHybridHits(
  * ```
  */
 /**
+ * Strip a trailing `#<digits>` chunk suffix from a fused search id.
+ * A literal `#` inside the filename is kept (`C# Notes.md#3` → `C# Notes.md`).
+ * `lastIndexOf("#")` would turn unsuffixed `C# Notes.md` into `C`.
+ */
+function splitChunkSuffix(id: string): { path: string; chunk?: number } {
+  const match = /#(\d+)$/.exec(id);
+  if (match === null || match.index === 0 || match[1] === undefined) return { path: id };
+  const parsed = Number.parseInt(match[1], 10);
+  if (!Number.isInteger(parsed) || parsed < 0) return { path: id };
+  return { path: id.slice(0, match.index), chunk: parsed };
+}
+
+function stripChunkSuffix(id: string): string {
+  return splitChunkSuffix(id).path;
+}
+
+function vaultPathOfHit(id: string, granularity: "note" | "block"): string {
+  return granularity === "block" ? stripChunkSuffix(id) : id;
+}
+
+/**
  * v3.10.0-rc.8 — prune excluded paths from a fused ranking list, at the
  * fusion-stage source. Defense-in-depth parity with the rc.18 L-HYB-1
  * response-build guard: the fusion-stage consumers of the fused list
@@ -2259,9 +2280,9 @@ async function filterCurrentHybridHits(
  * if a future ranker arm forgets its own per-arm filter.
  *
  * Pure (the `isExcluded` predicate is injected) and granularity-aware: for
- * `"block"` ids of the form `path#chunk`, the chunk suffix is stripped before
- * the membership test — matching the response-build guard's `lastIndexOf("#")`
- * logic exactly so the two layers never disagree.
+ * `"block"` ids of the form `path#<digits>`, the numeric chunk suffix is stripped
+ * before the membership test — matching graph-boost / response-build
+ * `stripChunkSuffix` so a literal `#` in the filename is not treated as a chunk.
  *
  * @param hits - fused ranking entries (each carries an `id` = path or `path#chunk`).
  * @param isExcluded - returns true if a vault-relative path is excluded (`vault.isExcluded`).
@@ -2273,14 +2294,7 @@ export function pruneExcludedHits<T extends { id: string }>(
   isExcluded: (relPath: string) => boolean,
   granularity: "note" | "block"
 ): T[] {
-  return hits.filter((h) => {
-    let p = h.id;
-    if (granularity === "block") {
-      const hashIdx = h.id.lastIndexOf("#");
-      if (hashIdx > 0) p = h.id.slice(0, hashIdx);
-    }
-    return !isExcluded(p);
-  });
+  return hits.filter((h) => !isExcluded(vaultPathOfHit(h.id, granularity)));
 }
 
 /**
@@ -2994,16 +3008,7 @@ export async function searchHybrid(
   // path can't inject an excluded id into `fused` (the per-arm filters already
   // prevent it), so an integration test of this layer would be vacuous.
   fused = pruneExcludedHits(fused, (p) => vault.isExcluded(p), granularity);
-  fused = await filterLiveVaultHits(
-    vault,
-    fused,
-    (hit) => {
-      if (granularity !== "block") return hit.id;
-      const hashIdx = hit.id.lastIndexOf("#");
-      return hashIdx > 0 ? hit.id.slice(0, hashIdx) : hit.id;
-    },
-    fused.length
-  );
+  fused = await filterLiveVaultHits(vault, fused, (hit) => vaultPathOfHit(hit.id, granularity), fused.length);
 
   // S-5 — snapshot the pure-RRF order/score BEFORE any re-rank stage runs.
   if (exRrf) {
@@ -3026,9 +3031,8 @@ export async function searchHybrid(
     // v3.7.16 P2-16 — strip the `#chunk-N` suffix ONLY when it's a chunk
     // marker, not a literal `#` in the filename. Pre-3.7.16 `f.id.split("#")[0]`
     // mangled `C# Notes.md` → `C` and broke graph boost for any filename
-    // containing `#`. The post-3.7.16 regex strips `#<digits>` ONLY at the
+    // containing `#`. The shared helper strips `#<digits>` ONLY at the
     // end of the id, matching the chunker's `${path}#${chunkIndex}` format.
-    const stripChunkSuffix = (id: string): string => id.replace(/#\d+$/, "");
     const candidatePaths = new Set<string>();
     for (const f of fused) {
       const candidatePath = stripChunkSuffix(f.id);
@@ -3230,11 +3234,7 @@ export async function searchHybrid(
       const staleDays = ctx.recency.staleDays;
       const now =
         typeof ctx.recency.nowMs === "number" && Number.isFinite(ctx.recency.nowMs) ? ctx.recency.nowMs : Date.now();
-      const pathOf = (id: string): string => {
-        if (granularity !== "block") return id;
-        const h = id.lastIndexOf("#");
-        return h > 0 ? id.slice(0, h) : id;
-      };
+      const pathOf = (id: string): string => vaultPathOfHit(id, granularity);
       const uniquePaths = [...new Set(fused.map((f) => pathOf(f.id)))];
       const ageByPath = new Map<string, number>();
       await Promise.all(
@@ -3297,11 +3297,7 @@ export async function searchHybrid(
   if (ctx.feedback && ctx.feedback.weight > 0 && ctx.feedback.scores.size > 0 && fused.length > 1) {
     const w = Math.min(1, Math.max(0, ctx.feedback.weight));
     const fbScores = ctx.feedback.scores;
-    const fbPathOf = (id: string): string => {
-      if (granularity !== "block") return id;
-      const h = id.lastIndexOf("#");
-      return h > 0 ? id.slice(0, h) : id;
-    };
+    const fbPathOf = (id: string): string => vaultPathOfHit(id, granularity);
     const exFbTmp = exFeedback ? new Map<string, number>() : undefined;
     const blended = fused.map((f, pos) => {
       const fb = fbScores.get(fbPathOf(f.id)) ?? 0;
@@ -3340,11 +3336,7 @@ export async function searchHybrid(
     // ships without the per-arm filter, this terminal guard prevents leakage
     // into the final SearchHybridHit[]. Cheap (string-glob match) and closes
     // the ε-class sibling gap noted by the audit.
-    let pathForFilter = f.id;
-    if (granularity === "block") {
-      const hashIdx = f.id.lastIndexOf("#");
-      if (hashIdx > 0) pathForFilter = f.id.slice(0, hashIdx);
-    }
+    const pathForFilter = vaultPathOfHit(f.id, granularity);
     if (vault.isExcluded(pathForFilter)) continue;
     try {
       const live = await vault.stat(pathForFilter);
@@ -3399,16 +3391,14 @@ export async function searchHybrid(
     }
     // v2.2.0: when granularity is "block", f.id is "path#chunk_index" — split
     // back into path + chunk_index for the response. When "note", f.id is
-    // just the path.
+    // just the path. Use the numeric-suffix helper so `C# Notes.md#3` keeps
+    // the filename hash.
     let pathPart = f.id;
     let chunkFromId: number | undefined;
     if (granularity === "block") {
-      const hashIdx = f.id.lastIndexOf("#");
-      if (hashIdx > 0) {
-        pathPart = f.id.slice(0, hashIdx);
-        const parsed = Number.parseInt(f.id.slice(hashIdx + 1), 10);
-        if (Number.isInteger(parsed) && parsed >= 0) chunkFromId = parsed;
-      }
+      const split = splitChunkSuffix(f.id);
+      pathPart = split.path;
+      chunkFromId = split.chunk;
     }
     // v2.8.0: derive content-source kind. BM25 / embeddings hits carry it
     // explicitly; TF-IDF doesn't (it only runs over markdown). Either

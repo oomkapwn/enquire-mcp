@@ -511,6 +511,26 @@ describe("runDoctor — tiers and readiness", () => {
     expect(samePath.ready).toBe(true);
     expect(samePath.checks.find((check) => check.id === "index:embed")?.status).toBe("ok");
     expect(samePath.checks.find((check) => check.id === "index:embed-selected")).toBeUndefined();
+
+    const previousXdg = process.env.XDG_CACHE_HOME;
+    try {
+      if (previousXdg !== undefined && path.isAbsolute(previousXdg)) {
+        const relativeXdg = path.relative(process.cwd(), previousXdg);
+        if (relativeXdg !== "" && !path.isAbsolute(relativeXdg)) {
+          process.env.XDG_CACHE_HOME = relativeXdg;
+          const relativeDefault = serveTimeEmbedFile(await fs.realpath(root));
+          expect(path.isAbsolute(relativeDefault)).toBe(false);
+          expect(path.resolve(relativeDefault)).toBe(path.resolve(serveEmbedFile));
+          const sameRelative = await diagnose({ ...paths, embedFile: relativeDefault });
+          expect(sameRelative.checks.find((check) => check.id === "index:embed-selected")).toBeUndefined();
+          const sameResolved = await diagnose({ ...paths, embedFile: path.resolve(relativeDefault) });
+          expect(sameResolved.checks.find((check) => check.id === "index:embed-selected")).toBeUndefined();
+        }
+      }
+    } finally {
+      if (previousXdg === undefined) delete process.env.XDG_CACHE_HOME;
+      else process.env.XDG_CACHE_HOME = previousXdg;
+    }
   });
 
   it("each hybrid prerequisite independently blocks readiness", async (ctx) => {

@@ -134,10 +134,13 @@ export function candidateModelCacheRoots(): string[] {
 /**
  * Default `.embed.db` location for a given vault root. Same formula as
  * `embedDbPath` in `src/tool-registry.ts`, which `serve` / `serve-http` /
- * `query` / `eval` / `setup` use. Those commands have no `--embed-file`.
+ * `query` / `eval` / `setup` use, then `path.resolve`d. Those commands have
+ * no `--embed-file`. Resolve is required because `defaultIndexFile` joins
+ * `XDG_CACHE_HOME` verbatim, and a relative cache home would otherwise
+ * disagree with `path.resolve(--embed-file)`.
  */
 function defaultEmbedDbFile(vaultRoot: string): string {
-  return defaultIndexFile(vaultRoot).replace(/\.fts5\.db$/, ".embed.db");
+  return path.resolve(defaultIndexFile(vaultRoot).replace(/\.fts5\.db$/, ".embed.db"));
 }
 
 const MAX_SQLITE_SNAPSHOT_BYTES = 256 * 1024 * 1024;
@@ -1058,7 +1061,7 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
   // an independent guard as well, so doctor reports a second, tier-aware check
   // whenever the resolved override differs from the default.
   if (vaultExists) {
-    const defaultEmbedFile = defaultEmbedDbFile(vault.root);
+    const defaultEmbedFile = path.resolve(defaultEmbedDbFile(vault.root));
     const selectedEmbedFile = opts.embedFile !== undefined ? path.resolve(opts.embedFile) : defaultEmbedFile;
     const appendWatcherActivationGuardCheck = async ({
       embedFile,
@@ -1315,7 +1318,7 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
   // path-distinct `--embed-file` is still inspected, like the selected
   // watcher guard, but it cannot substitute for the default.
   if (vaultExists) {
-    const defaultEmbedFile = defaultEmbedDbFile(vault.root);
+    const defaultEmbedFile = path.resolve(defaultEmbedDbFile(vault.root));
     const selectedEmbedFile = opts.embedFile !== undefined ? path.resolve(opts.embedFile) : defaultEmbedFile;
     const appendEmbedIndexCheck = async ({
       id,

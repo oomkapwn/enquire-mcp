@@ -1525,6 +1525,24 @@ export class Vault {
       throw this.sanitizeFsError(err);
     }
   }
+  // Publication committed at rename/wx write/unlink. A receipt-stat failure
+  // must not turn that committed success into a reported failure/retry
+  // (sensitive-artifact.ts:122-127). Prefer a live dest stat; otherwise the
+  // inode snapshot taken beside the durable mutation.
+  private async publishedReceiptStat(
+    abs: string,
+    fallback: import("node:fs").Stats | undefined,
+    fallbackSize?: number
+  ): Promise<{ mtimeMs: number; size: number }> {
+    try {
+      const live = await this.statSafe(abs);
+      return { mtimeMs: live.mtimeMs, size: live.size };
+    } catch {
+      if (fallback) return { mtimeMs: fallback.mtimeMs, size: fallback.size };
+      if (fallbackSize !== undefined) return { mtimeMs: Date.now(), size: fallbackSize };
+      throw new Error(`published path is not statable: ${vaultRelative(this.root, abs)}`);
+    }
+  }
 
   async readBinaryFile(relOrAbs: string): Promise<Buffer> {
     const abs = await this.resolveSafePath(relOrAbs);
@@ -1772,6 +1790,7 @@ export class Vault {
     // user-facing "Note already exists" error for back-compat).
     const targetLstat = await this.assertMutationLeafNotSymlink(abs, "write");
     await this.assertMutationPathPublic(abs, "write", "destination");
+    let publishedStat: import("node:fs").Stats | undefined;
     if (opts.overwrite) {
       // v3.11.0-rc.12 (rc.11-audit L-7) — atomic overwrite: write a sibling tmp then
       // rename(2) over the target, so a crash/SIGKILL mid-write can never truncate the
@@ -1798,6 +1817,7 @@ export class Vault {
         await this.assertMutationPathPublic(tmp, "write", "temporary destination");
         if (Buffer.isBuffer(content)) await fh.writeFile(content);
         else await fh.writeFile(content, "utf8");
+        publishedStat = await fh.stat();
         await fh.close();
         fh = undefined;
         await this.assertMutationLeafNotSymlink(abs, "write");
@@ -1816,6 +1836,11 @@ export class Vault {
         await this.assertMutationPathPublic(abs, "write", "destination");
         if (Buffer.isBuffer(content)) await fh.writeFile(content);
         else await fh.writeFile(content, "utf8");
+        try {
+          publishedStat = await fh.stat();
+        } catch {
+          publishedStat = undefined;
+        }
       } catch (err) {
         if (err instanceof Error && "code" in err && (err as NodeJS.ErrnoException).code === "EEXIST") {
           throw new Error(`Note already exists: ${targetRel} (pass overwrite=true to replace)`);
@@ -1826,12 +1851,12 @@ export class Vault {
       }
     }
     this.deleteCacheEntry(abs);
-    const stat = await this.statSafe(abs);
+    const receipt = await this.publishedReceiptStat(abs, publishedStat, contentBytes);
     return {
       absPath: abs,
       relPath: vaultRelative(this.root, abs),
-      mtimeMs: stat.mtimeMs,
-      bytes: stat.size
+      mtimeMs: receipt.mtimeMs,
+      bytes: receipt.size
     };
   }
 
@@ -2184,17 +2209,21 @@ export class Vault {
     // Plain rename is reserved for confirmed case aliases and for a distinct
     // destination that already existed when overwrite authority was planned.
     let needsExclusiveMove = false;
+    let publishedStat: import("node:fs").Stats | undefined;
     if (exactSamePath) {
       if (!opts.overwrite) {
         throw new Error(`Destination already exists: ${toRelNorm} (pass overwrite=true to replace)`);
       }
+      publishedStat = await this.statSafe(fromAbs);
       await this.renameSafe(fromAbs, toAbs);
     } else if (currentDestination?.kind === "same-canonical-case-alias") {
+      publishedStat = await this.statSafe(fromAbs);
       await this.renameSafe(fromAbs, toAbs);
     } else if (currentDestination?.kind === "distinct") {
       if (!opts.overwrite) {
         throw new Error(`Destination already exists: ${toRelNorm} (pass overwrite=true to replace)`);
       }
+      publishedStat = await this.statSafe(fromAbs);
       await this.renameSafe(fromAbs, toAbs);
     } else {
       needsExclusiveMove = true;
@@ -2229,6 +2258,7 @@ export class Vault {
             }
             throw copyErr;
           }
+          publishedStat = await this.statSafe(toAbs);
           await this.unlinkSafe(fromAbs);
         } else {
           throw err;
@@ -2241,16 +2271,17 @@ export class Vault {
       // The EXDEV copy path already unlinked; a second unlinkSafe would ENOENT
       // after a completed move (the swallowed fs.unlink.catch used to hide both).
       if (linked) {
+        publishedStat = await this.statSafe(fromAbs);
         await this.unlinkSafe(fromAbs);
       }
     }
     this.deleteCacheEntry(fromAbs);
     this.deleteCacheEntry(toAbs);
-    const stat = await this.statSafe(toAbs);
+    const receipt = await this.publishedReceiptStat(toAbs, publishedStat);
     return {
       from: vaultRelative(this.root, fromAbs),
       to: vaultRelative(this.root, toAbs),
-      mtimeMs: stat.mtimeMs
+      mtimeMs: receipt.mtimeMs
     };
   }
 

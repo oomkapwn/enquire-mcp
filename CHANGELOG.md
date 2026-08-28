@@ -4,6 +4,17 @@ All notable changes to this project will be documented here. The format follows 
 
 ## [4.0.0-rc.4] — 2026-08-21
 
+### Startup HNSW persist erases the family when EmbedDb drifts after saveTo
+
+> **TL;DR:** **Startup `--use-hnsw` persistence no longer leaves a published generation on disk after EmbedDb drifts and the in-memory graph is discarded.** `saveTo` can commit the immutable binary plus meta pointer and still throw on later lease-release; a receipt mismatch only logged and dropped the candidate. The watcher flush already erases that family. Startup now calls the same eraser, best-effort, when persist was attempted and the candidate is discarded. Compact v4 pointers omit `text_preview`; native vectors in the generation remain sensitive.
+>
+> **Bounded claim.** This does **not** erase on build-time drift (no `saveTo`) or persist-disabled startup. Uncommitted `saveTo(false)` with matching receipts still keeps the in-memory candidate and the previous sidecar. It does **not** change watcher `hnswPersistUnsafe`, load-time discard, or the empty-index erase. It does **not** reopen A5 schema 3→5 vector drop.
+>
+> **Method note:** BACKLOG §1.CC-HOLD **H3**. Coverage is extra phases of the existing `saveTo(false)` persist test: (1) `saveTo` commits a pointer, an unrelated EmbedDb upsert runs during that await; (2) `saveTo` writes the pointer then throws (lease-release shape) with the same upsert. Both must return `hnswContext: null`, keep brute search up, and leave the meta pointer gone. No new `it()`. Under D-45 all executable proof is GitHub-hosted; no local package-manager, lint or test workload was used.
+
+- **Post-persist-attempt drift erases the family.** After a startup persist attempt, a changed HNSW receipt discards the candidate and clears the persist base, including when `saveTo` throws after the pointer commits.
+- **Brute-force search stays up.** The discarded graph is not a `semanticUsable` latch.
+
 ### Mutation-census CHANGELOG names the workflow and script residuals
 
 > **TL;DR:** **The repository-wide raw-mutation census does not cover every checked-in test that reads `.github/workflows/*.yml` or `scripts/*.mjs`.** The original rc.4 TL;DR said every structural-test source and a conservative `src/`-reader superset were inside one census. That class is unchanged. Tests admitted only because they read publication-authority workflows or scripts stay outside unless they already qualify as structural or `src/`-reader members. The current residuals are `release-metadata-gates.test.ts` and `check-audit.test.ts`. Both sinks were already fail-closed by their own oracles.

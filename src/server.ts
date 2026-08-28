@@ -836,6 +836,7 @@ export async function prepareServerDeps(opts: ServeOptions): Promise<ServerDeps>
               receipt: HnswPersistenceReceipt;
               origin: "loaded" | "built";
             } | null = null;
+            let persistAttempted = false;
             if (opts.hnswPersist !== false) {
               const beforeLoad = db.captureHnswLoadSnapshot();
               const { loadHnswFromDisk } = await import("./hnsw.js");
@@ -897,6 +898,7 @@ export async function prepareServerDeps(opts: ServeOptions): Promise<ServerDeps>
                   let persisted = false;
                   try {
                     if (opts.hnswPersist !== false) {
+                      persistAttempted = true;
                       persisted =
                         (await index.saveTo(
                           persistFile,
@@ -990,6 +992,19 @@ export async function prepareServerDeps(opts: ServeOptions): Promise<ServerDeps>
                   );
                 }
               }
+            } else if (persistAttempted) {
+              // saveTo can throw after the meta pointer commits (lease-release
+              // failure). Treat any persist attempt as possibly published, and
+              // erase outside the receipt→attach await window. Compact v4
+              // pointers omit text_preview; the immutable generation remains
+              // sensitive.
+              const { clearHnswPersistedArtifacts } = await import("./hnsw.js");
+              const persistenceScopes = db.getPersistenceFamilyScopes();
+              await clearHnswPersistedArtifacts(persistFile, persistenceScopes).catch((err) => {
+                process.stderr.write(
+                  `enquire: unable to erase stale HNSW artifacts after persist-time generation drift — ${err instanceof Error ? err.message : String(err)}\n`
+                );
+              });
             }
           } finally {
             await db.closeAndRelease();

@@ -124,7 +124,7 @@ const PRODUCTION_FILE_PINS: Readonly<Record<string, ProductionFilePin>> = {
       "./fts5.js|discoverFtsIndexConfig|discoverFtsIndexConfig"
     ],
     k1Opens: 3,
-    sha256: "87a38719e6f18cb70035322bc717daa55f6dc7fa2a3f702dd9a67fb545dfa664"
+    sha256: "b03297c68205aeb7e26f873a182867b10c56e69a39336669c8cf56402026e708"
   },
   "src/tools/search.ts": {
     constructors: { EmbedDb: 1, FtsIndex: 0 },

@@ -83,7 +83,10 @@ async function removeSemanticAdmissionFixture(fixture: SemanticAdmissionFixture)
   await fs.rm(fixture.scratch, { recursive: true, force: true });
 }
 
-function installSemanticAdmissionRuntimeMocks(buildHnsw: (...args: unknown[]) => Promise<unknown>): void {
+function installSemanticAdmissionRuntimeMocks(
+  buildHnsw: (...args: unknown[]) => Promise<unknown>,
+  hnswOverrides: Record<string, unknown> = {}
+): void {
   vi.resetModules();
   vi.doMock("@huggingface/transformers", () => ({
     env: { allowRemoteModels: true, allowLocalModels: true },
@@ -96,7 +99,7 @@ function installSemanticAdmissionRuntimeMocks(buildHnsw: (...args: unknown[]) =>
   }));
   vi.doMock("../src/hnsw.js", async () => {
     const actual = await vi.importActual<typeof import("../src/hnsw.js")>("../src/hnsw.js");
-    return { ...actual, buildHnsw };
+    return { ...actual, buildHnsw, ...hnswOverrides };
   });
 }
 
@@ -2112,6 +2115,169 @@ describe("prepareServerDeps — complete semantic-generation admission", () => {
       stderr.mockRestore();
       resetSemanticAdmissionRuntimeMocks();
       await removeSemanticAdmissionFixture(fixture);
+    }
+
+    const drift = await createSemanticAdmissionFixture();
+    const driftPersistFile = hnswPersistBase(drift.embedFile);
+    const persistEvents: string[] = [];
+    const clear = vi.fn(async (file: unknown, scopes: unknown) => {
+      persistEvents.push("clear");
+      const actual = await vi.importActual<typeof import("../src/hnsw.js")>("../src/hnsw.js");
+      return actual.clearHnswPersistedArtifacts(file as string, scopes as never);
+    });
+    const driftSaveTo = vi.fn(async (file: unknown, ..._args: unknown[]) => {
+      persistEvents.push("save");
+      await fs.writeFile(`${String(file)}.meta.json`, '{"formatVersion":4}\n');
+      const writer = new EmbedDb({
+        file: drift.embedFile,
+        vaultRoot: drift.vaultRoot,
+        modelAlias: "multilingual",
+        dim: 384,
+        quantization: "f32"
+      });
+      await writer.open();
+      try {
+        const vector = new Float32Array(384);
+        vector[0] = 1;
+        writer.upsertNote("Unrelated.md", Date.now(), [
+          {
+            chunkIndex: 0,
+            lineStart: 1,
+            lineEnd: 1,
+            textPreview: "unrelated note indexed during HNSW persist",
+            vector
+          }
+        ]);
+      } finally {
+        await writer.closeAndRelease();
+      }
+      return true;
+    });
+    const driftBuild = vi.fn(async (..._args: unknown[]) => ({
+      dim: 384,
+      size: 1,
+      searchKnn: () => ({ labels: [1], distances: [0] }),
+      setEf: () => {},
+      applyDiff: async () => {},
+      saveTo: driftSaveTo
+    }));
+    installSemanticAdmissionRuntimeMocks(driftBuild, { clearHnswPersistedArtifacts: clear });
+    const driftStderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      const [{ prepareServerDeps }, { embeddingsSearch: isolatedEmbeddingsSearch }] = await Promise.all([
+        import("../src/server.js"),
+        import("../src/tools/search.js")
+      ]);
+      const deps = await prepareServerDeps({ vault: drift.vaultRoot, useHnsw: true });
+
+      expect(driftBuild).toHaveBeenCalledTimes(1);
+      expect(driftSaveTo).toHaveBeenCalledTimes(1);
+      expect(driftSaveTo.mock.calls[0]?.[0]).toBe(driftPersistFile);
+      expect(persistEvents).toEqual(["save", "clear"]);
+      expect(clear).toHaveBeenCalledWith(driftPersistFile, driftSaveTo.mock.calls[0]?.[4]);
+      expect(deps.hnswContext).toBeNull();
+      expect(deps.watcherHealth).toMatchObject({ semanticUsable: true, hnswUsable: true });
+      await expect(fs.lstat(`${driftPersistFile}.meta.json`)).rejects.toMatchObject({ code: "ENOENT" });
+
+      const result = await isolatedEmbeddingsSearch(
+        deps.vault,
+        { query: "semantic admission marker", limit: 1 },
+        drift.embedFile,
+        deps.hnswContext,
+        deps.watcherHealth
+      );
+      expect(result.method).toBe("embeddings-cosine");
+      expect(result.matches.map((match) => match.path)).toEqual(["Semantic.md"]);
+
+      const log = driftStderr.mock.calls.map(([chunk]) => String(chunk)).join("");
+      expect(log).toMatch(/embedding database changed while HNSW was persisting/i);
+      expect(log).not.toMatch(/immutable generation \+ meta pointer persisted/i);
+    } finally {
+      driftStderr.mockRestore();
+      resetSemanticAdmissionRuntimeMocks();
+      await removeSemanticAdmissionFixture(drift);
+    }
+
+    const throwDrift = await createSemanticAdmissionFixture();
+    const throwPersistFile = hnswPersistBase(throwDrift.embedFile);
+    const throwPersistEvents: string[] = [];
+    const throwClear = vi.fn(async (file: unknown, scopes: unknown) => {
+      throwPersistEvents.push("clear");
+      const actual = await vi.importActual<typeof import("../src/hnsw.js")>("../src/hnsw.js");
+      return actual.clearHnswPersistedArtifacts(file as string, scopes as never);
+    });
+    const throwSaveTo = vi.fn(async (file: unknown, ..._args: unknown[]) => {
+      throwPersistEvents.push("save");
+      await fs.writeFile(`${String(file)}.meta.json`, '{"formatVersion":4}\n');
+      const writer = new EmbedDb({
+        file: throwDrift.embedFile,
+        vaultRoot: throwDrift.vaultRoot,
+        modelAlias: "multilingual",
+        dim: 384,
+        quantization: "f32"
+      });
+      await writer.open();
+      try {
+        const vector = new Float32Array(384);
+        vector[0] = 1;
+        writer.upsertNote("Unrelated.md", Date.now(), [
+          {
+            chunkIndex: 0,
+            lineStart: 1,
+            lineEnd: 1,
+            textPreview: "unrelated note indexed during HNSW persist",
+            vector
+          }
+        ]);
+      } finally {
+        await writer.closeAndRelease();
+      }
+      throw new Error("injected publisher lease-release failure");
+    });
+    const throwBuild = vi.fn(async (..._args: unknown[]) => ({
+      dim: 384,
+      size: 1,
+      searchKnn: () => ({ labels: [1], distances: [0] }),
+      setEf: () => {},
+      applyDiff: async () => {},
+      saveTo: throwSaveTo
+    }));
+    installSemanticAdmissionRuntimeMocks(throwBuild, { clearHnswPersistedArtifacts: throwClear });
+    const throwStderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      const [{ prepareServerDeps }, { embeddingsSearch: isolatedEmbeddingsSearch }] = await Promise.all([
+        import("../src/server.js"),
+        import("../src/tools/search.js")
+      ]);
+      const deps = await prepareServerDeps({ vault: throwDrift.vaultRoot, useHnsw: true });
+
+      expect(throwBuild).toHaveBeenCalledTimes(1);
+      expect(throwSaveTo).toHaveBeenCalledTimes(1);
+      expect(throwSaveTo.mock.calls[0]?.[0]).toBe(throwPersistFile);
+      expect(throwPersistEvents).toEqual(["save", "clear"]);
+      expect(throwClear).toHaveBeenCalledWith(throwPersistFile, throwSaveTo.mock.calls[0]?.[4]);
+      expect(deps.hnswContext).toBeNull();
+      expect(deps.watcherHealth).toMatchObject({ semanticUsable: true, hnswUsable: true });
+      await expect(fs.lstat(`${throwPersistFile}.meta.json`)).rejects.toMatchObject({ code: "ENOENT" });
+
+      const result = await isolatedEmbeddingsSearch(
+        deps.vault,
+        { query: "semantic admission marker", limit: 1 },
+        throwDrift.embedFile,
+        deps.hnswContext,
+        deps.watcherHealth
+      );
+      expect(result.method).toBe("embeddings-cosine");
+      expect(result.matches.map((match) => match.path)).toEqual(["Semantic.md"]);
+
+      const log = throwStderr.mock.calls.map(([chunk]) => String(chunk)).join("");
+      expect(log).toMatch(/HNSW persist failed.*injected publisher lease-release failure/is);
+      expect(log).toMatch(/embedding database changed while HNSW was persisting/i);
+      expect(log).not.toMatch(/immutable generation \+ meta pointer persisted/i);
+    } finally {
+      throwStderr.mockRestore();
+      resetSemanticAdmissionRuntimeMocks();
+      await removeSemanticAdmissionFixture(throwDrift);
     }
   });
 });

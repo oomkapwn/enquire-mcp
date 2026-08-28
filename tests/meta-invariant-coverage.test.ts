@@ -34,7 +34,7 @@ import { releaseMutationVersionedTransitionAuditProblems } from "./release-mutat
 
 const repoRoot = path.resolve(__dirname, "..");
 const RELEASE_MUTATION_IDENTITY_FIXTURE_SHA256 = "8205d24e6d42dd4cb8986368611514131abe701434beb30150e33ea08f4b1288";
-const RELEASE_MUTATION_TRANSITION_FIXTURE_SHA256 = "669db10763ccc17945c689a035d9996d77314408bc860e29e0ecf31f1f49b4b4";
+const RELEASE_MUTATION_TRANSITION_FIXTURE_SHA256 = "70c33477bbd3071ec4caf47fcd3913b7704b53c5e0fb6f19e21e35a64df433e8";
 const releaseMutationIdentityFixturePath = path.join(repoRoot, "tests/fixtures/release-mutation-identity.v2.json");
 const releaseMutationTransitionFixturePath = path.join(repoRoot, "tests/fixtures/release-mutation-transition.v3.json");
 const releaseIntegritySourcePath = path.join(repoRoot, "tests/release-integrity.test.ts");
@@ -316,7 +316,7 @@ const EXPECTED_REPOSITORY_MUTATION_HELPER_CALL_ENTRIES = [
   ],
   [
     "k1-ast-invariant.test.ts",
-    { count: 4, sha256: "6dfca383de8d53508a3b93d9e07f73e019b63dffa0696486938c60b13c64bb1a" }
+    { count: 4, sha256: "2fc773a8836e9c9fbcef8b7699e40c015f5bf14df6e3b86c76625ab2b50135cd" }
   ],
   [
     "k1-class-invariant.test.ts",
@@ -996,8 +996,8 @@ const EXPECTED_REVIEWED_ORDINARY_OWNER_SHA256_ENTRIES = [
   ["K-1 statement semicolon normalization", "16d035dcb619ed86a565e7aa31d24ffe1eaf3be6126768a6934d95ffb5075997"],
   ["K-1 block-comment stripping", "c95678067a8bf775dec72803fda97aeda6b12479bf8420e9566259b4b42ce4db"],
   ["K-1 line-comment stripping", "c95678067a8bf775dec72803fda97aeda6b12479bf8420e9566259b4b42ce4db"],
-  ["K-1 module-extension normalization", "a8a82204030d1e2837f67cfca53062f14bf0a547434dcfa9de1b2d7903307757"],
-  ["K-1 source-path separator normalization", "c4c0053677a5715b9903b3b65d94de7939e89f5cd409e934c8976aa803b87bdf"],
+  ["K-1 module-extension normalization", "514e6393d0473cee06747aee6d0868c5006f43d55d7f35692ada27a49b2daacd"],
+  ["K-1 source-path separator normalization", "42e6682e7388c1a75810d8a7922ccaef610094260b19b15ed3ea736d0cc802c5"],
   ["line-terminator block-comment stripping", "61bbbea7aac48eafa3a24d78998eb49e81a6e7911953f3c25ead27692923a80d"],
   ["line-terminator line-comment stripping", "61bbbea7aac48eafa3a24d78998eb49e81a6e7911953f3c25ead27692923a80d"],
   ["ReDoS source-path separator normalization", "1b31e3478ce12f357ad0de08f669cdd462aef1c92b5e40ea2b7252bf483dc9bd"],

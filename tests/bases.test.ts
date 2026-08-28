@@ -347,6 +347,15 @@ views:
     // open.md + done.md (frontmatter tag) AND Notes/inline.md (inline #book)
     expect(out.matches.map((m) => m.path).sort()).toEqual(["Notes/inline.md", "done.md", "open.md"]);
     expect(out.unevaluated_predicates).toEqual([]);
+
+    await fs.writeFile(path.join(root, "singular.md"), "---\nstatus: open\ntag: book\n---\nsingular key\n");
+    const withSingular = await queryBase(vault, { path: "q.base" });
+    expect(withSingular.matches.map((m) => m.path).sort()).toEqual([
+      "Notes/inline.md",
+      "done.md",
+      "open.md",
+      "singular.md"
+    ]);
   });
 
   it("filters by taggedWith(file.file, ...)", async () => {
@@ -361,6 +370,10 @@ views:
     const out = await queryBase(vault, { path: "q.base" });
     expect(out.matches.map((m) => m.path).sort()).toContain("open.md");
     expect(out.matches.map((m) => m.path).sort()).toContain("done.md");
+
+    await fs.writeFile(path.join(root, "singular.md"), "---\nstatus: open\ntag: book\n---\nsingular key\n");
+    const withSingular = await queryBase(vault, { path: "q.base" });
+    expect(withSingular.matches.map((m) => m.path)).toContain("singular.md");
   });
 
   it("filters by frontmatter equality", async () => {

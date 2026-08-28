@@ -634,22 +634,22 @@ describe("SessionRegistry (v2.14.0)", () => {
       await closeServerBounded(httpServer);
     }
 
-    const hangHandler = createHttpHandler(
-      deps,
-      {
-        vault: root,
-        port: 0,
-        host: "127.0.0.1",
-        bearerToken: "late-registration-test-token-1234567890",
-        stateful: true,
-        rateLimitPerMinute: 0,
-        installSignalHandlers: false
-      }
-    );
+    const hangHandler = createHttpHandler(deps, {
+      vault: root,
+      port: 0,
+      host: "127.0.0.1",
+      bearerToken: "late-registration-test-token-1234567890",
+      stateful: true,
+      rateLimitPerMinute: 0,
+      installSignalHandlers: false
+    });
     const hangServer = createServer((req, res) => {
       const writeHead = res.writeHead.bind(res);
-      res.writeHead = ((...args: unknown[]) => {
-        (writeHead as (...inner: unknown[]) => unknown)(...args);
+      // Forwarding the SDK's Content-Length then throwing leaves an unfinished
+      // body; undici reports "other side closed". A close-delimited head is
+      // the post-header state finishCaughtHttpResponse can complete.
+      res.writeHead = ((statusCode: number, ..._rest: unknown[]) => {
+        writeHead(statusCode, { Connection: "close" });
         throw new Error("injected post-header failure");
       }) as typeof res.writeHead;
       void hangHandler(req, res);

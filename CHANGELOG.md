@@ -4,6 +4,17 @@ All notable changes to this project will be documented here. The format follows 
 
 ## [4.0.0-rc.4] — 2026-08-21
 
+### Query-base exact totals do not skip an unreadable listed note
+
+> **TL;DR:** **`obsidian_query_base` no longer reports `total_matched` after silently skipping a listed note whose `readFile` failed.** Incomplete bounded listing already throws so a prefix cannot be called exact. 93e left `catch { continue }` around the per-note read, so an unreadable admitted note vanished from the exact total with no error. An unreadable listed note now fails closed with the same exact-total error class. Malformed frontmatter after a successful read is not this slice.
+>
+> **Bounded claim.** This does **not** invert `if (!listing.complete)` fail-closed. It does **not** invent a skipped-count that still claims exactness over the readable subset. It does **not** change `listBases` malformed-base fallthrough.
+>
+> **Method note:** BACKLOG §1.CC-ter **B6**, sixth product slice of the `93e03f28` unit (what catches this throw, and what does that catcher then disable?). Coverage is an extra phase of the existing incomplete-walk test: after the incomplete-listing spy, a complete listing with one unreadable `done.md` must throw `/cannot report an exact total.*done\\.md/`. No new `it()`. Under D-45 all executable proof is GitHub-hosted; no local package-manager, lint or test workload was used.
+
+- **Unreadable listed notes fail closed.** `queryBase` throws instead of `continue` when `readFile` fails for an admitted markdown path.
+- **Incomplete listing is unchanged.** A bounded walk with `complete: false` still throws before any note read.
+
 ### Open-questions matching budget does not charge vault I/O as ReDoS
 
 > **TL;DR:** **`obsidian_open_questions` with a caller-supplied pattern no longer rejects a legitimate regex as catastrophic backtracking merely because uncached note reads consumed the matching wall clock.** After 93e rewrote the envelope, `matchDeadline` was `Date.now() + scanBudgetMs` before the uncached walk, and both the pre-`readNoteUncached` check and `flushCandidateBatch` remaining-time math treated vault I/O as matching. `matchingTimeout()` has no inner catcher, so one slow read returned zero questions with a ReDoS error. The budget now decrements only around `matchBatch` and is not reset per note. Incomplete listing still fails closed. The default inline matcher stays uncharged.

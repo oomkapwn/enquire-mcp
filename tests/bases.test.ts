@@ -668,6 +668,21 @@ views:
     await expect(queryBase(vault, { path: "q.base" })).rejects.toThrow(/cannot report an exact total.*23/u);
     expect(bounded).toHaveBeenCalledWith([".md"], 50_000, 200_000, undefined);
     expect(readFile).not.toHaveBeenCalled();
+
+    bounded.mockRestore();
+    readFile.mockRestore();
+    const originalRead = vault.readFile.bind(vault);
+    const unreadable = vi.spyOn(vault, "readFile").mockImplementation(async (relOrAbs) => {
+      if (String(relOrAbs).replace(/\\/g, "/").endsWith("done.md")) {
+        throw new Error("synthetic unreadable note");
+      }
+      return originalRead(relOrAbs);
+    });
+    try {
+      await expect(queryBase(vault, { path: "q.base" })).rejects.toThrow(/cannot report an exact total.*done\.md/u);
+    } finally {
+      unreadable.mockRestore();
+    }
   });
 
   it("skips cyclic and aliased note frontmatter before recursive filter evaluation", async () => {

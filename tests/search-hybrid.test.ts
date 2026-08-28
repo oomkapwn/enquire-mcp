@@ -1907,9 +1907,35 @@ describe("embeddingsSearch — HNSW database-generation authority", () => {
 
 describe("prepareServerDeps — complete semantic-generation admission", () => {
   it.each([false, true] as const)(
-    "quarantines an incomplete source generation before a semantic query (useHnsw=%s)",
+    "keeps brute-force semantic search when a declared source generation is incomplete (useHnsw=%s)",
     async (useHnsw) => {
       const fixture = await createSemanticAdmissionFixture();
+      const healthyFile = path.join(fixture.vaultRoot, "Healthy.md");
+      await fs.writeFile(healthyFile, "healthy sibling note\n");
+      const healthyStat = await fs.stat(healthyFile);
+      const writer = new EmbedDb({
+        file: fixture.embedFile,
+        vaultRoot: fixture.vaultRoot,
+        modelAlias: "multilingual",
+        dim: 384,
+        quantization: "f32"
+      });
+      await writer.open();
+      try {
+        const vector = new Float32Array(384);
+        vector[0] = 1;
+        writer.upsertNote("Healthy.md", healthyStat.mtimeMs, [
+          {
+            chunkIndex: 0,
+            lineStart: 1,
+            lineEnd: 1,
+            textPreview: "healthy sibling note",
+            vector
+          }
+        ]);
+      } finally {
+        await writer.closeAndRelease();
+      }
       const Database = (await import("better-sqlite3")).default;
       const mutate = new Database(fixture.embedFile);
       try {
@@ -1936,22 +1962,26 @@ describe("prepareServerDeps — complete semantic-generation admission", () => {
           hnswPersist: false
         });
 
-        expect(deps.watcherHealth).toMatchObject({ semanticUsable: false, hnswUsable: false });
+        expect(deps.watcherHealth).toMatchObject({ semanticUsable: true, hnswUsable: true });
         expect(deps.hnswContext).toBeNull();
         expect(buildHnsw).not.toHaveBeenCalled();
-        await expect(
-          isolatedEmbeddingsSearch(
-            deps.vault,
-            { query: "semantic admission marker", limit: 1 },
-            fixture.embedFile,
-            deps.hnswContext,
-            deps.watcherHealth
-          )
-        ).rejects.toThrow(/embedding search is quarantined/i);
+        const result = await isolatedEmbeddingsSearch(
+          deps.vault,
+          { query: "semantic admission marker", limit: 2 },
+          fixture.embedFile,
+          deps.hnswContext,
+          deps.watcherHealth
+        );
+        expect(result.method).toBe("embeddings-cosine");
+        expect(result.matches.map((match) => match.path).sort()).toEqual(["Healthy.md", "Semantic.md"]);
 
         const log = stderr.mock.calls.map(([chunk]) => String(chunk)).join("");
-        expect(log).toMatch(/failed complete semantic admission/i);
-        expect(log).not.toMatch(/falling back to brute-force semantic search/i);
+        expect(log).not.toMatch(/failed complete semantic admission/i);
+        if (useHnsw) {
+          expect(log).toMatch(/HNSW build failed; falling back to brute-force semantic search/i);
+        } else {
+          expect(log).not.toMatch(/falling back to brute-force semantic search/i);
+        }
       } finally {
         stderr.mockRestore();
         resetSemanticAdmissionRuntimeMocks();

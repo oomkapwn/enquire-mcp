@@ -4,6 +4,17 @@ All notable changes to this project will be documented here. The format follows 
 
 ## [4.0.0-rc.4] — 2026-08-21
 
+### Incomplete embedding generation does not quarantine brute-force semantic search
+
+> **TL;DR:** **`obsidian_embeddings_search` (and the embeddings arm of `obsidian_search`) no longer stay down for the life of a `serve` process because HNSW snapshot admission refused one declared source.** After brute ranking stopped calling the snapshot helper, `prepareServerDeps` still ran `captureHnswReceiptSnapshot()` on the brute-only startup path and latched `semanticUsable=false` on any throw. The `--use-hnsw` catch did the same for `EmbedSnapshotIntegrityError` / `EmbedSnapshotCapacityError`. Serve-path search then threw `SEMANTIC_ROUTE_QUARANTINED` even though remaining well-formed rows were rankable. Brute-only startup no longer opens a second EmbedDb for that snapshot. HNSW integrity/capacity failures now leave the brute route up (`hnswContext` null), matching a missing/corrupt sidecar.
+>
+> **Bounded claim.** This does **not** change `captureHnswReceiptSnapshot` itself or `hnswPersistUnsafe`. Mixed-generation after awaited filesystem work is still refused by `captureGenerationIdentity`. Live pending-queue overflow may still latch `semanticUsable` (B0). Incomplete declared sources remain an HNSW-snapshot refusal, not a process-wide semantic quarantine.
+>
+> **Method note:** BACKLOG §1.CC-ter **B6**, third product slice of the `93e03f28` unit. Coverage is a retarget of the existing `it.each([false, true])` complete-admission test: an extra `Healthy.md` sibling must remain searchable after `Semantic.md`'s `n_chunks` is poked incomplete, `semanticUsable` stays true, `buildHnsw` is uncalled, and brute-only startup must not log the old quarantine line. No new `it()`. K-1 pins drop the removed integrity EmbedDb site. Under D-45 all executable proof is GitHub-hosted; no local package-manager, lint or test workload was used.
+
+- **Brute-only startup does not run the HNSW envelope.** `prepareServerDeps` no longer opens `integrityDb` to call `captureHnswReceiptSnapshot` when `--use-hnsw` is off.
+- **HNSW snapshot failure is an optimization miss.** Integrity/capacity errors leave `semanticUsable` true and `hnswContext` null so brute ranking can still return remaining current-source rows.
+
 ### Brute-force embedding search does not run the HNSW graph envelope
 
 > **TL;DR:** **`obsidian_embeddings_search` (and the embeddings arm of `obsidian_search`) no longer fail a whole brute-force query because HNSW snapshot admission refused the corpus.** `93e03f28` called `captureHnswReceiptSnapshot()` inside `searchReceiptRows` and discarded the return, so ranking inherited the HNSW envelope (`MAX_HNSW_SNAPSHOT_ROWS = 250_000`, 64 MiB text, complete `n_chunks`). One incomplete declared source or over-envelope corpus threw `EmbedSnapshotIntegrityError` / `EmbedSnapshotCapacityError` with no catcher, including `--use-hnsw` off. Ranking still uses one SQLite transaction; mixed-generation after awaited filesystem work is still refused by `captureGenerationIdentity`. HNSW build/load still use the snapshot helper.

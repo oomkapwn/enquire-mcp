@@ -48,7 +48,7 @@ const DISCOVERY_MARKERS = ["discoverEmbedDbConfig", "discoverEmbedDbConfigCached
 const SAFE_MARKER = "SAFE BY DESIGN";
 // Context window — must accommodate discovery, fail-closed state branching,
 // and supported-config projection before construction. The caller-pattern
-// inventory below separately proves exact def-use/order at all eleven sites.
+// inventory below separately proves exact def-use/order at all ten sites.
 const CONTEXT_LINES = 128;
 
 interface ConstructorSite {
@@ -70,7 +70,7 @@ interface ProductionConfigurationCall {
 
 const EXPECTED_PRODUCTION_DISCOVERY_CALLS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
   "src/cli.ts": { discoverEmbedDbConfig: 2, discoverFtsIndexConfig: 4 },
-  "src/server.ts": { discoverEmbedDbConfig: 3, discoverFtsIndexConfig: 1 },
+  "src/server.ts": { discoverEmbedDbConfig: 2, discoverFtsIndexConfig: 1 },
   "src/tools/search.ts": { discoverEmbedDbConfigCached: 1 }
 };
 const CONFIGURATION_DEFINING_MODULES = new Set(["src/embed-db.ts", "src/fts5.ts"]);
@@ -98,7 +98,7 @@ function productionConfigurationCalls(file: string, source: string): ProductionC
   return calls;
 }
 
-/** Pin all production callers to the reviewed eleven-site fail-closed inventory. */
+/** Pin all production callers to the reviewed ten-site fail-closed inventory. */
 function productionConfigurationInventoryProblems(calls: readonly ProductionConfigurationCall[]): string[] {
   const problems: string[] = [];
   const counts = new Map<string, number>();
@@ -123,8 +123,8 @@ function productionConfigurationInventoryProblems(calls: readonly ProductionConf
       if (actual !== expected) problems.push(`${file} ${name}: expected ${expected}, found ${actual}`);
     }
   }
-  if (productionDiscoveryTotal !== 11) {
-    problems.push(`global production discovery inventory: expected 11, found ${productionDiscoveryTotal}`);
+  if (productionDiscoveryTotal !== 10) {
+    problems.push(`global production discovery inventory: expected 10, found ${productionDiscoveryTotal}`);
   }
   return problems;
 }
@@ -339,12 +339,6 @@ function configurationDiscoveryRootProblems(cliSource: string, serverSource: str
       expected: 2
     },
     {
-      label: "server non-HNSW integrity Embed canonical-root discovery",
-      source: serverSource,
-      needle: "discoverEmbedDbConfig(startupEmbedFile, vault.root)",
-      expected: 1
-    },
-    {
       label: "search cached Embed canonical-root discovery",
       source: searchSource,
       needle: "discoverEmbedDbConfigCached(embedFile, vault.root)",
@@ -360,7 +354,7 @@ function configurationDiscoveryRootProblems(cliSource: string, serverSource: str
     { label: "CLI FTS", source: cliSource, marker: "discoverFtsIndexConfig(", expected: 4 },
     { label: "CLI Embed", source: cliSource, marker: "discoverEmbedDbConfig(", expected: 2 },
     { label: "server FTS", source: serverSource, marker: "discoverFtsIndexConfig(", expected: 1 },
-    { label: "server Embed", source: serverSource, marker: "discoverEmbedDbConfig(", expected: 3 },
+    { label: "server Embed", source: serverSource, marker: "discoverEmbedDbConfig(", expected: 2 },
     { label: "search cached Embed", source: searchSource, marker: "discoverEmbedDbConfigCached(", expected: 1 },
     { label: "CLI legacy FTS peek", source: cliSource, marker: "peekFtsMetaSafe(", expected: 0 },
     { label: "CLI legacy Embed peek", source: cliSource, marker: "peekEmbedDbMeta(", expected: 0 },
@@ -377,8 +371,8 @@ function configurationDiscoveryRootProblems(cliSource: string, serverSource: str
     countLiteral(cliSource, "discoverEmbedDbConfig(") +
     countLiteral(serverSource, "discoverEmbedDbConfig(") +
     countLiteral(searchSource, "discoverEmbedDbConfig(");
-  if (uncachedEmbedDiscoveries !== 5) {
-    problems.push(`uncached Embed discovery inventory: expected 5, found ${uncachedEmbedDiscoveries}`);
+  if (uncachedEmbedDiscoveries !== 4) {
+    problems.push(`uncached Embed discovery inventory: expected 4, found ${uncachedEmbedDiscoveries}`);
   }
   return problems;
 }
@@ -406,7 +400,7 @@ interface FailClosedCallerSpec {
   openFailurePolicy?: "finally-propagate" | "rethrow" | "fail-soft-null";
 }
 
-/** Build the reviewed one-to-one fail-closed contract for all eleven production callers. */
+/** Build the reviewed one-to-one fail-closed contract for all ten production callers. */
 function failClosedCallerSpecs(cliSource: string, serverSource: string, searchSource: string): FailClosedCallerSpec[] {
   return [
     {
@@ -526,21 +520,6 @@ function failClosedCallerSpecs(cliSource: string, serverSource: string, searchSo
       className: "EmbedDb",
       discoveryBinding: "discovered",
       instanceBinding: "watcherEmbedDb"
-    },
-    {
-      label: "server non-HNSW integrity Embed",
-      source: serverSource,
-      start: "if (startupEmbedDbAvailable && !opts.useHnsw) {",
-      end: "// v2.13.0 — opt-in HNSW",
-      discovery: "discoverEmbedDbConfig(startupEmbedFile, vault.root)",
-      refusal: 'if (discovered.kind === "missing" || discovered.kind === "refused")',
-      refusalEffect: 'throw new EmbedSnapshotIntegrityError("Embedding index configuration could not be verified");',
-      reviewedTryAncestors: 1,
-      resolver: "resolveStoredEmbeddingConfiguration(discovered.meta)",
-      acquisition: "new EmbedDb({",
-      className: "EmbedDb",
-      discoveryBinding: "discovered",
-      instanceBinding: "integrityDb"
     },
     {
       label: "server HNSW Embed",
@@ -1269,7 +1248,7 @@ function hoistedInstanceCaptureInvokedBeforeOpen(
 }
 
 /**
- * Bind each of the eleven preflight reads to exactly one constructor and its
+ * Bind each of the ten preflight reads to exactly one constructor and its
  * first awaited open. Textual proximity is insufficient: the same const
  * binding must cross the discovery -> constructor -> open boundary unchanged.
  */
@@ -1433,8 +1412,8 @@ function configurationDiscoveryOpenBindingProblems(
       problems.push(`${spec.label}: constructed instance is used or reassigned before open`);
     }
   }
-  if (specs.length !== 11) {
-    problems.push(`discovery/open binding inventory: expected 11 specs, found ${specs.length}`);
+  if (specs.length !== 10) {
+    problems.push(`discovery/open binding inventory: expected 10 specs, found ${specs.length}`);
   }
   return problems;
 }
@@ -2585,7 +2564,7 @@ describe("K-1 class invariant (v3.6.3 methodological guard; recursive scan since
     expect(failClosedSpecInventoryProblems(cliSource, serverSource, searchSource, configurationCalls)).toEqual([]);
     expect(storedEmbeddingConfigurationHelperProblems(embeddingsSource)).toEqual([]);
     expect(countLiteral(cliSource, "resolveStoredEmbeddingConfiguration(")).toBe(2);
-    expect(countLiteral(serverSource, "resolveStoredEmbeddingConfiguration(")).toBe(3);
+    expect(countLiteral(serverSource, "resolveStoredEmbeddingConfiguration(")).toBe(2);
     expect(countLiteral(searchSource, "resolveStoredEmbeddingConfiguration(")).toBe(1);
 
     const cliRootFiltersRemoved = replaceExactly(
@@ -2613,25 +2592,20 @@ describe("K-1 class invariant (v3.6.3 methodological guard; recursive scan since
       ])
     );
 
-    const serverRootFiltersRemoved = replaceExactly(
-      replaceAllExactly(
-        replaceExactly(
-          serverSource,
-          "discoverFtsIndexConfig(indexFile, vault.root)",
-          "discoverFtsIndexConfig(indexFile)"
-        ),
-        "discoverEmbedDbConfig(embedFile, vault.root)",
-        "discoverEmbedDbConfig(embedFile)",
-        2
+    const serverRootFiltersRemoved = replaceAllExactly(
+      replaceExactly(
+        serverSource,
+        "discoverFtsIndexConfig(indexFile, vault.root)",
+        "discoverFtsIndexConfig(indexFile)"
       ),
-      "discoverEmbedDbConfig(startupEmbedFile, vault.root)",
-      "discoverEmbedDbConfig(startupEmbedFile)"
+      "discoverEmbedDbConfig(embedFile, vault.root)",
+      "discoverEmbedDbConfig(embedFile)",
+      2
     );
     expect(configurationDiscoveryRootProblems(cliSource, serverRootFiltersRemoved, searchSource)).toEqual(
       expect.arrayContaining([
         "server FTS canonical-root discovery: expected 1, found 0",
-        "server Embed canonical-root discoveries: expected 2, found 0",
-        "server non-HNSW integrity Embed canonical-root discovery: expected 1, found 0"
+        "server Embed canonical-root discoveries: expected 2, found 0"
       ])
     );
 
@@ -2652,7 +2626,7 @@ describe("K-1 class invariant (v3.6.3 methodological guard; recursive scan since
     expect(configurationDiscoveryRootProblems(cliSource, serverSource, searchCacheRemoved)).toEqual(
       expect.arrayContaining([
         "search cached Embed canonical-root discovery: expected 1, found 0",
-        "uncached Embed discovery inventory: expected 5, found 6"
+        "uncached Embed discovery inventory: expected 4, found 5"
       ])
     );
 
@@ -2671,11 +2645,11 @@ describe("K-1 class invariant (v3.6.3 methodological guard; recursive scan since
     expect(rawPeekProblems).toEqual(
       expect.arrayContaining([
         "src/cli.ts discoverFtsIndexConfig: expected 4, found 3",
-        "global production discovery inventory: expected 11, found 10"
+        "global production discovery inventory: expected 10, found 9"
       ])
     );
     expect(failClosedSpecInventoryProblems(rawPeekCli, serverSource, searchSource, rawPeekCalls)).toContain(
-      "fail-closed caller spec inventory: 11 specs for 10 production discoveries"
+      "fail-closed caller spec inventory: 10 specs for 9 production discoveries"
     );
 
     const uncataloguedCaller = productionConfigurationCalls(
@@ -2688,7 +2662,7 @@ describe("K-1 class invariant (v3.6.3 methodological guard; recursive scan since
     expect(productionConfigurationInventoryProblems([...configurationCalls, ...uncataloguedCaller])).toEqual(
       expect.arrayContaining([
         "uncatalogued production discovery caller: src/new-index-caller.ts:2 discoverFtsIndexConfig",
-        "global production discovery inventory: expected 11, found 12"
+        "global production discovery inventory: expected 10, found 11"
       ])
     );
     expect(
@@ -2699,7 +2673,7 @@ describe("K-1 class invariant (v3.6.3 methodological guard; recursive scan since
     ).toEqual(
       expect.arrayContaining([
         "src/new-index-caller.ts discoverFtsIndexConfig: expected 1 fail-closed specs, found 0",
-        "fail-closed caller spec inventory: 11 specs for 12 production discoveries"
+        "fail-closed caller spec inventory: 10 specs for 11 production discoveries"
       ])
     );
 
@@ -2728,15 +2702,6 @@ describe("K-1 class invariant (v3.6.3 methodological guard; recursive scan since
     );
     expect(configurationDiscoveryOpenBindingProblems(cliSource, hnswConstructorAliasDropped, searchSource)).toContain(
       "server HNSW Embed: constructor authority is not passed through one immutable db alias"
-    );
-
-    const integrityWrongDiscovery = replaceExactly(
-      serverSource,
-      "      await integrityDb.open(discovered);",
-      "      await integrityDb.open(discoveredEmbed);"
-    );
-    expect(configurationDiscoveryOpenBindingProblems(cliSource, integrityWrongDiscovery, searchSource)).toContain(
-      "server non-HNSW integrity Embed: awaited open is not bound to the exact discovery const"
     );
 
     const searchDeadOpenDecoy = replaceExactly(
@@ -2995,12 +2960,11 @@ describe("K-1 class invariant (v3.6.3 methodological guard; recursive scan since
       serverSource,
       'if (discovered.kind === "missing" || discovered.kind === "refused")',
       "if (false)",
-      3
+      2
     );
     expect(configurationDiscoveryFailClosedProblems(cliSource, serverEmbedFallbackReenabled, searchSource)).toEqual(
       expect.arrayContaining([
         "server watcher Embed: refused discovery refusal/degrade is missing",
-        "server non-HNSW integrity Embed: refused discovery refusal/degrade is missing",
         "server HNSW Embed: refused discovery refusal/degrade is missing"
       ])
     );

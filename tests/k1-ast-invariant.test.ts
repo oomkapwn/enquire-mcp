@@ -108,9 +108,9 @@ const PRODUCTION_FILE_PINS: Readonly<Record<string, ProductionFilePin>> = {
     sha256: "7b894cbf9487ed799e090cceea745217012fa9d3e0d6bb07b481f8d0ab4cde26"
   },
   "src/server.ts": {
-    constructors: { EmbedDb: 3, FtsIndex: 1 },
+    constructors: { EmbedDb: 2, FtsIndex: 1 },
     discoveries: {
-      discoverEmbedDbConfig: 3,
+      discoverEmbedDbConfig: 2,
       discoverEmbedDbConfigCached: 0,
       discoverFtsIndexConfig: 1
     },
@@ -123,8 +123,8 @@ const PRODUCTION_FILE_PINS: Readonly<Record<string, ProductionFilePin>> = {
       "./fts5.js|assertTokenizeMode|assertTokenizeMode",
       "./fts5.js|discoverFtsIndexConfig|discoverFtsIndexConfig"
     ],
-    k1Opens: 4,
-    sha256: "a577f4eb5ec7a973bba9def32f43c75110ec7bec5c8ff6eed104b46697387496"
+    k1Opens: 3,
+    sha256: "064153c91b0867aae7400ddbabb6fd06f566995a667014015a8c58497ce9b1d9"
   },
   "src/tools/search.ts": {
     constructors: { EmbedDb: 1, FtsIndex: 0 },
@@ -2802,8 +2802,8 @@ async function discoverEmbedDbConfigCached(file, vaultRoot) {
     const pinnedServer = await fs.readFile(pinnedServerPath, "utf8");
     const missingServerOpen = replaceExactly(
       pinnedServer,
-      "      await integrityDb.open(discovered);",
-      "      void integrityDb;"
+      "          await watcherEmbedDb.open(discovered);",
+      "          void watcherEmbedDb;"
     );
     const serverPin = PRODUCTION_FILE_PINS["src/server.ts"];
     expect(serverPin).toBeDefined();

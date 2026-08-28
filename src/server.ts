@@ -5,8 +5,6 @@ import {
   assertEmbedDbRecoveryOwnership,
   discoverEmbedDbConfig,
   EmbedDb,
-  EmbedSnapshotCapacityError,
-  EmbedSnapshotIntegrityError,
   type HnswPersistenceReceipt,
   type HnswPersistenceRow,
   hnswPersistBase,
@@ -489,7 +487,6 @@ export async function prepareServerDeps(opts: ServeOptions): Promise<ServerDeps>
   let ftsIndex: FtsIndex | null = null;
   let watcher: VaultWatcher | null = null;
   let watcherEmbedDb: EmbedDb | null = null;
-  let integrityDb: EmbedDb | null = null;
   let hnswSnapshotDb: EmbedDb | null = null;
   let hnswContext: ServerDeps["hnswContext"] = null;
   let hnswPersistenceLifetime: PersistenceFamilyLeaseHandle | null = null;
@@ -771,43 +768,6 @@ export async function prepareServerDeps(opts: ServeOptions): Promise<ServerDeps>
     }
 
     const semanticRouteHealth = watcher?.searchHealth ?? { semanticUsable: true, hnswUsable: true };
-    // HNSW is optional, but embedding-generation integrity is not. Admit the
-    // complete durable generation once even on the brute-force route so a
-    // missing declared chunk or malformed row cannot be laundered into partial
-    // semantic results merely because --use-hnsw is off.
-    if (startupEmbedDbAvailable && !opts.useHnsw) {
-      try {
-        const discovered = await discoverEmbedDbConfig(startupEmbedFile, vault.root);
-        if (discovered.kind === "missing" || discovered.kind === "refused") {
-          throw new EmbedSnapshotIntegrityError("Embedding index configuration could not be verified");
-        }
-        const storedConfiguration =
-          discovered.kind === "owned" ? resolveStoredEmbeddingConfiguration(discovered.meta) : null;
-        const model = storedConfiguration?.model ?? resolveModel(undefined);
-        integrityDb = new EmbedDb({
-          file: startupEmbedFile,
-          vaultRoot: vault.root,
-          modelAlias: model.alias,
-          dim: model.dim,
-          quantization: storedConfiguration?.quantization ?? opts.quantizeEmbeddings ?? "f32"
-        });
-        await integrityDb.open(discovered);
-        integrityDb.captureHnswReceiptSnapshot();
-      } catch (err) {
-        semanticRouteHealth.semanticUsable = false;
-        semanticRouteHealth.hnswUsable = false;
-        process.stderr.write(
-          `enquire: embedding generation failed complete semantic admission; semantic search is quarantined — ${
-            err instanceof Error ? err.message : String(err)
-          }\n`
-        );
-      } finally {
-        if (integrityDb) {
-          await integrityDb.closeAndRelease();
-          integrityDb = null;
-        }
-      }
-    }
 
     // v2.13.0 — opt-in HNSW approximate nearest-neighbor index. Built in-memory
     // on serve start from the embed-db rows instead of the O(n) brute-force
@@ -1058,22 +1018,13 @@ export async function prepareServerDeps(opts: ServeOptions): Promise<ServerDeps>
             "HNSW startup failed and persistence cleanup was incomplete"
           );
         }
-        if (err instanceof EmbedSnapshotIntegrityError || err instanceof EmbedSnapshotCapacityError) {
-          // A corrupt/incomplete or over-envelope durable DB is not an HNSW-only
-          // optimization failure. Quarantine the shared semantic capability so
-          // the brute path cannot return a surviving partial generation.
-          semanticRouteHealth.semanticUsable = false;
-          semanticRouteHealth.hnswUsable = false;
-          process.stderr.write(
-            `enquire: embedding generation failed complete semantic admission; semantic search is quarantined — ${err.message}\n`
-          );
-        } else {
-          // Native/sidecar-specific failures remain an optimization miss: the
-          // already-admitted EmbedDb can safely serve the brute-force route.
-          process.stderr.write(
-            `enquire: HNSW build failed; falling back to brute-force semantic search — ${err instanceof Error ? err.message : String(err)}\n`
-          );
-        }
+        // Incomplete/over-envelope snapshot admission and native/sidecar
+        // failures are both HNSW-optimization misses. Brute EmbedDb can still
+        // rank current well-formed rows; process-wide semanticUsable stays up.
+        // Live pending-queue overflow may still latch it (B0).
+        process.stderr.write(
+          `enquire: HNSW build failed; falling back to brute-force semantic search — ${err instanceof Error ? err.message : String(err)}\n`
+        );
         hnswContext = null;
       }
     }
@@ -1175,13 +1126,10 @@ export async function prepareServerDeps(opts: ServeOptions): Promise<ServerDeps>
     };
   } catch (error) {
     const temporaryCleanupErrors: unknown[] = [];
-    for (const db of new Set(
-      [integrityDb, hnswSnapshotDb].filter((candidate): candidate is EmbedDb => candidate !== null)
-    )) {
+    if (hnswSnapshotDb) {
       try {
-        await db.closeAndRelease();
-        if (integrityDb === db) integrityDb = null;
-        if (hnswSnapshotDb === db) hnswSnapshotDb = null;
+        await hnswSnapshotDb.closeAndRelease();
+        hnswSnapshotDb = null;
       } catch (cleanupError) {
         temporaryCleanupErrors.push(cleanupError);
       }

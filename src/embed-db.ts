@@ -2107,6 +2107,35 @@ export class EmbedDb {
    * ```
    */
   quarantineSource(relPath: string, kind: EmbedChunkKind): void {
+    const db = this.requireDb();
+    const transaction = db.transaction(() => this.quarantineSourceInCurrentTransaction(relPath, kind));
+    transaction();
+  }
+
+  /**
+   * Quarantine one source only while a derived HNSW graph still owns the expected
+   * physical generation.
+   *
+   * The comparison and the marker insert run under one `BEGIN IMMEDIATE`
+   * transaction. A drift result performs no DML, allowing the watcher to
+   * process-quarantine its stale graph before writing the marker DB-only.
+   *
+   * @param expected - UUID/epoch currently owned by the in-memory graph.
+   * @param relPath - Exact vault-relative source path.
+   * @param kind - Content-source kind.
+   * @returns A committed post-trigger generation, or a drift receipt proving no
+   *   marker write ran.
+   */
+  quarantineSourceIfGeneration(
+    expected: EmbedDbGenerationIdentity,
+    relPath: string,
+    kind: EmbedChunkKind
+  ): EmbedConditionalMutationResult<void> {
+    return this.mutateIfGeneration(expected, () => this.quarantineSourceInCurrentTransaction(relPath, kind));
+  }
+
+  /** Insert one quarantine marker inside the caller-owned transaction. */
+  private quarantineSourceInCurrentTransaction(relPath: string, kind: EmbedChunkKind): void {
     this.requireDb()
       .prepare("INSERT OR IGNORE INTO source_quarantine (rel_path, kind) VALUES (?, ?)")
       .run(relPath, kind);

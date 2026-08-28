@@ -826,12 +826,13 @@ describe("VaultWatcher single-generation staging", () => {
     // event must stop without publishing any of its three transient states.
     expect(embedCalls).toBe(2);
     // The prior rows stay physically recoverable but the observed failed
-    // generation durably quarantines both DB authorities. HNSW metadata may
-    // retain the old label, but search rehydrates labels from EmbedDb and
-    // therefore cannot treat this sidecar text as output authority.
+    // generation durably quarantines both DB authorities. Same-generation
+    // HNSW ownership drops the withheld path's labels instead of retaining
+    // them behind a process-wide persist latch.
     expect(markerPathsInFts(fixture.fts, "churnoldmarker")).toEqual([]);
     expect(markerPathsInEmbedDb(fixture.embedDb, "churnoldmarker")).toEqual([]);
-    expect(markerPathsInHnsw(fixture.hnswRowsByLabel, "churnoldmarker")).toEqual(["Churn.md"]);
+    expect(markerPathsInHnsw(fixture.hnswRowsByLabel, "churnoldmarker")).toEqual([]);
+    expect(fixture.watcher.searchHealth.hnswUsable).toBe(true);
     expect(fixture.fts.auditKind("md").mismatched_files).toBe(1);
     expect(fixture.embedDb.auditKind("md").mismatched_files).toBe(1);
     for (const marker of ["churncandidate", "churnsecondmarker", "churnthirdmarker"]) {
@@ -841,19 +842,17 @@ describe("VaultWatcher single-generation staging", () => {
     }
 
     // Retry exhaustion is per accepted event, not a permanent poison pill for
-    // the authoritative SQLite stores. The process-local native graph remains
-    // quarantined until restart: its retained metadata is not output authority
-    // once hnswUsable is false, and advancing it piecemeal after a missed DB
-    // generation would risk blessing an incomplete graph.
+    // the authoritative stores. A later successful handle may HNSW-sync the
+    // recovered generation because the graph stayed usable.
     await enqueue(fixture.watcher, churnPath, "change");
     await fixture.watcher.close();
     expect(embedCalls).toBe(3);
     expect(markerPathsInFts(fixture.fts, "churnoldmarker")).toEqual([]);
     expect(markerPathsInEmbedDb(fixture.embedDb, "churnoldmarker")).toEqual([]);
-    expect(markerPathsInHnsw(fixture.hnswRowsByLabel, "churnoldmarker")).toEqual(["Churn.md"]);
+    expect(markerPathsInHnsw(fixture.hnswRowsByLabel, "churnoldmarker")).toEqual([]);
     expect(markerPathsInFts(fixture.fts, "churnthirdmarker")).toEqual(["Churn.md"]);
     expect(markerPathsInEmbedDb(fixture.embedDb, "churnthirdmarker")).toEqual(["Churn.md"]);
-    expect(markerPathsInHnsw(fixture.hnswRowsByLabel, "churnthirdmarker")).toEqual([]);
-    expect(fixture.watcher.searchHealth.hnswUsable).toBe(false);
+    expect(markerPathsInHnsw(fixture.hnswRowsByLabel, "churnthirdmarker")).toEqual(["Churn.md"]);
+    expect(fixture.watcher.searchHealth.hnswUsable).toBe(true);
   });
 });

@@ -84,16 +84,19 @@ function sameHnswRowManifest(
  *
  * A fatal staged watcher preparation failure leaves the prior generation
  * intact and does not latch `semanticUsable`. PDF/OCR page failures use that
- * same quarantined preparation path. Staging may still process-quarantine
- * HNSW (`hnswUsable`) via the per-path quarantine helper.
+ * same quarantined preparation path. Staging still process-quarantines HNSW
+ * (`hnswUsable`) when a live graph diff fails.
  *
  * After activation has completed, a per-path sink mutation failure
  * (markdown/PDF commit, embed-db unlink) records a source-scoped quarantine
  * and does **not** latch `semanticUsable`. Brute-force EmbedDb search stays
  * available for every other note when the EmbedDb quarantine marker is
  * successfully persisted. The failed path is withheld by that marker.
- * HNSW may still be process-quarantined (`hnswUsable`) because a graph that
- * omitted the withheld label would under-fill recall around it.
+ * Live HNSW drops that path's labels and adopts only the committed
+ * post-quarantine generation from `quarantineSourceIfGeneration`. A foreign
+ * EmbedDb epoch process-quarantines the graph instead of being published.
+ * `applyDiff` failure and live pending-queue overflow still process-quarantine
+ * HNSW.
  *
  * `purgeStoredIdentity` also no longer latches `semanticUsable`, but it runs
  * only from activation replay and still rethrows, so a failed purge still
@@ -203,8 +206,9 @@ export interface WatcherOptions {
    * + the requested language trained-data files pre-installed via
    * `enquire-mcp install-ocr-lang <code>` (see v3.7.16 P1-1 offline
    * enforcement). If those aren't available, the watcher attempts to
-   * quarantine the PDF generation and every prior FTS/embed/HNSW row is
-   * retained until a later complete extraction succeeds.
+   * quarantine the PDF generation. Prior FTS/embed rows stay physically
+   * recoverable; live HNSW drops that path's labels when this watcher still
+   * owns the EmbedDb generation.
    *
    * Recommended pairing: `--ocr-pdfs` + `--watch` + `--include-pdfs`
    * for users with scanned-document vaults that change during sessions.
@@ -219,8 +223,9 @@ export interface WatcherOptions {
   /**
    * v3.9.0-rc.1 — page cap for OCR runs. Mirrors `DEFAULT_OCR_MAX_PAGES`
    * (200). Exceeding it attempts to quarantine the entire changed PDF
-   * generation and preserves every prior FTS/embed/HNSW row. Operators can
-   * lift the cap when they trust their PDF set.
+   * generation. Prior FTS/embed rows stay physically recoverable; live HNSW
+   * drops that path's labels when this watcher still owns the EmbedDb
+   * generation. Operators can lift the cap when they trust their PDF set.
    */
   ocrMaxPages?: number;
   /**
@@ -351,10 +356,10 @@ export function statsMtimeMsFromNs(mtimeNs: bigint): number {
  * `rowsByLabel` map, AND the persisted HNSW generation (a later
  * `markDelete(-1)` or a real row colliding on `-1` then scrambles results).
  * This throws (fail-closed) instead: the watcher's per-event try/catch logs it
- * and skips the HNSW update for that file. The surrounding embed-sync catch
- * permanently disables sidecar persistence for that watcher generation, so the
- * next serve rebuilds instead of trusting a stale graph under a fresh database
- * signature. A corrupt sentinel label is never inserted.
+ * and skips the HNSW update for that file. The surrounding commit catch
+ * quarantines the source and drops its live labels when this watcher still
+ * owns the EmbedDb generation; a foreign epoch process-quarantines persist
+ * instead of blessing an incomplete graph. A corrupt sentinel label is never inserted.
  *
  * @param rows - The embed rows (vector + chunk metadata), in insertion order.
  * @param newIds - The row ids `upsertNote` assigned, parallel to `rows`.
@@ -482,6 +487,11 @@ export class VaultWatcher {
    * not prevent the other from recording its quarantine. A broader fail-stop
    * policy for that storage-failure residual requires explicit authorization.
    *
+   * When live HNSW still owns the EmbedDb generation, the EmbedDb marker is
+   * written with `quarantineSourceIfGeneration` and this watcher publishes
+   * only that committed generation after dropping the path's labels. A foreign
+   * epoch process-quarantines the graph and writes the marker DB-only.
+   *
    * @param relPath - Vault-relative source whose attempted refresh failed.
    * @param kind - Content-source kind shared by both stores.
    */
@@ -497,8 +507,19 @@ export class VaultWatcher {
         );
       }
     }
+    if (!this.embedDb) return;
     try {
-      this.embedDb?.quarantineSource(relPath, kind);
+      if (this.hnsw && this.hnswRowsByLabel && this.hnswGenerationAuthority && this.searchHealth.hnswUsable) {
+        const attempt = this.embedDb.quarantineSourceIfGeneration({ ...this.hnswGenerationAuthority }, relPath, kind);
+        if (attempt.kind === "committed") {
+          this.dropQuarantinedPathFromLiveHnsw(relPath, kind, attempt.committedGeneration);
+        } else {
+          this.quarantineHnswGeneration("another process advanced EmbedDb before a per-path quarantine");
+          this.embedDb.quarantineSource(relPath, kind);
+        }
+      } else {
+        this.embedDb.quarantineSource(relPath, kind);
+      }
     } catch (error) {
       if (!this.silent) {
         process.stderr.write(
@@ -508,13 +529,32 @@ export class VaultWatcher {
         );
       }
     }
-    // A quarantine mutation changes the admitted DB generation without an
-    // equivalent graph deletion. Keeping HNSW as a candidate could under-fill
-    // recall around the withheld label, so leave the authoritative brute path
-    // available but quarantine this process's graph until restart.
-    if (this.embedDb && this.hnsw) {
-      this.quarantineHnswGeneration(`source ${relPath} entered semantic quarantine`);
+  }
+
+  /**
+   * Remove one quarantined source from the live graph and publish only the
+   * committed post-quarantine generation. Does not recapture the current epoch.
+   *
+   * @param relPath - Public vault-relative identity now withheld by a marker.
+   * @param kind - Content-source kind for HNSW metadata.
+   * @param committedGeneration - Exact UUID/epoch returned by `quarantineSourceIfGeneration`.
+   * @returns Nothing.
+   */
+  private dropQuarantinedPathFromLiveHnsw(
+    relPath: string,
+    kind: "md" | "pdf",
+    committedGeneration: EmbedDbGenerationIdentity
+  ): void {
+    if (!this.hnsw || !this.hnswRowsByLabel || !this.searchHealth.hnswUsable) {
+      return;
     }
+    const oldIds: number[] = [];
+    for (const [id, row] of this.hnswRowsByLabel) {
+      if (row.rel_path === relPath && row.kind === kind) oldIds.push(id);
+    }
+    const hnswResult = this.syncHnswForFile(relPath, kind, oldIds, []);
+    if (!hnswResult) return;
+    this.publishCommittedHnswGeneration(committedGeneration);
   }
   // v3.9.0-rc.11 (audit H1) — per-file serialization. chokidar dispatches file
   // events concurrently; without this, two rapid saves to the SAME file
@@ -1999,8 +2039,8 @@ export class VaultWatcher {
   /**
    * Derive markdown lexical input and optional embeddings from one note
    * snapshot. No replacement generation is committed here. A preparation
-   * failure attempts source-scoped quarantine (and may process-quarantine
-   * HNSW); the marker is not guaranteed if the store write fails.
+   * failure attempts source-scoped quarantine and drops that path from live
+   * HNSW; the marker is not guaranteed if the store write fails.
    *
    * @param absPath - Canonical note path.
    * @param relPath - Public vault-relative note path.
@@ -2028,9 +2068,9 @@ export class VaultWatcher {
       return { note, embedResult };
     } catch (err) {
       this.quarantineFailedGeneration(relPath, "md");
-      // Keep the previous lexical + semantic generation together when any
-      // read/parse/embed preparation step fails. The watcher remains fail-soft:
-      // it logs and waits for the next event/bulk reconciliation.
+      // Source-scoped quarantine withholds the failed path. Live HNSW drops
+      // that path's labels when this watcher still owns the EmbedDb generation;
+      // a foreign epoch process-quarantines persist instead of being published.
       if (!this.silent) {
         process.stderr.write(
           `enquire: watcher markdown preparation failed for ${relPath} — ${
@@ -2047,7 +2087,7 @@ export class VaultWatcher {
    * Derive PDF lexical pages and optional embeddings from one binary snapshot.
    * OCR, when enabled, consumes the same captured bytes. No replacement
    * generation is committed here. A preparation failure attempts source-scoped
-   * quarantine (and may process-quarantine HNSW); the marker is not guaranteed
+   * quarantine and drops that path from live HNSW; the marker is not guaranteed
    * if the store write fails.
    *
    * @param absPath - Canonical PDF path.
@@ -2173,9 +2213,8 @@ export class VaultWatcher {
       return embedNote;
     } catch (err) {
       this.quarantineFailedGeneration(relPath, "md");
-      // Do not latch semanticUsable: quarantine is per-path when the marker
-      // persists. See WatcherSearchHealth.
-      if (this.hnsw) this.hnswPersistUnsafe = true;
+      // Do not latch semanticUsable or hnswPersistUnsafe: quarantine is
+      // per-path when the marker persists. See WatcherSearchHealth.
       if (!this.silent) {
         process.stderr.write(
           `enquire: watcher generation commit failed for ${relPath} — ${
@@ -2232,9 +2271,8 @@ export class VaultWatcher {
       return embedNote;
     } catch (err) {
       this.quarantineFailedGeneration(relPath, "pdf");
-      // Do not latch semanticUsable: quarantine is per-path when the marker
-      // persists. See WatcherSearchHealth.
-      if (this.hnsw) this.hnswPersistUnsafe = true;
+      // Do not latch semanticUsable or hnswPersistUnsafe: quarantine is
+      // per-path when the marker persists. See WatcherSearchHealth.
       if (!this.silent) {
         process.stderr.write(
           `enquire: watcher PDF generation commit failed for ${relPath} — ${

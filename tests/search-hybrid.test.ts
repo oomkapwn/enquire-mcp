@@ -694,6 +694,17 @@ describe("searchHybrid — BM25 + TF-IDF fusion path", () => {
       const numSignals = Object.keys(m.per_signal).length;
       expect(numSignals).toBeGreaterThanOrEqual(2);
     }
+
+    const block = await searchHybrid(
+      v,
+      { query: "OAuth JWT tokens", limit: 10, min_signals: 2, granularity: "block" },
+      { ftsIndex: idx, embedFile: path.join(ftsRoot, "nonexistent.embed.db") }
+    );
+    expect(block.matches.length).toBeGreaterThan(0);
+    for (const m of block.matches) {
+      expect(m.per_signal.bm25).toBeDefined();
+      expect(m.per_signal.tfidf).toBeDefined();
+    }
   });
 
   it("BM25 chunk-collapse: per_signal.bm25 carries chunk_index from the best chunk", async () => {

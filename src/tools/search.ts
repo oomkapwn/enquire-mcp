@@ -2983,6 +2983,35 @@ export async function searchHybrid(
     }
   }
 
+  // B3 — TF-IDF is note-scoped. At block granularity BM25 and embeddings
+  // fuse on `path#chunk`. Project each TF-IDF note onto the block ids those
+  // rankers already produced for that path; if none exist, emit `path#0`
+  // (the same fallback embeddings uses for a missing chunk_index).
+  if (granularity === "block" && tfidfRanked.length > 0) {
+    const blockIdsByPath = new Map<string, string[]>();
+    const recordBlockId = (id: string): void => {
+      const notePath = stripChunkSuffix(id);
+      const existing = blockIdsByPath.get(notePath);
+      if (existing) {
+        if (!existing.includes(id)) existing.push(id);
+      } else {
+        blockIdsByPath.set(notePath, [id]);
+      }
+    };
+    for (const h of bm25Ranked) recordBlockId(h.id);
+    for (const h of embedRanked) recordBlockId(h.id);
+    const projected: typeof tfidfRanked = [];
+    for (const hit of tfidfRanked) {
+      const targets = blockIdsByPath.get(hit.id);
+      if (targets === undefined || targets.length === 0) {
+        projected.push({ ...hit, id: `${hit.id}#0` });
+        continue;
+      }
+      for (const id of targets) projected.push({ ...hit, id });
+    }
+    tfidfRanked = projected;
+  }
+
   // ─── RRF fusion ─────────────────────────────────────────────────────────
   let fused = reciprocalRankFusion(
     {

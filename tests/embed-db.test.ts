@@ -4242,6 +4242,11 @@ describe("EmbedDb atomic HNSW receipt snapshots", () => {
         expect(() => db.captureHnswReceiptSnapshot()).toThrow(
           "Embedding source state is incomplete during HNSW snapshot capture"
         );
+        // 93e03f28 ran captureHnswReceiptSnapshot inside searchReceiptRows and
+        // discarded the return, so this poke also failed brute cosine. Ranking
+        // still sees both physical rows.
+        const poked = db.searchWithReceipts(l2([1, 0, 0, 0]), 10);
+        expect(poked.map((hit) => hit.text_preview).sort()).toEqual(["first", "second"]);
 
         raw.prepare("UPDATE source_state SET n_chunks = 2 WHERE rel_path = ? AND kind = 'md'").run("complete.md");
         expect(db.captureHnswReceiptSnapshot().receipt.activeRows).toBe(2);
@@ -4253,6 +4258,9 @@ describe("EmbedDb atomic HNSW receipt snapshots", () => {
         expect(() => db.captureHnswBuildSnapshot()).toThrow(
           "Embedding source state is incomplete during HNSW snapshot capture"
         );
+        const remaining = db.searchWithReceipts(l2([1, 0, 0, 0]), 10);
+        expect(remaining).toHaveLength(1);
+        expect(remaining[0]?.text_preview).toBe("first");
       } finally {
         raw.close();
       }

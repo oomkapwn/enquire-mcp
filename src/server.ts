@@ -882,7 +882,7 @@ export async function prepareServerDeps(opts: ServeOptions): Promise<ServerDeps>
                   });
                 }
               } else {
-                const { buildHnsw } = await import("./hnsw.js");
+                const { buildHnsw, clearHnswPersistedArtifacts } = await import("./hnsw.js");
                 const index = await buildHnsw(
                   rows.map((r) => ({ label: r.label, vector: r.vector })),
                   { dim: model.dim, maxElements: rows.length }
@@ -936,6 +936,19 @@ export async function prepareServerDeps(opts: ServeOptions): Promise<ServerDeps>
                     process.stderr.write(
                       "enquire: embedding database changed while HNSW was persisting; discarding the stale candidate\n"
                     );
+                    // A post-publication DB drift makes the just-written graph stale
+                    // and may include native vectors that the new generation deleted.
+                    // Erase the family now instead of leaving privacy cleanup to a
+                    // future restart. Compact v4 pointers omit text_preview; the
+                    // immutable generation remains sensitive.
+                    if (persisted) {
+                      const persistenceScopes = db.getPersistenceFamilyScopes();
+                      await clearHnswPersistedArtifacts(persistFile, persistenceScopes).catch((err) => {
+                        process.stderr.write(
+                          `enquire: unable to erase stale HNSW artifacts after persist-time generation drift — ${err instanceof Error ? err.message : String(err)}\n`
+                        );
+                      });
+                    }
                   }
                 }
               }

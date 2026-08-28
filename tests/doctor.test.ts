@@ -513,32 +513,35 @@ describe("runDoctor — tiers and readiness", () => {
     expect(samePath.checks.find((check) => check.id === "index:embed-selected")).toBeUndefined();
 
     const previousXdg = process.env.XDG_CACHE_HOME;
+    const hermeticDefault = serveTimeEmbedFile(await fs.realpath(root));
     try {
+      process.env.XDG_CACHE_HOME = "";
+      const ignoredEmpty = serveTimeEmbedFile(await fs.realpath(root));
+      expect(path.isAbsolute(ignoredEmpty)).toBe(true);
+      delete process.env.XDG_CACHE_HOME;
+      const platformDefault = serveTimeEmbedFile(await fs.realpath(root));
+      expect(ignoredEmpty).toBe(platformDefault);
+      expect(ignoredEmpty).not.toBe(hermeticDefault);
+
       if (previousXdg !== undefined && path.isAbsolute(previousXdg)) {
         const relativeXdg = path.relative(process.cwd(), previousXdg);
         if (relativeXdg !== "" && !path.isAbsolute(relativeXdg)) {
           process.env.XDG_CACHE_HOME = relativeXdg;
-          const relativeDefault = serveTimeEmbedFile(await fs.realpath(root));
-          expect(path.isAbsolute(relativeDefault)).toBe(false);
-          expect(path.resolve(relativeDefault)).toBe(path.resolve(serveEmbedFile));
-          const stillDistinct = await diagnose(paths);
-          expect(stillDistinct.ready).toBe(true);
-          expect(stillDistinct.checks.find((check) => check.id === "index:embed")?.status).toBe("ok");
-          expect(stillDistinct.checks.find((check) => check.id === "index:embed-selected")?.status).toBe("ok");
-          const sameRelative = await diagnose({ ...paths, embedFile: relativeDefault });
-          expect(sameRelative.ready).toBe(true);
-          expect(sameRelative.checks.find((check) => check.id === "index:embed")?.status).toBe("ok");
-          expect(sameRelative.checks.find((check) => check.id === "index:embed-selected")).toBeUndefined();
-          const sameResolved = await diagnose({ ...paths, embedFile: path.resolve(relativeDefault) });
-          expect(sameResolved.ready).toBe(true);
-          expect(sameResolved.checks.find((check) => check.id === "index:embed")?.status).toBe("ok");
-          expect(sameResolved.checks.find((check) => check.id === "index:embed-selected")).toBeUndefined();
+          const ignoredRelative = serveTimeEmbedFile(await fs.realpath(root));
+          expect(ignoredRelative).toBe(platformDefault);
+          expect(ignoredRelative).not.toBe(path.join(relativeXdg, "enquire", path.basename(hermeticDefault)));
         }
       }
     } finally {
       if (previousXdg === undefined) delete process.env.XDG_CACHE_HOME;
       else process.env.XDG_CACHE_HOME = previousXdg;
     }
+
+    const afterIgnore = await diagnose(paths);
+    expect(afterIgnore.ready).toBe(true);
+    expect(afterIgnore.checks.find((check) => check.id === "index:embed")?.status).toBe("ok");
+    expect(afterIgnore.checks.find((check) => check.id === "index:embed-selected")?.status).toBe("ok");
+    expect(serveTimeEmbedFile(await fs.realpath(root))).toBe(hermeticDefault);
   });
 
   it("each hybrid prerequisite independently blocks readiness", async (ctx) => {

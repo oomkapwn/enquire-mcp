@@ -135,9 +135,9 @@ export function candidateModelCacheRoots(): string[] {
  * Default `.embed.db` location for a given vault root. Same formula as
  * `embedDbPath` in `src/tool-registry.ts`, which `serve` / `serve-http` /
  * `query` / `eval` / `setup` use, then `path.resolve`d. Those commands have
- * no `--embed-file`. Resolve is required because `defaultIndexFile` joins
- * `XDG_CACHE_HOME` verbatim, and a relative cache home would otherwise
- * disagree with `path.resolve(--embed-file)`.
+ * no `--embed-file`. `defaultIndexFile` ignores non-absolute `XDG_CACHE_HOME`
+ * so this path is CWD-independent; resolve still aligns `--embed-file`
+ * spelling with that default.
  */
 function defaultEmbedDbFile(vaultRoot: string): string {
   return path.resolve(defaultIndexFile(vaultRoot).replace(/\.fts5\.db$/, ".embed.db"));

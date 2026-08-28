@@ -3237,18 +3237,29 @@ export function computeBreadcrumbsByLine(content: string): string[] {
 
 /**
  * Default location for the FTS5 index file — `~/.cache/enquire/<hash>.fts5.db`
- * (or `$XDG_CACHE_HOME` on Linux). The hash is the first 12 chars of
- * sha1(vaultRoot), retained as a legacy routing key. Non-colliding roots get
- * distinct default paths; the truncated key is not collision-proof vault
- * identity. Collision handling and a root-bound migration are deferred to AH-9e.
+ * (or `$XDG_CACHE_HOME/enquire/<hash>.fts5.db` when that env value is an
+ * absolute path). The hash is the first 12 chars of sha1(vaultRoot), retained
+ * as a legacy routing key. Non-colliding roots get distinct default paths; the
+ * truncated key is not collision-proof vault identity. Collision handling and
+ * a root-bound migration are deferred to AH-9e.
+ *
+ * A relative or empty `XDG_CACHE_HOME` is ignored so the result does not
+ * depend on this process's CWD. `doctor` and `serve` then share the same
+ * default FTS/embed file even when they are launched from different
+ * directories. Parse-cache, feedback, and tessdata resolvers are separate
+ * formulas and are not this function.
  *
  * @param vaultRoot - Absolute path to the vault root.
  * @returns Absolute path to the index file.
  */
 export function defaultIndexFile(vaultRoot: string): string {
+  const raw = process.env.XDG_CACHE_HOME;
   const base =
-    process.env.XDG_CACHE_HOME ??
-    (process.platform === "darwin" ? path.join(os.homedir(), "Library", "Caches") : path.join(os.homedir(), ".cache"));
+    raw !== undefined && path.isAbsolute(raw)
+      ? raw
+      : process.platform === "darwin"
+        ? path.join(os.homedir(), "Library", "Caches")
+        : path.join(os.homedir(), ".cache");
   const hash = createHash("sha1").update(vaultRoot).digest("hex").slice(0, 12);
   return path.join(base, "enquire", `${hash}.fts5.db`);
 }

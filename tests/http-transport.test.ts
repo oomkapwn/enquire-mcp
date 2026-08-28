@@ -2293,6 +2293,32 @@ describe("startHttpServer stateful sessions (v2.14.0)", () => {
     const addr = httpServer.address();
     // After close, .address() returns null on a server that has been closed.
     expect(addr).toBeNull();
+
+    const signalCounts = {
+      sigint: process.listenerCount("SIGINT"),
+      sigterm: process.listenerCount("SIGTERM"),
+      beforeExit: process.listenerCount("beforeExit")
+    };
+    const owned = await startHttpServer({
+      vault: root,
+      port: 0,
+      host: "127.0.0.1",
+      bearerToken: TOKEN,
+      mcpPath: "/mcp",
+      rateLimitPerMinute: 0,
+      stateful: false,
+      installSignalHandlers: true
+    });
+    try {
+      expect(process.listenerCount("SIGINT")).toBeGreaterThan(signalCounts.sigint);
+      expect(process.listenerCount("SIGTERM")).toBeGreaterThan(signalCounts.sigterm);
+      expect(process.listenerCount("beforeExit")).toBeGreaterThan(signalCounts.beforeExit);
+    } finally {
+      await shutdownHttpServer(owned);
+    }
+    expect(process.listenerCount("SIGINT")).toBe(signalCounts.sigint);
+    expect(process.listenerCount("SIGTERM")).toBe(signalCounts.sigterm);
+    expect(process.listenerCount("beforeExit")).toBe(signalCounts.beforeExit);
   });
 
   // v3.8.7 P2-11 + v4 — concurrent/later shutdown calls join one safe task.

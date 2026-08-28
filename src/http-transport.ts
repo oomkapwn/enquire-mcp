@@ -1711,6 +1711,10 @@ interface HttpServerExtras {
   listenerClosed: boolean;
   /** Lazily captured dependency owner, retained until every stage succeeds. */
   cleanupOwner?: PreparedServerCleanupOwner;
+  /** SIGINT/SIGTERM owner installed after listen; dropped on every shutdown. */
+  onSignal?: () => void;
+  /** beforeExit owner installed after listen; dropped on every shutdown. */
+  onBeforeExit?: () => void;
 }
 const httpServerExtras = new WeakMap<HttpServer, HttpServerExtras>();
 /** One teardown promise per server so concurrent programmatic callers join the
@@ -1798,13 +1802,15 @@ export function closeServerBounded(server: HttpServer, graceMs: number = HTTP_CL
  * `prepareServerDeps` opens once at boot.
  *
  * Order matters:
- *   1. `registry.closeAll()` — bounded ordinary request drain, followed by
+ *   1. Drop this generation's SIGINT/SIGTERM/`beforeExit` owners so a later
+ *      server in the same process cannot be terminated by this listener.
+ *   2. `registry.closeAll()` — bounded ordinary request drain, followed by
  *      cancellation/rollback or completion of persistent writes, then close
  *      every transport + McpServer in stateful mode.
- *   2. `httpServer.close()` — stop accepting new connections + wait for
+ *   3. `httpServer.close()` — stop accepting new connections + wait for
  *      existing ones to drain. Node's http.Server doesn't actively
  *      terminate keep-alive sockets unless we ask it to.
- *   3. Close feedback lifetime, watcher, watcherEmbedDb, vault cache, and fts5
+ *   4. Close feedback lifetime, watcher, watcherEmbedDb, vault cache, and fts5
  *      index — the same dependency order as the stdio cleanup chain.
  *
  * Idempotent: sequential and concurrent calls on the same server join the
@@ -1820,6 +1826,15 @@ export async function shutdownHttpServer(server: HttpServer): Promise<void> {
       // Not from startHttpServer. Still close the TCP listener for safety.
       await closeServerBounded(server);
       return;
+    }
+    if (extras.onSignal) {
+      process.removeListener("SIGINT", extras.onSignal);
+      process.removeListener("SIGTERM", extras.onSignal);
+      extras.onSignal = undefined;
+    }
+    if (extras.onBeforeExit) {
+      process.removeListener("beforeExit", extras.onBeforeExit);
+      extras.onBeforeExit = undefined;
     }
     const cleanupErrors: unknown[] = [];
     // Close both era gates synchronously, then drain independently. Legacy
@@ -2027,6 +2042,8 @@ export async function startHttpServer(
       };
       process.on("beforeExit", onBeforeExit);
       beforeExitInstalled = true;
+      startupExtras.onSignal = onSignal;
+      startupExtras.onBeforeExit = onBeforeExit;
     }
 
     const addr = listener.address();

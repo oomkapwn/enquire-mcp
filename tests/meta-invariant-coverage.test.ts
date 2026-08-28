@@ -316,7 +316,7 @@ const EXPECTED_REPOSITORY_MUTATION_HELPER_CALL_ENTRIES = [
   ],
   [
     "k1-ast-invariant.test.ts",
-    { count: 4, sha256: "a7d88bfd4075380c588be49b8769f80c8df90e24427dc02b76a341e74b2b1f05" }
+    { count: 4, sha256: "6dfca383de8d53508a3b93d9e07f73e019b63dffa0696486938c60b13c64bb1a" }
   ],
   [
     "k1-class-invariant.test.ts",
@@ -996,8 +996,8 @@ const EXPECTED_REVIEWED_ORDINARY_OWNER_SHA256_ENTRIES = [
   ["K-1 statement semicolon normalization", "16d035dcb619ed86a565e7aa31d24ffe1eaf3be6126768a6934d95ffb5075997"],
   ["K-1 block-comment stripping", "c95678067a8bf775dec72803fda97aeda6b12479bf8420e9566259b4b42ce4db"],
   ["K-1 line-comment stripping", "c95678067a8bf775dec72803fda97aeda6b12479bf8420e9566259b4b42ce4db"],
-  ["K-1 module-extension normalization", "9ad0037feca05334689ad4805c36e368854e2b6201e6a5238dafd01c3944d2ec"],
-  ["K-1 source-path separator normalization", "7899d3553bfdbe7e6b013e961ad0f1635a8b967360aaa8e5f06088e468676c96"],
+  ["K-1 module-extension normalization", "a8a82204030d1e2837f67cfca53062f14bf0a547434dcfa9de1b2d7903307757"],
+  ["K-1 source-path separator normalization", "c4c0053677a5715b9903b3b65d94de7939e89f5cd409e934c8976aa803b87bdf"],
   ["line-terminator block-comment stripping", "61bbbea7aac48eafa3a24d78998eb49e81a6e7911953f3c25ead27692923a80d"],
   ["line-terminator line-comment stripping", "61bbbea7aac48eafa3a24d78998eb49e81a6e7911953f3c25ead27692923a80d"],
   ["ReDoS source-path separator normalization", "1b31e3478ce12f357ad0de08f669cdd462aef1c92b5e40ea2b7252bf483dc9bd"],

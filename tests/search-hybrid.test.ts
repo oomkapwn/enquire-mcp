@@ -1857,9 +1857,55 @@ describe("embeddingsSearch — HNSW database-generation authority", () => {
   it("refuses all results when EmbedDb advances during awaited live-vault validation", async () => {
     const fixture = await createSemanticAdmissionFixture();
     installSemanticAdmissionRuntimeMocks(vi.fn(async () => undefined));
+    let siblingMutated = false;
     let mutated = false;
     try {
       const { embeddingsSearch: isolatedEmbeddingsSearch } = await import("../src/tools/search.js");
+      const unrelatedFile = path.join(fixture.vaultRoot, "Unrelated.md");
+      await fs.writeFile(unrelatedFile, "unrelated sibling note\n");
+      const siblingVault = new Vault(fixture.vaultRoot);
+      await siblingVault.ensureExists();
+      const originalSiblingStat = siblingVault.stat.bind(siblingVault);
+      const siblingStatSpy = vi.spyOn(siblingVault, "stat").mockImplementation(async (relPath) => {
+        if (!siblingMutated) {
+          siblingMutated = true;
+          const writer = new EmbedDb({
+            file: fixture.embedFile,
+            vaultRoot: fixture.vaultRoot,
+            modelAlias: "multilingual",
+            dim: 384,
+            quantization: "f32"
+          });
+          await writer.open();
+          try {
+            const noteStat = await fs.stat(unrelatedFile);
+            const vector = new Float32Array(384);
+            vector[0] = 1;
+            writer.upsertNote("Unrelated.md", noteStat.mtimeMs, [
+              {
+                chunkIndex: 0,
+                lineStart: 1,
+                lineEnd: 1,
+                textPreview: "unrelated sibling note",
+                vector
+              }
+            ]);
+          } finally {
+            await writer.closeAndRelease();
+          }
+        }
+        return originalSiblingStat(relPath);
+      });
+      const siblingResult = await isolatedEmbeddingsSearch(
+        siblingVault,
+        { query: "semantic admission marker", limit: 1 },
+        fixture.embedFile
+      );
+      expect(siblingMutated).toBe(true);
+      expect(siblingResult.matches.map((match) => match.path)).toEqual(["Semantic.md"]);
+      expect(siblingResult.matches[0]?.snippet).toContain("semantic admission marker");
+      siblingStatSpy.mockRestore();
+
       const vault = new Vault(fixture.vaultRoot);
       await vault.ensureExists();
       const originalStat = vault.stat.bind(vault);

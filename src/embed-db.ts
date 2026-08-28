@@ -2603,7 +2603,8 @@ export class EmbedDb {
       // Ranking uses one SQLite snapshot. Complete-generation HNSW envelope
       // admission belongs to captureHnswReceiptSnapshot (graph build/load),
       // not brute-force cosine. Mixed-generation after awaited filesystem work
-      // is refused by embeddingsSearch via captureGenerationIdentity.
+      // is refused by embeddingsSearch via the physical UUID plus ranked
+      // source receipts, not the whole-database mutation epoch.
 
       // v2.0.0-beta.1 P2 fix: prefix-equality via substr — avoids LIKE pattern
       // semantics so folder names containing `%` / `_` don't expand into

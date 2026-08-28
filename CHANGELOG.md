@@ -4,6 +4,17 @@ All notable changes to this project will be documented here. The format follows 
 
 ## [4.0.0-rc.4] — 2026-08-21
 
+### Per-path quarantine does not permanently skip HNSW persist
+
+> **TL;DR:** **One ordinary note's failed watcher commit no longer disables HNSW persistence (and the live graph) for every other note until restart.** After B0 dropped the process-wide `semanticUsable` latch, `quarantineFailedGeneration` still called `quarantineHnswGeneration` whenever EmbedDb and HNSW were both attached, and the md/pdf commit catchers also set `hnswPersistUnsafe` whenever `this.hnsw` existed. A Map-of-Content that trips `MAX_FTS_LINK_TARGETS` therefore stopped `flushHnswToDisk` for the life of the process even though brute EmbedDb search stayed up. Per-path quarantine now drops that source's live HNSW labels and adopts the post-quarantine EmbedDb generation. Remaining notes can keep using and persisting the graph.
+>
+> **Bounded claim.** This does **not** reset `hnswPersistUnsafe` after an `applyDiff` throw, a persist-time receipt/label mismatch, or live pending-queue overflow (B0 classified overflow as justified). It does **not** change `captureHnswReceiptSnapshot`. Mixed-generation after awaited filesystem work is still refused by `captureGenerationIdentity`. Brute search still withholds the failed path via the EmbedDb quarantine marker.
+>
+> **Method note:** BACKLOG §1.CC-ter **B6**, fourth product slice of the `93e03f28` unit (what catches this throw, and what does that catcher then disable?). Coverage is extra phases of the existing persist-safety test: after a zipHnsw id-count mismatch and after a PDF FTS-only commit throw, `hnswPersistUnsafe` stays false and `hnswUsable` stays true while the failed path is quarantined. The applyDiff-throw phase still requires the persist latch. No new `it()`. Under D-45 all executable proof is GitHub-hosted; no local package-manager, lint or test workload was used.
+
+- **Per-path quarantine drops labels, not the route.** `quarantineFailedGeneration` removes the withheld path from the live graph instead of setting `hnswPersistUnsafe` / `hnswUsable=false`.
+- **Commit catchers do not re-arm persist.** The md/pdf `if (this.hnsw) this.hnswPersistUnsafe = true` extras are gone; `applyDiff` failure still latches persist inside `syncHnswForFile`.
+
 ### Incomplete embedding generation does not quarantine brute-force semantic search
 
 > **TL;DR:** **`obsidian_embeddings_search` (and the embeddings arm of `obsidian_search`) no longer stay down for the life of a `serve` process because HNSW snapshot admission refused one declared source.** After brute ranking stopped calling the snapshot helper, `prepareServerDeps` still ran `captureHnswReceiptSnapshot()` on the brute-only startup path and latched `semanticUsable=false` on any throw. The `--use-hnsw` catch did the same for `EmbedSnapshotIntegrityError` / `EmbedSnapshotCapacityError`. Serve-path search then threw `SEMANTIC_ROUTE_QUARANTINED` even though remaining well-formed rows were rankable. Brute-only startup no longer opens a second EmbedDb for that snapshot. HNSW integrity/capacity failures now leave the brute route up (`hnswContext` null), matching a missing/corrupt sidecar.

@@ -84,16 +84,18 @@ function sameHnswRowManifest(
  *
  * A fatal staged watcher preparation failure leaves the prior generation
  * intact and does not latch `semanticUsable`. PDF/OCR page failures use that
- * same quarantined preparation path. Staging may still process-quarantine
- * HNSW (`hnswUsable`) via the per-path quarantine helper.
+ * same quarantined preparation path. Staging still process-quarantines HNSW
+ * (`hnswUsable`) when a live graph diff fails.
  *
  * After activation has completed, a per-path sink mutation failure
  * (markdown/PDF commit, embed-db unlink) records a source-scoped quarantine
  * and does **not** latch `semanticUsable`. Brute-force EmbedDb search stays
  * available for every other note when the EmbedDb quarantine marker is
  * successfully persisted. The failed path is withheld by that marker.
- * HNSW may still be process-quarantined (`hnswUsable`) because a graph that
- * omitted the withheld label would under-fill recall around it.
+ * Live HNSW drops that path's labels and adopts the post-quarantine EmbedDb
+ * generation instead of process-quarantining persist/`hnswUsable` for every
+ * other note. `applyDiff` failure and live pending-queue overflow still
+ * process-quarantine HNSW.
  *
  * `purgeStoredIdentity` also no longer latches `semanticUsable`, but it runs
  * only from activation replay and still rethrows, so a failed purge still
@@ -508,13 +510,30 @@ export class VaultWatcher {
         );
       }
     }
-    // A quarantine mutation changes the admitted DB generation without an
-    // equivalent graph deletion. Keeping HNSW as a candidate could under-fill
-    // recall around the withheld label, so leave the authoritative brute path
-    // available but quarantine this process's graph until restart.
-    if (this.embedDb && this.hnsw) {
-      this.quarantineHnswGeneration(`source ${relPath} entered semantic quarantine`);
+    // A quarantine marker withholds one source. Drop that path's live labels
+    // and adopt the post-quarantine generation so remaining notes can keep
+    // using and persisting HNSW. applyDiff failure still process-quarantines.
+    this.dropQuarantinedPathFromLiveHnsw(relPath, kind);
+  }
+
+  /**
+   * Remove one quarantined source from the live graph without latching persist.
+   *
+   * @param relPath - Public vault-relative identity now withheld by a marker.
+   * @param kind - Content-source kind for HNSW metadata.
+   * @returns Nothing.
+   */
+  private dropQuarantinedPathFromLiveHnsw(relPath: string, kind: "md" | "pdf"): void {
+    if (!this.embedDb || !this.hnsw || !this.hnswRowsByLabel || !this.searchHealth.hnswUsable) {
+      return;
     }
+    const oldIds: number[] = [];
+    for (const [id, row] of this.hnswRowsByLabel) {
+      if (row.rel_path === relPath && row.kind === kind) oldIds.push(id);
+    }
+    const hnswResult = this.syncHnswForFile(relPath, kind, oldIds, []);
+    if (!hnswResult) return;
+    this.publishCommittedHnswGeneration(this.embedDb.captureGenerationIdentity());
   }
   // v3.9.0-rc.11 (audit H1) — per-file serialization. chokidar dispatches file
   // events concurrently; without this, two rapid saves to the SAME file
@@ -1999,8 +2018,8 @@ export class VaultWatcher {
   /**
    * Derive markdown lexical input and optional embeddings from one note
    * snapshot. No replacement generation is committed here. A preparation
-   * failure attempts source-scoped quarantine (and may process-quarantine
-   * HNSW); the marker is not guaranteed if the store write fails.
+   * failure attempts source-scoped quarantine and drops that path from live
+   * HNSW; the marker is not guaranteed if the store write fails.
    *
    * @param absPath - Canonical note path.
    * @param relPath - Public vault-relative note path.
@@ -2047,7 +2066,7 @@ export class VaultWatcher {
    * Derive PDF lexical pages and optional embeddings from one binary snapshot.
    * OCR, when enabled, consumes the same captured bytes. No replacement
    * generation is committed here. A preparation failure attempts source-scoped
-   * quarantine (and may process-quarantine HNSW); the marker is not guaranteed
+   * quarantine and drops that path from live HNSW; the marker is not guaranteed
    * if the store write fails.
    *
    * @param absPath - Canonical PDF path.
@@ -2173,9 +2192,8 @@ export class VaultWatcher {
       return embedNote;
     } catch (err) {
       this.quarantineFailedGeneration(relPath, "md");
-      // Do not latch semanticUsable: quarantine is per-path when the marker
-      // persists. See WatcherSearchHealth.
-      if (this.hnsw) this.hnswPersistUnsafe = true;
+      // Do not latch semanticUsable or hnswPersistUnsafe: quarantine is
+      // per-path when the marker persists. See WatcherSearchHealth.
       if (!this.silent) {
         process.stderr.write(
           `enquire: watcher generation commit failed for ${relPath} — ${
@@ -2232,9 +2250,8 @@ export class VaultWatcher {
       return embedNote;
     } catch (err) {
       this.quarantineFailedGeneration(relPath, "pdf");
-      // Do not latch semanticUsable: quarantine is per-path when the marker
-      // persists. See WatcherSearchHealth.
-      if (this.hnsw) this.hnswPersistUnsafe = true;
+      // Do not latch semanticUsable or hnswPersistUnsafe: quarantine is
+      // per-path when the marker persists. See WatcherSearchHealth.
       if (!this.silent) {
         process.stderr.write(
           `enquire: watcher PDF generation commit failed for ${relPath} — ${

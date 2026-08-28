@@ -1603,6 +1603,7 @@ describe("VaultWatcher HNSW disk persistence (v3.9.0-rc.6)", () => {
       // mutation. The permanent unsafe latch must dominate the earlier dirty
       // state, otherwise close would stamp a partial graph with a fresh
       // EmbedDb signature and the next serve would trust it.
+      const originalApplyDiff = index.applyDiff.bind(index);
       (
         index as unknown as {
           applyDiff(): { removed: number; added: number };
@@ -1615,8 +1616,9 @@ describe("VaultWatcher HNSW disk persistence (v3.9.0-rc.6)", () => {
       expect(w.searchHealth.hnswUsable).toBe(false);
 
       // Class sibling: zipHnswAddPoints runs after the EmbedDb transaction but
-      // before syncHnswForFile. Prove the surrounding markdown catch still sets
-      // the HNSW persistence latch instead of laundering that stale graph on close.
+      // before syncHnswForFile. Restore applyDiff so per-path quarantine can
+      // drop the withheld labels. The markdown catch must not re-arm persist.
+      index.applyDiff = originalApplyDiff;
       watcherInternals.hnswPersistUnsafe = false;
       w.searchHealth.hnswUsable = true;
       const originalConditionalUpsert = embedDb.upsertNoteWithCanonicalVectorsIfGeneration.bind(embedDb);
@@ -1638,7 +1640,8 @@ describe("VaultWatcher HNSW disk persistence (v3.9.0-rc.6)", () => {
         embedDb.upsertNoteWithCanonicalVectorsIfGeneration = originalConditionalUpsert;
       }
       expect(mismatchInjectedAfterCommit).toBe(true);
-      expect(watcherInternals.hnswPersistUnsafe).toBe(true);
+      expect(watcherInternals.hnswPersistUnsafe).toBe(false);
+      expect(w.searchHealth.hnswUsable).toBe(true);
       // Per-path quarantine is the correct scope. The markdown catch used to
       // latch semanticUsable globally, which disabled embeddings search for
       // every other note until restart. Each phase below is a causal negative
@@ -1674,6 +1677,8 @@ describe("VaultWatcher HNSW disk persistence (v3.9.0-rc.6)", () => {
         ).toBeUndefined();
         expect(embedDb.getQuarantinedPaths("pdf")).toEqual(["paper.pdf"]);
         expect(w.searchHealth.semanticUsable).toBe(true);
+        expect(watcherInternals.hnswPersistUnsafe).toBe(false);
+        expect(w.searchHealth.hnswUsable).toBe(true);
       } finally {
         fts.reindexPdfFile = originalReindexPdfFile;
       }
@@ -1713,6 +1718,11 @@ describe("VaultWatcher HNSW disk persistence (v3.9.0-rc.6)", () => {
         fts.dropFile = originalDropFile;
       }
 
+      // The applyDiff throw for unsafe.md still left a partial native graph.
+      // Re-arm that persist latch so close cannot stamp it. Per-path
+      // quarantine no longer re-arms it.
+      watcherInternals.hnswPersistUnsafe = true;
+      w.searchHealth.hnswUsable = false;
       await expect(w.flushHnswToDisk()).resolves.toBe(false);
       await expect(fs.access(`${persistFile}.meta.json`)).rejects.toMatchObject({ code: "ENOENT" });
       expect(await generationNames()).toEqual([]);

@@ -2200,8 +2200,10 @@ export class Vault {
       needsExclusiveMove = true;
     }
     if (needsExclusiveMove) {
+      let linked = false;
       try {
         await this.linkSafe(fromAbs, toAbs);
+        linked = true;
       } catch (err) {
         if (err instanceof Error && "code" in err && (err as NodeJS.ErrnoException).code === "EEXIST") {
           if (destinationWasPlannedMissing) throw new RenameDestinationChangedError(toRelNorm);
@@ -2233,14 +2235,14 @@ export class Vault {
         }
       }
       // link() succeeded — source still exists at fromAbs as a hard link.
-      // Unlink it to complete the move semantic. If unlink fails the user
-      // sees a still-present fromAbs alongside the new toAbs (hard-linked,
-      // same inode on POSIX); re-running renameFile will see toAbs exists
-      // and reject — but the duplicate is a recoverable state, not data
-      // loss, which is the v3.7.13 M1 recovery posture.
-      await fs.unlink(fromAbs).catch(() => {
-        // Best-effort cleanup; toAbs is the canonical truth.
-      });
+      // Unlink through unlinkSafe so a failed source removal is not reported
+      // as a completed rename. The leftover hardlink pair is recoverable, but
+      // renameNote must not rewrite backlinks on a false move receipt.
+      // The EXDEV copy path already unlinked; a second unlinkSafe would ENOENT
+      // after a completed move (the swallowed fs.unlink.catch used to hide both).
+      if (linked) {
+        await this.unlinkSafe(fromAbs);
+      }
     }
     this.deleteCacheEntry(fromAbs);
     this.deleteCacheEntry(toAbs);

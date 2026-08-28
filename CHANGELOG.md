@@ -4,6 +4,17 @@ All notable changes to this project will be documented here. The format follows 
 
 ## [4.0.0-rc.4] — 2026-08-21
 
+### Exclusive rename does not report success when source unlink fails
+
+> **TL;DR:** **`renameFile` no longer returns success when the default exclusive move linked the destination but failed to remove the source path.** The swallowed `fs.unlink(fromAbs).catch(() => {})` left the note at both paths as two hardlinks; `renameNote` then rewrote vault-wide backlinks on a false premise, and the watcher never saw an unlink. Source removal now goes through `unlinkSafe` and the error surfaces. The leftover pair remains recoverable; the receipt is no longer a lie.
+>
+> **Bounded claim.** This does **not** change the EXDEV copy+unlink path (already `unlinkSafe`, still a single unlink). It does **not** reset commit flags after a later fallible `stat` (A4). It does **not** fold `appendNote` post-write stat/close (H4).
+>
+> **Method note:** BACKLOG §1.CC **A3**. Coverage is an extra phase of the existing exclusive-admission test: after a successful `linkSafe` to a missing destination, `unlinkSafe` rejects and `renameFile` must throw while both paths still hold the source bytes. No new `it()`. Under D-45 all executable proof is GitHub-hosted; no local package-manager, lint or test workload was used.
+
+- **Source unlink is part of the move receipt.** Post-`linkSafe` cleanup uses `unlinkSafe` instead of a swallowed raw `fs.unlink`.
+- **`renameNote` cannot rewrite backlinks on a false move.** A failed source removal throws before `{ from, to }` is returned.
+
 ### Query-base exact totals do not skip an unreadable listed note
 
 > **TL;DR:** **`obsidian_query_base` no longer reports `total_matched` after silently skipping a listed note whose `readFile` failed.** Incomplete bounded listing already throws so a prefix cannot be called exact. 93e left `catch { continue }` around the per-note read, so an unreadable admitted note vanished from the exact total with no error. An unreadable listed note now fails closed with the same exact-total error class. Malformed frontmatter after a successful read is not this slice.

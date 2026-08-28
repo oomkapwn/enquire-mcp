@@ -25,8 +25,8 @@ const registry = readFileSync(path.join(repoRoot, "src/tool-registry.ts"), "utf8
 // BODY fields (`create_note.content`, `append_to_note.content`/`separator`) are DELIBERATELY out
 // of scope: they flow LINEARLY into `composeNote` → `vault.writeNote`/`appendNote` (one
 // `stringifyFrontmatter` + one `Buffer.byteLength`, no parser, no per-note/whole-vault scan), and
-// are double-bounded already — by the serve-http body cap (`deriveHttpBodyCap` = max(4 MB,
-// maxFileBytes×1.5) = 7.5 MB default, enforced streaming BEFORE the handler) and by the sink
+// are double-bounded already — by the serve-http body cap (`deriveHttpBodyCap` = max(4 MiB,
+// maxFileBytes×6 + 64 KiB) ≈ 30.06 MiB default, enforced streaming BEFORE the handler) and by the sink
 // (`writeNote`/`appendNote` reject > maxFileBytes = 5 MB default). A boundary `.max(1_000_000)`
 // (the auditor's proposed parity with `validate_note_proposal`, whose 1 MB cap exists because IT
 // has a superlinear wikilink scan) would sit BELOW the real 5 MB write limit and REJECT legitimate

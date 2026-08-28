@@ -873,8 +873,18 @@ export function createSessionRegistry(
       await Promise.all(
         snapshot.map(async (s) => {
           await Promise.all([
-            waitForBoundedSettlement(Promise.resolve().then(() => s.transport.close()).catch(() => {}), protocolCloseMs),
-            waitForBoundedSettlement(Promise.resolve().then(() => s.server.close()).catch(() => {}), protocolCloseMs)
+            waitForBoundedSettlement(
+              Promise.resolve()
+                .then(() => s.transport.close())
+                .catch(() => {}),
+              protocolCloseMs
+            ),
+            waitForBoundedSettlement(
+              Promise.resolve()
+                .then(() => s.server.close())
+                .catch(() => {}),
+              protocolCloseMs
+            )
           ]);
         })
       );

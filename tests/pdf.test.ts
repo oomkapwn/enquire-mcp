@@ -265,6 +265,19 @@ describe("listPdfs (v2.7.0)", () => {
     expect(first?.name).toBe("paper");
     expect(first?.size_bytes).toBeGreaterThan(0);
     expect(first?.mtime).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+
+    const orig = v.readBinaryFile.bind(v);
+    v.readBinaryFile = async () => {
+      throw new Error("injected unread");
+    };
+    try {
+      const unread = await listPdfs(v, {});
+      expect(unread).toHaveLength(1);
+      expect(unread[0]?.path).toBe("paper.pdf");
+      expect(unread[0]?.size_bytes).toBe(first?.size_bytes);
+    } finally {
+      v.readBinaryFile = orig;
+    }
   });
 
   it("walks recursively into subfolders", async () => {

@@ -385,7 +385,7 @@ export interface PdfSummary {
   path: string;
   /** Filename minus the `.pdf` extension. */
   name: string;
-  /** File size in bytes. */
+  /** File size in bytes from the directory walk. `0` if the walker omitted it. */
   size_bytes: number;
   /** Last-modified ISO timestamp. */
   mtime: string;
@@ -398,7 +398,8 @@ export interface PdfSummary {
  * PDFs are the #1 non-markdown content kind in real research vaults. Same
  * privacy filter (`--exclude-glob` / `--read-paths`) applies. Returns
  * lightweight metadata only — for full text extraction call {@link readPdf}.
- * Unreadable PDFs are skipped without poisoning the listing.
+ * Unreadable PDFs stay in the listing with the walker's `sizeBytes` (or `0`
+ * when a synthetic `FileEntry` omitted it). The listing does not open files.
  *
  * @param vault - The vault.
  * @param args - All optional. `folder` restricts the scan. `limit`
@@ -421,18 +422,13 @@ export async function listPdfs(vault: Vault, args: { folder?: string; limit?: nu
   const out: PdfSummary[] = [];
   for (const e of all) {
     if (out.length >= limit) break;
-    let size = 0;
-    try {
-      const buf = await vault.readBinaryFile(e.absPath);
-      size = buf.byteLength;
-    } catch {
-      // Unreadable PDF — skip without poisoning the listing.
-      continue;
-    }
+    // Walker already captured `sizeBytes`. Do not re-read the file for a
+    // listing size, and do not drop the row when a later open fails —
+    // listCanvases keeps malformed/unreadable canvases with counts at 0.
     out.push({
       path: e.relPath,
       name: e.basename.replace(/\.pdf$/i, ""),
-      size_bytes: size,
+      size_bytes: e.sizeBytes ?? 0,
       mtime: new Date(e.mtimeMs).toISOString()
     });
   }

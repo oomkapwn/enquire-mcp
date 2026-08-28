@@ -4,6 +4,19 @@ All notable changes to this project will be documented here. The format follows 
 
 ## [4.0.0-rc.4] — 2026-08-21
 
+### listPdfs keeps unreadable PDFs and uses the walker size
+
+> **TL;DR:** **`obsidian_list_pdfs` no longer drops a PDF the directory walk already admitted.** `listCanvases` keeps a malformed or unreadable canvas with `size_bytes` from the successful read or `0` on open failure. `listPdfs` re-read every file for size and `continue`d on that open, so a permission race or unreadable PDF vanished from the listing. The walker already recorded `sizeBytes`.
+>
+> **Bounded claim.** This does **not** change `readPdf` extraction, OCR, or canvas/base listings. Canvas and `.base` listings still open files because they need node/view counts. It does **not** reopen H5.
+>
+> **Method note:** BACKLOG §1.CC-ter **B2**. Coverage is an extra phase of the existing `lists PDFs with size + mtime` test: `readBinaryFile` throws after the walk, the row stays, and `size_bytes` matches the first listing. No new `it()`. Under D-45 all executable proof is GitHub-hosted; no local package-manager, lint or test workload was used.
+
+- **Listing size comes from the walk.** `listPdfs` publishes `FileEntry.sizeBytes` instead of opening each PDF again.
+- **Unreadable PDFs stay in the listing.** An open failure after the walk no longer removes the row.
+
+### HTTP catch paths end a response that already sent headers
+
 ### HTTP catch paths end a response that already sent headers
 
 > **TL;DR:** **A post-header HTTP transport error no longer leaves the client socket open.** Catch paths on stateful POST, initialize, DELETE, the outer handler, stateless dispatch, and SSE logged the error and called `sendJsonRpcError` only when headers were still unsent. Once the SDK had started the response, the handler returned without `res.end()`. Stateful DELETE swallowed `handleRequest` rejection and closed only protocol objects.

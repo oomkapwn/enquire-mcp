@@ -4,6 +4,16 @@ All notable changes to this project will be documented here. The format follows 
 
 ## [4.0.0-rc.4] — 2026-08-21
 
+### Same-config embed schema upgrade keeps vectors
+
+> **TL;DR:** **A 3.11.6 embedding index is no longer emptied when v4 opens it.** Schema 3→5 admitted the store as owned, then `bootstrapSchema` dropped `embeddings` and stamped schema 5. Default serve does not run `syncEmbedDb`, so semantic search degraded to BM25+TF-IDF while `doctor` reported `ok` at 0 chunks. Same-config historical schemas whose vector table already has `kind` (v2/v3/v4) now keep their rows and only install v5 UUID/epoch metadata. v1 still rebuilds. Model, dimension, or quantization mismatch still rebuilds.
+>
+> **Bounded claim.** This does **not** auto-run `syncEmbedDb` on serve. It does **not** keep vectors across a model/dim/quantization change (AH-4 remains HOLD). It does **not** unify Bases tag regexes or change FTS5. A fresh UUID still rotates on the metadata upgrade so HNSW sidecars rebuild from the preserved embed-db.
+>
+> **Method note:** BACKLOG §1.CC **A5**. Coverage is extra phases of the existing `rebuilds supported same-root legacy schemas` test: v2/v3/v4 same-config opens keep `totalChunks() === 1`; v1 still rebuilds to 0. No new `it()`. Under D-45 all executable proof is GitHub-hosted; no local package-manager, lint or test workload was used.
+
+- **Compatible historical schemas keep the vector table.** `bootstrapSchema` skips `DROP TABLE embeddings` when model/dim/quantization match and `schema_version >= 2`.
+
 ### Inline `#tag` keeps combining marks that NFC cannot compose
 
 > **TL;DR:** **An inline `#tag` no longer truncates at a combining mark that has no canonical composition.** NFC-before-match already recovered `#café` (NFD `e` + U+0301 → `é`). The parser `INLINE_TAG_RE` and the Bases `collectTags` continuation classes still excluded `\p{M}`, so `#q` + U+0308 (`q̈`, no precomposed form) captured `q` while the parser TSDoc claimed NFC recovers any combining mark.
@@ -81,7 +91,7 @@ All notable changes to this project will be documented here. The format follows 
 
 > **TL;DR:** **Startup `--use-hnsw` persistence no longer leaves a published generation on disk after EmbedDb drifts and the in-memory graph is discarded.** `saveTo` can commit the immutable binary plus meta pointer and still throw on later lease-release; a receipt mismatch only logged and dropped the candidate. The watcher flush already erases that family. Startup now calls the same eraser, best-effort, when persist was attempted and the candidate is discarded. Compact v4 pointers omit `text_preview`; native vectors in the generation remain sensitive.
 >
-> **Bounded claim.** This does **not** erase on build-time drift (no `saveTo`) or persist-disabled startup. Uncommitted `saveTo(false)` with matching receipts still keeps the in-memory candidate and the previous sidecar. It does **not** change watcher `hnswPersistUnsafe`, load-time discard, or the empty-index erase. It does **not** reopen A5 schema 3→5 vector drop.
+> **Bounded claim.** This does **not** erase on build-time drift (no `saveTo`) or persist-disabled startup. Uncommitted `saveTo(false)` with matching receipts still keeps the in-memory candidate and the previous sidecar. It does **not** change watcher `hnswPersistUnsafe`, load-time discard, or the empty-index erase. It does **not** change EmbedDb `bootstrapSchema`.
 >
 > **Method note:** BACKLOG §1.CC-HOLD **H3**. Coverage is extra phases of the existing `saveTo(false)` persist test: (1) `saveTo` commits a pointer, an unrelated EmbedDb upsert runs during that await; (2) `saveTo` writes the pointer then throws (lease-release shape) with the same upsert. Both must return `hnswContext: null`, keep brute search up, and leave the meta pointer gone. No new `it()`. Under D-45 all executable proof is GitHub-hosted; no local package-manager, lint or test workload was used.
 
@@ -103,7 +113,7 @@ All notable changes to this project will be documented here. The format follows 
 
 > **TL;DR:** **`embeddingsSearch` no longer treats the whole-database `mutation_epoch` as an equality key.** Indexing any note used to bump that counter on four tables, so a watcher (or a second writer) indexing an unrelated note during live-vault validation threw `Embedding index changed during search` and `obsidian_search` recorded `signal_errors.embeddings`. Terminal egress now keys the physical EmbedDb UUID plus the ranked source receipts. Reindexing a ranked hit still fails closed. HNSW still requires UUID+epoch before it is queried, and falls back to brute-force cosine when the graph is stale.
 >
-> **Bounded claim.** This does **not** stop bumping `mutation_epoch` on INSERT/UPDATE/DELETE. It does **not** change HNSW persist, watcher generation authority, or discovery stale-open equality. It does **not** reopen A5 schema 3→5 vector drop.
+> **Bounded claim.** This does **not** stop bumping `mutation_epoch` on INSERT/UPDATE/DELETE. It does **not** change HNSW persist, watcher generation authority, or discovery stale-open equality. It does **not** change EmbedDb `bootstrapSchema`.
 >
 > **Method note:** BACKLOG §1.CC **A10**. Coverage is an extra phase of the existing live-vault-validation test: upserting `Unrelated.md` during `vault.stat` must still return `Semantic.md`; reindexing `Semantic.md` in the same test must still throw. No new `it()`. Under D-45 all executable proof is GitHub-hosted; no local package-manager, lint or test workload was used.
 

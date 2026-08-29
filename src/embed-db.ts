@@ -67,6 +67,8 @@ function errnoCode(err: unknown): string | undefined {
 // layout is unchanged, every vector must be rebuilt in the new model space.
 // v5 gives every physical EmbedDb generation a cryptographic instance UUID and
 // installs exact table-level mutation triggers that advance one durable epoch.
+// A same-config v2/v3/v4 store keeps its vectors through that metadata upgrade;
+// v1 still rebuilds because its embeddings table has no `kind` column.
 
 /** Content-source kind. Mirrors ChunkKind in src/fts5.ts. */
 export type EmbedChunkKind = "md" | "pdf";
@@ -1286,9 +1288,11 @@ export function decodeInt8Vector(buf: Buffer, dim: number): Float32Array {
  *
  * `open()` admits only a truly schema-empty file or a structurally recognized
  * embedding index for the exact vault root. A recognized same-root index is
- * rebuilt for supported legacy-schema or model/dim/quantization mismatches;
- * foreign, malformed, and future-schema databases are refused without
- * Enquire-issued persistent PRAGMA, DDL, DML, chmod, or HNSW actions.
+ * upgraded in place when the vector table already matches the current v2 shape
+ * and only schema metadata is behind; rebuilt for v1 table-shape or
+ * model/dim/quantization mismatches; foreign, malformed, and future-schema
+ * databases are refused without Enquire-issued persistent PRAGMA, DDL, DML,
+ * chmod, or HNSW actions.
  *
  * @example
  * ```ts
@@ -1734,6 +1738,11 @@ export class EmbedDb {
       const existingQuant = meta?.quantization ?? "f32";
       const quantMatch = uninitialized || existingQuant === this.quantization;
       const requiresBootstrap = uninitialized || !versionMatch || !modelMatch || !dimMatch || !quantMatch;
+      // v2+ embeddings already have `kind`. Same-config historical 2/3/4 only
+      // lack v5 UUID/epoch metadata; dropping the vector table emptied 3.11.6
+      // indexes on the default non-`--watch` serve path (BACKLOG §1.CC A5).
+      const keepCompatibleVectors =
+        !uninitialized && !versionMatch && modelMatch && dimMatch && quantMatch && Number(meta?.schema_version) >= 2;
 
       // Exact current schema + configuration is already a complete durable
       // generation. Reopening it must not rewrite metadata, rotate identity,
@@ -1746,7 +1755,11 @@ export class EmbedDb {
         if (!modelMatch) reason.push("model configuration changed");
         if (!dimMatch) reason.push("vector dimension changed");
         if (!quantMatch) reason.push("quantization changed");
-        process.stderr.write(`enquire: rebuilding embed index (${reason.join("; ")})\n`);
+        process.stderr.write(
+          keepCompatibleVectors
+            ? `enquire: upgrading embed index schema in place (${reason.join("; ")})\n`
+            : `enquire: rebuilding embed index (${reason.join("; ")})\n`
+        );
       }
 
       // Remove every admitted mutation surface before dropping tables. Current
@@ -1755,7 +1768,7 @@ export class EmbedDb {
       for (const name of [...SOURCE_REVISION_TRIGGER_NAMES, ...MUTATION_EPOCH_TRIGGER_NAMES]) {
         db.exec(`DROP TRIGGER IF EXISTS ${name}`);
       }
-      if (!uninitialized) {
+      if (!uninitialized && !keepCompatibleVectors) {
         db.exec(`
           DROP TABLE IF EXISTS embeddings;
           DROP TABLE IF EXISTS source_state;
@@ -1784,8 +1797,9 @@ export class EmbedDb {
       `);
 
       // Identity metadata exists before the epoch triggers are installed. A
-      // new physical database or any destructive rebuild always receives a
-      // fresh cryptographic UUID and starts at epoch 1.
+      // new physical database, a destructive rebuild, or a same-config
+      // metadata upgrade always receives a fresh cryptographic UUID and starts
+      // at epoch 1.
       this.writeMeta({
         schema_version: String(EMBED_DB_SCHEMA_VERSION),
         vault_root: this.vaultRoot,

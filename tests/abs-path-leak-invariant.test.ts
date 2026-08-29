@@ -134,7 +134,12 @@ function mutationLeafProbeProblems(src: string): string[] {
       problems.push(`${name} must use the mutation leaf assertion at every required phase`);
     }
   }
-  if (!methodBody(src, "writeNote").includes("return this.writeNoteContent(relPath, content, opts)")) {
+  if (
+    !methodBody(src, "writeNote").includes(
+      "return this.writeNoteContent(relPath, content, { overwrite: opts.overwrite })"
+    ) ||
+    methodBody(src, "writeNote").includes("rollbackRecovery")
+  ) {
     problems.push("writeNote must remain a thin delegate to the shared guarded write core");
   }
   if (
@@ -222,8 +227,8 @@ describe("abs-path-leak inventory invariant (rc.49)", () => {
     );
     const writeDelegateBypass = replaceExactly(
       realVault,
-      "return this.writeNoteContent(relPath, content, opts);",
-      "return this.writeNoteContent(relPath, content, { overwrite: false });"
+      "return this.writeNoteContent(relPath, content, { overwrite: opts.overwrite });",
+      "return this.writeNoteContent(relPath, content, opts);"
     );
     expect(mutationLeafProbeProblems(writeDelegateBypass)).toContain(
       "writeNote must remain a thin delegate to the shared guarded write core"

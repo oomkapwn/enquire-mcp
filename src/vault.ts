@@ -1701,7 +1701,7 @@ export class Vault {
     content: string,
     opts: { overwrite?: boolean } = {}
   ): Promise<{ absPath: string; relPath: string; mtimeMs: number; bytes: number }> {
-    return this.writeNoteContent(relPath, content, opts);
+    return this.writeNoteContent(relPath, content, { overwrite: opts.overwrite });
   }
 
   /**

@@ -225,8 +225,8 @@ const ABS_PATH_SHARED_WRITE_DELEGATE_MUTATIONS = [
   {
     helper: "replaceExactly",
     label: "writeNote shared-write-core delegate",
-    needle: "return this.writeNoteContent(relPath, content, opts);",
-    replacement: "return this.writeNoteContent(relPath, content, { overwrite: false });",
+    needle: "return this.writeNoteContent(relPath, content, { overwrite: opts.overwrite });",
+    replacement: "return this.writeNoteContent(relPath, content, opts);",
     sourceIdentifier: "realVault"
   },
   {
@@ -276,7 +276,7 @@ const EXPECTED_REPOSITORY_MUTATION_HELPER_CALL_ENTRIES = [
     "abs-path-leak-invariant.test.ts",
     {
       count: 7 + ABS_PATH_SHARED_WRITE_DELEGATE_MUTATIONS.length,
-      sha256: "b6bd6c29b881d836003557db0d972f6083755b0aaf27ff9a37b1924707f723cd"
+      sha256: "250b3ffb66b7722983d6160bca5706e2849bbc900ed5ae52418c5d85a5955747"
     }
   ],
   ["cli-parity.test.ts", { count: 6, sha256: "a9ef3b468d6be29d93af888dd9df1289fc17bf0a0fa96d660d9378071ced0117" }],

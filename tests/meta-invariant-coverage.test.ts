@@ -1005,12 +1005,12 @@ const EXPECTED_REVIEWED_ORDINARY_OWNER_SHA256_ENTRIES = [
   ["ReDoS catastrophic control transform", "99358421ccbe92052218efb7bcf19e31029854d36548144c4a1ac4d68ec5540b"],
   [
     "Embed synchronous admission label normalization",
-    "f2bb42debb5e1c804d9620d6b240ead8504e6d06d49ce3769d6d65247fb8e00d"
+    "76c4428d38e0aaaa78fee08081ba14ea1b395a65c6ad893faf81c166c57ae29f"
   ],
-  ["Embed sidecar route label normalization", "8f31f04cb58453f0cc4296e397e77b2f320584de59e96c47718e070b00d06014"],
+  ["Embed sidecar route label normalization", "2a93ebc727dd8919aa7bb79d4af69aa09640c9a227138aae1caf08d0e6f1a3f2"],
   [
     "Embed malformed-generation value normalization",
-    "639096bed5316aae3c5145ee0abce73b64dc4b6bc80e7a31192c51a29f7dd81d"
+    "f8b62081dcdd4e75ba1bba3f41d2188d918fd934dba57b67f8fe1ac6cecb35fb"
   ],
   ["embedding index extension mapping", "9b30b5965abe1f6de24f5b0de8392a92859489f735556e39c5f83bac285d87d1"],
   ["FTS route slug normalization", "4c85c74d066bfaf4b0177ad8da61b867bc62ae819b9e5b98becb13d8fbf80028"],

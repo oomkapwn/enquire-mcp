@@ -485,6 +485,68 @@ describe("rollback-safe batch write cancellation", () => {
     } finally {
       await fs.rm(occupantRoot, { recursive: true, force: true });
     }
+
+    // Eighth phase — A13 dest withhold without sourcePlan. Reverse fails AFTER a
+    // concurrent regular file occupies vacated `fromRel`, and the source has NO
+    // self-reference. Source restore would not run, but dest probe would read the
+    // occupant as PRESENT and restore dest original over the only copy of the
+    // renamed note. Occupant dest withhold must not depend on sourcePlan.
+    const noSelfOccupantRoot = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-noself-occupant-"));
+    try {
+      const sourceContent = "# Source\n\nSOURCE-NOSELF-OCCUPANT-SENTINEL\n";
+      await fs.writeFile(path.join(noSelfOccupantRoot, "Source.md"), sourceContent);
+      await fs.writeFile(path.join(noSelfOccupantRoot, "Dest.md"), "# Dest\n\nDEST-NOSELF-OCCUPANT-MUST-NOT-RESTORE\n");
+      await fs.writeFile(path.join(noSelfOccupantRoot, "Caller-A.md"), "A points to [[Source]].\n");
+      const noSelfOccupantVault = new Vault(noSelfOccupantRoot, { enableWrite: true });
+      await noSelfOccupantVault.ensureExists();
+
+      const noSelfAbort = new AbortController();
+      const noSelfWrite = noSelfOccupantVault.writeNote.bind(noSelfOccupantVault);
+      noSelfOccupantVault.writeNote = async (...args: Parameters<Vault["writeNote"]>) => {
+        const result = await noSelfWrite(...args);
+        const [relPath, content] = args;
+        if (!noSelfAbort.signal.aborted && relPath.startsWith("Caller-") && content.includes("[[Dest")) {
+          noSelfAbort.abort(new Error("deterministic post-rename cancellation"));
+        }
+        return result;
+      };
+      const noSelfRename = noSelfOccupantVault.renameFile.bind(noSelfOccupantVault);
+      let noSelfReverse = 0;
+      noSelfOccupantVault.renameFile = async (...args: Parameters<Vault["renameFile"]>) => {
+        const [from, to] = args;
+        if (from === "Dest.md" && to === "Source.md") {
+          noSelfReverse += 1;
+          await fs.writeFile(path.join(noSelfOccupantRoot, "Source.md"), "OCCUPANT-NOSELF-SENTINEL\n");
+          throw new Error("deterministic reverse-rename failure");
+        }
+        return noSelfRename(...args);
+      };
+
+      const noSelfRejection = await renameNote(
+        noSelfOccupantVault,
+        { from: "Source.md", to: "Dest.md", overwrite: true },
+        { signal: noSelfAbort.signal }
+      ).then(
+        () => null,
+        (err: unknown) => err
+      );
+      expect(noSelfReverse).toBe(1);
+      expect(noSelfRejection).toBeInstanceOf(Error);
+      expect(noSelfRejection).not.toBeInstanceOf(WriteRequestAbortedError);
+      expect(await fs.readFile(path.join(noSelfOccupantRoot, "Source.md"), "utf8")).toBe("OCCUPANT-NOSELF-SENTINEL\n");
+      expect(await fs.readFile(path.join(noSelfOccupantRoot, "Dest.md"), "utf8")).toBe(sourceContent);
+      const noSelfMessage = noSelfRejection instanceof Error ? noSelfRejection.message : String(noSelfRejection);
+      expect(noSelfMessage).toContain("pre-rename destination bytes NOT restored");
+      expect(noSelfMessage).toContain(".enquire-rollback/Dest.md");
+      expect(noSelfMessage).not.toContain("no regular file is present");
+      expect(noSelfMessage).not.toContain("pre-rename source bytes NOT restored");
+      expect(await fs.readFile(path.join(noSelfOccupantRoot, ".enquire-rollback", "Dest.md"), "utf8")).toContain(
+        "DEST-NOSELF-OCCUPANT-MUST-NOT-RESTORE"
+      );
+      expect(await statOrNullIfMissing(path.join(noSelfOccupantRoot, ".enquire-rollback", "Source.md"))).toBeNull();
+    } finally {
+      await fs.rm(noSelfOccupantRoot, { recursive: true, force: true });
+    }
   });
 
   it("(negative-control) the same replace fixture commits fully when its signal remains active", async () => {

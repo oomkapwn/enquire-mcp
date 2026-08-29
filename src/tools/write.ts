@@ -460,45 +460,46 @@ export async function renameNote(
       // After A4, renameFile does not reject once the reverse move is durable,
       // so a thrown reverse means the kernel move did not return. A regular
       // file then sitting at `fromRel` is a concurrent occupant, not "our"
-      // vacated path, and source-snapshot restore must not overwrite it.
-      // Vacant reverse-fail still recreates via sourcePlan (A1 phase 4).
-      // Reverse success still overwrites dest-at-source with original bytes.
+      // vacated path: source-snapshot restore must not overwrite it, and dest
+      // restore must not treat it as proof the renamed note is safe. Vacant
+      // reverse-fail still recreates via sourcePlan (A1 phase 4). Reverse
+      // success still overwrites dest-at-source with original bytes.
+      let reverseFailOccupant = false;
+      if (renamed && !reverseReturned) {
+        try {
+          const occupantLeaf = await vault.lstatIfExistsPublic(fromRel);
+          reverseFailOccupant = occupantLeaf?.isFile === true;
+        } catch {
+          reverseFailOccupant = false;
+        }
+      }
       let sourceRestoreWithheld = false;
       if (sourcePlan && sourceCommitted) {
-        if (!reverseReturned) {
-          let occupant = false;
+        if (reverseFailOccupant) {
+          sourceRestoreWithheld = true;
+          const sourceBytes = Buffer.isBuffer(sourcePlan.before)
+            ? sourcePlan.before
+            : Buffer.from(sourcePlan.before, "utf8");
+          let recoveryRel: string | null = null;
+          let recoveryFailure: string | null = null;
           try {
-            const sourceLeaf = await vault.lstatIfExistsPublic(fromRel);
-            occupant = sourceLeaf?.isFile === true;
-          } catch {
-            occupant = false;
+            recoveryRel = await vault.writeRollbackRecoveryPublic(fromRel, sourceBytes);
+          } catch (recoveryErr) {
+            recoveryFailure = recoveryErr instanceof Error ? recoveryErr.message : String(recoveryErr);
           }
-          if (occupant) {
-            sourceRestoreWithheld = true;
-            const sourceBytes = Buffer.isBuffer(sourcePlan.before)
-              ? sourcePlan.before
-              : Buffer.from(sourcePlan.before, "utf8");
-            let recoveryRel: string | null = null;
-            let recoveryFailure: string | null = null;
-            try {
-              recoveryRel = await vault.writeRollbackRecoveryPublic(fromRel, sourceBytes);
-            } catch (recoveryErr) {
-              recoveryFailure = recoveryErr instanceof Error ? recoveryErr.message : String(recoveryErr);
-            }
-            if (recoveryRel !== null) {
-              failures.push(
-                `${fromRel}: pre-rename source bytes NOT restored — saved at ${recoveryRel} — a regular ` +
-                  `file is present at ${fromRel} after reverse rename did not return, so ${fromRel} may ` +
-                  `hold a concurrent occupant. The renamed note remains at ${toRelCheck}.`
-              );
-            } else {
-              failures.push(
-                `${fromRel}: pre-rename source bytes NOT restored and NOT recoverable — a regular file is ` +
-                  `present at ${fromRel} after reverse rename did not return, so overwriting it could ` +
-                  `destroy a concurrent occupant.` +
-                  (recoveryFailure !== null ? ` Recovery write failed: ${recoveryFailure}` : "")
-              );
-            }
+          if (recoveryRel !== null) {
+            failures.push(
+              `${fromRel}: pre-rename source bytes NOT restored — saved at ${recoveryRel} — a regular ` +
+                `file is present at ${fromRel} after reverse rename did not return, so ${fromRel} may ` +
+                `hold a concurrent occupant. The renamed note remains at ${toRelCheck}.`
+            );
+          } else {
+            failures.push(
+              `${fromRel}: pre-rename source bytes NOT restored and NOT recoverable — a regular file is ` +
+                `present at ${fromRel} after reverse rename did not return, so overwriting it could ` +
+                `destroy a concurrent occupant.` +
+                (recoveryFailure !== null ? ` Recovery write failed: ${recoveryFailure}` : "")
+            );
           }
         }
         if (!sourceRestoreWithheld) {
@@ -511,8 +512,10 @@ export async function renameNote(
         // note's content. A source with no self-reference is not snapshotted in
         // memory, so that write can destroy it permanently.
         //
-        // Refuse only when the source path is PROVEN to hold no regular file —
-        // a non-file result, ENOENT, or ENOTDIR. An unresolved probe error
+        // Refuse dest restore when the source path is PROVEN to hold no
+        // regular file — a non-file result, ENOENT, or ENOTDIR — or when a
+        // regular file was already present after reverse rename did not return.
+        // That occupant is not a returned source. An unresolved probe error
         // leaves the question open, and refusing there would abandon the
         // destination in states where the source is in fact safe, which is
         // strictly worse than the pre-fix behaviour.
@@ -529,9 +532,10 @@ export async function renameNote(
         // uses `lstatIfExistsPublic`, so a planted symlink is not a regular file
         // and the restore is withheld. A regular-file occupant at `fromRel` after
         // reverse rename did not return is also not proof the renamed note is
-        // safe: source-snapshot restore is withheld (A13) and dest restore
-        // follows that withhold. Remaining concurrent mutators are still a
-        // third hardlink or an ABA race between probe and restore.
+        // safe, with or without a sourcePlan: dest restore is withheld on that
+        // occupant. Source-snapshot restore is withheld only when sourcePlan
+        // exists. Remaining concurrent mutators are still a third hardlink or
+        // an ABA race between probe and restore.
         //
         // What the branch buys is the property that was actually broken: the
         // renamed note's content is no longer overwritten on the strength of a
@@ -560,7 +564,7 @@ export async function renameNote(
           if (probeCode === "ENOENT" || probeCode === "ENOTDIR") sourceAbsent = true;
           else probeFailure = probeErr instanceof Error ? probeErr.message : String(probeErr);
         }
-        if (sourceAbsent || sourceRestoreWithheld) {
+        if (sourceAbsent || reverseFailOccupant) {
           const destBytes = Buffer.isBuffer(destinationBefore.before)
             ? destinationBefore.before
             : Buffer.from(destinationBefore.before, "utf8");
@@ -573,7 +577,7 @@ export async function renameNote(
           }
           if (recoveryRel !== null) {
             failures.push(
-              sourceRestoreWithheld
+              reverseFailOccupant
                 ? `${toRelCheck}: pre-rename destination bytes NOT restored — saved at ${recoveryRel} — a regular ` +
                     `file is present at ${fromRel} after reverse rename did not return, so that occupant is not ` +
                     `proof the renamed note is safe. The renamed note remains at ${toRelCheck}. The destination's ` +
@@ -585,7 +589,7 @@ export async function renameNote(
             );
           } else {
             failures.push(
-              sourceRestoreWithheld
+              reverseFailOccupant
                 ? `${toRelCheck}: pre-rename destination bytes NOT restored and NOT recoverable — a regular file is ` +
                     `present at ${fromRel} after reverse rename did not return, so that occupant is not proof the ` +
                     `renamed note is safe. Overwriting ${toRelCheck} could destroy the renamed note.` +

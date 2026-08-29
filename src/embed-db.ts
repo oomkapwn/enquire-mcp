@@ -1742,12 +1742,7 @@ export class EmbedDb {
       // lack v5 UUID/epoch metadata; dropping the vector table emptied 3.11.6
       // indexes on the default non-`--watch` serve path (BACKLOG §1.CC A5).
       const keepCompatibleVectors =
-        !uninitialized &&
-        !versionMatch &&
-        modelMatch &&
-        dimMatch &&
-        quantMatch &&
-        Number(meta?.schema_version) >= 2;
+        !uninitialized && !versionMatch && modelMatch && dimMatch && quantMatch && Number(meta?.schema_version) >= 2;
 
       // Exact current schema + configuration is already a complete durable
       // generation. Reopening it must not rewrite metadata, rotate identity,

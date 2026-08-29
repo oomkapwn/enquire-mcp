@@ -2572,9 +2572,7 @@ describe("EmbedDb", () => {
       );
       expect(repairedRaw.prepare("SELECT * FROM source_quarantine").all()).toEqual([]);
       expect(
-        repairedRaw
-          .prepare("SELECT rel_path, kind, revision FROM source_revision ORDER BY rel_path")
-          .all()
+        repairedRaw.prepare("SELECT rel_path, kind, revision FROM source_revision ORDER BY rel_path").all()
       ).toEqual([{ rel_path: "repair.md", kind: "md", revision: 1 }]);
       expect(
         repairedRaw

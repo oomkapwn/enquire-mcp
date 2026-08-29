@@ -4,6 +4,16 @@ All notable changes to this project will be documented here. The format follows 
 
 ## [4.0.0-rc.4] — 2026-08-21
 
+### Atomic overwrite cleanup unlinks only a tmp this invocation created
+
+> **TL;DR:** **A failed atomic overwrite no longer deletes a temp path this invocation never created.** `writeNoteContent` opened a random `<note>.<16hex>.tmp` with `wx` (O_EXCL) and, on any catch, unlinked that path. Exclusive-open can fail with `EEXIST` before `fh` is assigned — a collision, leftover nonce, or planted occupant — and the catch still deleted it. Cleanup now unlinks only after this invocation's exclusive open succeeded.
+>
+> **Bounded claim.** This does **not** change the `overwrite=false` exclusive-create path (no tmp). It does **not** add a vault-wide leftover-`.tmp` sweeper (AH-9b crash leftovers remain operator-manual). It does **not** close an ABA between a successful open and the later unlink. Hardlink/ABA remain bounds. It does **not** publish or tag.
+>
+> **Method note:** BACKLOG §1.CC **A14**. Coverage is extra phases of the existing AUD-01 leftover-tmp NEGATIVE control: a planted occupant of the nonce path survives an exclusive-open collision, and a post-close rename failure still unlinks the owned nonce. No new `it()`. Under D-45 all executable proof is GitHub-hosted; no local package-manager, lint or test workload was used.
+
+- **Overwrite catch unlinks only an owned nonce.** `createdTmp` is set after `openSafe(tmp, "wx")` succeeds; exclusive-open collision leaves a foreign occupant in place.
+
 ### Withheld rename destination bytes are saved under `.enquire-rollback/`
 
 > **TL;DR:** **A withheld `rename_note` destination snapshot is no longer discarded.** When rollback proves the source path holds no regular file, it still does not restore onto the destination (that path may hold the only copy of the renamed note). The destination's own pre-rename bytes are now written to `.enquire-rollback/<dest>` — a hidden prefix, so they stay off the public MCP surface. If that recovery write fails, dest restore is still withheld and those bytes remain unrecoverable.

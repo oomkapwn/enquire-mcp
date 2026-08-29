@@ -1854,8 +1854,13 @@ export class Vault {
       const tmpMode = targetLstat ? targetLstat.mode & 0o777 : 0o666;
       const tmp = `${abs}.${randomBytes(8).toString("hex")}.tmp`;
       let fh: import("node:fs/promises").FileHandle | undefined;
+      // Exclusive-open can fail before this invocation creates `tmp`. Unlink
+      // only a leaf we actually opened — a collision must not delete a foreign
+      // occupant of the same nonce path.
+      let createdTmp = false;
       try {
         fh = await this.openSafe(tmp, "wx", tmpMode); // O_EXCL — never follows a pre-planted symlink
+        createdTmp = true;
         await this.assertMutationPathPublic(tmp, "write", "temporary destination", opts.rollbackRecovery === true);
         if (Buffer.isBuffer(content)) await fh.writeFile(content);
         else await fh.writeFile(content, "utf8");
@@ -1868,7 +1873,7 @@ export class Vault {
         await this.renameSafe(tmp, abs);
       } catch (err) {
         if (fh) await fh.close().catch(() => {});
-        await this.unlinkSafe(tmp).catch(() => {});
+        if (createdTmp) await this.unlinkSafe(tmp).catch(() => {});
         throw err;
       }
     } else {

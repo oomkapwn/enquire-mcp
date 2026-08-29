@@ -7,7 +7,7 @@
 import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { extractFrontmatterTags } from "../src/parser.js";
 import { listTags } from "../src/tools/read.js";
 import { createNote, frontmatterSet } from "../src/tools/write.js";
@@ -51,6 +51,49 @@ describe("rc.12-audit AUD-01 (Goose, MEDIUM) — atomic writeNote overwrite must
     // no nonce .tmp left behind on the success path
     const leftover = (await fs.readdir(root)).filter((f) => f.endsWith(".tmp"));
     expect(leftover).toEqual([]);
+
+    // A14 causal: exclusive-open collision must not unlink a tmp this invocation
+    // never created. Plant a regular file at the nonce path before `wx` so the
+    // open fails; the occupant must survive. Pre-fix catch unlinked it anyway.
+    await fs.writeFile(path.join(root, "collide.md"), "OLD");
+    const openTarget = v as unknown as {
+      openSafe(p: string, flags: string | number, mode?: number): Promise<import("node:fs/promises").FileHandle>;
+    };
+    const realOpenSafe = openTarget.openSafe.bind(v);
+    let collisionPath: string | undefined;
+    const openSpy = vi.spyOn(openTarget, "openSafe").mockImplementation(async (p, flags, mode) => {
+      if (collisionPath === undefined && flags === "wx" && p.endsWith(".tmp")) {
+        collisionPath = p;
+        await fs.writeFile(p, "FOREIGN_TMP");
+      }
+      return mode === undefined ? realOpenSafe(p, flags) : realOpenSafe(p, flags, mode);
+    });
+    try {
+      await expect(v.writeNote("collide.md", "NEW", { overwrite: true })).rejects.toMatchObject({ code: "EEXIST" });
+    } finally {
+      openSpy.mockRestore();
+    }
+    expect(collisionPath).toBeDefined();
+    expect(await fs.readFile(collisionPath!, "utf8")).toBe("FOREIGN_TMP");
+    expect(await fs.readFile(path.join(root, "collide.md"), "utf8")).toBe("OLD");
+
+    // Owned tmp still cleaned after a post-close rename failure (`fh` is
+    // already undefined). Gating unlink on `if (fh)` would leave the nonce.
+    await fs.writeFile(path.join(root, "owned.md"), "OLD");
+    const renameTarget = v as unknown as {
+      renameSafe(src: string, dest: string): Promise<void>;
+    };
+    const renameSpy = vi
+      .spyOn(renameTarget, "renameSafe")
+      .mockRejectedValueOnce(Object.assign(new Error("synthetic rename failure"), { code: "EIO" }));
+    try {
+      await expect(v.writeNote("owned.md", "NEW", { overwrite: true })).rejects.toThrow(/synthetic rename failure/);
+    } finally {
+      renameSpy.mockRestore();
+    }
+    expect(await fs.readFile(path.join(root, "owned.md"), "utf8")).toBe("OLD");
+    const ownedLeftover = (await fs.readdir(root)).filter((f) => f.startsWith("owned.md.") && f.endsWith(".tmp"));
+    expect(ownedLeftover).toEqual([]);
   });
 });
 

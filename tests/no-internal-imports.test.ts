@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import * as os from "node:os";
@@ -1535,7 +1536,7 @@ async function updateVitestBootstrapCarrier(root: string, manifestDigest: string
 }
 
 async function refreshVitestBootstrapReceipt(root: string): Promise<void> {
-  await updateVitestBootstrapCarrier(root, await writeVitestBootstrapManifest(root));
+  execFileSync(process.execPath, [path.join(repoRoot, "scripts", "generate-vitest-bootstrap.mjs"), root]);
 }
 
 function isProductionPath(relativePath: string): boolean {
@@ -2460,6 +2461,45 @@ describe("Class A invariant — no test imports value from registration boilerpl
       await copyVitestBootstrapFixture(repoRoot, bootstrapScratch);
       expect(inspectRepositoryVitestBootstrap(bootstrapScratch)).toEqual([]);
 
+      const manifestPath = path.join(bootstrapScratch, ...VITEST_BOOTSTRAP_MANIFEST.split("/"));
+      const baselineManifest = await fs.readFile(manifestPath, "utf8");
+      const generatedDigest = execFileSync(
+        process.execPath,
+        [path.join(repoRoot, "scripts", "generate-vitest-bootstrap.mjs"), bootstrapScratch],
+        { encoding: "utf8" }
+      ).trim();
+      expect(generatedDigest).toBe(createHash("sha256").update(baselineManifest).digest("hex"));
+      expect(await fs.readFile(manifestPath, "utf8")).toBe(baselineManifest);
+      expect(inspectRepositoryVitestBootstrap(bootstrapScratch)).toEqual([]);
+
+      const ciPath = path.join(bootstrapScratch, ".github", "workflows", "ci.yml");
+      const baselineCi = await fs.readFile(ciPath, "utf8");
+      const pathShaNeedle = "expected_path_sha=";
+      const pathShaAt = baselineCi.indexOf(pathShaNeedle);
+      if (pathShaAt < 0) throw new Error("expected path-sha pin");
+      const driftedCi =
+        baselineCi.slice(0, pathShaAt + pathShaNeedle.length) +
+        "0".repeat(64) +
+        baselineCi.slice(pathShaAt + pathShaNeedle.length + 64);
+      await fs.writeFile(ciPath, driftedCi);
+      try {
+        try {
+          execFileSync(
+            process.execPath,
+            [path.join(repoRoot, "scripts", "generate-vitest-bootstrap.mjs"), bootstrapScratch],
+            { encoding: "utf8" }
+          );
+          throw new Error("expected generator to fail closed on path-sha drift");
+        } catch (error) {
+          const stderr =
+            error instanceof Error && "stderr" in error && typeof error.stderr === "string" ? error.stderr : "";
+          expect(`${String(error)}\n${stderr}`).toMatch(/Expanding the freeze is a reviewed inventory change/);
+        }
+      } finally {
+        await fs.writeFile(ciPath, baselineCi);
+      }
+      expect(inspectRepositoryVitestBootstrap(bootstrapScratch)).toEqual([]);
+
       for (const filename of EXPECTED_VITEST_BOOTSTRAP_FILES) {
         const absolute = path.join(bootstrapScratch, ...filename.split("/"));
         const baseline = await fs.readFile(absolute);
@@ -2471,8 +2511,6 @@ describe("Class A invariant — no test imports value from registration boilerpl
         expect(inspectRepositoryVitestBootstrap(bootstrapScratch)).toEqual([]);
       }
 
-      const manifestPath = path.join(bootstrapScratch, ...VITEST_BOOTSTRAP_MANIFEST.split("/"));
-      const baselineManifest = await fs.readFile(manifestPath, "utf8");
       await fs.writeFile(manifestPath, `A${baselineManifest.slice(1)}`);
       expect(inspectRepositoryVitestBootstrap(bootstrapScratch)).toEqual(
         expect.arrayContaining([

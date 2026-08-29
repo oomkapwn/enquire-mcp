@@ -4,6 +4,16 @@ All notable changes to this project will be documented here. The format follows 
 
 ## [4.0.0-rc.4] — 2026-08-21
 
+### Inline `#tag` keeps combining marks that NFC cannot compose
+
+> **TL;DR:** **An inline `#tag` no longer truncates at a combining mark that has no canonical composition.** NFC-before-match already recovered `#café` (NFD `e` + U+0301 → `é`). The parser `INLINE_TAG_RE` and the Bases `collectTags` continuation classes still excluded `\p{M}`, so `#q` + U+0308 (`q̈`, no precomposed form) captured `q` while the parser TSDoc claimed NFC recovers any combining mark.
+>
+> **Bounded claim.** This does **not** treat a combining mark as a tag lead (`#1` is still not a tag; the first character remains `\p{L}`). It does **not** change frontmatter `tags`/`tag` folding, graph-boost ranking, or TF-IDF block fusion keys. NFC-before-match remains; `\p{M}` is additive. Bases still uses its own regex (not the shared `INLINE_TAG_RE`); both continuation classes now include `\p{M}`.
+>
+> **Method note:** BACKLOG §1.CC-ter **B3**. Coverage is extra phases of the existing NFD `#café` producer test and the existing Bases `taggedWith` inline-tag test: `#q` + U+0308 must extract/match the two-code-point tag. No new `it()`. Under D-45 all executable proof is GitHub-hosted; no local package-manager, lint or test workload was used.
+
+- **Continuation class includes combining marks.** `INLINE_TAG_RE` and Bases `collectTags` are `[\p{L}][\p{L}\p{N}\p{M}_/-]*`.
+
 ### Wikilink graph-boost no longer overrides RRF scores
 
 > **TL;DR:** **Wikilink graph-boost is a post-RRF sort key, not a score addend.** `α × in_degree` with `α = 0.005` exceeded the whole Reciprocal Rank Fusion range, so expanding `limit` (and therefore the fused top-K used to count in-links) could reorder hits past a stronger ranker signal. The comment claimed a tie-break; the addend was not one.

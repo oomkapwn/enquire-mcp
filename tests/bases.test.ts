@@ -611,6 +611,15 @@ views:
     );
     const out = await queryBase(vault, { path: "q.base" });
     expect(out.matches.map((m) => m.path)).toEqual(["Notes/inline.md"]);
+
+    const qDiaeresis = `q${String.fromCodePoint(0x308)}`;
+    await fs.writeFile(path.join(root, "Notes", "mark.md"), `see #${qDiaeresis} here\n`);
+    await fs.writeFile(
+      path.join(root, "q-mark.base"),
+      `filters: 'taggedWith(file.file, "${qDiaeresis}")'\nviews:\n  - type: table\n`
+    );
+    const marked = await queryBase(vault, { path: "q-mark.base" });
+    expect(marked.matches.map((m) => m.path)).toEqual(["Notes/mark.md"]);
   });
 
   it("throws on unknown view name", async () => {

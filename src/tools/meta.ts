@@ -336,9 +336,8 @@ export async function validateNoteProposal(vault: Vault, args: ValidateProposalA
     for (const t of fmTags.split(/[\s,]+/)) if (t) proposedTagsRaw.add(t.replace(/^#/, ""));
   }
   // Inline tags. v3.11.0-rc.10 (M1) — shared INLINE_TAG_RE (was a byte-identical
-  // copy of parser's) + NFC-normalize BEFORE matching so an NFD inline tag isn't
-  // truncated at its combining mark (parity with extractInlineTags); the
-  // existing-vs-new classification below folds both sides via foldTag.
+  // copy of parser's) + NFC-normalize BEFORE matching so a composable NFD mark
+  // becomes a letter; `\p{M}` keeps marks that have no canonical composition.
   for (const m of sanitizedBodyAfterFm.normalize("NFC").matchAll(INLINE_TAG_RE)) {
     if (m[1]) proposedTagsRaw.add(m[1]);
   }

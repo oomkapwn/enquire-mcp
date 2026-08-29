@@ -2443,6 +2443,46 @@ export class Vault {
   }
 
   /**
+   * Probe one vault path without following a leaf symlink.
+   *
+   * {@link Vault.stat} realpaths the leaf, so a symlink pointing at another
+   * regular file looks like that file. Rename-cancellation rollback uses this
+   * probe so a planted source-path symlink is not treated as a present source.
+   *
+   * @param relOrAbs - Vault-relative or accepted absolute path.
+   * @returns Leaf metadata, or `null` when the path is missing (`ENOENT`).
+   * @throws {Error} If the path escapes the vault, is excluded, or fails with
+   *   any errno other than `ENOENT` (`ENOTDIR`, `EACCES`, `EIO`, `ELOOP`, …).
+   * @example
+   * ```ts
+   * const leaf = await vault.lstatIfExistsPublic("Source.md");
+   * if (leaf === null || !leaf.isFile) {
+   *   // missing, directory, or symlink — not a regular file at this path
+   * }
+   * ```
+   * @internal
+   */
+  async lstatIfExistsPublic(
+    relOrAbs: string
+  ): Promise<{ mtimeMs: number; size: number; isFile: boolean; isSymbolicLink: boolean } | null> {
+    if (!this.ready) await this.ensureExists();
+    const abs = this.resolveInside(relOrAbs);
+    const lexicalNorm = vaultRelative(this.root, abs);
+    const lexicalExclusion = this.exclusionReason(lexicalNorm);
+    if (lexicalExclusion) {
+      throw new Error(`Path is excluded by ${lexicalExclusion}: ${lexicalNorm}`);
+    }
+    const leaf = await this.lstatIfExistsSafe(abs);
+    if (leaf === null) return null;
+    return {
+      mtimeMs: leaf.mtimeMs,
+      size: leaf.size,
+      isFile: leaf.isFile(),
+      isSymbolicLink: leaf.isSymbolicLink()
+    };
+  }
+
+  /**
    * Return an opaque generation receipt for one current public regular file.
    *
    * The path is admitted through the same canonical containment, symlink, and

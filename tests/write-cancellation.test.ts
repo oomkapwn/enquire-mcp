@@ -287,6 +287,123 @@ describe("rollback-safe batch write cancellation", () => {
     } finally {
       await fs.rm(recoverableRoot, { recursive: true, force: true });
     }
+
+    // Fifth phase — the reverse rename fails AND a concurrent actor plants
+    // `fromRel` as a symlink pointing at the destination. `Vault.stat` would
+    // realpath through that link and read PRESENT, so the restore would
+    // overwrite the renamed content. The public non-following probe must
+    // treat the symlink as not a regular file and withhold the restore. The
+    // symlink is planted in the reverse-rename wrapper, before the probe,
+    // so wrapping `lstatIfExistsPublic` cannot fake a pass against `stat`.
+    const followRoot = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-source-symlink-"));
+    try {
+      const sourceContent = "# Source\n\nSOURCE-SYMLINK-SENTINEL\n";
+      await fs.writeFile(path.join(followRoot, "Source.md"), sourceContent);
+      await fs.writeFile(path.join(followRoot, "Dest.md"), "# Dest\n\nDEST-MUST-NOT-RESTORE\n");
+      await fs.writeFile(path.join(followRoot, "Caller-A.md"), "A points to [[Source]].\n");
+      const followVault = new Vault(followRoot, { enableWrite: true });
+      await followVault.ensureExists();
+
+      const followAbort = new AbortController();
+      const followWrite = followVault.writeNote.bind(followVault);
+      followVault.writeNote = async (...args: Parameters<Vault["writeNote"]>) => {
+        const result = await followWrite(...args);
+        const [relPath, content] = args;
+        if (!followAbort.signal.aborted && relPath.startsWith("Caller-") && content.includes("[[Dest")) {
+          followAbort.abort(new Error("deterministic post-rename cancellation"));
+        }
+        return result;
+      };
+      const followRename = followVault.renameFile.bind(followVault);
+      let followReverse = 0;
+      followVault.renameFile = async (...args: Parameters<Vault["renameFile"]>) => {
+        const [from, to] = args;
+        if (from === "Dest.md" && to === "Source.md") {
+          followReverse += 1;
+          await fs.symlink("Dest.md", path.join(followRoot, "Source.md"), "file");
+          throw new Error("deterministic reverse-rename failure");
+        }
+        return followRename(...args);
+      };
+
+      const followRejection = await renameNote(
+        followVault,
+        { from: "Source.md", to: "Dest.md", overwrite: true },
+        { signal: followAbort.signal }
+      ).then(
+        () => null,
+        (err: unknown) => err
+      );
+      expect(followReverse).toBe(1);
+      expect(followRejection).toBeInstanceOf(Error);
+      expect(followRejection).not.toBeInstanceOf(WriteRequestAbortedError);
+      expect(await fs.readFile(path.join(followRoot, "Dest.md"), "utf8")).toBe(sourceContent);
+      const followMessage = followRejection instanceof Error ? followRejection.message : String(followRejection);
+      expect(followMessage).toContain("pre-rename destination bytes NOT restored");
+      const planted = await fs.lstat(path.join(followRoot, "Source.md"));
+      expect(planted.isSymbolicLink()).toBe(true);
+      expect(await followVault.lstatIfExistsPublic("Source.md")).toEqual(
+        expect.objectContaining({ isFile: false, isSymbolicLink: true })
+      );
+    } finally {
+      await fs.rm(followRoot, { recursive: true, force: true });
+    }
+
+    // Sixth phase — the reverse rename fails AND the vacated source parent is
+    // replaced with a regular file, so the probe path is `ENOTDIR`. Missing
+    // is still proven: a parent component is not a directory, so the leaf
+    // cannot exist. This would also pass against `Vault.stat`; the fifth phase
+    // is the causal control for the non-following probe.
+    const enotdirRoot = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-enotdir-probe-"));
+    try {
+      const sourceContent = "# Source\n\nSOURCE-ENOTDIR-SENTINEL\n";
+      await fs.mkdir(path.join(enotdirRoot, "Folder"));
+      await fs.writeFile(path.join(enotdirRoot, "Folder", "Source.md"), sourceContent);
+      await fs.writeFile(path.join(enotdirRoot, "Dest.md"), "# Dest\n\nDEST-MUST-NOT-RESTORE\n");
+      await fs.writeFile(path.join(enotdirRoot, "Caller-A.md"), "A points to [[Folder/Source]].\n");
+      const enotdirVault = new Vault(enotdirRoot, { enableWrite: true });
+      await enotdirVault.ensureExists();
+
+      const enotdirAbort = new AbortController();
+      const enotdirWrite = enotdirVault.writeNote.bind(enotdirVault);
+      enotdirVault.writeNote = async (...args: Parameters<Vault["writeNote"]>) => {
+        const result = await enotdirWrite(...args);
+        const [relPath, content] = args;
+        if (!enotdirAbort.signal.aborted && relPath.startsWith("Caller-") && content.includes("[[Dest")) {
+          enotdirAbort.abort(new Error("deterministic post-rename cancellation"));
+        }
+        return result;
+      };
+      const enotdirRename = enotdirVault.renameFile.bind(enotdirVault);
+      let enotdirReverse = 0;
+      enotdirVault.renameFile = async (...args: Parameters<Vault["renameFile"]>) => {
+        const [from, to] = args;
+        if (from === "Dest.md" && to === "Folder/Source.md") {
+          enotdirReverse += 1;
+          await fs.rm(path.join(enotdirRoot, "Folder"), { recursive: true, force: true });
+          await fs.writeFile(path.join(enotdirRoot, "Folder"), "not-a-directory");
+          throw new Error("deterministic reverse-rename failure");
+        }
+        return enotdirRename(...args);
+      };
+
+      const enotdirRejection = await renameNote(
+        enotdirVault,
+        { from: "Folder/Source.md", to: "Dest.md", overwrite: true },
+        { signal: enotdirAbort.signal }
+      ).then(
+        () => null,
+        (err: unknown) => err
+      );
+      expect(enotdirReverse).toBe(1);
+      expect(enotdirRejection).toBeInstanceOf(Error);
+      expect(enotdirRejection).not.toBeInstanceOf(WriteRequestAbortedError);
+      expect(await fs.readFile(path.join(enotdirRoot, "Dest.md"), "utf8")).toBe(sourceContent);
+      const enotdirMessage = enotdirRejection instanceof Error ? enotdirRejection.message : String(enotdirRejection);
+      expect(enotdirMessage).toContain("pre-rename destination bytes NOT restored");
+    } finally {
+      await fs.rm(enotdirRoot, { recursive: true, force: true });
+    }
   });
 
   it("(negative-control) the same replace fixture commits fully when its signal remains active", async () => {

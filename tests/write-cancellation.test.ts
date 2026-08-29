@@ -416,6 +416,75 @@ describe("rollback-safe batch write cancellation", () => {
     } finally {
       await fs.rm(enotdirRoot, { recursive: true, force: true });
     }
+
+    // Seventh phase — A13. Reverse rename fails AFTER a concurrent regular file
+    // occupies vacated `fromRel`. Source carries a self-reference, so
+    // sourcePlan would restore with overwrite:true and destroy the occupant.
+    // Vacant reverse-fail still recreates (fourth phase). Occupant must survive;
+    // dest restore is also withheld so the renamed note at Dest.md is not
+    // overwritten on the strength of the occupant looking like a present source.
+    const occupantRoot = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-source-occupant-"));
+    try {
+      const selfRefSource = "# Source\n\nSelf [[Source]] plus SOURCE-OCCUPANT-SENTINEL\n";
+      const destinationOriginal = "# Dest\n\nDEST-MUST-STAY-AT-RENAMED-SOURCE\n";
+      await fs.writeFile(path.join(occupantRoot, "Source.md"), selfRefSource);
+      await fs.writeFile(path.join(occupantRoot, "Dest.md"), destinationOriginal);
+      await fs.writeFile(path.join(occupantRoot, "Caller-A.md"), "A points to [[Source]].\n");
+      const occupantVault = new Vault(occupantRoot, { enableWrite: true });
+      await occupantVault.ensureExists();
+
+      const occupantAbort = new AbortController();
+      const occupantWrite = occupantVault.writeNote.bind(occupantVault);
+      occupantVault.writeNote = async (...args: Parameters<Vault["writeNote"]>) => {
+        const result = await occupantWrite(...args);
+        const [relPath, content] = args;
+        if (!occupantAbort.signal.aborted && relPath.startsWith("Caller-") && content.includes("[[Dest")) {
+          occupantAbort.abort(new Error("deterministic post-rename cancellation"));
+        }
+        return result;
+      };
+      const occupantRename = occupantVault.renameFile.bind(occupantVault);
+      let occupantReverse = 0;
+      occupantVault.renameFile = async (...args: Parameters<Vault["renameFile"]>) => {
+        const [from, to] = args;
+        if (from === "Dest.md" && to === "Source.md") {
+          occupantReverse += 1;
+          await fs.writeFile(path.join(occupantRoot, "Source.md"), "OCCUPANT-SENTINEL\n");
+          throw new Error("deterministic reverse-rename failure");
+        }
+        return occupantRename(...args);
+      };
+
+      const occupantRejection = await renameNote(
+        occupantVault,
+        { from: "Source.md", to: "Dest.md", overwrite: true },
+        { signal: occupantAbort.signal }
+      ).then(
+        () => null,
+        (err: unknown) => err
+      );
+      expect(occupantReverse).toBe(1);
+      expect(occupantRejection).toBeInstanceOf(Error);
+      expect(occupantRejection).not.toBeInstanceOf(WriteRequestAbortedError);
+      expect(await fs.readFile(path.join(occupantRoot, "Source.md"), "utf8")).toBe("OCCUPANT-SENTINEL\n");
+      expect(await fs.readFile(path.join(occupantRoot, "Dest.md"), "utf8")).toContain("SOURCE-OCCUPANT-SENTINEL");
+      expect(await fs.readFile(path.join(occupantRoot, "Dest.md"), "utf8")).not.toContain(
+        "DEST-MUST-STAY-AT-RENAMED-SOURCE"
+      );
+      const occupantMessage =
+        occupantRejection instanceof Error ? occupantRejection.message : String(occupantRejection);
+      expect(occupantMessage).toContain("pre-rename source bytes NOT restored");
+      expect(occupantMessage).toContain(".enquire-rollback/Source.md");
+      expect(occupantMessage).toContain("pre-rename destination bytes NOT restored");
+      expect(occupantMessage).toContain(".enquire-rollback/Dest.md");
+      expect(occupantMessage).not.toContain("no regular file is present");
+      expect(await fs.readFile(path.join(occupantRoot, ".enquire-rollback", "Source.md"), "utf8")).toBe(selfRefSource);
+      expect(await fs.readFile(path.join(occupantRoot, ".enquire-rollback", "Dest.md"), "utf8")).toContain(
+        "DEST-MUST-STAY-AT-RENAMED-SOURCE"
+      );
+    } finally {
+      await fs.rm(occupantRoot, { recursive: true, force: true });
+    }
   });
 
   it("(negative-control) the same replace fixture commits fully when its signal remains active", async () => {

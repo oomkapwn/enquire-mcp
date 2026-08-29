@@ -4,6 +4,16 @@ All notable changes to this project will be documented here. The format follows 
 
 ## [4.0.0-rc.4] — 2026-08-21
 
+### Same-config embed schema upgrade keeps vectors
+
+> **TL;DR:** **A 3.11.6 embedding index is no longer emptied when v4 opens it.** Schema 3→5 admitted the store as owned, then `bootstrapSchema` dropped `embeddings` and stamped schema 5. Default serve does not run `syncEmbedDb`, so semantic search degraded to BM25+TF-IDF while `doctor` reported `ok` at 0 chunks. Same-config historical schemas whose vector table already has `kind` (v2/v3/v4) now keep their rows and only install v5 UUID/epoch metadata. v1 still rebuilds. Model, dimension, or quantization mismatch still rebuilds.
+>
+> **Bounded claim.** This does **not** auto-run `syncEmbedDb` on serve. It does **not** keep vectors across a model/dim/quantization change (AH-4 remains HOLD). It does **not** unify Bases tag regexes or change FTS5. A fresh UUID still rotates on the metadata upgrade so HNSW sidecars rebuild from the preserved embed-db.
+>
+> **Method note:** BACKLOG §1.CC **A5**. Coverage is extra phases of the existing `rebuilds supported same-root legacy schemas` test: v2/v3/v4 same-config opens keep `totalChunks() === 1`; v1 still rebuilds to 0. No new `it()`. Under D-45 all executable proof is GitHub-hosted; no local package-manager, lint or test workload was used.
+
+- **Compatible historical schemas keep the vector table.** `bootstrapSchema` skips `DROP TABLE embeddings` when model/dim/quantization match and `schema_version >= 2`.
+
 ### Inline `#tag` keeps combining marks that NFC cannot compose
 
 > **TL;DR:** **An inline `#tag` no longer truncates at a combining mark that has no canonical composition.** NFC-before-match already recovered `#café` (NFD `e` + U+0301 → `é`). The parser `INLINE_TAG_RE` and the Bases `collectTags` continuation classes still excluded `\p{M}`, so `#q` + U+0308 (`q̈`, no precomposed form) captured `q` while the parser TSDoc claimed NFC recovers any combining mark.

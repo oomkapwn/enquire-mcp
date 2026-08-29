@@ -2499,8 +2499,8 @@ describe("EmbedDb", () => {
     const Database = (await import("better-sqlite3")).default;
 
     // Explicitly supported historical v4 metadata remains readable even when
-    // its optional authority ledger is absent. The v5 upgrade is deliberately
-    // destructive: it rotates physical identity and discards old vectors.
+    // its optional authority ledger is absent. Same-config v4→v5 keeps the
+    // vector rows and rotates UUID/epoch metadata (BACKLOG §1.CC A5).
     const repairFile = path.join(dir, "v4-optional-repair.embed.db");
     await seedExactEmbedFile(repairFile, "repair.md");
     const repairRaw = new Database(repairFile);
@@ -2534,7 +2534,7 @@ describe("EmbedDb", () => {
 
     const repairedV4 = new EmbedDb({ file: repairFile, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
     await repairedV4.open();
-    expect(repairedV4.totalChunks()).toBe(0);
+    expect(repairedV4.totalChunks()).toBe(1);
     await repairedV4.closeAndRelease();
     const repairedRaw = new Database(repairFile, { readonly: true, fileMustExist: true });
     try {
@@ -2546,8 +2546,7 @@ describe("EmbedDb", () => {
              ORDER BY id`
           )
           .all()
-      ).toEqual([]);
-      expect(repairPayloadBefore).not.toEqual([]);
+      ).toEqual(repairPayloadBefore);
       const currentMeta = new Map(
         repairedRaw
           .prepare("SELECT key, value FROM meta ORDER BY key")
@@ -2572,7 +2571,11 @@ describe("EmbedDb", () => {
         "typeof(revision) = 'integer'"
       );
       expect(repairedRaw.prepare("SELECT * FROM source_quarantine").all()).toEqual([]);
-      expect(repairedRaw.prepare("SELECT * FROM source_revision").all()).toEqual([]);
+      expect(
+        repairedRaw
+          .prepare("SELECT rel_path, kind, revision FROM source_revision ORDER BY rel_path")
+          .all()
+      ).toEqual([{ rel_path: "repair.md", kind: "md", revision: 1 }]);
       expect(
         repairedRaw
           .prepare(
@@ -2601,10 +2604,10 @@ describe("EmbedDb", () => {
     raw.prepare("DELETE FROM meta WHERE key IN ('instance_uuid', 'mutation_epoch')").run();
     raw.close();
 
-    // POSITIVE: rc.19's fp32 → q8 inference-contract migration discards old vectors.
+    // POSITIVE: same-config schema 4→5 keeps the existing vector (A5).
     const db3 = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
     await db3.open();
-    expect(db3.totalChunks()).toBe(0);
+    expect(db3.totalChunks()).toBe(1);
     db3.upsertNote("b.md", 2000, [
       { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "y", vector: l2([0, 1, 0, 0]) }
     ]);
@@ -2677,11 +2680,8 @@ describe("EmbedDb", () => {
     await expectRefusalToPreserve(/ownership could not be verified/);
 
     // POSITIVE controls: genuine v1-v3 EmbedDb signatures with the exact
-    // root are supported legacy provenance and may be destructively rebuilt.
-    // The compact meta-table punctuation is intentional: SQLite preserves
-    // caller formatting in sqlite_master, but whitespace around `(`, `)` and
-    // `,` is not part of the historical class identity. The current v5
-    // preservation path was pinned by db2 above.
+    // root are supported legacy provenance. v1 still rebuilds (no `kind`
+    // column). v2/v3 already match the current vector table and keep rows.
     for (const legacyVersion of [1, 2, 3]) {
       const legacyFile = path.join(dir, `legacy-v${legacyVersion}.embed.db`);
       const legacy = new Database(legacyFile);
@@ -2737,7 +2737,7 @@ describe("EmbedDb", () => {
 
       const migrated = new EmbedDb({ file: legacyFile, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
       await migrated.open();
-      expect(migrated.totalChunks()).toBe(0);
+      expect(migrated.totalChunks()).toBe(legacyVersion === 1 ? 0 : 1);
       await migrated.closeAndRelease();
     }
   });

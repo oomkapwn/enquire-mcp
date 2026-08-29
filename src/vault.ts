@@ -229,7 +229,10 @@ export interface FileSourceState {
 const ENQUIRE_ROLLBACK_SEGMENT = ".enquire-rollback";
 
 function isEnquireRollbackRel(relPath: string): boolean {
-  const parts = relPath.replace(/\\/g, "/").split("/").filter((seg) => seg.length > 0 && seg !== ".");
+  const parts = relPath
+    .replace(/\\/g, "/")
+    .split("/")
+    .filter((seg) => seg.length > 0 && seg !== ".");
   if (parts[0] !== ENQUIRE_ROLLBACK_SEGMENT || parts.length < 2) return false;
   for (const seg of parts.slice(1)) {
     if (seg === ".." || restrictedVaultPathReason(seg) !== null) return false;

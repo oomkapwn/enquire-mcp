@@ -1759,7 +1759,10 @@ describe("searchHybrid — opt-in explain mode (v3.11.6 S-5)", () => {
       );
       const hub = result.matches.find((m) => m.path === "hub.md");
       expect(hub?.explain?.graph_boost?.in_degree).toBe(2); // a.md + b.md both link it
-      expect(hub?.explain?.graph_boost?.score_delta).toBeCloseTo(0.01, 5); // 2 × α(0.005)
+      expect(hub?.explain?.graph_boost?.score_delta).toBe(0);
+      for (const m of result.matches) {
+        expect(m.explain?.final_rank).toBe(m.explain?.rrf.rank);
+      }
       // The leaf notes received no in-links → no graph_boost sub-object.
       // rc.12 — assert presence FIRST so the optional-chained absence check
       // can't pass vacuously if a.md ever drops out of the matches.

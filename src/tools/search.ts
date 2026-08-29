@@ -1948,7 +1948,7 @@ export async function embeddingsSearch(
 export interface SearchHitExplain {
   /** RRF-fused rank + score right after Reciprocal Rank Fusion, BEFORE any re-rank stage. The three ranker arms that fed it live in the hit's `per_signal`. */
   rrf: { rank: number; score: number };
-  /** Wikilink graph-boost (v2.3.0): in-degree among the fused top-K + the score added (α × in_degree). Present only when graph-boost ran AND this hit received a boost. */
+  /** Wikilink graph-boost (v2.3.0): in-degree among the fused top-K. `score_delta` is 0 — in_degree breaks equal RRF totals and is not added to the fused score. Present only when graph-boost ran AND this hit received a boost. */
   graph_boost?: { in_degree: number; score_delta: number };
   /** Cross-encoder reranker (v2.9.0): the reranker score + rank before/after the rerank re-sort. Present only when a reranker ran and scored this hit. */
   reranker?: { score: number; rank_before: number; rank_after: number };
@@ -3053,9 +3053,9 @@ export async function searchHybrid(
   // ─── v2.3.0: Wikilink graph-boost ───────────────────────────────────────
   // Re-rank top-K by counting how many *other* top-K hits link to each one.
   // Equivalent to a 1-step personalised PageRank seeded by the fused top-K.
-  // Boost is small (α=0.005) — enough to break ties but won't override
-  // strong single-ranker signals. Requires no new index — uses already-
-  // cached parsed wikilinks per note.
+  // in_degree is a sort key after RRF, not a score addend: it breaks equal
+  // RRF totals and cannot override a stronger ranker signal. Requires no new
+  // index — uses already-cached parsed wikilinks per note.
   // This requires an Obsidian-aware layer over the retrieval engine:
   // wikilinks are the domain primitive used for the bounded post-fusion
   // signal. No cross-project uniqueness is assumed here.
@@ -3103,7 +3103,7 @@ export async function searchHybrid(
         // skip unreadable notes
       }
     }
-    const ALPHA = 0.005;
+    const inDegreeById = new Map<string, number>();
     for (const f of fused) {
       const fPath = stripChunkSuffix(f.id); // v3.7.16 P2-16
       const fBasename = stripMd(path.basename(fPath));
@@ -3116,11 +3116,15 @@ export async function searchHybrid(
         }
       }
       if (inDegree > 0) {
-        f.score += ALPHA * inDegree;
-        if (exGraph) exGraph.set(f.id, { in_degree: inDegree, score_delta: round5(ALPHA * inDegree) });
+        inDegreeById.set(f.id, inDegree);
+        if (exGraph) exGraph.set(f.id, { in_degree: inDegree, score_delta: 0 });
       }
     }
-    fused.sort((a, b) => b.score - a.score);
+    fused.sort((a, b) => {
+      const scoreCmp = b.score - a.score;
+      if (scoreCmp !== 0) return scoreCmp;
+      return (inDegreeById.get(b.id) ?? 0) - (inDegreeById.get(a.id) ?? 0);
+    });
   }
 
   // Build snippet/chunk lookup tables for attaching the best evidence per

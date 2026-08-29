@@ -116,7 +116,7 @@ What Claude does under the hood:
 
 1. It calls the `obsidian_search` MCP tool with your query.
 2. The server fuses every available ranker — BM25 (if `--persistent-index` is on), TF-IDF cosine (always on), and ML embeddings (if you've built them via `setup`) — using Reciprocal Rank Fusion with `k=60`.
-3. A wikilink graph-boost reranks the top-K via 1-step personalised PageRank (so notes linked from your most relevant hits rise).
+3. A wikilink graph-boost counts in-degree among the fused top-K and uses it as a tie-break after RRF (it cannot override a stronger ranker signal).
 4. Each returned hit carries `path`, `title`, `score`, `snippet`, and a `per_signal` block showing which ranker contributed at what rank — observability built into the response shape.
 
 You'll see Claude's tool-call indicator fire, then a list of matching notes with paths, snippets, and a short synthesis. The raw tool response shape looks roughly like:

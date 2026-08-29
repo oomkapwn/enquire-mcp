@@ -229,7 +229,7 @@ graph LR
     BM25 --> RRF{RRF fusion<br/>k=60}
     TFIDF --> RRF
     EMB --> RRF
-    RRF --> GB[Graph boost<br/>α × in-degree]
+    RRF --> GB[Graph boost<br/>in-degree tie-break]
     GB --> RR[BGE cross-encoder<br/>reranker]
     RR --> R[Ranked hits<br/>per_signal observability]
 ```

@@ -4,6 +4,16 @@ All notable changes to this project will be documented here. The format follows 
 
 ## [4.0.0-rc.4] — 2026-08-21
 
+### Source-snapshot restore does not overwrite a reverse-fail occupant
+
+> **TL;DR:** **A cancelled `rename_note` no longer restores the source snapshot onto a regular file that appeared at the vacated source path, and no longer restores dest on the strength of that occupant.** After reverse rename throws, `restoreNoteSnapshots(..., overwrite: true)` assumed `fromRel` was still vacant. A concurrent regular file there was overwritten, and that occupant also made the dest probe read PRESENT so dest restore destroyed the renamed note — including when the source had no self-reference and sourcePlan never ran. Reverse-fail now treats a regular file at `fromRel` as an occupant: source restore is withheld when `sourcePlan` exists, dest restore is withheld whether or not it does, and withheld snapshots land under `.enquire-rollback/`. Vacant reverse-fail still recreates via `sourcePlan`. Reverse success still restores original source bytes over dest-at-source.
+>
+> **Bounded claim.** This does **not** close an ABA between the occupant probe and the later dest withhold. It does **not** change reverse-success self-ref restore. It does **not** treat unresolved probe errnos (`EACCES`, `EIO`, `ELOOP`) as occupancy. Hardlink/ABA remain bounds. After A4, `renameFile` does not reject after a durable reverse move, so a thrown reverse is not the A1 third path. It does **not** publish or tag.
+>
+> **Method note:** BACKLOG §1.CC **A13**. Coverage is extra phases of the existing `rename_note restores source, overwritten destination, and backlinks after post-rename cancellation` test: reverse-rename wrapper plants a regular occupant at `Source.md` then throws; occupant bytes survive; Dest.md still holds the renamed source. The seventh phase is the self-ref case (both snapshots under `.enquire-rollback/`). The eighth phase is the no-self-ref case (dest snapshot only). The fourth phase remains the vacant reverse-fail positive control. No new `it()`. Under D-45 all executable proof is GitHub-hosted; no local package-manager, lint or test workload was used.
+
+- **Occupied reverse-fail withholds dest restore even without sourcePlan.** Self-ref occupant also withholds source restore; withheld snapshots land under `.enquire-rollback/`. The occupant and the renamed note stay on their public paths.
+
 ### Atomic overwrite cleanup unlinks only a tmp this invocation created
 
 > **TL;DR:** **A failed atomic overwrite no longer deletes a temp path this invocation never created.** `writeNoteContent` opened a random `<note>.<16hex>.tmp` with `wx` (O_EXCL) and, on any catch, unlinked that path. Exclusive-open can fail with `EEXIST` before `fh` is assigned — a collision, leftover nonce, or planted occupant — and the catch still deleted it. Cleanup now unlinks only after this invocation's exclusive open succeeded.

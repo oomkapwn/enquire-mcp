@@ -951,7 +951,9 @@ function collectTags(fm: Record<string, unknown>, body: string): string[] {
     // `#日本語` → no match). Now Unicode-aware (`\p{L}` + `u` flag), and the line is
     // NFC-normalized FIRST so an NFD `#café` (macOS APFS) composes its combining mark
     // into the base letter before matching (parity with parser's extractInlineTags).
-    for (const m of line.normalize("NFC").matchAll(/(?:^|\s)(#[\p{L}][\p{L}\p{N}_/-]*)/gu)) {
+    // Continuation includes `\p{M}` so a mark with no canonical composition stays in
+    // the capture (sibling of INLINE_TAG_RE).
+    for (const m of line.normalize("NFC").matchAll(/(?:^|\s)(#[\p{L}][\p{L}\p{N}\p{M}_/-]*)/gu)) {
       const tag = foldTag(m[1] ?? ""); // strip `#` + NFC + lowercase
       if (tag) out.add(tag);
     }

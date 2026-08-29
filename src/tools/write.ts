@@ -469,7 +469,7 @@ export async function renameNote(
           let occupant = false;
           try {
             const sourceLeaf = await vault.lstatIfExistsPublic(fromRel);
-            occupant = sourceLeaf !== null && sourceLeaf.isFile;
+            occupant = sourceLeaf?.isFile === true;
           } catch {
             occupant = false;
           }

@@ -4,6 +4,16 @@ All notable changes to this project will be documented here. The format follows 
 
 ## [4.0.0-rc.4] — 2026-08-21
 
+### TF-IDF block hits fuse on the same path#chunk key as BM25
+
+> **TL;DR:** **`granularity: "block"` no longer keeps TF-IDF on a bare note path while BM25 and embeddings fuse on `path#chunk`.** Reciprocal Rank Fusion keys on `id`, so a TF-IDF hit could not share a row with either chunk ranker. `min_signals: 2` then dropped the TF-IDF contribution, and `min_signals: 3` was unsatisfiable.
+>
+> **Bounded claim.** This does **not** turn TF-IDF into a chunker. It projects each note-level hit onto the block ids BM25/embeddings already produced for that path, or `path#0` when no sibling ranker named a chunk. At block granularity a TF-IDF-only hit therefore reports `chunk_index: 0` from the fusion key; that is not a TF-IDF source span. Note-granularity TF-IDF-only hits still omit `chunk_index`. It does **not** change note-granularity fusion, graph-boost α, or combining-mark inline tags. It does **not** reopen the lastIndexOf strip.
+>
+> **Method note:** BACKLOG §1.CC-ter **B3**. Coverage is an extra phase of the existing `min_signals=2` consensus test: the same query at `granularity: "block"` must still return hits that carry both `bm25` and `tfidf`. No new `it()`. Under D-45 all executable proof is GitHub-hosted; no local package-manager, lint or test workload was used.
+
+- **Block fusion keys are shared.** TF-IDF notes are projected onto sibling `path#chunk` ids before RRF.
+
 ### Search block ids strip only a numeric chunk suffix
 
 > **TL;DR:** **Block-granularity search no longer treats a `#` inside a filename as a chunk separator.** Graph boost already used `/#\d+$/`. Fusion prune, live-vault path, recency, feedback, the terminal privacy filter, and response split still used `lastIndexOf("#")`, so an unsuffixed id like `C# Notes.md` became `C`.

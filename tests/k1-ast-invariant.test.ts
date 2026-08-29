@@ -140,7 +140,7 @@ const PRODUCTION_FILE_PINS: Readonly<Record<string, ProductionFilePin>> = {
       "../embeddings.js|resolveStoredEmbeddingConfiguration|resolveStoredEmbeddingConfiguration"
     ],
     k1Opens: 1,
-    sha256: "3adbcd9c2cd89a1d13b7107331ef47b103ea8291e1845022a54cc791e3e1abf1"
+    sha256: "9e322066954a24d33eb68ce21837e5c4e3ed7a13f25f80a19ed93d42f495f216"
   }
 };
 

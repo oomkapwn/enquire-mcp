@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.0.0-rc.5] — 2026-08-29
+
+### Public acquisition strings retarget to unpublished 4.0.0-rc.5
+
+> **TL;DR:** **The public front door now names `4.0.0-rc.5` instead of unpublished `4.0.0-rc.4`.** `package.json`, lockfile root, `src/index.ts` `VERSION`, `server.json`, `mcpb/manifest.json`, README ×11, QUICKSTART, STABILITY, SECURITY, ROADMAP, `docs/api.md`, `llms.txt`, and `llms-ctx.txt` advertise this candidate. This commit does **not** create the annotated tag, GitHub Release, or npm `@rc` dist-tag. A7 remains HOLD on unpublished typescript-sdk#2574. `@latest` stays 3.11.6. MCP Registry untouched.
+>
+> **Bounded claim.** This does **not** close nested `@hono/node-server` 1.x resolution. It does **not** promote `@latest`. It does **not** publish. After merge and before the tag, the same acquisition-path overclaim class is live against rc.5; D-74 authorizes the tag only on the squash-main SHA after exact-main green.
+>
+> **Method note:** BACKLOG §1.CC **A6**. Coverage is an extra phase of the existing MCPB acquisition `it()`: README and QUICKSTART must not still contain `/releases/tag/v4.0.0-rc.4`. The arity-6 NEGATIVE still binds the live `package.json` version. No new `it()`. Under D-45 all executable proof is GitHub-hosted; no local package-manager, lint or test workload was used.
+
+- **Version surfaces and public acquisition strings name 4.0.0-rc.5.** Historical CHANGELOG rc.4 body is unchanged. npm `@rc` remains 4.0.0-rc.3 until the later tag-push-only release.
+
+### Tests (2228)
+
+**2228 → 2228 source tests.** This candidate retargets advertised strings; the frozen registration census is unchanged. Table-driven cases remain additional. Executable release evidence still belongs to the exact candidate and squash-main SHAs.
+
 ## [4.0.0-rc.4] — 2026-08-21
 
 ### Source-snapshot restore does not overwrite a reverse-fail occupant

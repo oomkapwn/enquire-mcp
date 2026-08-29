@@ -3271,6 +3271,11 @@ export type NegativeMissingSubpath = typeof import("@oomkapwn/enquire-mcp/fts5-m
     };
     expect(mcpbVersionProblems(readme, packageVersion)).toEqual([]);
     expect(mcpbVersionProblems(quickstart, packageVersion)).toEqual([]);
+    // A6 extra-phase: after the 4.0.0-rc.5 retarget, acquisition docs must not still
+    // advertise the unpublished predecessor tag. The existing arity-6 NEGATIVE
+    // below still binds the live package.json version.
+    expect(readme).not.toContain("/releases/tag/v4.0.0-rc.4");
+    expect(quickstart).not.toContain("/releases/tag/v4.0.0-rc.4");
     expect(mcpbVersionProblems(replaceAllExactly(readme, packageVersion, "0.0.0-stale", 6), packageVersion)).toEqual([
       "release tag drift",
       "asset filename drift"

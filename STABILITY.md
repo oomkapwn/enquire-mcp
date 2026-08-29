@@ -8,7 +8,7 @@ On the stable channel after **v3.0.0**, every CLI flag, MCP tool name, MCP resou
 
 ## v4.x prerelease compatibility boundary
 
-`4.0.0-rc.4` is the current preview of the deliberate major boundary for the official MCP TypeScript SDK v2 and MCP protocol revision `2026-07-28`:
+`4.0.0-rc.5` is the current preview of the deliberate major boundary for the official MCP TypeScript SDK v2 and MCP protocol revision `2026-07-28`:
 
 - The 46 tool names and argument shapes, 19 prompt names and schemas, resources, CLI flags/defaults, privacy controls, and write gates remain compatible with v3. Storage is not blanket-compatible: the exact custom-path admission boundary and HNSW layout migration are called out below.
 - Custom persistence paths now require exact case-sensitive family suffixes: `.json` for parse cache (excluding reserved `.feedback.json`/`.hnsw.meta.json` subclasses), `.fts5.db`, `.embed.db`, `.feedback.json`, and `.hnsw`. This is an intentional v4 prerelease break from v3's arbitrary custom spellings. There is no automatic migration or broad legacy eraser: stop all enquire processes, manually inspect/remove the old main and sidecars, then select a compliant path.
@@ -21,7 +21,7 @@ On the stable channel after **v3.0.0**, every CLI flag, MCP tool name, MCP resou
 
 Because this is an `@rc`, the v4 contract is not a stable-channel promise yet. Stable v4 promotion additionally requires real-client evidence and an explicit maintainer decision; installing `@latest` continues to select v3.
 
-The `enquire-mcp-basic-4.0.0-rc.4.mcpb` asset is the current build of the deliberately narrower preview profile introduced in `v4.0.0-rc.2`, not a replacement for the full npm/CLI surface. It fixes one vault, exactly 13 read-only tools, zero prompts, and no writes, watcher controls, persistent/on-disk index, embedding model, PDF, or OCR surface; its compatible host must provide Node.js 22.13 or newer. Its release is remotely gated and provenance-bound, but real desktop UI acceptance, signing, and directory/catalog approval remain outside this RC's claims.
+The `enquire-mcp-basic-4.0.0-rc.5.mcpb` asset is the current build of the deliberately narrower preview profile introduced in `v4.0.0-rc.2`, not a replacement for the full npm/CLI surface. It fixes one vault, exactly 13 read-only tools, zero prompts, and no writes, watcher controls, persistent/on-disk index, embedding model, PDF, or OCR surface; its compatible host must provide Node.js 22.13 or newer. Its release is remotely gated and provenance-bound, but real desktop UI acceptance, signing, and directory/catalog approval remain outside this RC's claims.
 
 ## v3.x stable surfaces
 

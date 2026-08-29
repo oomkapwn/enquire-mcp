@@ -213,11 +213,15 @@ describe("rollback-safe batch write cancellation", () => {
       // The corrected wording, not just the shared prefix: the refused branch is
       // now reached by PROVEN absence of the source, not by a failed reverse.
       expect(message).toContain("no regular file is present at");
-      expect(message).toContain("may hold the only copy");
-      expect(message).toContain("NOT recoverable");
+      expect(message).toContain("saved at");
+      expect(message).toContain(".enquire-rollback/Dest.md");
+      expect(message).not.toContain("NOT recoverable");
+      expect(await fs.readFile(path.join(reverseRoot, ".enquire-rollback", "Dest.md"), "utf8")).toContain(
+        "DEST-ORIGINAL-SENTINEL"
+      );
       // The destination's own pre-rename bytes are deliberately NOT written back
-      // here: they exist only in memory, while the source exists only on disk at
-      // this path, so preserving the source is the correct trade.
+      // here: they exist at the recovery path, while the source exists only on
+      // disk at this path, so preserving the source is the correct trade.
       expect(await fs.readFile(path.join(reverseRoot, "Dest.md"), "utf8")).not.toContain("DEST-ORIGINAL");
     } finally {
       await fs.rm(reverseRoot, { recursive: true, force: true });
@@ -340,6 +344,10 @@ describe("rollback-safe batch write cancellation", () => {
       expect(await fs.readFile(path.join(followRoot, "Dest.md"), "utf8")).toBe(sourceContent);
       const followMessage = followRejection instanceof Error ? followRejection.message : String(followRejection);
       expect(followMessage).toContain("pre-rename destination bytes NOT restored");
+      expect(followMessage).toContain(".enquire-rollback/Dest.md");
+      expect(await fs.readFile(path.join(followRoot, ".enquire-rollback", "Dest.md"), "utf8")).toContain(
+        "DEST-MUST-NOT-RESTORE"
+      );
       const planted = await fs.lstat(path.join(followRoot, "Source.md"));
       expect(planted.isSymbolicLink()).toBe(true);
       expect(await followVault.lstatIfExistsPublic("Source.md")).toEqual(
@@ -401,6 +409,10 @@ describe("rollback-safe batch write cancellation", () => {
       expect(await fs.readFile(path.join(enotdirRoot, "Dest.md"), "utf8")).toBe(sourceContent);
       const enotdirMessage = enotdirRejection instanceof Error ? enotdirRejection.message : String(enotdirRejection);
       expect(enotdirMessage).toContain("pre-rename destination bytes NOT restored");
+      expect(enotdirMessage).toContain(".enquire-rollback/Dest.md");
+      expect(await fs.readFile(path.join(enotdirRoot, ".enquire-rollback", "Dest.md"), "utf8")).toContain(
+        "DEST-MUST-NOT-RESTORE"
+      );
     } finally {
       await fs.rm(enotdirRoot, { recursive: true, force: true });
     }

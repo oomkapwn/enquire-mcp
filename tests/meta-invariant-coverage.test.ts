@@ -225,8 +225,8 @@ const ABS_PATH_SHARED_WRITE_DELEGATE_MUTATIONS = [
   {
     helper: "replaceExactly",
     label: "writeNote shared-write-core delegate",
-    needle: "return this.writeNoteContent(relPath, content, opts);",
-    replacement: "return this.writeNoteContent(relPath, content, { overwrite: false });",
+    needle: "return this.writeNoteContent(relPath, content, { overwrite: opts.overwrite });",
+    replacement: "return this.writeNoteContent(relPath, content, opts);",
     sourceIdentifier: "realVault"
   },
   {
@@ -276,7 +276,7 @@ const EXPECTED_REPOSITORY_MUTATION_HELPER_CALL_ENTRIES = [
     "abs-path-leak-invariant.test.ts",
     {
       count: 7 + ABS_PATH_SHARED_WRITE_DELEGATE_MUTATIONS.length,
-      sha256: "b6bd6c29b881d836003557db0d972f6083755b0aaf27ff9a37b1924707f723cd"
+      sha256: "250b3ffb66b7722983d6160bca5706e2849bbc900ed5ae52418c5d85a5955747"
     }
   ],
   ["cli-parity.test.ts", { count: 6, sha256: "a9ef3b468d6be29d93af888dd9df1289fc17bf0a0fa96d660d9378071ced0117" }],
@@ -290,7 +290,7 @@ const EXPECTED_REPOSITORY_MUTATION_HELPER_CALL_ENTRIES = [
   ],
   [
     "enforcement-guard-invariant.test.ts",
-    { count: 41, sha256: "baaae4781fb884eb67bea36b4fcd43bead16d7829f6b1baa1f8fbd3454998b8a" }
+    { count: 41, sha256: "86bd9ac2aeb2e1ee477a9408d439a096a6697697efa25ec65c3462b5d6050776" }
   ],
   [
     "erasure-invariant.test.ts",
@@ -325,7 +325,7 @@ const EXPECTED_REPOSITORY_MUTATION_HELPER_CALL_ENTRIES = [
   ["jsonld.test.ts", { count: 11, sha256: "ec02eb24004f2c975daa1b3a668451217e2884cec7cf301e33f91f8bce98d05b" }],
   [
     "meta-invariant-coverage.test.ts",
-    { count: 246, sha256: "235f871020f678d1a149d61186595cfe6f6c8cbb766e8bf85e69efe9526f1afc" }
+    { count: 246, sha256: "928e32acc64eb78ce84015a48d8a3356a6de1a0cc0455ee55e07587457a09937" }
   ],
   [
     "no-internal-imports.test.ts",

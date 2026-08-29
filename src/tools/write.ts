@@ -486,12 +486,11 @@ export async function renameNote(
         // What the branch buys is the property that was actually broken: the
         // renamed note's content is no longer overwritten on the strength of a
         // reverse rename that did not return it. Where withholding the restore
-        // costs the destination's pre-rename bytes, the trade is deliberate —
-        // it prefers the note the caller was renaming — and it is reported
-        // rather than presented as a completed rollback. Preserving BOTH sides
-        // requires writing the destination snapshot to a recovery artifact
-        // instead of discarding it; that is a separate change with its own
-        // privacy and erasure surface.
+        // would cost the destination's pre-rename bytes, those bytes are saved
+        // under `.enquire-rollback/` instead of discarded. If that recovery
+        // write fails, dest restore is still withheld and the destination's
+        // own bytes remain unrecoverable. Remaining concurrent mutators are
+        // still a third hardlink or an ABA race between probe and restore.
         // Three different paths leave the source safe and no single flag sees
         // all of them: the reverse rename returned it to `fromRel`; the
         // self-reference rollback recreated it there; or the reverse rename
@@ -513,13 +512,33 @@ export async function renameNote(
           else probeFailure = probeErr instanceof Error ? probeErr.message : String(probeErr);
         }
         if (sourceAbsent) {
-          failures.push(
-            `${toRelCheck}: pre-rename destination bytes NOT restored and NOT recoverable — no regular ` +
-              `file is present at ${fromRel}, so ${toRelCheck} may hold the only copy of that note's ` +
-              `content and overwriting it could destroy it. Check ${toRelCheck}: if it holds the ` +
-              `renamed content, moving it back to ${fromRel} by hand recovers THAT note only — the ` +
-              `destination's own pre-rename content is gone either way.`
-          );
+          const destBytes = Buffer.isBuffer(destinationBefore.before)
+            ? destinationBefore.before
+            : Buffer.from(destinationBefore.before, "utf8");
+          let recoveryRel: string | null = null;
+          let recoveryFailure: string | null = null;
+          try {
+            recoveryRel = await vault.writeRollbackRecoveryPublic(toRelCheck, destBytes);
+          } catch (recoveryErr) {
+            recoveryFailure = recoveryErr instanceof Error ? recoveryErr.message : String(recoveryErr);
+          }
+          if (recoveryRel !== null) {
+            failures.push(
+              `${toRelCheck}: pre-rename destination bytes NOT restored — saved at ${recoveryRel} — no regular ` +
+                `file is present at ${fromRel}, so ${toRelCheck} may hold the only copy of the renamed note. ` +
+                `Check ${toRelCheck}: if it holds the renamed content, moving it back to ${fromRel} by hand ` +
+                `recovers THAT note. The destination's own pre-rename content is at ${recoveryRel}.`
+            );
+          } else {
+            failures.push(
+              `${toRelCheck}: pre-rename destination bytes NOT restored and NOT recoverable — no regular ` +
+                `file is present at ${fromRel}, so ${toRelCheck} may hold the only copy of that note's ` +
+                `content and overwriting it could destroy it. Check ${toRelCheck}: if it holds the ` +
+                `renamed content, moving it back to ${fromRel} by hand recovers THAT note only — the ` +
+                `destination's own pre-rename content is gone either way.` +
+                (recoveryFailure !== null ? ` Recovery write failed: ${recoveryFailure}` : "")
+            );
+          }
         } else {
           if (probeFailure !== null) {
             failures.push(`${fromRel}: could not confirm the source is present (${probeFailure})`);

@@ -225,6 +225,21 @@ export interface FileSourceState {
   mtimeMs: number;
 }
 
+/** Hidden vault prefix used to keep a withheld rename-destination snapshot. */
+const ENQUIRE_ROLLBACK_SEGMENT = ".enquire-rollback";
+
+function isEnquireRollbackRel(relPath: string): boolean {
+  const parts = relPath
+    .replace(/\\/g, "/")
+    .split("/")
+    .filter((seg) => seg.length > 0 && seg !== ".");
+  if (parts[0] !== ENQUIRE_ROLLBACK_SEGMENT || parts.length < 2) return false;
+  for (const seg of parts.slice(1)) {
+    if (seg === ".." || restrictedVaultPathReason(seg) !== null) return false;
+  }
+  return true;
+}
+
 /** Result of one resource-bounded vault directory walk. */
 export interface BoundedFileListing {
   /** Admitted regular files, never more than the requested file limit. */
@@ -1689,7 +1704,7 @@ export class Vault {
     content: string,
     opts: { overwrite?: boolean } = {}
   ): Promise<{ absPath: string; relPath: string; mtimeMs: number; bytes: number }> {
-    return this.writeNoteContent(relPath, content, opts);
+    return this.writeNoteContent(relPath, content, { overwrite: opts.overwrite });
   }
 
   /**
@@ -1712,10 +1727,37 @@ export class Vault {
     return this.writeNoteContent(relPath, content, { overwrite: true });
   }
 
+  /**
+   * Save withheld rename-destination bytes under `.enquire-rollback/`.
+   *
+   * The prefix is hidden from the public vault surface. This does not restore
+   * those bytes onto the destination path; it keeps a copy so a withheld
+   * rollback does not discard them.
+   *
+   * @param destRel - Vault-relative destination path whose snapshot is withheld.
+   * @param content - Exact pre-rename destination bytes.
+   * @returns Vault-relative recovery path.
+   * @throws {Error} If the vault is read-only, the derived path is not an
+   *   enquire-rollback path, the path is user-excluded, or the write fails.
+   * @internal
+   */
+  async writeRollbackRecoveryPublic(destRel: string, content: Buffer): Promise<string> {
+    const posix = destRel.replace(/\\/g, "/").replace(/^\/+/u, "");
+    const recoveryRel = `${ENQUIRE_ROLLBACK_SEGMENT}/${posix}`;
+    if (!isEnquireRollbackRel(recoveryRel)) {
+      throw new Error(`Refusing rollback recovery path: ${recoveryRel}`);
+    }
+    const result = await this.writeNoteContent(recoveryRel, content, {
+      overwrite: true,
+      rollbackRecovery: true
+    });
+    return result.relPath;
+  }
+
   private async writeNoteContent(
     relPath: string,
     content: string | Buffer,
-    opts: { overwrite?: boolean }
+    opts: { overwrite?: boolean; rollbackRecovery?: boolean }
   ): Promise<{ absPath: string; relPath: string; mtimeMs: number; bytes: number }> {
     if (!this.writeEnabled) {
       throw new Error("Vault is read-only — start the server with --enable-write to allow note creation");
@@ -1741,7 +1783,7 @@ export class Vault {
     const targetRel = trimmed.toLowerCase().endsWith(".md") ? trimmed : `${trimmed}.md`;
     const abs = this.resolveInside(targetRel);
     const lexicalRel = vaultRelative(this.root, abs);
-    const lexicalExclusion = this.exclusionReason(lexicalRel);
+    const lexicalExclusion = this.writeExclusionProblem(lexicalRel, opts.rollbackRecovery === true);
     if (lexicalExclusion) {
       throw new Error(`Refusing to write — destination is excluded by ${lexicalExclusion}: ${lexicalRel}`);
     }
@@ -1769,7 +1811,7 @@ export class Vault {
     // before running the exclusion check. Linux ext4/btrfs (case-sensitive)
     // is unaffected; the realpath operation is a no-op there.
     const targetRelNorm = await this.canonicalRelForPrivacyCheck(abs);
-    const targetExclusion = this.exclusionReason(targetRelNorm);
+    const targetExclusion = this.writeExclusionProblem(targetRelNorm, opts.rollbackRecovery === true);
     if (targetExclusion) {
       throw new Error(`Refusing to write — destination is excluded by ${targetExclusion}: ${targetRelNorm}`);
     }
@@ -1789,7 +1831,7 @@ export class Vault {
     // EEXIST on an existing destination, which we translate to the same
     // user-facing "Note already exists" error for back-compat).
     const targetLstat = await this.assertMutationLeafNotSymlink(abs, "write");
-    await this.assertMutationPathPublic(abs, "write", "destination");
+    await this.assertMutationPathPublic(abs, "write", "destination", opts.rollbackRecovery === true);
     let publishedStat: import("node:fs").Stats | undefined;
     if (opts.overwrite) {
       // v3.11.0-rc.12 (rc.11-audit L-7) — atomic overwrite: write a sibling tmp then
@@ -1814,15 +1856,15 @@ export class Vault {
       let fh: import("node:fs/promises").FileHandle | undefined;
       try {
         fh = await this.openSafe(tmp, "wx", tmpMode); // O_EXCL — never follows a pre-planted symlink
-        await this.assertMutationPathPublic(tmp, "write", "temporary destination");
+        await this.assertMutationPathPublic(tmp, "write", "temporary destination", opts.rollbackRecovery === true);
         if (Buffer.isBuffer(content)) await fh.writeFile(content);
         else await fh.writeFile(content, "utf8");
         publishedStat = await fh.stat();
         await fh.close();
         fh = undefined;
         await this.assertMutationLeafNotSymlink(abs, "write");
-        await this.assertMutationPathPublic(tmp, "write", "temporary source");
-        await this.assertMutationPathPublic(abs, "write", "destination");
+        await this.assertMutationPathPublic(tmp, "write", "temporary source", opts.rollbackRecovery === true);
+        await this.assertMutationPathPublic(abs, "write", "destination", opts.rollbackRecovery === true);
         await this.renameSafe(tmp, abs);
       } catch (err) {
         if (fh) await fh.close().catch(() => {});
@@ -1833,7 +1875,7 @@ export class Vault {
       let fh: import("node:fs/promises").FileHandle | undefined;
       try {
         fh = await this.openSafe(abs, "wx");
-        await this.assertMutationPathPublic(abs, "write", "destination");
+        await this.assertMutationPathPublic(abs, "write", "destination", opts.rollbackRecovery === true);
         if (Buffer.isBuffer(content)) await fh.writeFile(content);
         else await fh.writeFile(content, "utf8");
         try {
@@ -1886,13 +1928,23 @@ export class Vault {
     }
   }
 
+  private writeExclusionProblem(rel: string, rollbackRecovery: boolean): VaultExclusionReason | null {
+    const reason = this.exclusionReason(rel);
+    if (reason === null) return null;
+    if (rollbackRecovery && reason === "hidden or reserved vault path" && isEnquireRollbackRel(rel)) {
+      return this.userExclusionReason(rel);
+    }
+    return reason;
+  }
+
   private async assertMutationPathPublic(
     abs: string,
     operation: "write" | "rename" | "append",
-    role: string
+    role: string,
+    rollbackRecovery = false
   ): Promise<string> {
     const rel = await this.canonicalRelForPrivacyCheck(abs);
-    const reason = this.exclusionReason(rel);
+    const reason = this.writeExclusionProblem(rel, rollbackRecovery);
     if (reason) {
       throw new Error(`Refusing to ${operation} — ${role} is excluded by ${reason}: ${rel}`);
     }

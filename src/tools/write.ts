@@ -478,14 +478,10 @@ export async function renameNote(
         // or ABA race", and the same is true here: a concurrent actor can change
         // the source path between this probe and the restore below.
         //
-        // The one concrete instance of that, worth naming so nobody assumes it
-        // is covered: `Vault.stat` resolves through realpath, so if an actor
-        // plants `fromRel` as a symlink pointing AT the destination, the probe
-        // reads PRESENT and the restore then overwrites the renamed content.
-        // Closing it needs a non-following probe, and `lstatIfExistsSafe` is
-        // private — exposing one is a separate change with its own review, not
-        // something to bolt onto a data-loss fix. Absent a concurrent mutator of
-        // the source path, the branch behaves as documented.
+        // The source-path symlink-to-destination follow is closed: this probe
+        // uses `lstatIfExistsPublic`, so a planted symlink is not a regular file
+        // and the restore is withheld. Remaining concurrent mutators are still a
+        // third hardlink or an ABA race between probe and restore.
         //
         // What the branch buys is the property that was actually broken: the
         // renamed note's content is no longer overwritten on the strength of a
@@ -505,7 +501,8 @@ export async function renameNote(
         let sourceAbsent = false;
         let probeFailure: string | null = null;
         try {
-          sourceAbsent = !(await vault.stat(fromRel)).isFile;
+          const sourceLeaf = await vault.lstatIfExistsPublic(fromRel);
+          sourceAbsent = sourceLeaf === null || !sourceLeaf.isFile;
         } catch (probeErr) {
           // ENOENT and ENOTDIR both PROVE no regular file is reachable at that
           // path: ENOTDIR means a parent component is not a directory, so the

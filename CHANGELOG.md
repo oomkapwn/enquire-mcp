@@ -8,7 +8,7 @@ All notable changes to this project will be documented here. The format follows 
 
 > **TL;DR:** **`granularity: "block"` no longer keeps TF-IDF on a bare note path while BM25 and embeddings fuse on `path#chunk`.** Reciprocal Rank Fusion keys on `id`, so a TF-IDF hit could not share a row with either chunk ranker. `min_signals: 2` then dropped the TF-IDF contribution, and `min_signals: 3` was unsatisfiable.
 >
-> **Bounded claim.** This does **not** turn TF-IDF into a chunker. It projects each note-level hit onto the block ids BM25/embeddings already produced for that path, or `path#0` when no sibling ranker named a chunk. It does **not** change note-granularity fusion, graph-boost α, or combining-mark inline tags. It does **not** reopen the lastIndexOf strip.
+> **Bounded claim.** This does **not** turn TF-IDF into a chunker. It projects each note-level hit onto the block ids BM25/embeddings already produced for that path, or `path#0` when no sibling ranker named a chunk. At block granularity a TF-IDF-only hit therefore reports `chunk_index: 0` from the fusion key; that is not a TF-IDF source span. Note-granularity TF-IDF-only hits still omit `chunk_index`. It does **not** change note-granularity fusion, graph-boost α, or combining-mark inline tags. It does **not** reopen the lastIndexOf strip.
 >
 > **Method note:** BACKLOG §1.CC-ter **B3**. Coverage is an extra phase of the existing `min_signals=2` consensus test: the same query at `granularity: "block"` must still return hits that carry both `bm25` and `tfidf`. No new `it()`. Under D-45 all executable proof is GitHub-hosted; no local package-manager, lint or test workload was used.
 

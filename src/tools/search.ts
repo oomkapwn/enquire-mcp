@@ -1969,7 +1969,11 @@ export interface SearchHybridHit {
   score: number;
   /** Snippet from whichever signal produced the best chunk hit. */
   snippet: string;
-  /** Zero-based source chunk, omitted when the contributing signal is note-level TF-IDF. */
+  /**
+   * Zero-based fusion-key chunk. At `granularity: "block"` this is the sibling
+   * BM25/embeddings index, or `0` when only TF-IDF named the note. Omitted at
+   * note granularity when no BM25/embeddings chunk supplied it. Not a TF-IDF span.
+   */
   chunk_index?: number;
   /** One-based source line start, omitted when no chunk-level signal supplied it. */
   line_start?: number;

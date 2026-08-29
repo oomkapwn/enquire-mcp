@@ -707,7 +707,7 @@ describe("enforcement-guarantee → code-guard invariant (rc.3, overclaim #15/#1
     expect(vault).toContain('assertMutationPathPublic(realAfterOpen, "append", "physical target")');
     const createOpen = vault.indexOf('fh = await this.openSafe(abs, "wx");');
     const createAdmission = vault.indexOf(
-      'await this.assertMutationPathPublic(abs, "write", "destination");',
+      'await this.assertMutationPathPublic(abs, "write", "destination", opts.rollbackRecovery === true);',
       createOpen
     );
     const createWrite = vault.indexOf('await fh.writeFile(content, "utf8");', createOpen);
@@ -716,12 +716,12 @@ describe("enforcement-guarantee → code-guard invariant (rc.3, overclaim #15/#1
     expect(createWrite).toBeGreaterThan(createAdmission);
     const temporaryOpen = vault.indexOf('fh = await this.openSafe(tmp, "wx", tmpMode);');
     const temporaryAdmission = vault.indexOf(
-      'await this.assertMutationPathPublic(tmp, "write", "temporary destination");',
+      'await this.assertMutationPathPublic(tmp, "write", "temporary destination", opts.rollbackRecovery === true);',
       temporaryOpen
     );
     const temporaryWrite = vault.indexOf('await fh.writeFile(content, "utf8");', temporaryOpen);
     const overwriteDestinationAdmission = vault.indexOf(
-      'await this.assertMutationPathPublic(abs, "write", "destination");',
+      'await this.assertMutationPathPublic(abs, "write", "destination", opts.rollbackRecovery === true);',
       temporaryWrite
     );
     const overwriteMove = vault.indexOf("await this.renameSafe(tmp, abs);", overwriteDestinationAdmission);

@@ -57,7 +57,7 @@ Rules of thumb: nDCG@5 **0.9+ excellent, 0.7+ good, <0.5 poor**. The compare too
 To debug a *single* result's ranking (not an aggregate), call `obsidian_search` with `explain: true`. Every hit then carries an `explain` object exposing each re-rank stage's contribution **and the rank movement it caused** — the thing the aggregate metrics can't show:
 
 - `rrf` — the fused rank/score right after RRF, **before** any re-rank stage (the three ranker arms are in the hit's `per_signal`).
-- `graph_boost` — wikilink `in_degree` among the top-K + the `score_delta` added (present only when a hit was boosted).
+- `graph_boost` — wikilink `in_degree` among the top-K (`score_delta` is 0: in_degree is a sort key, not a score addend).
 - `reranker` — the cross-encoder score + `rank_before`/`rank_after` (present only with `--enable-reranker`).
 - `recency` / `feedback` — the note's age / recency score / feedback score + `rank_before`/`rank_after` (present only when `--recency-weight` / `--feedback-weight` are active).
 - `final_rank` — the hit's 0-based position in the returned results.

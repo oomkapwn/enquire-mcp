@@ -4,6 +4,16 @@ All notable changes to this project will be documented here. The format follows 
 
 ## [4.0.0-rc.4] — 2026-08-21
 
+### Trusted Vitest bootstrap has a regeneration script
+
+> **TL;DR:** **The trusted Vitest bootstrap receipt can now be regenerated.** `.github/trusted-vitest-bootstrap.sha256` and its single `expected_manifest_sha=` CI carrier had no checked-in generator, so every dependency bump failed `lint` before `setup-node`. `scripts/generate-vitest-bootstrap.mjs` writes the 16-line receipt from the reviewed file census and updates that one carrier. Path-census pins (`expected_path_sha`, line count) stay fail-closed; expanding the freeze is still a reviewed inventory change.
+>
+> **Bounded claim.** This does **not** bump `package.json` / `package-lock.json`. It does **not** merge Dependabot #451/#510/#515. It does **not** add the generator to the frozen 16-file census. It does **not** publish or retag. A7's hono override remains a separate dependency-policy PR.
+>
+> **Method note:** BACKLOG §1.CC **A8**. Coverage is extra phases of the existing bootstrap NEGATIVE control: a copied fixture regenerates byte-identical receipt bytes, and later receipt-restore steps run the generator. No new `it()`. Under D-45 all executable proof is GitHub-hosted; no local package-manager, lint or test workload was used.
+
+- **Receipt regeneration is a first-party script.** `node scripts/generate-vitest-bootstrap.mjs` writes the receipt and the single CI carrier.
+
 ### Same-config embed schema upgrade keeps vectors
 
 > **TL;DR:** **A 3.11.6 embedding index is no longer emptied when v4 opens it.** Schema 3→5 admitted the store as owned, then `bootstrapSchema` dropped `embeddings` and stamped schema 5. Default serve does not run `syncEmbedDb`, so semantic search degraded to BM25+TF-IDF while `doctor` reported `ok` at 0 chunks. Same-config historical schemas whose vector table already has `kind` (v2/v3/v4) now keep their rows and only install v5 UUID/epoch metadata. v1 still rebuilds. Model, dimension, or quantization mismatch still rebuilds.

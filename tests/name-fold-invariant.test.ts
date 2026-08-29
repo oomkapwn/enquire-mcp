@@ -216,6 +216,10 @@ describe("M1 — tag PRODUCER recovers NFD / accented / non-Latin tags (rc.10, e
     expect(nfc4).not.toBe(nfd4);
     expect(extractInlineTags(`see #${nfd4} here`), "NFD #café must extract café, not cafe").toEqual([nfc4]);
     expect(extractInlineTags(`see #${nfc4} here`)).toEqual([nfc4]); // NFC unchanged
+    // Combining mark with no canonical composition stays two code points after NFC.
+    const qDiaeresis = `q${String.fromCodePoint(0x308)}`;
+    expect(qDiaeresis.normalize("NFC")).toBe(qDiaeresis);
+    expect(extractInlineTags(`see #${qDiaeresis} here`)).toEqual([qDiaeresis]);
   });
 
   it("extractInlineTags extracts non-Latin inline tags (POSITIVE)", () => {

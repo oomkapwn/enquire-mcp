@@ -449,28 +449,23 @@ function matchLinks(text: string, embed: boolean, budget: ParserBudget, sourceOf
 /**
  * Inline `#tag` extraction regex (shared — imported by `tools/meta.ts` so the
  * two extractors cannot drift; was a byte-identical copy before v3.11.0-rc.10).
- * Tag = a leading Unicode LETTER then letters/digits/`_`/`/`/`-`. Preceded by
- * whitespace/bracket/BOL so `#1` in a heading is not a tag. The `u` flag is
- * required for `\p{L}`. `matchAll` clones the regex per call, so sharing this
+ * Tag = a leading Unicode LETTER then letters/digits/combining marks/`_`/`/`/`-`.
+ * Preceded by whitespace/bracket/BOL so `#1` in a heading is not a tag. The `u` flag is
+ * required for `\p{L}` / `\p{M}`. `matchAll` clones the regex per call, so sharing this
  * `/g` instance across modules is lastIndex-safe.
  *
- * v3.11.0-rc.10 (M1, external audit) — the character class deliberately does NOT
- * include `\p{M}` (combining marks); instead every caller NFC-normalizes the text
- * BEFORE matching (see {@link extractInlineTags}). On macOS APFS an inline `#café`
- * is stored DECOMPOSED (NFD: `e` + U+0301), and U+0301 is a `\p{M}` mark that the
- * class excludes — so a raw match would TRUNCATE the capture to `cafe` and the
- * accent would be lost BEFORE any downstream `nfc()`/`foldTag()` could recover it
- * (the rc.9 producer-`nfc()` ran on already-corrupted input). Normalizing the text
- * first composes the mark back into the base letter (`é` = `\p{L}`), so the capture
- * is complete and canonical. (Normalize-before-match recovers ANY combining mark,
- * not just the ones we could enumerate in a character class.)
+ * v3.11.0-rc.10 (M1, external audit) — callers NFC-normalize the text BEFORE matching
+ * (see {@link extractInlineTags}) so a macOS-APFS NFD `#café` (`e` + U+0301) composes
+ * to `é` (`\p{L}`) instead of truncating at the mark. NFC does not recover a combining
+ * mark that has no canonical composition (`q` + U+0308 stays two code points). The
+ * continuation class therefore includes `\p{M}` so those marks stay in the capture.
  */
-export const INLINE_TAG_RE = /(?:^|[\s([{>])#([\p{L}][\p{L}\p{N}_/-]*)/gu;
+export const INLINE_TAG_RE = /(?:^|[\s([{>])#([\p{L}][\p{L}\p{N}\p{M}_/-]*)/gu;
 
 /**
  * Extract `#hashtag` style inline tags from markdown body text. Tags must
  * be preceded by whitespace, bracket, or BOL — `#1` inside a markdown
- * heading is NOT a tag. Tag chars: Unicode letters/digits, `_`, `/`, `-`.
+ * heading is NOT a tag. Tag chars: Unicode letters, digits, combining marks, `_`, `/`, `-`.
  *
  * @param text - Markdown body (caller should have stripped code spans).
  * @param limits - Optional lower admission limits.
@@ -485,8 +480,8 @@ export function extractInlineTags(text: string, limits?: ParserLimits): string[]
 function extractInlineTagsWithBudget(text: string, budget: ParserBudget): string[] {
   const found = new Set<string>();
   // v3.11.0-rc.10 (M1) — NFC-normalize the BODY before matching so an NFD inline
-  // tag (`#café` = `cafe`+U+0301 on macOS APFS) composes to `café` and the regex
-  // captures the full accented token instead of truncating at the combining mark.
+  // tag (`#café` = `cafe`+U+0301 on macOS APFS) composes to `café`. Marks with no
+  // canonical composition stay in the capture via `\p{M}` on INLINE_TAG_RE.
   for (const m of text.normalize("NFC").matchAll(INLINE_TAG_RE)) {
     // nfc() is now belt-and-suspenders (the input is already NFC); kept so a future
     // caller passing un-normalized text still stores a canonical tag.

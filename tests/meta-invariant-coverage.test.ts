@@ -290,7 +290,7 @@ const EXPECTED_REPOSITORY_MUTATION_HELPER_CALL_ENTRIES = [
   ],
   [
     "enforcement-guard-invariant.test.ts",
-    { count: 41, sha256: "7b197c5c1e8c4df0e41c35b6f99408ad36361312a0d3520db57a0231e7265da0" }
+    { count: 41, sha256: "86bd9ac2aeb2e1ee477a9408d439a096a6697697efa25ec65c3462b5d6050776" }
   ],
   [
     "erasure-invariant.test.ts",
@@ -325,7 +325,7 @@ const EXPECTED_REPOSITORY_MUTATION_HELPER_CALL_ENTRIES = [
   ["jsonld.test.ts", { count: 11, sha256: "ec02eb24004f2c975daa1b3a668451217e2884cec7cf301e33f91f8bce98d05b" }],
   [
     "meta-invariant-coverage.test.ts",
-    { count: 246, sha256: "235f871020f678d1a149d61186595cfe6f6c8cbb766e8bf85e69efe9526f1afc" }
+    { count: 246, sha256: "928e32acc64eb78ce84015a48d8a3356a6de1a0cc0455ee55e07587457a09937" }
   ],
   [
     "no-internal-imports.test.ts",

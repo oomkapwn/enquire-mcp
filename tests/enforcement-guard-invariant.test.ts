@@ -701,7 +701,7 @@ describe("enforcement-guarantee → code-guard invariant (rc.3, overclaim #15/#1
     expect(chunkReceipt).toBeGreaterThan(chunkAdmission);
     expect(chunkRevision).toBeGreaterThan(chunkReceipt);
     expect(chunkReturn).toBeGreaterThan(chunkRevision);
-    expect(vault).toContain('assertMutationPathPublic(abs, "write", "destination")');
+    expect(vault).toContain('assertMutationPathPublic(abs, "write", "destination",');
     expect(vault).toContain('assertMutationPathPublic(fromAbs, "rename", "source")');
     expect(vault).toContain('assertMutationPathPublic(toAbs, "rename", "destination")');
     expect(vault).toContain('assertMutationPathPublic(realAfterOpen, "append", "physical target")');

@@ -2472,16 +2472,16 @@ describe("Class A invariant — no test imports value from registration boilerpl
       expect(await fs.readFile(manifestPath, "utf8")).toBe(baselineManifest);
       expect(inspectRepositoryVitestBootstrap(bootstrapScratch)).toEqual([]);
 
-      const ciPath = path.join(bootstrapScratch, ".github", "workflows", "ci.yml");
-      const baselineCi = await fs.readFile(ciPath, "utf8");
+      const pathShaCiPath = path.join(bootstrapScratch, ".github", "workflows", "ci.yml");
+      const pathShaCi = await fs.readFile(pathShaCiPath, "utf8");
       const pathShaNeedle = "expected_path_sha=";
-      const pathShaAt = baselineCi.indexOf(pathShaNeedle);
+      const pathShaAt = pathShaCi.indexOf(pathShaNeedle);
       if (pathShaAt < 0) throw new Error("expected path-sha pin");
       const driftedCi =
-        baselineCi.slice(0, pathShaAt + pathShaNeedle.length) +
+        pathShaCi.slice(0, pathShaAt + pathShaNeedle.length) +
         "0".repeat(64) +
-        baselineCi.slice(pathShaAt + pathShaNeedle.length + 64);
-      await fs.writeFile(ciPath, driftedCi);
+        pathShaCi.slice(pathShaAt + pathShaNeedle.length + 64);
+      await fs.writeFile(pathShaCiPath, driftedCi);
       try {
         try {
           execFileSync(
@@ -2496,7 +2496,7 @@ describe("Class A invariant — no test imports value from registration boilerpl
           expect(`${String(error)}\n${stderr}`).toMatch(/Expanding the freeze is a reviewed inventory change/);
         }
       } finally {
-        await fs.writeFile(ciPath, baselineCi);
+        await fs.writeFile(pathShaCiPath, pathShaCi);
       }
       expect(inspectRepositoryVitestBootstrap(bootstrapScratch)).toEqual([]);
 

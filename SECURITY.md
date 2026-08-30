@@ -263,14 +263,14 @@ The `obsidian_embeddings_search` tool plus the `install-model` and `build-embedd
 - If `@huggingface/transformers` failed to install (e.g., user ran `npm install --omit=optional`, or the platform lacks ONNX runtime binaries), the embedding tools and subcommands surface a clean error message pointing the user at `npm install @huggingface/transformers` — never a cryptic module-not-found stack trace.
 - Read-only / TF-IDF / FTS5 surfaces are unaffected. The server starts and serves all v1.x tools normally.
 
-## Published dependency resolution (introduced in v3.11.7-rc.8; current at v4.0.0-rc.5)
+## Published dependency resolution (introduced in v3.11.7-rc.8; current at v4.0.0-rc.6)
 
 npm applies `overrides` only from the root project performing an install. The overrides in enquire's source `package.json` keep its development/release lockfile on patched transitive versions, but they are ignored when the published package is installed as somebody else's dependency. Release CI therefore audits two distinct graphs:
 
 - **Source checkout:** production advisories at moderate+ and development advisories at high+ fail with an empty allowlist.
 - **Published consumer:** CI packs the actual npm tarball with scripts disabled, uses that artifact as a file dependency in a clean temporary root with no overrides, resolves a lockfile from scratch without running lifecycle scripts, and audits production dependencies at moderate+. This preserves future peer/bundled dependency semantics instead of copying a hand-selected subset of manifest fields. A new advisory fails; a temporary exception also fails once its advisory disappears, forcing removal instead of becoming permanent.
 
-As of the current v4.0.0-rc.5 maintenance line, the published-consumer audit policy has exactly two configured
+As of the current v4.0.0-rc.6 maintenance line, the published-consumer audit policy has exactly two configured
 temporary upstream exceptions, listed below. The live registry-resolved graph stopped reporting
 [`GHSA-frvp-7c67-39w9`](https://github.com/advisories/GHSA-frvp-7c67-39w9), so the stale-entry gate
 rejected that now-stale exception and it was removed. This is a live consumer-resolution receipt, not
@@ -285,7 +285,7 @@ may report multiple vulnerable package nodes because npm propagates unique advis
 parent packages. Release candidates may carry only the exact, removal-tracked exceptions approved for
 that candidate; promotion to npm `@latest` is blocked until the published-consumer audit is clean.
 
-## MCPB Basic boundary (`v4.0.0-rc.5`; introduced in `v4.0.0-rc.2`)
+## MCPB Basic boundary (`v4.0.0-rc.6`; introduced in `v4.0.0-rc.2`)
 
 The Basic bundle is an intentionally narrower distribution profile, not the full npm edition. Its manifest grants one user-selected vault directory and launches a fixed surface of exactly 13 read-only tools with zero prompts. It disables write tools, watcher controls, persistent/on-disk indexes, embedding-model discovery, PDF, and OCR. Recommended search falls back to live in-memory TF-IDF, and the fixed launch contract also refuses to consult a full edition's existing embedding database or watcher-startup guard.
 

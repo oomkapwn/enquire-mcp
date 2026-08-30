@@ -123,7 +123,7 @@ Drop into any MCP client:
 
 ### Prefer a reviewable desktop bundle? Use MCPB Basic
 
-The [`v4.0.0-rc.5` GitHub Release](https://github.com/oomkapwn/enquire-mcp/releases/tag/v4.0.0-rc.5) provides `enquire-mcp-basic-4.0.0-rc.5.mcpb` together with its checksum, inventory, SBOM, notices, and provenance. The bundle packages the server JavaScript and ordinary JavaScript dependencies; a compatible MCPB host must supply Node.js 22.13 or newer. Open it in that host, review the manifest, and choose the one vault directory the host may expose.
+The [`v4.0.0-rc.6` GitHub Release](https://github.com/oomkapwn/enquire-mcp/releases/tag/v4.0.0-rc.6) provides `enquire-mcp-basic-4.0.0-rc.6.mcpb` together with its checksum, inventory, SBOM, notices, and provenance. The bundle packages the server JavaScript and ordinary JavaScript dependencies; a compatible MCPB host must supply Node.js 22.13 or newer. Open it in that host, review the manifest, and choose the one vault directory the host may expose.
 
 **Basic means deliberately small:** exactly **13 read-only tools**, **0 prompts**, and no write tools, watcher controls, persistent/on-disk index, embedding model, PDF, or OCR surface. Its recommended umbrella search lazily uses in-memory TF-IDF over live Markdown; the fixed launch contract also refuses discovery of a full edition's existing embedding database or watcher guard. enquire itself initiates no outbound calls while serving; requested note content still crosses into the MCP client you connected and is governed there by that client's privacy terms.
 
@@ -143,7 +143,7 @@ The output is honest about each client's install boundary: **VS Code gets its of
 **Want full hybrid power?** Complete the hybrid preflight, then serve:
 
 ```bash
-npm install -g @oomkapwn/enquire-mcp@4.0.0-rc.5      # exact prerelease package
+npm install -g @oomkapwn/enquire-mcp@4.0.0-rc.6      # exact prerelease package
 enquire-mcp --version
 # recommended: preview first, then explicitly apply the same package-coherent plan
 enquire-mcp first-run --tier hybrid --client claude-desktop --vault <path>
@@ -342,7 +342,7 @@ Plus 3 MCP resources (`obsidian://vault/info`, `obsidian://note/{path}`, `obsidi
 | **CI** | `release.yml` directly enumerates **13 release gate contexts**, all run on every PR: `lint`, `test (22)`, `test (24)`, `smoke`, `audit`, `coverage`, `version-consistency`, `docs`, `oia`, `protocol-conformance`, `package-consumer`, `mcpb-basic`, and `docker`. The pinned `test-windows` hostile-filesystem and startup-interlock job is an additional named check-run enforced transitively as a blocking prerequisite of `smoke`; `protocol-conformance` aggregates blocking Linux + Windows official-client lanes, `package-consumer` aggregates blocking Linux, Windows, and macOS packed-install lanes, and `mcpb-basic` verifies one exact Linux-built bundle on all three OSes. Branch protection now enforces all **13** contexts (live-verified 2026-08-21 for the branch-protection snapshot). `test-macos` is the only `continue-on-error` advisory job. The `docker` gate builds the image and completes bounded CLI plus MCP introspection probes; CodeQL runs two separate unprotected analyses via [GitHub default setup](https://docs.github.com/code-security/code-scanning/automatically-scanning-your-code-for-vulnerabilities-and-errors/configuring-default-setup-for-code-scanning). Before npm publish, `release.yml` re-verifies all 13 directly listed gates on the tagged SHA. |
 | **Coverage** | Lines ≥86% · statements ≥82% · functions ≥75% · branches ≥74% (gated) |
 | **Releases** | npm + GitHub release per tag · semver · **signed build provenance** (npm + Sigstore, SLSA Build L2; L3 generator on the roadmap) |
-| **Stability** | v3 remains the `@latest` semver-bound stable line. The `v4.0.0-rc.5` preview preserves tool/prompt/resource, CLI, privacy and write-gate behavior while intentionally changing `buildMcpServer()`'s nominal SDK type, requiring exact family suffixes for custom persistence paths, and migrating HNSW persistence to immutable generations plus a meta-last digest pointer; see [STABILITY.md](./STABILITY.md) |
+| **Stability** | v3 remains the `@latest` semver-bound stable line. The `v4.0.0-rc.6` preview preserves tool/prompt/resource, CLI, privacy and write-gate behavior while intentionally changing `buildMcpServer()`'s nominal SDK type, requiring exact family suffixes for custom persistence paths, and migrating HNSW persistence to immutable generations plus a meta-last digest pointer; see [STABILITY.md](./STABILITY.md) |
 
 Full posture and **[privacy policy](./SECURITY.md#privacy-policy)**: **[SECURITY.md](./SECURITY.md)** · Stability surface: **[STABILITY.md](./STABILITY.md)** · Vulns: `oomkapwn@gmail.com`.
 
@@ -370,7 +370,7 @@ Full posture and **[privacy policy](./SECURITY.md#privacy-policy)**: **[SECURITY
 
 `v2.0` hybrid retrieval (BM25+TF-IDF+embeddings via RRF) · `v2.6` remote MCP · `v2.7-2.8` PDFs blended · `v2.9` BGE reranker · `v2.10` OCR · `v2.11` doctor + setup · `v2.12` eval harness · `v2.13` HNSW · `v2.14` stateful sessions · `v2.15` late-chunking · `v2.16` HNSW persistence · `v2.17` int8 quantization · `v3.8.0` stable · `v3.8.7` HTTP transport hardening · **`v3.9.0` stable**: OCR'd PDF watcher embed-sync, HNSW in-memory live update on file changes, R-10 adaptive HNSW refill (closes the >66% excluded under-return). · **`v3.10` stable**: forgetting-aware freshness — `age_days` + `stale` flag + opt-in `--recency-weight` re-ranking + frontmatter-aware `obsidian_search`.
 
-Channel: `npm install @oomkapwn/enquire-mcp` → latest stable (`@latest` = v3.11.x). Pre-release: `npm install @oomkapwn/enquire-mcp@rc` → the v4 SDK-v2 candidate; pin `@4.0.0-rc.5` for an exact preview install. Full changelog: **[CHANGELOG.md](./CHANGELOG.md)** · Forward plan: **[ROADMAP.md](https://github.com/oomkapwn/enquire-mcp/blob/main/ROADMAP.md)**.
+Channel: `npm install @oomkapwn/enquire-mcp` → latest stable (`@latest` = v3.11.x). Pre-release: `npm install @oomkapwn/enquire-mcp@rc` → the v4 SDK-v2 candidate; pin `@4.0.0-rc.6` for an exact preview install. Full changelog: **[CHANGELOG.md](./CHANGELOG.md)** · Forward plan: **[ROADMAP.md](https://github.com/oomkapwn/enquire-mcp/blob/main/ROADMAP.md)**.
 
 ---
 

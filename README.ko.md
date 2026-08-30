@@ -104,7 +104,7 @@ enquire-mcp serve --vault ~/Documents/Obsidian\ Vault
 
 ### 검토 가능한 데스크톱 번들이 필요하신가요? MCPB Basic
 
-[GitHub Release `v4.0.0-rc.5`](https://github.com/oomkapwn/enquire-mcp/releases/tag/v4.0.0-rc.5)는 `enquire-mcp-basic-4.0.0-rc.5.mcpb`와 checksum, inventory, SBOM, notices, provenance를 제공합니다. 번들에는 서버 JavaScript와 일반 의존성이 포함되며, 호환 MCPB 호스트가 Node.js 22.13 이상을 제공해야 합니다.
+[GitHub Release `v4.0.0-rc.6`](https://github.com/oomkapwn/enquire-mcp/releases/tag/v4.0.0-rc.6)는 `enquire-mcp-basic-4.0.0-rc.6.mcpb`와 checksum, inventory, SBOM, notices, provenance를 제공합니다. 번들에는 서버 JavaScript와 일반 의존성이 포함되며, 호환 MCPB 호스트가 Node.js 22.13 이상을 제공해야 합니다.
 
 Basic은 정확히 **13개의 읽기 전용 도구**와 **0개의 프롬프트**로 제한됩니다. 쓰기, 영구 인덱스, 모델, PDF/OCR, watcher는 없습니다. 실제 데스크톱 GUI, 서명, 디렉터리 승인 및 카탈로그는 유지관리자의 검증이 남아 있습니다. enquire는 serve 중 외부 호출을 시작하지 않지만 요청된 노트 텍스트는 연결된 MCP 클라이언트로 전달되며 해당 클라이언트의 개인정보 보호 조건을 따릅니다.
 
@@ -113,7 +113,7 @@ Basic은 정확히 **13개의 읽기 전용 도구**와 **0개의 프롬프트**
 **완전한 하이브리드 성능을 원하시나요?** 하이브리드 사전 점검을 마친 뒤 서버를 시작하세요:
 
 ```bash
-npm install -g @oomkapwn/enquire-mcp@4.0.0-rc.5      # exact prerelease package
+npm install -g @oomkapwn/enquire-mcp@4.0.0-rc.6      # exact prerelease package
 enquire-mcp --version
 # recommended: preview first, then explicitly apply the same package-coherent plan
 enquire-mcp first-run --tier hybrid --client claude-desktop --vault <path>

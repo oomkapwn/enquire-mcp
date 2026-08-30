@@ -34,7 +34,7 @@ import { releaseMutationVersionedTransitionAuditProblems } from "./release-mutat
 
 const repoRoot = path.resolve(__dirname, "..");
 const RELEASE_MUTATION_IDENTITY_FIXTURE_SHA256 = "8205d24e6d42dd4cb8986368611514131abe701434beb30150e33ea08f4b1288";
-const RELEASE_MUTATION_TRANSITION_FIXTURE_SHA256 = "09bc51e1a7cc8e6257dc69449cc59fcc579d4ef4b5d23a5fab563fc29d109d47";
+const RELEASE_MUTATION_TRANSITION_FIXTURE_SHA256 = "114dd16bde29faf3726cf998cb6110dfcd07dc0d2720c42a92ac900380cff300";
 const releaseMutationIdentityFixturePath = path.join(repoRoot, "tests/fixtures/release-mutation-identity.v2.json");
 const releaseMutationTransitionFixturePath = path.join(repoRoot, "tests/fixtures/release-mutation-transition.v3.json");
 const releaseIntegritySourcePath = path.join(repoRoot, "tests/release-integrity.test.ts");
@@ -286,7 +286,7 @@ const EXPECTED_REPOSITORY_MUTATION_HELPER_CALL_ENTRIES = [
   ],
   [
     "docs-consistency.test.ts",
-    { count: 53, sha256: "19d16057dbdcc014b436d46e80746391288e88f4446f4f10f8721033f251a441" }
+    { count: 53, sha256: "026bb453d24c2e13f08c60556958322c06b6fc61ec55d8e7fade36e857f6cb2c" }
   ],
   [
     "enforcement-guard-invariant.test.ts",
@@ -968,10 +968,10 @@ type ReviewedOrdinaryTransformId = (typeof REVIEWED_ORDINARY_TRANSFORMS)[number]
 // the complete source file, so a reachable decoy, relocated clone, or severed
 // helper consumer cannot inherit authority from the same filename/title/count.
 const EXPECTED_REVIEWED_ORDINARY_OWNER_SHA256_ENTRIES = [
-  ["pdf OCR quote normalization", "086edeb621eb027c9a5e3b07ca0b3b019ae04067a9796dc10ec67753b8492beb"],
-  ["pdf OCR whitespace normalization", "086edeb621eb027c9a5e3b07ca0b3b019ae04067a9796dc10ec67753b8492beb"],
-  ["lifecycle whitespace normalization", "6a82a3805a92511d86b67a10f5c91664336148eee405e43ca28de28180ff301d"],
-  ["release gate parenthesis unescape", "ab6231bc51c59b7f5de884922890492ca142c58a9e89b7906448713a2a7d631f"],
+  ["pdf OCR quote normalization", "1780f7f8b05070220f49ae4586b52b796a79c21388acd784ec3ee8709769e668"],
+  ["pdf OCR whitespace normalization", "1780f7f8b05070220f49ae4586b52b796a79c21388acd784ec3ee8709769e668"],
+  ["lifecycle whitespace normalization", "feed4e83b7ea451e40a976396c85a46e25586b9849b05022b6ff2f858da9b0c0"],
+  ["release gate parenthesis unescape", "95e7982264bbd5c5712c005f0486da5e1b29d2d3957a420a2cfc44aa9b210e5d"],
   ["entrypoint block-comment stripping", "319def01444e238d986cd6674091a75f17ce843b71ac7e74e2c1aeba07741b0a"],
   ["entrypoint line-comment stripping", "319def01444e238d986cd6674091a75f17ce843b71ac7e74e2c1aeba07741b0a"],
   ["release-check open-parenthesis unescape", "e12c9f3c715151d4535e1531ca2c067e426973eae147b325fbac7b990bd36108"],

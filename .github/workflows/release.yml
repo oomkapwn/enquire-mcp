@@ -1054,8 +1054,8 @@ jobs:
           VERSION=$(node -p "require('./package.json').version")
           SOURCE_SHA=$(git rev-parse HEAD)
           TAG="v$VERSION"
-          cp -- package.json server.json "$RELEASE_BODY" "$HANDOFF_ROOT/"
-          mv -- "$HANDOFF_ROOT/$(basename "$RELEASE_BODY")" "$HANDOFF_ROOT/release-notes.md"
+          cp -- package.json server.json "$HANDOFF_ROOT/"
+          cp -- "$RELEASE_BODY" "$HANDOFF_ROOT/release-notes.md"
           cp -- npm-package/enquire-mcp-npm.tgz npm-package/npm-package-manifest.json "$HANDOFF_ROOT/npm-package/"
           cp -- artifacts/enquire-mcp-basic-* "$HANDOFF_ROOT/artifacts/"
           cp -- scripts/check-release-integrity.mjs scripts/npm-package-artifact.mjs "$HANDOFF_ROOT/scripts/"

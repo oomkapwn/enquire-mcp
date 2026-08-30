@@ -1,6 +1,6 @@
 # enquire-mcp — Roadmap
 
-> Public roadmap for **enquire-mcp**, the #1 Obsidian MCP for freshness-aware, cited AI memory backed by your own vault. Updated 2026-08-29 (`v4.0.0-rc.5`: the current preview of the MCPB Basic bundle first introduced in `v4.0.0-rc.2` on the published `v4.0.0-rc.1` official-SDK-v2 foundation, behind a fail-closed 13-gate remote publication chain; stable `@latest` remains v3).
+> Public roadmap for **enquire-mcp**, the #1 Obsidian MCP for freshness-aware, cited AI memory backed by your own vault. Updated 2026-08-29 (`v4.0.0-rc.6`: the current preview of the MCPB Basic bundle first introduced in `v4.0.0-rc.2` on the published `v4.0.0-rc.1` official-SDK-v2 foundation, behind a fail-closed 13-gate remote publication chain; stable `@latest` remains v3).
 >
 > **North Star:** be — and confidently *stay* — the best project in its spheres (Obsidian MCP; local-first AI-memory layer) on **technology** and **reliability**. "Confidently" means every claim we make is one an external auditor or a privacy-conscious user can verify against the code.
 

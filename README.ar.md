@@ -109,7 +109,7 @@ enquire-mcp serve --vault ~/Documents/Obsidian\ Vault
 
 ### حزمة سطح مكتب قابلة للمراجعة؟ MCPB Basic
 
-يوفّر [GitHub Release `v4.0.0-rc.5`](https://github.com/oomkapwn/enquire-mcp/releases/tag/v4.0.0-rc.5) ملف `enquire-mcp-basic-4.0.0-rc.5.mcpb` مع checksum والجرد وSBOM والإشعارات وإثبات المصدر. تتضمن الحزمة JavaScript الخاص بالخادم والاعتماديات العادية، وعلى مضيف MCPB المتوافق توفير Node.js 22.13 أو أحدث.
+يوفّر [GitHub Release `v4.0.0-rc.6`](https://github.com/oomkapwn/enquire-mcp/releases/tag/v4.0.0-rc.6) ملف `enquire-mcp-basic-4.0.0-rc.6.mcpb` مع checksum والجرد وSBOM والإشعارات وإثبات المصدر. تتضمن الحزمة JavaScript الخاص بالخادم والاعتماديات العادية، وعلى مضيف MCPB المتوافق توفير Node.js 22.13 أو أحدث.
 
 Basic مقيد بـ **13 أداة للقراءة فقط** و**0 موجّهات**: بلا كتابة أو فهارس دائمة أو نماذج أو PDF/OCR أو watcher. ما زال اختبار واجهة سطح المكتب الفعلية والتوقيع وموافقة المجلد والدليل بيد المشرف. لا يبدأ enquire اتصالات خارجية أثناء الخدمة، لكن نص الملاحظات المطلوب ينتقل إلى عميل MCP المتصل ويخضع لشروط خصوصيته.
 
@@ -120,7 +120,7 @@ Basic مقيد بـ **13 أداة للقراءة فقط** و**0 موجّهات**
 </div>
 
 ```bash
-npm install -g @oomkapwn/enquire-mcp@4.0.0-rc.5      # exact prerelease package
+npm install -g @oomkapwn/enquire-mcp@4.0.0-rc.6      # exact prerelease package
 enquire-mcp --version
 # recommended: preview first, then explicitly apply the same package-coherent plan
 enquire-mcp first-run --tier hybrid --client claude-desktop --vault <path>

@@ -82,8 +82,8 @@ import {
   SPLIT_VERIFY_OUTPUTS
 } from "./release-split-contract-fixtures.ts";
 
-const SPLIT_FIXTURE_SHA256 = "8096105d1acb35f436f3f72f58addfba1a883c5f4f5f9fc6c3ef6eb953e8b93f";
-const SPLIT_PROJECTION_SHA256 = "30ddc2aa8a0bd0697b19ee2a62517347869c64214f52f1f1ab837272204a3c6d";
+const SPLIT_FIXTURE_SHA256 = "84b08b80080df0fe7067994b35bd61c38ae8101fc08ea5b761fb0db0c4b8050e";
+const SPLIT_PROJECTION_SHA256 = "8019d27e27d687f181bb9cd4a6c6f37a22e3141401df85428936f71e7044c650";
 const NPM_CI_CONTRACT_FIXTURE_SHA256 = "cca2875787c2d3772532a11910337d00b212e7c89ffbeb138ebc62c219d2223c";
 
 interface WorkflowJob {
@@ -9998,6 +9998,8 @@ function mcpbSplitReleaseProblems(inputs: {
   if (
     handoffStep?.id !== "handoff" ||
     digest(handoffRun) !== SPLIT_CONTRACT_SHA256.handoffAssembly ||
+    !handoffRun.includes('cp -- "$RELEASE_BODY" "$HANDOFF_ROOT/release-notes.md"') ||
+    handoffRun.includes('mv -- "$HANDOFF_ROOT/$(basename "$RELEASE_BODY")"') ||
     !handoffRun.includes("find . -type f ! -name release-files.sha256 -print0 | LC_ALL=C sort -z |") ||
     !handoffRun.includes("xargs -0 sha256sum > release-files.sha256") ||
     !handoffRun.includes("sha256sum -c release-files.sha256") ||

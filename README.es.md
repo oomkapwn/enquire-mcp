@@ -97,7 +97,7 @@ Conéctalo a cualquier cliente MCP:
 
 ### ¿Un paquete de escritorio revisable? MCPB Basic
 
-El [GitHub Release `v4.0.0-rc.4`](https://github.com/oomkapwn/enquire-mcp/releases/tag/v4.0.0-rc.4) ofrece `enquire-mcp-basic-4.0.0-rc.4.mcpb` junto con su checksum, inventario, SBOM, avisos y procedencia. El paquete incluye el JavaScript del servidor y dependencias normales; el host MCPB compatible debe proporcionar Node.js 22.13 o posterior.
+El [GitHub Release `v4.0.0-rc.5`](https://github.com/oomkapwn/enquire-mcp/releases/tag/v4.0.0-rc.5) ofrece `enquire-mcp-basic-4.0.0-rc.5.mcpb` junto con su checksum, inventario, SBOM, avisos y procedencia. El paquete incluye el JavaScript del servidor y dependencias normales; el host MCPB compatible debe proporcionar Node.js 22.13 o posterior.
 
 Basic queda limitado a **13 herramientas de solo lectura** y **0 prompts**: sin escritura, índices persistentes, modelos, PDF/OCR ni watcher. Aún falta la validación del mantenedor en la GUI real, firma, aprobación del directorio y catálogo. enquire no inicia llamadas salientes al servir, pero el texto solicitado pasa al cliente MCP conectado y queda sujeto a sus términos de privacidad.
 
@@ -106,7 +106,7 @@ Basic queda limitado a **13 herramientas de solo lectura** y **0 prompts**: sin 
 **¿Quieres toda la potencia híbrida?** Completa la preparación híbrida y luego inicia el servidor:
 
 ```bash
-npm install -g @oomkapwn/enquire-mcp@4.0.0-rc.4      # exact prerelease package
+npm install -g @oomkapwn/enquire-mcp@4.0.0-rc.5      # exact prerelease package
 enquire-mcp --version
 # recommended: preview first, then explicitly apply the same package-coherent plan
 enquire-mcp first-run --tier hybrid --client claude-desktop --vault <path>

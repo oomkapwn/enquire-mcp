@@ -31,11 +31,10 @@ import * as path from "node:path";
 import { load } from "js-yaml";
 import { z } from "zod";
 import { parseFrontmatter } from "./frontmatter.js";
-import { foldName, foldTag, lookupFoldedAny, lookupFoldedKey, nfc, nfcLower } from "./name-fold.js";
-import { extractWikilinks, stripCodeAndInline } from "./parser.js";
+import { foldName, foldTag, lookupFoldedKey, nfc, nfcLower } from "./name-fold.js";
+import { extractFrontmatterTags, extractInlineTags, extractWikilinks, stripCodeAndInline } from "./parser.js";
 import { MAX_SCAN_NOTES } from "./tools/limits.js";
 import type { Vault } from "./vault.js";
-import { splitLines } from "./wildcard-match.js";
 
 /** Top-level shape of a parsed `.base` file. Mirrors the Obsidian schema. */
 export interface ParsedBase {
@@ -110,7 +109,9 @@ export interface BaseQueryResult {
    * returned slice. Pre-3.6.2 this was `matches.length` after the limit
    * cap, which underreported when more matches existed than `limit`.
    * Callers can now reliably tell when a result was truncated by
-   * comparing `total_matched > matches.length` (or check `truncated`).
+   * comparing `total_matched > matches.length` (or check `truncated`). A
+   * query rejects instead of returning this field when any listed note cannot
+   * be read or its frontmatter cannot be parsed and admitted exactly.
    */
   total_matched: number;
   /** v3.6.2 HN-1 — true iff `total_matched > matches.length` (i.e. the
@@ -541,7 +542,9 @@ function insertBoundedHit(hits: BaseQueryHit[], hit: BaseQueryHit, limit: number
  *
  * Implementation: walks the vault, parses each note's frontmatter, evals
  * the filter tree against (file.path, frontmatter, tags). Tags come from
- * frontmatter `tags:` AND inline `#tags` in the body.
+ * frontmatter `tags:` / `tag:` and canonical inline `#tags` in the body.
+ * A listed note with unreadable, malformed, or admission-failing frontmatter
+ * rejects the whole query so `total_matched` is never a silently partial count.
  *
  * NOT a full Obsidian DSL implementation — see module header for the
  * subset we support.
@@ -602,7 +605,7 @@ export async function queryBase(vault: Vault, args: QueryBaseArgs): Promise<Base
       fm = (parsed.data as Record<string, unknown>) ?? {};
       body = parsed.content ?? "";
     } catch {
-      continue;
+      throw new Error(`obsidian_query_base cannot report an exact total; invalid frontmatter in ${e.relPath}`);
     }
     // v3.11.5-rc.3 (post-rc.2 re-sweep, PARSER-DESYNC class) — sanitize (strip fenced +
     // inline code) BEFORE collecting tags/links, matching the canonical parseNote. Pre-rc.3
@@ -611,7 +614,7 @@ export async function queryBase(vault: Vault, args: QueryBaseArgs): Promise<Base
     // `tag ==` / `linksTo()` .base filters then matched notes they shouldn't (parity break
     // with obsidian_search + Obsidian, which ignore links/tags inside code).
     const sanitizedBody = stripCodeAndInline(body);
-    const tags = collectTags(fm, sanitizedBody);
+    const tags = collectTags(fm, extractInlineTags(sanitizedBody));
     // v3.5.0 — collect outbound wikilink targets (basename-normalized,
     // lowercased) for `linksTo()` predicate evaluation. We don't resolve
     // against the vault's basename index here — `linksTo("Foo")` just
@@ -925,39 +928,17 @@ function literalEqual(a: unknown, b: unknown): boolean {
   return false;
 }
 
-/** Collect tags from frontmatter `tags:` / `tag:` (string or array) AND inline
- *  `#tags` in the body. Lowercased + leading-# stripped. */
-function collectTags(fm: Record<string, unknown>, body: string): string[] {
+/**
+ * Collect tags through the canonical parser extractors. Frontmatter accepts
+ * plural `tags:` or singular `tag:` as either a string (comma/whitespace
+ * separated) or an array. Inline tags use the shared Unicode-aware boundary
+ * rules, including whitespace, `(`, `[`, `{`, `>`, and beginning-of-input.
+ * Returned tags are NFC/case-folded with a leading `#` removed.
+ */
+function collectTags(fm: Record<string, unknown>, inlineTags: Iterable<string>): string[] {
   const out = new Set<string>();
-  // v3.11.0-rc.13 (rc.12-audit AUD-03) — fold the `tags`/`tag` KEY so a `Tags:` /
-  // `Tag:` frontmatter property is visible to Bases tag filters (the producer
-  // sibling of the H1 key-fold class).
-  const fmTags = lookupFoldedAny(fm, ["tags", "tag"]);
-  // v3.11.0-rc.9 (L-TAG-1) — foldTag (NFC + case fold + strip) so a Unicode
-  // frontmatter tag canonicalizes identically to the predicate side.
-  if (typeof fmTags === "string") {
-    for (const t of fmTags.split(/[\s,]+/).filter(Boolean)) out.add(foldTag(t));
-  } else if (Array.isArray(fmTags)) {
-    for (const t of fmTags) {
-      if (typeof t === "string") out.add(foldTag(t));
-    }
-  }
-  // Inline #tags. Matches `#word`, `#word/subword`, ignores leading-# in
-  // headings (lines starting with # are markdown headings, not tags).
-  for (const line of splitLines(body)) {
-    if (/^#{1,6}\s/.test(line)) continue;
-    // v3.11.0-rc.10 (M1, external audit) — was ASCII-only (`#[A-Za-z][\w/-]*`), which
-    // silently dropped EVERY non-ASCII inline tag (accented `#café` → `#caf`, CJK
-    // `#日本語` → no match). Now Unicode-aware (`\p{L}` + `u` flag), and the line is
-    // NFC-normalized FIRST so an NFD `#café` (macOS APFS) composes its combining mark
-    // into the base letter before matching (parity with parser's extractInlineTags).
-    // Continuation includes `\p{M}` so a mark with no canonical composition stays in
-    // the capture (sibling of INLINE_TAG_RE).
-    for (const m of line.normalize("NFC").matchAll(/(?:^|\s)(#[\p{L}][\p{L}\p{N}\p{M}_/-]*)/gu)) {
-      const tag = foldTag(m[1] ?? ""); // strip `#` + NFC + lowercase
-      if (tag) out.add(tag);
-    }
-  }
+  for (const tag of extractFrontmatterTags(fm)) out.add(foldTag(tag));
+  for (const tag of inlineTags) out.add(foldTag(tag));
   return [...out];
 }
 

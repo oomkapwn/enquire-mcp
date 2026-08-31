@@ -35,9 +35,11 @@ running.
 - **Local data at rest.** Depending on enabled options, enquire can store a
   parsed-note cache, a content-bearing FTS5 index, an embedding database,
   HNSW sidecars, and an opt-in feedback file in the local cache directory.
+  An incomplete cancelled rename can also preserve exact pre-rename file bytes
+  inside the vault under `.enquire-rollback/<random-namespace>/`.
   The detailed sections below document their contents, permissions, and threat
-  boundaries. Treat the cache, FTS5, embedding, and HNSW artifacts with the
-  same sensitivity as the vault.
+  boundaries. Treat the cache, FTS5, embedding, HNSW, feedback, and rollback
+  recovery artifacts with the same sensitivity as the vault.
 - **Retention and erasure.** `clear-cache --vault <path>` removes the parsed-note
   cache namespace selected for the requested vault. `clear-index --vault <path>` removes the corresponding FTS5
   database plus WAL/SHM/rollback-journal sidecars. `clear-embeddings --vault <path>` removes its
@@ -57,7 +59,13 @@ running.
   spelling is admitted only when a canonical-parent snapshot contains at most
   one supplied spelling and BigInt device/inode proves it is the expected
   directory entry; a distinct folded entry refuses planning. None of these
-  commands recursively deletes arbitrary files.
+  commands recursively deletes arbitrary files. None of `clear-cache`,
+  `clear-index`, `clear-embeddings`, or `prune` removes vault-local
+  `.enquire-rollback/` snapshots: after inspecting and recovering any needed
+  bytes with ordinary filesystem tools, the vault operator must delete that
+  hidden directory manually. Stop every write-enabled enquire process for that
+  vault before inspection and purge; otherwise a concurrent cancelled rename
+  can create a fresh namespace while the directory is being removed.
 - **Plain-file publication and read boundary.** Parse-cache, feedback, and HNSW pointer/
   generation writes reserve unpredictable exclusive temp entries, validate held
   BigInt inode identities, apply `0600`, fsync the file, and rename the leaf.
@@ -71,13 +79,34 @@ running.
   regular-file descriptor whose identity, size, and timestamps must remain stable
   through the read; symlink and FIFO/socket leaves are refused rather than followed
   or blocked on. The parse cache uses its configured disk-cache limit, feedback
-  applies 64 MiB on both publication and reopen, and compact HNSW format-3
+  applies 64 MiB on both publication and reopen, and compact HNSW format-4
   pointer metadata applies 64 KiB on both publication and every current-pointer read.
 - **Filters are not retroactive erasure.** `--exclude-glob` and `--read-paths`
   immediately hide filtered content from tool results, but copies created
   before the filter can remain in local cache/index artifacts. Clear the
   applicable cache, FTS5, and embedding/HNSW stores, then rebuild with the
   filter in place.
+- **Rollback recovery is a narrow internal sink.** With `--enable-write`, if
+  cancellation compensation cannot safely put a pre-rename source or
+  destination snapshot back on its public path, enquire attempts to write its
+  exact raw bytes to
+  `<vault>/.enquire-rollback/<128-bit-random-namespace>/<original-basename>`.
+  The original source/destination path must pass the ordinary lexical and
+  canonical visibility checks. After that admission, the derived hidden path
+  deliberately does not reapply `--read-paths` or `--exclude-glob`: those
+  filters describe the public note surface and must not cause rollback bytes
+  to be discarded. The built-in hidden-path policy still prevents MCP tools
+  from reading the recovery copy. New recovery root/namespace directories
+  request mode `0700` (subject to a more restrictive umask), each namespace
+  and leaf is created exclusively, and symlinked/non-directory recovery roots
+  are refused. Successfully written recovery snapshots are append-only, are
+  not automatically restored, and persist until the operator
+  inspects/recovers them out of band and manually purges
+  `.enquire-rollback/`. A disk, permission, or unsafe-root failure is reported
+  as `NOT recoverable` without a recovery path; the operation does not claim
+  that those bytes were saved. Stop every write-enabled enquire process for
+  that vault before inspection and purge so no concurrent cancellation can
+  publish a new namespace during removal.
 - **Third parties.** npm/GitHub package distribution, Hugging Face model
   acquisition, the Tesseract language-pack repository, any connected MCP
   client, and any tunnel/proxy are independent services governed by their own
@@ -130,7 +159,15 @@ When `--persistent-cache` is enabled, full note bodies are written to a JSON fil
 
 Hidden and reserved path segments are never part of enquire-mcp's public vault surface, even when neither `--read-paths` nor `--exclude-glob` is configured. The central `restrictedVaultPathReason()` policy blocks any dot-prefixed segment plus `.obsidian`, `.git`, `.trash`, `node_modules`, `.DS_Store`, and `Thumbs.db` at every depth. Reserved names are compared case-insensitively and after folding Windows-equivalent trailing dots/spaces; mixed path separators are normalized. Ordinary dotted names such as `Project.v2/note.v2.md` remain visible.
 
-- **One policy, all funnels.** `Vault.isExcluded()` composes the built-in boundary with user filters. Walkers, explicit folder lists, direct text/binary/stat reads, create/append/rename, persistent cache, watcher admission, persistent-index result filters, and resources therefore share one verdict instead of maintaining separate skip lists.
+- **One public-surface policy, all public funnels.** `Vault.isExcluded()`
+  composes the built-in boundary with user filters. Walkers, explicit folder
+  lists, direct text/binary/stat reads, ordinary create/append/rename writes,
+  persistent cache, watcher admission, persistent-index result filters, and
+  resources therefore share one public-surface verdict instead of maintaining
+  separate skip lists. The rollback-recovery sink documented above is the
+  narrow internal exception: its original snapshot path must pass that verdict,
+  while its derived intrinsically hidden storage path bypasses user filters so
+  an incomplete cancellation does not discard already-admitted bytes.
 - **Lexical and physical identities are checked.** Direct paths and writes are checked before filesystem resolution and again after canonical `realpath`, blocking both a hidden alias to a visible target and a visible alias to a hidden target. A hidden missing path is refused before an existence lookup. Create, append and rename paths repeat physical admission before their content-bearing write or move step.
 - **Persisted search evidence is re-admitted live.** Bounded final FTS5, embedding and hybrid candidates must still name present, publicly admitted regular files whose live mtime and durable per-source store revision match the receipt selected with the stored bytes. Quarantined, orphaned, invalid-kind and mismatched rows fail closed. A chunk URI applies the same terminal rule before returning indexed bytes; failures use the same not-found framing as a missing chunk. Low-level FTS/Embed receipt APIs expose the authority tuple for callers that own a `Vault`; their legacy methods and HNSW sidecar previews remain receipt-free, and sidecar preview metadata is never MCP egress authority.
 - **Aggregate index counters are physical health metadata.** Existing `total_chunks` / `total_files` fields describe the persisted database and can include stale filtered rows until the index is rebuilt. They expose no path or content, but deployments that treat even aggregate stale-row counts as sensitive should rebuild after changing visibility policy.
@@ -145,7 +182,7 @@ Hidden and reserved path segments are never part of enquire-mcp's public vault s
 
 Threat model: an attacker-controlled MCP client tries to read a path the user hasn't whitelisted. Mitigations:
 
-- **`Vault.isExcluded()` enforces both flags after the built-in hidden/reserved boundary.** A path must be intrinsically public, match the allowlist, AND not match any exclude pattern. The same predicate gates `listMarkdown()`, `listFilesByExtension()`, `resolveSafePath()` (so `readNote` / `readBinaryFile` / write paths all respect it).
+- **`Vault.isExcluded()` enforces both flags after the built-in hidden/reserved boundary.** A path must be intrinsically public, match the allowlist, AND not match any exclude pattern. The same predicate gates `listMarkdown()`, `listFilesByExtension()`, `resolveSafePath()` (so `readNote`, `readBinaryFile`, and ordinary write paths all respect it). Rollback recovery first applies this predicate to the original snapshot path, then uses the internal hidden-sink exception documented above.
 - **Watcher-aware (defense-in-depth).** When `--watch` is enabled, file events for paths outside the allowlist are dropped at the chokidar `ignored` predicate — the watcher never even sees writes to private folders. Since v3.10.0-rc.20 the watcher's per-file `handle()` ALSO re-checks `isExcluded()` before any index/embed work, so a filtered note can't be indexed even if an event reaches the handler by another path.
 - **Error-message distinguishes the two filters.** When a tool tries to read a path that's blocked, the error says either `"--read-paths allowlist (path doesn't match any allow-glob)"` or `"--exclude-glob denylist"` — so users can tell which flag rejected the path.
 - **No silent degradation.** If `--read-paths` is set and zero paths match, `listMarkdown()` returns `[]` and tools return empty results rather than falling back to "everything is visible."
@@ -174,11 +211,34 @@ Mitigations already in place:
 - **Refuses overwrite by default** — `to` already exists → throws unless the caller passes `overwrite: true` explicitly.
 - **Refuses `from === to`** — a same-path rename is treated as an error rather than a silent no-op.
 - **Code-fence-aware rewrite** — wikilinks inside ` ``` ` / `~~~` blocks are left verbatim. An attacker can't smuggle a payload like `[[Foo]]` inside a code block to force unrelated files to be rewritten — only outside-fence wikilinks resolved by the parser are touched.
-- **Atomicity & recovery posture** — write order is: (1) all backlink-bearing files, (2) the source file's rewritten content (still at OLD path), (3) `fs.rename` source's old path → new path. A failure at any step before step 3 leaves backlinks pointing at the still-present old name (worst case: safe and recoverable; old wikilinks resolve, the user can re-run the rename).
+- **Atomicity & recovery posture** — after the read-only plan, execution order
+  is: (1) rewrite the source's self-references at its old path when needed,
+  (2) commit the classified old→new filesystem move, then (3) rewrite
+  backlink-bearing files. Precommit validation failures in step 2 restore a
+  committed source rewrite before rejecting. A post-syscall/partial-move
+  failure is reported as indeterminate or partially committed rather than
+  labelled safe. If an ordinary backlink write fails after the move, the
+  destination already exists at the new path, but some remaining backlinks can
+  still name the old path; this is resumable repair work, not a transaction.
+- **Cancelled-rename recovery snapshots** — if compensation cannot safely
+  restore a captured source/destination snapshot without overwriting an
+  ambiguous or newly occupied public path, enquire attempts the
+  `.enquire-rollback/` write described above. Only a successfully written
+  snapshot is preserved and gets a relative recovery path; a failed recovery
+  write is reported explicitly as `NOT recoverable` with no false `saved at`
+  receipt. This is operator-mediated recovery, not a transactional automatic
+  restore; review and remove retained snapshots manually after resolving the
+  rename. Stop every write-enabled enquire process for that vault before
+  inspecting or purging the recovery namespace.
 - **`dry_run: true` preview** — caller can inspect the full per-file rewrite plan before any disk mutation.
 
 Out of scope:
-- A vault that spans multiple filesystems (rare; symlink to a mounted drive). `fs.rename` will fail with `EXDEV` after the backlink files are written. The user can move the vault to a single filesystem and re-run; we don't auto-fall back to copy-then-delete.
+- A cross-filesystem overwrite of an already-existing destination remains an
+  `EXDEV` failure of the classified rename. For a destination classified as
+  missing, the exclusive `link` move does fall back on `EXDEV` to
+  `COPYFILE_EXCL` followed by source unlink. That copy/delete fallback is not
+  atomic: a failed unlink leaves both entries and raises a partial-commit error
+  instead of claiming a completed move.
 - A note that contains identical literal `[[X]]` strings inside AND outside a code fence where only the outside ones should be rewritten — the parser excludes code-fenced wikilinks, so the rewrite plan correctly only includes outside-fence ones, and the line-walker skips fence lines during the actual replacement.
 
 ## `--watch`: live-watcher posture
@@ -263,14 +323,14 @@ The `obsidian_embeddings_search` tool plus the `install-model` and `build-embedd
 - If `@huggingface/transformers` failed to install (e.g., user ran `npm install --omit=optional`, or the platform lacks ONNX runtime binaries), the embedding tools and subcommands surface a clean error message pointing the user at `npm install @huggingface/transformers` — never a cryptic module-not-found stack trace.
 - Read-only / TF-IDF / FTS5 surfaces are unaffected. The server starts and serves all v1.x tools normally.
 
-## Published dependency resolution (introduced in v3.11.7-rc.8; current at v4.0.0-rc.6)
+## Published dependency resolution (introduced in v3.11.7-rc.8; current at v4.0.0-rc.7)
 
 npm applies `overrides` only from the root project performing an install. The overrides in enquire's source `package.json` keep its development/release lockfile on patched transitive versions, but they are ignored when the published package is installed as somebody else's dependency. Release CI therefore audits two distinct graphs:
 
 - **Source checkout:** production advisories at moderate+ and development advisories at high+ fail with an empty allowlist.
 - **Published consumer:** CI packs the actual npm tarball with scripts disabled, uses that artifact as a file dependency in a clean temporary root with no overrides, resolves a lockfile from scratch without running lifecycle scripts, and audits production dependencies at moderate+. This preserves future peer/bundled dependency semantics instead of copying a hand-selected subset of manifest fields. A new advisory fails; a temporary exception also fails once its advisory disappears, forcing removal instead of becoming permanent.
 
-As of the current v4.0.0-rc.6 maintenance line, the published-consumer audit policy has exactly two configured
+As of the current v4.0.0-rc.7 maintenance line, the published-consumer audit policy has exactly two configured
 temporary upstream exceptions, listed below. The live registry-resolved graph stopped reporting
 [`GHSA-frvp-7c67-39w9`](https://github.com/advisories/GHSA-frvp-7c67-39w9), so the stale-entry gate
 rejected that now-stale exception and it was removed. This is a live consumer-resolution receipt, not
@@ -285,7 +345,7 @@ may report multiple vulnerable package nodes because npm propagates unique advis
 parent packages. Release candidates may carry only the exact, removal-tracked exceptions approved for
 that candidate; promotion to npm `@latest` is blocked until the published-consumer audit is clean.
 
-## MCPB Basic boundary (`v4.0.0-rc.6`; introduced in `v4.0.0-rc.2`)
+## MCPB Basic boundary (`v4.0.0-rc.7`; introduced in `v4.0.0-rc.2`)
 
 The Basic bundle is an intentionally narrower distribution profile, not the full npm edition. Its manifest grants one user-selected vault directory and launches a fixed surface of exactly 13 read-only tools with zero prompts. It disables write tools, watcher controls, persistent/on-disk indexes, embedding-model discovery, PDF, and OCR. Recommended search falls back to live in-memory TF-IDF, and the fixed launch contract also refuses to consult a full edition's existing embedding database or watcher-startup guard.
 

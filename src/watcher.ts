@@ -29,7 +29,7 @@ import {
 } from "./embed-db.js";
 import type { loadEmbedder } from "./embeddings.js";
 import { deriveFtsTitle, extractAliases, type FtsIndex } from "./fts5.js";
-import type { HnswIndex } from "./hnsw.js";
+import type { HnswIndex, HnswPublicationReceiptSink } from "./hnsw.js";
 import { assertHnswFilePath } from "./persistence-path.js";
 import type { CachedNote, Vault } from "./vault.js";
 
@@ -850,9 +850,12 @@ export class VaultWatcher {
    * last flush), an index + rowsByLabel + persistFile + embedDb are all
    * wired. Captures one exact embed-db receipt and compares the complete
    * label metadata before saving, then captures again after the awaited native
-   * write. Any generation drift quarantines the route, while the stale pointer
-   * is rejected by the next serve's payload signature. Permanently skips
-   * persistence after any live HNSW diff
+   * write. A post-save generation drift quarantines the route and conditionally
+   * removes the live pointer when either its exact receipt or same-instance
+   * authority is no newer than the invalidated DB epoch under the publisher
+   * lease; a newer/different DB authority is preserved. If no matching pointer
+   * remains, the next serve's payload-signature check still rejects stale state.
+   * Permanently skips persistence after any live HNSW diff
    * failure, leaving the older signature behind so restart must rebuild rather
    * than blessing a partial graph as current. Fail-soft: a save error is logged
    * + swallowed (the signature guard means a stale/missing sidecar rebuilds).
@@ -887,7 +890,7 @@ export class VaultWatcher {
       // the exact decoded DB representation. Build a separate compact graph
       // from one atomic EmbedDb snapshot, revalidate it before publication,
       // and leave the serving graph untouched.
-      const { buildHnsw, clearHnswPersistedArtifacts } = await import("./hnsw.js");
+      const { buildHnsw, clearHnswPublishedGenerationIfStale } = await import("./hnsw.js");
       const compact = await buildHnsw(
         before.vectors.map((row) => ({ label: row.label, vector: row.vector })),
         { dim: before.receipt.dim, maxElements: before.vectors.length }
@@ -898,25 +901,49 @@ export class VaultWatcher {
         this.searchHealth.hnswUsable = false;
         return false;
       }
-      const saved = await compact.saveTo(
-        this.hnswPersistFile,
-        before.rowsByLabel,
-        before.receipt.signature,
-        {
-          dbInstanceUuid: before.receipt.dbInstanceUuid,
-          dbMutationEpoch: before.receipt.dbMutationEpoch
-        },
-        this.embedDb.getPersistenceFamilyScopes()
-      );
-      if (!saved) throw new Error("HNSW compact persistence did not commit its metadata pointer");
+      const publication: HnswPublicationReceiptSink = {};
+      let saved = false;
+      let saveError: unknown;
+      try {
+        saved = await compact.saveTo(
+          this.hnswPersistFile,
+          before.rowsByLabel,
+          before.receipt.signature,
+          {
+            dbInstanceUuid: before.receipt.dbInstanceUuid,
+            dbMutationEpoch: before.receipt.dbMutationEpoch
+          },
+          this.embedDb.getPersistenceFamilyScopes(),
+          publication
+        );
+        if (!saved) throw new Error("HNSW compact persistence did not commit its metadata pointer");
+      } catch (error) {
+        saveError = error;
+      }
       const after = this.embedDb.captureHnswReceiptSnapshot();
       if (!sameHnswPersistenceReceipt(before.receipt, after.receipt)) {
         this.hnswPersistUnsafe = true;
         this.searchHealth.hnswUsable = false;
+        if (saveError !== undefined && !this.silent) {
+          process.stderr.write(
+            `enquire: watcher HNSW persist failed — ${saveError instanceof Error ? saveError.message : String(saveError)} (checking stale persistence authority)\n`
+          );
+        }
         // A post-publication DB drift makes the just-written graph stale and
-        // may include bytes that the new generation deleted. Erase the family
-        // now instead of leaving privacy cleanup to a future restart.
-        await clearHnswPersistedArtifacts(this.hnswPersistFile, this.embedDb.getPersistenceFamilyScopes());
+        // may include bytes that the new generation deleted. Remove it only if
+        // its exact pointer or stale DB authority is still current under the
+        // publisher lease. A later publisher for the same/older epoch of the
+        // invalidated DB instance is also stale; a newer/different authority
+        // survives.
+        await clearHnswPublishedGenerationIfStale(
+          this.hnswPersistFile,
+          publication.receipt,
+          {
+            dbInstanceUuid: before.receipt.dbInstanceUuid,
+            dbMutationEpoch: before.receipt.dbMutationEpoch
+          },
+          this.embedDb.getPersistenceFamilyScopes()
+        );
         if (!this.silent) {
           process.stderr.write(
             "enquire: watcher embedding generation changed during HNSW persistence; the live route is quarantined\n"
@@ -924,6 +951,7 @@ export class VaultWatcher {
         }
         return false;
       }
+      if (saveError !== undefined) throw saveError;
       this.hnswDirty = false;
       if (!this.silent) {
         process.stderr.write(

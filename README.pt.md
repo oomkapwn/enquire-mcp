@@ -15,7 +15,7 @@
 [![CI](https://github.com/oomkapwn/enquire-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/oomkapwn/enquire-mcp/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/@oomkapwn/enquire-mcp.svg?label=npm&color=cb3837)](https://www.npmjs.com/package/@oomkapwn/enquire-mcp)
 [![downloads](https://img.shields.io/npm/dm/@oomkapwn/enquire-mcp.svg?color=cb3837)](https://www.npmjs.com/package/@oomkapwn/enquire-mcp)
-[![tests](https://img.shields.io/badge/tests-2228%20contracts-brightgreen.svg)](#️-confiança)
+[![tests](https://img.shields.io/badge/tests-2246%20contracts-brightgreen.svg)](#️-confiança)
 [![stable](https://img.shields.io/badge/v3.11.x-stable-brightgreen.svg)](./STABILITY.md)
 [![build provenance](https://img.shields.io/badge/build_provenance-SLSA_L2-blue.svg)](https://slsa.dev/spec/v1.0/levels#build-l2)
 [![MCP](https://img.shields.io/badge/MCP-2026--07--28-8A2BE2.svg)](https://modelcontextprotocol.io/)
@@ -53,7 +53,7 @@ Seu vault do Obsidian se torna **memória de longo prazo persistente e consultá
 > 3. **Zero chamadas de rede de saída iniciadas pelo enquire durante `serve`.** Os modelos são armazenados em cache local após um download explícito e único do HuggingFace. O conteúdo só é devolvido ao cliente MCP conectado; o tratamento de dados por esse cliente ou túnel é a sua própria fronteira de confiança.
 > 4. **Recuperação consciente da atualidade.** Cada resultado informa quão antiga é a nota; o reranqueamento por recência opcional permite que um agente prefira conhecimento recente e sinalize fatos desatualizados para reverificação — a fronteira consciente do esquecimento, construída sobre o `mtime` que seus arquivos já têm.
 
-**46 ferramentas · 19 prompts MCP · 2228+ testes unitários · 50+ idiomas · v3.11.x estável · vinculado a semver · MIT · proveniência de build no npm (SLSA L2).**
+**46 ferramentas · 19 prompts MCP · 2246+ testes unitários · 50+ idiomas · v3.11.x estável · vinculado a semver · MIT · proveniência de build no npm (SLSA L2).**
 
 ---
 
@@ -72,7 +72,7 @@ Seu vault do Obsidian se torna **memória de longo prazo persistente e consultá
 | **Toda a superfície de conhecimento do Obsidian** | ✅ Markdown, wikilinks, frontmatter, Canvas, Bases, PDF e OCR |
 | **Recuperação agêntica para perguntas difíceis** | ✅ HyDE, decomposição em subperguntas, context packs, GraphRAG-light e 19 prompts MCP |
 | **Escala sem abrir mão do controle** | ✅ Atualizações HNSW ao vivo, persistência, refill adaptativo e quantização int8 |
-| **Confiança de produção** | ✅ Somente leitura por padrão, filtros de privacidade, HTTP autenticado, contratos semver, 2228 testes, 13 gates de release e proveniência SLSA L2 |
+| **Confiança de produção** | ✅ Somente leitura por padrão, filtros de privacidade, HTTP autenticado, contratos semver, 2246 testes, 13 gates de release e proveniência SLSA L2 |
 
 **Um vault. Todos os agentes. A pilha completa. Sem lock-in de nuvem.**
 
@@ -102,7 +102,7 @@ Conecte a qualquer cliente MCP:
 
 ### Um pacote desktop auditável? MCPB Basic
 
-O [GitHub Release `v4.0.0-rc.6`](https://github.com/oomkapwn/enquire-mcp/releases/tag/v4.0.0-rc.6) fornece `enquire-mcp-basic-4.0.0-rc.6.mcpb` com checksum, inventário, SBOM, avisos e proveniência. O pacote inclui o JavaScript do servidor e dependências comuns; o host MCPB compatível deve fornecer Node.js 22.13 ou mais recente.
+O [GitHub Release `v4.0.0-rc.7`](https://github.com/oomkapwn/enquire-mcp/releases/tag/v4.0.0-rc.7) fornece `enquire-mcp-basic-4.0.0-rc.7.mcpb` com checksum, inventário, SBOM, avisos e proveniência. O pacote inclui o JavaScript do servidor e dependências comuns; o host MCPB compatível deve fornecer Node.js 22.13 ou mais recente.
 
 Basic fica restrito a **13 ferramentas somente leitura** e **0 prompts**: sem escrita, índices persistentes, modelos, PDF/OCR ou watcher. GUI desktop real, assinatura, aprovação de diretório e catálogo ainda exigem validação do mantenedor. enquire não inicia chamadas externas durante o serviço, mas o texto solicitado passa ao cliente MCP conectado e fica sujeito aos termos de privacidade desse cliente.
 
@@ -111,7 +111,7 @@ Basic fica restrito a **13 ferramentas somente leitura** e **0 prompts**: sem es
 **Quer todo o poder híbrido?** Conclua o preflight híbrido e depois inicie o servidor:
 
 ```bash
-npm install -g @oomkapwn/enquire-mcp@4.0.0-rc.6      # exact prerelease package
+npm install -g @oomkapwn/enquire-mcp@4.0.0-rc.7      # exact prerelease package
 enquire-mcp --version
 # recommended: preview first, then explicitly apply the same package-coherent plan
 enquire-mcp first-run --tier hybrid --client claude-desktop --vault <path>
@@ -185,7 +185,7 @@ O mesmo comando `npx -y @oomkapwn/enquire-mcp serve --vault <path>` funciona par
 ### Exemplos de consultas que funcionam bem
 
 - *"Encontre toda nota em que discuti estratégia de precificação e resuma a evolução."* — a fusão RRF + reranker lida com "evolução" de forma semântica
-- *"Qual foi minha decisão entre PostgreSQL e MongoDB? Cite a daily note."* — o graph-boost de wikilinks faz emergir o documento central de decisão
+- *"Qual foi minha decisão entre PostgreSQL e MongoDB? Cite a daily note."* — quando candidatos fundidos empatam na pontuação RRF, o grau de entrada de wikilinks no conjunto de candidatos desempata
 - *"Анализируй мои заметки о RAG за последние 3 месяца"* — embeddings multilíngues + filtro de data por frontmatter
 - *"Quais páginas do PDF do paper do LLaMA-3 falam sobre escala?"* — PDFs mesclados na busca com citações `[page: N]`
 - *"Mostre as comunidades temáticas no meu vault de pesquisa — quais temas venho explorando?"* — `obsidian_get_communities` (GraphRAG-light)
@@ -196,7 +196,7 @@ O mesmo comando `npx -y @oomkapwn/enquire-mcp serve --vault <path>` funciona par
 
 **1 — Memória de longo prazo para agentes de IA.** Conecte o seu vault do Obsidian a qualquer agente compatível com MCP (Claude Code, Claude Desktop, Cursor, ChatGPT, Codex, OpenClaw). O agente passa a ter recall semântico durável sobre cada nota de reunião, entrada de diário, registro de pesquisa e documento de decisão que você já escreveu — entre sessões, modelos e fornecedores. Diferentemente da memória embutida de um fornecedor, seu conhecimento não fica preso na nuvem de um fornecedor; ele vive em markdown simples que você possui e pode migrar livremente.
 
-**2 — Base de conhecimento pessoal / segundo cérebro.** A recuperação híbrida faz emergir a nota certa para *qualquer* formulação, em qualquer um dos mais de 50 idiomas. Pergunte em inglês sobre uma entrada de diário em russo de 2 anos atrás e obtenha o resultado certo. O graph-boost de wikilinks reranqueia notas que ficam no centro do seu grafo de conhecimento. O GraphRAG-light faz emergir comunidades temáticas — descubra conexões que você esqueceu que fez. PDFs se mesclam na busca com citações `[page: N]`, de modo que papers de pesquisa e transcrições de reuniões se tornam memória de primeira classe.
+**2 — Base de conhecimento pessoal / segundo cérebro.** A recuperação híbrida faz emergir a nota certa para *qualquer* formulação, em qualquer um dos mais de 50 idiomas. Pergunte em inglês sobre uma entrada de diário em russo de 2 anos atrás e obtenha o resultado certo. O graph-boost de wikilinks apenas desempata pontuações RRF iguais usando o grau de entrada dentro do conjunto de candidatos. O GraphRAG-light faz emergir comunidades temáticas — descubra conexões que você esqueceu que fez. PDFs se mesclam na busca com citações `[page: N]`, de modo que papers de pesquisa e transcrições de reuniões se tornam memória de primeira classe.
 
 **3 — RAG agêntico / engenharia de contexto.** O `obsidian_search` expõe pontuações por sinal, de modo que o agente vê *por que* cada resultado foi ranqueado. O HyDE pré-reescreve consultas vagas em respostas hipotéticas ricas antes da recuperação. A decomposição em sub-perguntas lida com perguntas multi-hop ("como nossa estratégia de precificação evoluiu e qual foi a reação dos clientes?") quebrando-as em sub-consultas independentes e fundindo os resultados. O harness de avaliação embutido (NDCG / Recall / MRR) permite medir a qualidade da recuperação nas suas próprias consultas, em vez de confiar em benchmarks de fornecedores.
 
@@ -239,7 +239,7 @@ graph LR
     RR --> R[Ranked hits<br/>per_signal observability]
 ```
 
-O `obsidian_search` detecta automaticamente os sinais disponíveis e degrada de forma graciosa. O graph-boost de wikilinks reranqueia o top-K via PageRank personalizado de 1 passo. O reranking opcional por cross-encoder repontua o top-N para +15.5 NDCG@10 medido. Cada resultado retorna `per_signal: { bm25, tfidf, embeddings }` para você ver POR QUE ele foi ranqueado.
+O `obsidian_search` detecta automaticamente os sinais disponíveis e degrada de forma graciosa. O graph-boost de wikilinks apenas desempata pontuações RRF iguais usando o grau de entrada dentro do conjunto de candidatos. O reranking opcional por cross-encoder repontua o top-N para +15.5 NDCG@10 medido. Cada resultado retorna `per_signal: { bm25, tfidf, embeddings }` para você ver POR QUE ele foi ranqueado.
 
 | Nível | Configuração | O que você obtém |
 |---|---|---|
@@ -283,7 +283,7 @@ Mais 3 recursos MCP (`obsidian://vault/info`, `obsidian://note/{path}`, `obsidia
 | **Transporte HTTP** | Autenticação por bearer (SHA-256 de tempo constante + `timingSafeEqual`), rate-limit por token, CORS estrito |
 | **Frontmatter** | `js-yaml@5` `load` (schema core YAML 1.2, seguro por padrão) — sem execução de código |
 | **Arquivos de cache + índice** | Onde os modos POSIX funcionam, o Enquire reaplica `0600` aos arquivos sensíveis em melhor esforço; um diretório pai criado pelo Enquire começa com `0700`, enquanto um pai existente/personalizado continua sob gestão do operador |
-| **2228 testes unitários · 13 checks de CI exigidos para release · todos os 13 atualmente protegidos** | Postura de release verificada; o detalhe operacional está fixado abaixo. |
+| **2246 testes unitários · 13 checks de CI exigidos para release · todos os 13 atualmente protegidos** | Postura de release verificada; o detalhe operacional está fixado abaixo. |
 | **CI** | O `release.yml` enumera diretamente **13 gates de release**, todos executados em cada PR: `lint`, `test (22)`, `test (24)`, `smoke`, `audit`, `coverage`, `version-consistency`, `docs`, `oia`, `protocol-conformance`, `package-consumer`, `mcpb-basic` e `docker`. O job Windows hostile-filesystem fixado `test-windows` é um check-run nomeado adicional, exigido transitivamente como pré-requisito bloqueante de `smoke`. A branch protection agora exige todos os **13** (snapshot verificado ao vivo em 2026-08-21). `test-macos` é o único job consultivo com `continue-on-error`. O gate `docker` constrói a imagem e executa probes limitados de CLI e introspecção MCP; o CodeQL executa duas análises separadas e não protegidas via [GitHub default setup](https://docs.github.com/code-security/code-scanning/automatically-scanning-your-code-for-vulnerabilities-and-errors/configuring-default-setup-for-code-scanning). Antes do npm publish, o `release.yml` reverifica os 13 gates que enumera diretamente no SHA marcado. |
 | **Cobertura** | Linhas ≥86% · statements ≥82% · funções ≥75% · branches ≥74% (com gate) |
 | **Releases** | npm + GitHub release por tag · semver · **proveniência de build assinada** (npm + Sigstore, SLSA Build L2; gerador L3 no roadmap) |
@@ -324,7 +324,7 @@ Canal: `npm install @oomkapwn/enquire-mcp` → último estável (`@latest` = v3.
 ```bash
 git clone https://github.com/oomkapwn/enquire-mcp.git
 cd enquire-mcp && npm install
-npm test       # suíte completa (2228 testes)
+npm test       # suíte completa (2246 testes)
 npm run lint   # zero avisos
 npm run build  # tsc → dist/
 ```

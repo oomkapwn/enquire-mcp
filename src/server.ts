@@ -837,6 +837,8 @@ export async function prepareServerDeps(opts: ServeOptions): Promise<ServerDeps>
               origin: "loaded" | "built";
             } | null = null;
             let persistAttempted = false;
+            const publication: import("./hnsw.js").HnswPublicationReceiptSink = {};
+            let persistDbGeneration: import("./hnsw.js").HnswDbGenerationAuthority | null = null;
             if (opts.hnswPersist !== false) {
               const beforeLoad = db.captureHnswLoadSnapshot();
               const { loadHnswFromDisk } = await import("./hnsw.js");
@@ -898,17 +900,19 @@ export async function prepareServerDeps(opts: ServeOptions): Promise<ServerDeps>
                   let persisted = false;
                   try {
                     if (opts.hnswPersist !== false) {
+                      persistDbGeneration = {
+                        dbInstanceUuid: afterAsync.receipt.dbInstanceUuid,
+                        dbMutationEpoch: afterAsync.receipt.dbMutationEpoch
+                      };
                       persistAttempted = true;
                       persisted =
                         (await index.saveTo(
                           persistFile,
                           afterAsync.rowsByLabel,
                           afterAsync.receipt.signature,
-                          {
-                            dbInstanceUuid: afterAsync.receipt.dbInstanceUuid,
-                            dbMutationEpoch: afterAsync.receipt.dbMutationEpoch
-                          },
-                          db.getPersistenceFamilyScopes()
+                          persistDbGeneration,
+                          db.getPersistenceFamilyScopes(),
+                          publication
                         )) === true;
                       if (!persisted) {
                         throw new Error("HNSW persistence did not commit its metadata pointer");
@@ -994,13 +998,22 @@ export async function prepareServerDeps(opts: ServeOptions): Promise<ServerDeps>
               }
             } else if (persistAttempted) {
               // saveTo can throw after the meta pointer commits (lease-release
-              // failure). Treat any persist attempt as possibly published, and
-              // erase outside the receipt→attach await window. Compact v4
-              // pointers omit text_preview; the immutable generation remains
-              // sensitive.
-              const { clearHnswPersistedArtifacts } = await import("./hnsw.js");
+              // failure). Its receipt is intentionally captured before that
+              // boundary, but cleanup also carries the invalidated DB authority
+              // so a same/older-authority publisher (or a save that produced no
+              // receipt) cannot leave deleted-derived bytes behind. Compare
+              // under the publisher lease; preserve a newer/different authority.
+              const { clearHnswPublishedGenerationIfStale } = await import("./hnsw.js");
               const persistenceScopes = db.getPersistenceFamilyScopes();
-              await clearHnswPersistedArtifacts(persistFile, persistenceScopes).catch((err) => {
+              if (persistDbGeneration === null) {
+                throw new Error("HNSW persistence attempt lost its EmbedDb generation authority");
+              }
+              await clearHnswPublishedGenerationIfStale(
+                persistFile,
+                publication.receipt,
+                persistDbGeneration,
+                persistenceScopes
+              ).catch((err) => {
                 process.stderr.write(
                   `enquire: unable to erase stale HNSW artifacts after persist-time generation drift — ${err instanceof Error ? err.message : String(err)}\n`
                 );

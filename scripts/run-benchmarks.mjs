@@ -105,6 +105,80 @@ export function benchmarkEmbeddingSyncComplete(report, expectedNotes) {
   );
 }
 
+/** Strip only the numeric chunk suffix emitted by block-granularity fusion. */
+function stripBenchmarkChunkSuffix(id) {
+  const match = /#(\d+)$/.exec(id);
+  if (match === null || match.index === 0 || match[1] === undefined) return id;
+  const parsed = Number.parseInt(match[1], 10);
+  if (!Number.isInteger(parsed) || parsed < 0) return id;
+  return id.slice(0, match.index);
+}
+
+/** Match the product's canonical key for note paths and wikilink targets. */
+function foldBenchmarkName(name) {
+  return name.normalize("NFC").toLowerCase();
+}
+
+/** Match `stripMd` in the product search path. */
+function stripBenchmarkMd(name) {
+  return name.replace(/\.md$/i, "");
+}
+
+/**
+ * Apply the product graph signal to a benchmark RRF list.
+ *
+ * The signal is candidate-set wikilink in-degree and may break only equal
+ * RRF-score ties. It never changes a fused score, so a more strongly ranked
+ * candidate cannot be overtaken by accumulating links. Chunk suffix, `.md`,
+ * case, and Unicode normalization mirror `src/tools/search.ts`.
+ *
+ * @param {Array<{id: string, score: number}>} fused - RRF candidates.
+ * @param {Map<string, Set<string>>} outLinks - Raw wikilink targets by source path.
+ * @returns {Array<{id: string, score: number}>} The same candidates in product-parity order.
+ */
+export function applyBenchmarkGraphTieBreak(fused, outLinks) {
+  const candidateSourcePaths = new Set();
+  for (const candidate of fused) {
+    const candidatePath = stripBenchmarkChunkSuffix(candidate.id);
+    if (candidatePath.toLowerCase().endsWith(".md")) candidateSourcePaths.add(candidatePath);
+  }
+
+  const foldedTargetsBySource = new Map();
+  for (const [sourcePath, targets] of outLinks) {
+    if (!candidateSourcePaths.has(sourcePath)) continue;
+    const foldedTargets = new Set();
+    for (const target of targets) {
+      if (typeof target !== "string" || target.length === 0) continue;
+      foldedTargets.add(foldBenchmarkName(target));
+      foldedTargets.add(foldBenchmarkName(stripBenchmarkMd(target)));
+    }
+    foldedTargetsBySource.set(sourcePath, foldedTargets);
+  }
+
+  const inDegreeById = new Map();
+  for (const candidate of fused) {
+    const candidatePath = stripBenchmarkChunkSuffix(candidate.id);
+    const candidateBasename = stripBenchmarkMd(path.basename(candidatePath));
+    const candidateKeys = [
+      foldBenchmarkName(candidatePath),
+      foldBenchmarkName(stripBenchmarkMd(candidatePath)),
+      foldBenchmarkName(candidateBasename)
+    ];
+    let inDegree = 0;
+    for (const [otherPath, targets] of foldedTargetsBySource) {
+      if (otherPath === candidatePath) continue;
+      if (candidateKeys.some((key) => targets.has(key))) inDegree += 1;
+    }
+    if (inDegree > 0) inDegreeById.set(candidate.id, inDegree);
+  }
+
+  return fused.sort((a, b) => {
+    const scoreCmp = b.score - a.score;
+    if (scoreCmp !== 0) return scoreCmp;
+    return (inDegreeById.get(b.id) ?? 0) - (inDegreeById.get(a.id) ?? 0);
+  });
+}
+
 /** Preflight + load the compiled dist symbols the benchmark body uses. Called
  *  only from the CLI entry (never on a bare `import` of this module). */
 async function loadDistBuildArtifacts() {
@@ -564,9 +638,9 @@ PageRank (Brin & Page, 1998) ranks [[Graph]] nodes by recursively distributing
 "score" from each node to its out-neighbors. Original use: ranking web pages.
 Modern use: ranking notes by how central they are in the wikilink graph.
 
-In enquire-mcp, a 1-step personalized PageRank seeded by the top-K [[RRF]]
-candidates produces a small graph-boost score that breaks ties in favor of
-notes other top hits link to.
+In enquire-mcp, candidate-set wikilink in-degree breaks only equal [[RRF]]
+score ties in favor of notes other candidates link to. It never changes a
+fused score or overrides a stronger retrieval signal.
 `,
 
   "Reference/Cache.md": `---
@@ -1207,6 +1281,8 @@ async function runHybridRerankedHyde(
   // (otherwise this row is identical to `Hybrid + reranker` and contributes
   // no signal). Queries without an answer are skipped; the row label
   // includes the actual N.
+  const resultLimit = 10;
+  const fusionTopK = Math.max(resultLimit * 4, 30);
   const perQuery = [];
   for (const q of queries) {
     const ha = hydeMap.get(q.id);
@@ -1246,15 +1322,19 @@ async function runHybridRerankedHyde(
           embedRanked.push({ id: h.path, rank: embRank++, score: h.score });
         }
       }
-      const fused = reciprocalRankFusion(
+      let fused = reciprocalRankFusion(
         { bm25: bm25Ranked, tfidf: tfidfRanked, embeddings: embedRanked },
-        { topK: 50 }
+        { topK: fusionTopK }
       );
-      // Wikilink graph-boost — mirror src/tools/search.ts:searchHybrid (v2.3.0).
-      // Count how many other top-K hits link to each candidate; α=0.005 boost.
+      // Wikilink graph signal — mirror src/tools/search.ts:searchHybrid.
+      // Candidate-set in-degree breaks equal RRF-score ties; it is not a
+      // score addend and cannot override a stronger retrieval signal.
       if (fused.length > 1) {
         const candidatePaths = new Set();
-        for (const f of fused) candidatePaths.add(f.id.includes("#") ? f.id.split("#")[0] : f.id);
+        for (const f of fused) {
+          const candidatePath = stripBenchmarkChunkSuffix(f.id);
+          if (candidatePath.toLowerCase().endsWith(".md")) candidatePaths.add(candidatePath);
+        }
         const outLinks = new Map();
         for (const cp of candidatePaths) {
           try {
@@ -1263,30 +1343,16 @@ async function runHybridRerankedHyde(
             for (const wl of note.parsed.wikilinks) {
               if (!wl.target) continue;
               targets.add(wl.target);
-              targets.add(wl.target.replace(/\.md$/i, ""));
             }
             outLinks.set(cp, targets);
           } catch {
             // unreadable notes get no outlinks
           }
         }
-        const ALPHA = 0.005;
-        for (const f of fused) {
-          const fPath = f.id.includes("#") ? f.id.split("#")[0] : f.id;
-          const fBasename = path.basename(fPath).replace(/\.md$/i, "");
-          let inDegree = 0;
-          for (const [other, targets] of outLinks) {
-            if (other === fPath) continue;
-            if (targets.has(fPath) || targets.has(fPath.replace(/\.md$/i, "")) || targets.has(fBasename)) {
-              inDegree += 1;
-            }
-          }
-          if (inDegree > 0) f.score += ALPHA * inDegree;
-        }
-        fused.sort((a, b) => b.score - a.score);
+        fused = applyBenchmarkGraphTieBreak(fused, outLinks);
       }
       // Apply reranker if available.
-      let topK = fused.slice(0, 10).map((f) => f.id);
+      let topK = fused.slice(0, resultLimit).map((f) => f.id);
       if (rerankerOverride) {
         try {
           const top50 = fused.slice(0, 50);
@@ -1302,7 +1368,7 @@ async function runHybridRerankedHyde(
           const reorder = top50
             .map((f, i) => ({ id: f.id, score: scores[i] ?? -Infinity }))
             .sort((a, b) => b.score - a.score);
-          topK = reorder.slice(0, 10).map((r) => r.id);
+          topK = reorder.slice(0, resultLimit).map((r) => r.id);
         } catch {
           // Reranker failed; fall back to RRF order.
         }

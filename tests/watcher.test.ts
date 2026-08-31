@@ -11,7 +11,7 @@ import type {
   HnswReceiptSnapshot
 } from "../src/embed-db.js";
 import { defaultIndexFile, FtsIndex } from "../src/fts5.js";
-import type { HnswIndex } from "../src/hnsw.js";
+import type { HnswIndex, HnswPublicationReceipt } from "../src/hnsw.js";
 import * as hnswModule from "../src/hnsw.js";
 import type { PersistenceFamilyScopes } from "../src/persistence-coordination.js";
 import { Vault } from "../src/vault.js";
@@ -1880,6 +1880,11 @@ describe("VaultWatcher direct HNSW flush generation binding", () => {
     capacity: () => ({ currentCount: 1, maxElements: 1 })
   });
 
+  const publicationReceipt = (persistFile: string): HnswPublicationReceipt => ({
+    binFile: `${path.basename(persistFile)}.${"e".repeat(48)}.bin`,
+    binSha256: "f".repeat(64)
+  });
+
   const configure = (
     watcher: VaultWatcher,
     before: HnswBuildSnapshot,
@@ -1921,7 +1926,7 @@ describe("VaultWatcher direct HNSW flush generation binding", () => {
     const { internals } = fixture;
     internals.hnswRowsByLabel = new Map([[7, row("stale")]]);
     const build = vi.spyOn(hnswModule, "buildHnsw");
-    const clear = vi.spyOn(hnswModule, "clearHnswPersistedArtifacts");
+    const clear = vi.spyOn(hnswModule, "clearHnswPublishedGenerationIfStale");
 
     await expect(watcher.flushHnswToDisk()).resolves.toBe(false);
     expect(build).not.toHaveBeenCalled();
@@ -1940,7 +1945,7 @@ describe("VaultWatcher direct HNSW flush generation binding", () => {
     const saveTo = vi.fn<HnswIndex["saveTo"]>().mockResolvedValue(true);
     const compact = compactIndex(saveTo);
     const build = vi.spyOn(hnswModule, "buildHnsw").mockResolvedValue(compact);
-    const clear = vi.spyOn(hnswModule, "clearHnswPersistedArtifacts");
+    const clear = vi.spyOn(hnswModule, "clearHnswPublishedGenerationIfStale");
 
     await expect(watcher.flushHnswToDisk()).resolves.toBe(false);
     expect(build).toHaveBeenCalledWith([{ label: 7, vector: before.vectors[0]?.vector }], {
@@ -1958,11 +1963,11 @@ describe("VaultWatcher direct HNSW flush generation binding", () => {
   it("keeps the dirty retry state when compact saveTo returns false", async () => {
     const watcher = new VaultWatcher({ vault: new Vault(root), silent: true });
     const before = buildSnapshot("a");
-    const fixture = configure(watcher, before, [snapshot("a")]);
+    const fixture = configure(watcher, before, [snapshot("a"), snapshot("a")]);
     const { internals } = fixture;
     const saveTo = vi.fn<HnswIndex["saveTo"]>().mockResolvedValue(false);
     vi.spyOn(hnswModule, "buildHnsw").mockResolvedValue(compactIndex(saveTo));
-    const clear = vi.spyOn(hnswModule, "clearHnswPersistedArtifacts");
+    const clear = vi.spyOn(hnswModule, "clearHnswPublishedGenerationIfStale");
 
     await expect(watcher.flushHnswToDisk()).resolves.toBe(false);
     expect(saveTo).toHaveBeenCalledWith(
@@ -1973,16 +1978,59 @@ describe("VaultWatcher direct HNSW flush generation binding", () => {
         dbInstanceUuid: before.receipt.dbInstanceUuid,
         dbMutationEpoch: before.receipt.dbMutationEpoch
       },
-      fixture.persistenceScopes
+      fixture.persistenceScopes,
+      expect.any(Object)
     );
     expect(clear).not.toHaveBeenCalled();
-    expect(fixture.receiptCaptures()).toBe(1);
+    expect(fixture.receiptCaptures()).toBe(2);
     expect(internals.hnswPersistUnsafe).toBe(false);
     expect(internals.hnswDirty).toBe(true);
     expect(watcher.searchHealth.hnswUsable).toBe(true);
   });
 
-  it("clears the just-published family when the DB drifts after saveTo", async () => {
+  it("conditionally clears only the just-published generation when the DB drifts after saveTo", async () => {
+    const watcher = new VaultWatcher({ vault: new Vault(root), silent: true });
+    const before = buildSnapshot("a");
+    const fixture = configure(watcher, before, [snapshot("a"), snapshot("b")]);
+    const { internals } = fixture;
+    const events: string[] = [];
+    const published = publicationReceipt(internals.hnswPersistFile ?? "missing.hnsw");
+    const saveTo = vi
+      .fn<HnswIndex["saveTo"]>()
+      .mockImplementation(async (_file, _rows, _signature, _db, _scopes, publication) => {
+        events.push("save");
+        if (publication) publication.receipt = published;
+        return true;
+      });
+    vi.spyOn(hnswModule, "buildHnsw").mockImplementation(async () => {
+      events.push("build");
+      return compactIndex(saveTo);
+    });
+    const clear = vi.spyOn(hnswModule, "clearHnswPublishedGenerationIfStale").mockImplementation(async () => {
+      events.push("clear");
+      return false;
+    });
+    const fullClear = vi.spyOn(hnswModule, "clearHnswPersistedArtifacts");
+
+    await expect(watcher.flushHnswToDisk()).resolves.toBe(false);
+    expect(events).toEqual(["build", "save", "clear"]);
+    expect(clear).toHaveBeenCalledWith(
+      internals.hnswPersistFile,
+      published,
+      {
+        dbInstanceUuid: before.receipt.dbInstanceUuid,
+        dbMutationEpoch: before.receipt.dbMutationEpoch
+      },
+      fixture.persistenceScopes
+    );
+    expect(fullClear).not.toHaveBeenCalled();
+    expect(fixture.receiptCaptures()).toBe(2);
+    expect(internals.hnswPersistUnsafe).toBe(true);
+    expect(internals.hnswDirty).toBe(true);
+    expect(watcher.searchHealth.hnswUsable).toBe(false);
+  });
+
+  it("cleans an invalidated DB authority when saveTo throws without a publication receipt", async () => {
     const watcher = new VaultWatcher({ vault: new Vault(root), silent: true });
     const before = buildSnapshot("a");
     const fixture = configure(watcher, before, [snapshot("a"), snapshot("b")]);
@@ -1990,20 +2038,28 @@ describe("VaultWatcher direct HNSW flush generation binding", () => {
     const events: string[] = [];
     const saveTo = vi.fn<HnswIndex["saveTo"]>().mockImplementation(async () => {
       events.push("save");
-      return true;
+      throw new Error("deterministic pre-receipt save failure");
     });
     vi.spyOn(hnswModule, "buildHnsw").mockImplementation(async () => {
       events.push("build");
       return compactIndex(saveTo);
     });
-    const clear = vi.spyOn(hnswModule, "clearHnswPersistedArtifacts").mockImplementation(async () => {
+    const clear = vi.spyOn(hnswModule, "clearHnswPublishedGenerationIfStale").mockImplementation(async () => {
       events.push("clear");
       return true;
     });
 
     await expect(watcher.flushHnswToDisk()).resolves.toBe(false);
     expect(events).toEqual(["build", "save", "clear"]);
-    expect(clear).toHaveBeenCalledWith(internals.hnswPersistFile, fixture.persistenceScopes);
+    expect(clear).toHaveBeenCalledWith(
+      internals.hnswPersistFile,
+      undefined,
+      {
+        dbInstanceUuid: before.receipt.dbInstanceUuid,
+        dbMutationEpoch: before.receipt.dbMutationEpoch
+      },
+      fixture.persistenceScopes
+    );
     expect(fixture.receiptCaptures()).toBe(2);
     expect(internals.hnswPersistUnsafe).toBe(true);
     expect(internals.hnswDirty).toBe(true);
@@ -2018,7 +2074,7 @@ describe("VaultWatcher direct HNSW flush generation binding", () => {
     const saveTo = vi.fn<HnswIndex["saveTo"]>().mockResolvedValue(true);
     const compact = compactIndex(saveTo);
     const build = vi.spyOn(hnswModule, "buildHnsw").mockResolvedValue(compact);
-    const clear = vi.spyOn(hnswModule, "clearHnswPersistedArtifacts");
+    const clear = vi.spyOn(hnswModule, "clearHnswPublishedGenerationIfStale");
 
     await expect(watcher.flushHnswToDisk()).resolves.toBe(true);
     expect(build).toHaveBeenCalledWith([{ label: 7, vector: before.vectors[0]?.vector }], {
@@ -2033,7 +2089,8 @@ describe("VaultWatcher direct HNSW flush generation binding", () => {
         dbInstanceUuid: before.receipt.dbInstanceUuid,
         dbMutationEpoch: before.receipt.dbMutationEpoch
       },
-      fixture.persistenceScopes
+      fixture.persistenceScopes,
+      expect.any(Object)
     );
     expect(clear).not.toHaveBeenCalled();
     expect(fixture.receiptCaptures()).toBe(2);
@@ -2048,7 +2105,7 @@ describe("VaultWatcher direct HNSW flush generation binding", () => {
     const fixture = configure(watcher, before, [], null);
     const { internals } = fixture;
     const build = vi.spyOn(hnswModule, "buildHnsw");
-    const clear = vi.spyOn(hnswModule, "clearHnswPersistedArtifacts");
+    const clear = vi.spyOn(hnswModule, "clearHnswPublishedGenerationIfStale");
 
     expect(internals.hnswDirty).toBe(true);
     await expect(watcher.flushHnswToDisk()).resolves.toBe(false);

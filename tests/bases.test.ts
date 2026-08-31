@@ -622,6 +622,31 @@ views:
     expect(marked.matches.map((m) => m.path)).toEqual(["Notes/mark.md"]);
   });
 
+  it("shares the canonical parser's bracket and blockquote inline-tag boundaries", async () => {
+    const { root, vault } = await makeBaseVault();
+    await fs.writeFile(
+      path.join(root, "Notes", "boundaries.md"),
+      "(#paren) [#square] {#brace} >#quote but word#embedded is not a tag\n"
+    );
+
+    for (const tag of ["paren", "square", "brace", "quote"]) {
+      await fs.writeFile(path.join(root, "q.base"), `filters: 'taggedWith(file.file, "${tag}")'\n`);
+      const out = await queryBase(vault, { path: "q.base" });
+      expect(
+        out.matches.map((match) => match.path),
+        tag
+      ).toEqual(["Notes/boundaries.md"]);
+    }
+
+    // NEGATIVE control: a hash embedded in an ordinary word has no canonical
+    // inline-tag boundary and must not become visible to Bases tag filters.
+    await fs.writeFile(path.join(root, "q.base"), `filters: 'taggedWith(file.file, "embedded")'\n`);
+    await expect(queryBase(vault, { path: "q.base" })).resolves.toMatchObject({
+      matches: [],
+      total_matched: 0
+    });
+  });
+
   it("throws on unknown view name", async () => {
     const { root, vault } = await makeBaseVault();
     await fs.writeFile(
@@ -707,32 +732,40 @@ views:
     }
   });
 
-  it("skips cyclic and aliased note frontmatter before recursive filter evaluation", async () => {
+  it("keeps total_matched exact when every readable note frontmatter is admitted (POSITIVE control)", async () => {
     const { root, vault } = await makeBaseVault();
     await fs.writeFile(path.join(root, "q.base"), "filters: 'true'\n");
-    await fs.writeFile(
-      path.join(root, "cycle.md"),
-      `---
-loop: &loop
-  self: *loop
----
-cycle
-`
-    );
-    await fs.writeFile(
-      path.join(root, "alias.md"),
-      `---
-first: &shared
-  value: one
-second: *shared
----
-alias
-`
-    );
+    await fs.writeFile(path.join(root, "valid.md"), "---\nmeta:\n  nested: true\n---\nvalid\n");
+
     const out = await queryBase(vault, { path: "q.base" });
-    expect(out.matches.map((match) => match.path)).not.toContain("cycle.md");
-    expect(out.matches.map((match) => match.path)).not.toContain("alias.md");
-    expect(out.total_matched).toBe(4);
+    expect(out.total_matched).toBe(5);
+    expect(out.matches.map((match) => match.path)).toContain("valid.md");
+  });
+
+  it.each([
+    {
+      label: "malformed YAML",
+      file: "malformed.md",
+      source: "---\nmeta:\n\tbroken: true\n---\nmalformed\n"
+    },
+    {
+      label: "a cyclic YAML alias",
+      file: "cycle.md",
+      source: "---\nloop: &loop\n  self: *loop\n---\ncycle\n"
+    },
+    {
+      label: "a repeated YAML alias",
+      file: "alias.md",
+      source: "---\nfirst: &shared\n  value: one\nsecond: *shared\n---\nalias\n"
+    }
+  ])("fails closed on $label instead of silently undercounting total_matched", async ({ file, source }) => {
+    const { root, vault } = await makeBaseVault();
+    await fs.writeFile(path.join(root, "q.base"), "filters: 'true'\n");
+    await fs.writeFile(path.join(root, file), source);
+
+    await expect(queryBase(vault, { path: "q.base" })).rejects.toThrow(
+      new RegExp(`cannot report an exact total.*invalid frontmatter.*${file.replace(".", "\\.")}`, "u")
+    );
   });
 
   it("preserves small legacy matched_on diagnostics when no filter is active", async () => {

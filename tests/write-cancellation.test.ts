@@ -17,6 +17,13 @@ async function statOrNullIfMissing(absPath: string): Promise<import("node:fs").S
   }
 }
 
+function recoveryPathIn(message: string, basename: string): string {
+  const escapedBasename = basename.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+  const found = message.match(new RegExp(`\\.enquire-rollback/[0-9a-f]{32}/${escapedBasename}`, "u"))?.[0];
+  if (found === undefined) throw new Error(`Missing rollback recovery path for ${basename}: ${message}`);
+  return found;
+}
+
 beforeEach(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-write-cancel-"));
 });
@@ -214,9 +221,9 @@ describe("rollback-safe batch write cancellation", () => {
       // now reached by PROVEN absence of the source, not by a failed reverse.
       expect(message).toContain("no regular file is present at");
       expect(message).toContain("saved at");
-      expect(message).toContain(".enquire-rollback/Dest.md");
+      const destinationRecovery = recoveryPathIn(message, "Dest.md");
       expect(message).not.toContain("NOT recoverable");
-      expect(await fs.readFile(path.join(reverseRoot, ".enquire-rollback", "Dest.md"), "utf8")).toContain(
+      expect(await fs.readFile(path.join(reverseRoot, destinationRecovery), "utf8")).toContain(
         "DEST-ORIGINAL-SENTINEL"
       );
       // The destination's own pre-rename bytes are deliberately NOT written back
@@ -344,10 +351,8 @@ describe("rollback-safe batch write cancellation", () => {
       expect(await fs.readFile(path.join(followRoot, "Dest.md"), "utf8")).toBe(sourceContent);
       const followMessage = followRejection instanceof Error ? followRejection.message : String(followRejection);
       expect(followMessage).toContain("pre-rename destination bytes NOT restored");
-      expect(followMessage).toContain(".enquire-rollback/Dest.md");
-      expect(await fs.readFile(path.join(followRoot, ".enquire-rollback", "Dest.md"), "utf8")).toContain(
-        "DEST-MUST-NOT-RESTORE"
-      );
+      const destinationRecovery = recoveryPathIn(followMessage, "Dest.md");
+      expect(await fs.readFile(path.join(followRoot, destinationRecovery), "utf8")).toContain("DEST-MUST-NOT-RESTORE");
       const planted = await fs.lstat(path.join(followRoot, "Source.md"));
       expect(planted.isSymbolicLink()).toBe(true);
       expect(await followVault.lstatIfExistsPublic("Source.md")).toEqual(
@@ -409,10 +414,8 @@ describe("rollback-safe batch write cancellation", () => {
       expect(await fs.readFile(path.join(enotdirRoot, "Dest.md"), "utf8")).toBe(sourceContent);
       const enotdirMessage = enotdirRejection instanceof Error ? enotdirRejection.message : String(enotdirRejection);
       expect(enotdirMessage).toContain("pre-rename destination bytes NOT restored");
-      expect(enotdirMessage).toContain(".enquire-rollback/Dest.md");
-      expect(await fs.readFile(path.join(enotdirRoot, ".enquire-rollback", "Dest.md"), "utf8")).toContain(
-        "DEST-MUST-NOT-RESTORE"
-      );
+      const destinationRecovery = recoveryPathIn(enotdirMessage, "Dest.md");
+      expect(await fs.readFile(path.join(enotdirRoot, destinationRecovery), "utf8")).toContain("DEST-MUST-NOT-RESTORE");
     } finally {
       await fs.rm(enotdirRoot, { recursive: true, force: true });
     }
@@ -474,12 +477,12 @@ describe("rollback-safe batch write cancellation", () => {
       const occupantMessage =
         occupantRejection instanceof Error ? occupantRejection.message : String(occupantRejection);
       expect(occupantMessage).toContain("pre-rename source bytes NOT restored");
-      expect(occupantMessage).toContain(".enquire-rollback/Source.md");
+      const sourceRecovery = recoveryPathIn(occupantMessage, "Source.md");
       expect(occupantMessage).toContain("pre-rename destination bytes NOT restored");
-      expect(occupantMessage).toContain(".enquire-rollback/Dest.md");
+      const destinationRecovery = recoveryPathIn(occupantMessage, "Dest.md");
       expect(occupantMessage).not.toContain("no regular file is present");
-      expect(await fs.readFile(path.join(occupantRoot, ".enquire-rollback", "Source.md"), "utf8")).toBe(selfRefSource);
-      expect(await fs.readFile(path.join(occupantRoot, ".enquire-rollback", "Dest.md"), "utf8")).toContain(
+      expect(await fs.readFile(path.join(occupantRoot, sourceRecovery), "utf8")).toBe(selfRefSource);
+      expect(await fs.readFile(path.join(occupantRoot, destinationRecovery), "utf8")).toContain(
         "DEST-MUST-STAY-AT-RENAMED-SOURCE"
       );
     } finally {
@@ -537,16 +540,365 @@ describe("rollback-safe batch write cancellation", () => {
       expect(await fs.readFile(path.join(noSelfOccupantRoot, "Dest.md"), "utf8")).toBe(sourceContent);
       const noSelfMessage = noSelfRejection instanceof Error ? noSelfRejection.message : String(noSelfRejection);
       expect(noSelfMessage).toContain("pre-rename destination bytes NOT restored");
-      expect(noSelfMessage).toContain(".enquire-rollback/Dest.md");
+      const destinationRecovery = recoveryPathIn(noSelfMessage, "Dest.md");
       expect(noSelfMessage).not.toContain("no regular file is present");
       expect(noSelfMessage).not.toContain("pre-rename source bytes NOT restored");
-      expect(await fs.readFile(path.join(noSelfOccupantRoot, ".enquire-rollback", "Dest.md"), "utf8")).toContain(
+      expect(await fs.readFile(path.join(noSelfOccupantRoot, destinationRecovery), "utf8")).toContain(
         "DEST-NOSELF-OCCUPANT-MUST-NOT-RESTORE"
       );
-      expect(await statOrNullIfMissing(path.join(noSelfOccupantRoot, ".enquire-rollback", "Source.md"))).toBeNull();
+      const recoveryEntries = await fs.readdir(path.join(noSelfOccupantRoot, ".enquire-rollback"), { recursive: true });
+      expect(recoveryEntries.some((entry) => entry.replace(/\\/g, "/").endsWith("/Source.md"))).toBe(false);
     } finally {
       await fs.rm(noSelfOccupantRoot, { recursive: true, force: true });
     }
+
+    // Ninth phase — the first post-reverse probe sees the source path vacant,
+    // then a regular-file occupant appears before the destination probe. Mere
+    // presence at the second probe cannot prove that the failed reverse
+    // returned the renamed bytes. The destination must remain untouched while
+    // the original destination snapshot goes to recovery.
+    const lateOccupantRoot = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-late-source-occupant-"));
+    try {
+      const sourceContent = "# Source\n\nSOURCE-LATE-OCCUPANT-SENTINEL\n";
+      const destinationContent = "# Dest\n\nDEST-LATE-OCCUPANT-MUST-NOT-RESTORE\n";
+      const occupantContent = "LATE-OCCUPANT-SENTINEL\n";
+      await fs.writeFile(path.join(lateOccupantRoot, "Source.md"), sourceContent);
+      await fs.writeFile(path.join(lateOccupantRoot, "Dest.md"), destinationContent);
+      await fs.writeFile(path.join(lateOccupantRoot, "Caller-A.md"), "A points to [[Source]].\n");
+      const lateOccupantVault = new Vault(lateOccupantRoot, { enableWrite: true });
+      await lateOccupantVault.ensureExists();
+
+      const lateAbort = new AbortController();
+      const lateWrite = lateOccupantVault.writeNote.bind(lateOccupantVault);
+      lateOccupantVault.writeNote = async (...args: Parameters<Vault["writeNote"]>) => {
+        const result = await lateWrite(...args);
+        const [relPath, content] = args;
+        if (!lateAbort.signal.aborted && relPath.startsWith("Caller-") && content.includes("[[Dest")) {
+          lateAbort.abort(new Error("deterministic post-rename cancellation"));
+        }
+        return result;
+      };
+      const lateRename = lateOccupantVault.renameFile.bind(lateOccupantVault);
+      lateOccupantVault.renameFile = async (...args: Parameters<Vault["renameFile"]>) => {
+        if (args[0] === "Dest.md" && args[1] === "Source.md") {
+          throw new Error("deterministic reverse-rename failure");
+        }
+        return lateRename(...args);
+      };
+      const lateLstat = lateOccupantVault.lstatIfExistsPublic.bind(lateOccupantVault);
+      let lateProbeCount = 0;
+      lateOccupantVault.lstatIfExistsPublic = async (...args: Parameters<Vault["lstatIfExistsPublic"]>) => {
+        lateProbeCount += 1;
+        if (lateProbeCount === 1) return null;
+        if (lateProbeCount === 2) {
+          await fs.writeFile(path.join(lateOccupantRoot, "Source.md"), occupantContent);
+        }
+        return lateLstat(...args);
+      };
+
+      const lateRejection = await renameNote(
+        lateOccupantVault,
+        { from: "Source.md", to: "Dest.md", overwrite: true },
+        { signal: lateAbort.signal }
+      ).then(
+        () => null,
+        (error: unknown) => error
+      );
+
+      expect(lateProbeCount).toBe(2);
+      expect(lateRejection).toBeInstanceOf(Error);
+      expect(await fs.readFile(path.join(lateOccupantRoot, "Source.md"), "utf8")).toBe(occupantContent);
+      expect(await fs.readFile(path.join(lateOccupantRoot, "Dest.md"), "utf8")).toBe(sourceContent);
+      const lateMessage = lateRejection instanceof Error ? lateRejection.message : String(lateRejection);
+      expect(lateMessage).toContain("no source snapshot restore committed");
+      const destinationRecovery = recoveryPathIn(lateMessage, "Dest.md");
+      expect(await fs.readFile(path.join(lateOccupantRoot, destinationRecovery), "utf8")).toBe(destinationContent);
+    } finally {
+      await fs.rm(lateOccupantRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("rename_note withholds destination restore when the source probe is inconclusive", async () => {
+    const sourceContent = "# Source\n\nSOURCE-EIO-SENTINEL\n";
+    const destinationContent = "# Destination\n\nDESTINATION-EIO-SENTINEL\n";
+    await fs.writeFile(path.join(root, "Source.md"), sourceContent);
+    await fs.writeFile(path.join(root, "Dest.md"), destinationContent);
+    await fs.writeFile(path.join(root, "Caller.md"), "Points to [[Source]].\n");
+
+    const vault = new Vault(root, { enableWrite: true });
+    await vault.ensureExists();
+    const abort = new AbortController();
+    const writeNote = vault.writeNote.bind(vault);
+    vault.writeNote = async (...args: Parameters<Vault["writeNote"]>) => {
+      const result = await writeNote(...args);
+      if (!abort.signal.aborted && args[0] === "Caller.md" && args[1].includes("[[Dest]]")) {
+        abort.abort(new Error("deterministic post-rename cancellation"));
+      }
+      return result;
+    };
+    const renameFile = vault.renameFile.bind(vault);
+    vault.renameFile = async (...args: Parameters<Vault["renameFile"]>) => {
+      if (args[0] === "Dest.md" && args[1] === "Source.md") {
+        throw new Error("deterministic reverse-rename failure");
+      }
+      return renameFile(...args);
+    };
+    vault.lstatIfExistsPublic = async () => {
+      throw Object.assign(new Error("deterministic source probe failure"), { code: "EIO" });
+    };
+
+    const rejection = await renameNote(
+      vault,
+      { from: "Source.md", to: "Dest.md", overwrite: true },
+      { signal: abort.signal }
+    ).then(
+      () => null,
+      (error: unknown) => error
+    );
+
+    expect(rejection).toBeInstanceOf(Error);
+    expect(rejection).not.toBeInstanceOf(WriteRequestAbortedError);
+    expect(await statOrNullIfMissing(path.join(root, "Source.md"))).toBeNull();
+    expect(await fs.readFile(path.join(root, "Dest.md"), "utf8")).toBe(sourceContent);
+    const message = rejection instanceof Error ? rejection.message : String(rejection);
+    expect(message).toContain("pre-rename destination bytes NOT restored");
+    expect(message).toContain("could not confirm whether a regular file is present");
+    const recoveryMatch = message.match(/saved at ([^ ]+)/u);
+    expect(recoveryMatch?.[1]).toBeDefined();
+    expect(await fs.readFile(path.join(root, recoveryMatch?.[1] ?? ""), "utf8")).toBe(destinationContent);
+  });
+
+  it("rename_note does not overwrite an uninspectable source-path occupant", async () => {
+    const sourceContent = "# Source\n\nSelf [[Source]] plus SOURCE-UNKNOWN-SENTINEL\n";
+    const destinationContent = "# Destination\n\nDESTINATION-UNKNOWN-SENTINEL\n";
+    const occupantContent = "CONCURRENT-OCCUPANT-MUST-SURVIVE\n";
+    await fs.writeFile(path.join(root, "Source.md"), sourceContent);
+    await fs.writeFile(path.join(root, "Dest.md"), destinationContent);
+    await fs.writeFile(path.join(root, "Caller.md"), "Points to [[Source]].\n");
+
+    const vault = new Vault(root, { enableWrite: true });
+    await vault.ensureExists();
+    const abort = new AbortController();
+    const writeNote = vault.writeNote.bind(vault);
+    vault.writeNote = async (...args: Parameters<Vault["writeNote"]>) => {
+      const result = await writeNote(...args);
+      if (!abort.signal.aborted && args[0] === "Caller.md" && args[1].includes("[[Dest]]")) {
+        abort.abort(new Error("deterministic post-rename cancellation"));
+      }
+      return result;
+    };
+    const renameFile = vault.renameFile.bind(vault);
+    vault.renameFile = async (...args: Parameters<Vault["renameFile"]>) => {
+      if (args[0] === "Dest.md" && args[1] === "Source.md") {
+        await fs.writeFile(path.join(root, "Source.md"), occupantContent);
+        throw new Error("deterministic reverse-rename failure");
+      }
+      return renameFile(...args);
+    };
+    vault.lstatIfExistsPublic = async () => {
+      throw Object.assign(new Error("deterministic source probe failure"), { code: "EIO" });
+    };
+
+    const rejection = await renameNote(
+      vault,
+      { from: "Source.md", to: "Dest.md", overwrite: true },
+      { signal: abort.signal }
+    ).then(
+      () => null,
+      (error: unknown) => error
+    );
+
+    expect(rejection).toBeInstanceOf(Error);
+    expect(await fs.readFile(path.join(root, "Source.md"), "utf8")).toBe(occupantContent);
+    expect(await fs.readFile(path.join(root, "Dest.md"), "utf8")).toContain("SOURCE-UNKNOWN-SENTINEL");
+    const message = rejection instanceof Error ? rejection.message : String(rejection);
+    const sourceRecovery = recoveryPathIn(message, "Source.md");
+    const destinationRecovery = recoveryPathIn(message, "Dest.md");
+    expect(await fs.readFile(path.join(root, sourceRecovery), "utf8")).toBe(sourceContent);
+    expect(await fs.readFile(path.join(root, destinationRecovery), "utf8")).toBe(destinationContent);
+
+    // Recovery publication itself can fail (for example ENOSPC/EACCES). That
+    // must not weaken either fail-closed overwrite decision or fabricate a
+    // successful receipt: both withheld snapshots are reported unrecoverable
+    // with the underlying cause, while the concurrent occupant and renamed
+    // source remain untouched on their public paths.
+    const recoveryFailureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-recovery-enospc-"));
+    try {
+      await fs.writeFile(path.join(recoveryFailureRoot, "Source.md"), sourceContent);
+      await fs.writeFile(path.join(recoveryFailureRoot, "Dest.md"), destinationContent);
+      await fs.writeFile(path.join(recoveryFailureRoot, "Caller.md"), "Points to [[Source]].\n");
+      const recoveryFailureVault = new Vault(recoveryFailureRoot, { enableWrite: true });
+      await recoveryFailureVault.ensureExists();
+      const failureAbort = new AbortController();
+      const failureWrite = recoveryFailureVault.writeNote.bind(recoveryFailureVault);
+      recoveryFailureVault.writeNote = async (...args: Parameters<Vault["writeNote"]>) => {
+        const result = await failureWrite(...args);
+        if (!failureAbort.signal.aborted && args[0] === "Caller.md" && args[1].includes("[[Dest]]")) {
+          failureAbort.abort(new Error("deterministic post-rename cancellation"));
+        }
+        return result;
+      };
+      const failureRename = recoveryFailureVault.renameFile.bind(recoveryFailureVault);
+      recoveryFailureVault.renameFile = async (...args: Parameters<Vault["renameFile"]>) => {
+        if (args[0] === "Dest.md" && args[1] === "Source.md") {
+          await fs.writeFile(path.join(recoveryFailureRoot, "Source.md"), occupantContent);
+          throw new Error("deterministic reverse-rename failure");
+        }
+        return failureRename(...args);
+      };
+      recoveryFailureVault.lstatIfExistsPublic = async () => {
+        throw Object.assign(new Error("deterministic source probe failure"), { code: "EIO" });
+      };
+      const recoveryAttempts: string[] = [];
+      recoveryFailureVault.writeRollbackRecoveryPublic = async (relPath) => {
+        recoveryAttempts.push(relPath);
+        throw Object.assign(new Error("deterministic rollback recovery ENOSPC"), { code: "ENOSPC" });
+      };
+
+      const failureRejection = await renameNote(
+        recoveryFailureVault,
+        { from: "Source.md", to: "Dest.md", overwrite: true },
+        { signal: failureAbort.signal }
+      ).then(
+        () => null,
+        (error: unknown) => error
+      );
+
+      expect(failureRejection).toBeInstanceOf(Error);
+      expect(recoveryAttempts).toEqual(["Source.md", "Dest.md"]);
+      expect(await fs.readFile(path.join(recoveryFailureRoot, "Source.md"), "utf8")).toBe(occupantContent);
+      expect(await fs.readFile(path.join(recoveryFailureRoot, "Dest.md"), "utf8")).toContain("SOURCE-UNKNOWN-SENTINEL");
+      const failureMessage = failureRejection instanceof Error ? failureRejection.message : String(failureRejection);
+      expect(failureMessage.match(/NOT recoverable/gu)).toHaveLength(2);
+      expect(failureMessage.match(/deterministic rollback recovery ENOSPC/gu)).toHaveLength(2);
+      expect(failureMessage).not.toContain("saved at");
+      await expect(fs.lstat(path.join(recoveryFailureRoot, ".enquire-rollback"))).rejects.toMatchObject({
+        code: "ENOENT"
+      });
+    } finally {
+      await fs.rm(recoveryFailureRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("rollback recovery files are append-only and reject a planted recovery-root symlink", async () => {
+    const vault = new Vault(root, { enableWrite: true });
+    await vault.ensureExists();
+
+    const first = await vault.writeRollbackRecoveryPublic("Folder/Dest.md", Buffer.from("first recovery\n"));
+    const second = await vault.writeRollbackRecoveryPublic("Folder/Dest.md", Buffer.from("second recovery\n"));
+    expect(second).not.toBe(first);
+    expect(await fs.readFile(path.join(root, first), "utf8")).toBe("first recovery\n");
+    expect(await fs.readFile(path.join(root, second), "utf8")).toBe("second recovery\n");
+
+    const filteredRoot = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-recovery-filters-"));
+    try {
+      await fs.mkdir(path.join(filteredRoot, "Public", "Denied"), { recursive: true });
+      await fs.mkdir(path.join(filteredRoot, "Private"));
+      const filteredVault = new Vault(filteredRoot, {
+        enableWrite: true,
+        readPaths: ["Public/**"],
+        excludeGlobs: [".enquire-rollback/**", "Public/Denied/**"]
+      });
+      await filteredVault.ensureExists();
+
+      // Recovery is authorized by the already-admitted public snapshot path.
+      // The derived hidden path need not match the public allowlist and an
+      // explicit deny-glob for the hidden namespace cannot discard its bytes.
+      const admitted = await filteredVault.writeRollbackRecoveryPublic(
+        "Public/Dest.md",
+        Buffer.from("allowlisted recovery\n")
+      );
+      expect(await fs.readFile(path.join(filteredRoot, admitted), "utf8")).toBe("allowlisted recovery\n");
+      await expect(filteredVault.readNote(admitted)).rejects.toThrow(/hidden or reserved vault path/i);
+
+      // NEGATIVE controls: bypassing filters for the derived internal path
+      // must not authorize a snapshot whose original public path was denied.
+      const namespacesBeforeDeniedWrites = await fs.readdir(path.join(filteredRoot, ".enquire-rollback"));
+      await expect(
+        filteredVault.writeRollbackRecoveryPublic("Private/Dest.md", Buffer.from("must not be written\n"))
+      ).rejects.toThrow(/--read-paths allowlist/i);
+      await expect(
+        filteredVault.writeRollbackRecoveryPublic("Public/Denied/Dest.md", Buffer.from("must not be written\n"))
+      ).rejects.toThrow(/--exclude-glob denylist/i);
+      expect(await fs.readdir(path.join(filteredRoot, ".enquire-rollback"))).toEqual(namespacesBeforeDeniedWrites);
+    } finally {
+      await fs.rm(filteredRoot, { recursive: true, force: true });
+    }
+
+    const symlinkRoot = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-recovery-symlink-"));
+    try {
+      const targetDir = path.join(symlinkRoot, "UserNotes");
+      const recoveryRoot = path.join(symlinkRoot, ".enquire-rollback");
+      await fs.mkdir(targetDir);
+      await fs.writeFile(path.join(targetDir, "sentinel.md"), "must remain unchanged\n");
+      await fs.symlink(
+        process.platform === "win32" ? targetDir : "UserNotes",
+        recoveryRoot,
+        process.platform === "win32" ? "junction" : "dir"
+      );
+      const symlinkVault = new Vault(symlinkRoot, { enableWrite: true });
+      await symlinkVault.ensureExists();
+
+      await expect(
+        symlinkVault.writeRollbackRecoveryPublic("sentinel.md", Buffer.from("must not be written\n"))
+      ).rejects.toThrow(/rollback recovery root.*real directory/i);
+      expect(await fs.readFile(path.join(targetDir, "sentinel.md"), "utf8")).toBe("must remain unchanged\n");
+      expect(await fs.readdir(targetDir)).toEqual(["sentinel.md"]);
+    } finally {
+      await fs.rm(symlinkRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("rename_note reports an incomplete rollback when destination publication precedes source-unlink failure", async () => {
+    const sourceContent = "# Source\n\nPARTIAL-MOVE-SENTINEL\n";
+    await fs.writeFile(path.join(root, "Source.md"), sourceContent);
+    const vault = new Vault(root, { enableWrite: true });
+    await vault.ensureExists();
+    const abort = new AbortController();
+    const internals = vault as unknown as {
+      unlinkSafe(target: string): Promise<void>;
+    };
+    const unlinkSafe = internals.unlinkSafe.bind(vault);
+    internals.unlinkSafe = async (target: string): Promise<void> => {
+      if (target.replace(/\\/g, "/").endsWith("/Source.md")) {
+        abort.abort(new Error("deterministic cancellation during source unlink"));
+        throw new Error("deterministic source unlink failure");
+      }
+      return unlinkSafe(target);
+    };
+
+    const rejection = await renameNote(vault, { from: "Source.md", to: "Dest.md" }, { signal: abort.signal }).then(
+      () => null,
+      (error: unknown) => error
+    );
+
+    expect(rejection).toBeInstanceOf(Error);
+    expect(rejection).not.toBeInstanceOf(WriteRequestAbortedError);
+    const message = rejection instanceof Error ? rejection.message : String(rejection);
+    expect(message).toContain("rollback failed");
+    expect(message).toContain("was published by hardlink before source removal failed");
+    const sourceStat = await fs.stat(path.join(root, "Source.md"));
+    const destinationStat = await fs.stat(path.join(root, "Dest.md"));
+    expect({ dev: destinationStat.dev, ino: destinationStat.ino }).toEqual({
+      dev: sourceStat.dev,
+      ino: sourceStat.ino
+    });
+    expect(sourceStat.nlink).toBeGreaterThanOrEqual(2);
+    expect(await fs.readFile(path.join(root, "Source.md"), "utf8")).toBe(sourceContent);
+    expect(await fs.readFile(path.join(root, "Dest.md"), "utf8")).toBe(sourceContent);
+  });
+
+  it("(negative-control) an uninterrupted exclusive rename leaves only the destination", async () => {
+    const sourceContent = "# Source\n\nCOMPLETE-MOVE-SENTINEL\n";
+    await fs.writeFile(path.join(root, "Source.md"), sourceContent);
+    const vault = new Vault(root, { enableWrite: true });
+    await vault.ensureExists();
+
+    await expect(renameNote(vault, { from: "Source.md", to: "Dest.md" })).resolves.toEqual(
+      expect.objectContaining({ from: "Source.md", to: "Dest.md", dry_run: false })
+    );
+    expect(await statOrNullIfMissing(path.join(root, "Source.md"))).toBeNull();
+    expect(await fs.readFile(path.join(root, "Dest.md"), "utf8")).toBe(sourceContent);
   });
 
   it("(negative-control) the same replace fixture commits fully when its signal remains active", async () => {

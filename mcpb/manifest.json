@@ -3,7 +3,7 @@
   "manifest_version": "0.3",
   "name": "enquire-mcp-basic",
   "display_name": "enquire MCP — Basic Read-Only",
-  "version": "4.0.0-rc.6",
+  "version": "4.0.0-rc.7",
   "description": "One-click, read-only Markdown access to an Obsidian vault: 13 focused tools, two resource surfaces, local execution, and no MCP prompts.",
   "long_description": "The deliberately small desktop edition of enquire-mcp. Select one Obsidian vault and give an MCP client cited, freshness-aware access to Markdown notes through exactly 13 read-only tools. It includes the recommended hybrid search surface (gracefully degraded to local pure-JavaScript TF-IDF), exact live text search, wikilink navigation, tags, stats, and frontmatter queries. The Basic bundle does not expose writes, feedback, persistent index builders, model acquisition, PDF/OCR, Canvas, Bases, Dataview, watcher controls, or MCP prompts. enquire itself initiates no outbound calls while serving; the connected MCP client remains a separate trust boundary and may process returned note content under its own terms.",
   "author": {

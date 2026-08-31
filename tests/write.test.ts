@@ -328,6 +328,45 @@ describe("createNote", () => {
       unlinkSpy.mockRestore();
     }
 
+    const copyRoot = path.join(root, "F2-copy-unlink-root");
+    await fs.mkdir(copyRoot, { recursive: true });
+    const copySourceRel = "CopySource.md";
+    const copyDestRel = "CopyDest.md";
+    const copySourceBytes = "copy source unlink sentinel\n";
+    await fs.writeFile(path.join(copyRoot, copySourceRel), copySourceBytes);
+    const copyVault = new Vault(copyRoot, { enableWrite: true });
+    await copyVault.ensureExists();
+    const copyInternals = copyVault as unknown as {
+      linkSafe(source: string, destination: string): Promise<void>;
+      unlinkSafe(target: string): Promise<void>;
+    };
+    const copyUnlinkSafe = copyInternals.unlinkSafe.bind(copyVault);
+    const linkSpy = vi
+      .spyOn(copyInternals, "linkSafe")
+      .mockRejectedValue(Object.assign(new Error("synthetic cross-device link"), { code: "EXDEV" }));
+    const copyUnlinkSpy = vi.spyOn(copyInternals, "unlinkSafe").mockImplementation(async (target: string) => {
+      if (String(target).replace(/\\/g, "/").endsWith("CopySource.md")) {
+        throw new Error("synthetic copied-source unlink failure");
+      }
+      return copyUnlinkSafe(target);
+    });
+    try {
+      await expect(copyVault.renameFile(copySourceRel, copyDestRel)).rejects.toThrow(
+        /published by copy before source removal failed/
+      );
+      expect(await fs.readFile(path.join(copyRoot, copySourceRel), "utf8")).toBe(copySourceBytes);
+      expect(await fs.readFile(path.join(copyRoot, copyDestRel), "utf8")).toBe(copySourceBytes);
+      const sourceStat = await fs.stat(path.join(copyRoot, copySourceRel));
+      const destinationStat = await fs.stat(path.join(copyRoot, copyDestRel));
+      expect({ dev: destinationStat.dev, ino: destinationStat.ino }).not.toEqual({
+        dev: sourceStat.dev,
+        ino: sourceStat.ino
+      });
+    } finally {
+      linkSpy.mockRestore();
+      copyUnlinkSpy.mockRestore();
+    }
+
     const statRoot = path.join(root, "F2-post-commit-stat-root");
     await fs.mkdir(statRoot, { recursive: true });
     const statSourceRel = "StatSource.md";
@@ -661,6 +700,7 @@ describe("appendToNote", () => {
       openSafe(p: string, flags: string | number, mode?: number): Promise<import("node:fs/promises").FileHandle>;
     };
     const openSafe = appendInternals.openSafe.bind(v);
+    let injectedCloseFailures = 0;
     const openSpy = vi.spyOn(appendInternals, "openSafe").mockImplementation(async (p, flags, mode) => {
       const handle = await openSafe(p, flags, mode);
       let published = false;
@@ -677,8 +717,11 @@ describe("appendToNote", () => {
         return stat(...args);
       }) as typeof handle.stat;
       handle.close = (async () => {
-        if (published) throw new Error("synthetic post-commit append close failure");
-        return close();
+        await close();
+        if (published) {
+          injectedCloseFailures++;
+          throw new Error("synthetic post-commit append close failure");
+        }
       }) as typeof handle.close;
       return handle;
     });
@@ -686,6 +729,7 @@ describe("appendToNote", () => {
       const receipt = await v.appendNote("AppendStat.md", "\nsecond");
       expect(receipt.appended_bytes).toBe(Buffer.byteLength("\nsecond"));
       expect(await fs.readFile(path.join(root, "AppendStat.md"), "utf8")).toBe("first\nsecond");
+      expect(injectedCloseFailures).toBe(1);
     } finally {
       openSpy.mockRestore();
     }

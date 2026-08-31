@@ -261,9 +261,9 @@ function tokenizerCallerProblems(cliSource: string, serverSource: string): strin
       expected: 2
     },
     {
-      label: "cli custom/default canonical-root FTS path",
+      label: "cli selected custom/default canonical-root FTS paths",
       source: cliSource,
-      needle: "const indexFile = opts.indexFile ?? defaultIndexFile(v.root);",
+      needle: "const selectedIndexFile = opts.indexFile ?? defaultIndexFile(v.root);",
       expected: 2
     },
     {
@@ -3185,15 +3185,12 @@ describe("K-1 class invariant (v3.6.3 methodological guard; recursive scan since
 
     const queryCustomPathDropped = replaceExactly(
       cliSource,
-      "const indexFile = opts.indexFile ?? defaultIndexFile(v.root);",
-      "const indexFile = defaultIndexFile(v.root);",
+      "const selectedIndexFile = opts.indexFile ?? defaultIndexFile(v.root);",
+      "const selectedIndexFile = defaultIndexFile(v.root);",
       2
     );
     expect(tokenizerCallerProblems(queryCustomPathDropped, serverSource)).toEqual(
-      expect.arrayContaining([
-        "cli custom/default canonical-root FTS path: expected 2, found 1",
-        "cli default-only canonical-root FTS paths: expected 1, found 2"
-      ])
+      expect.arrayContaining(["cli selected custom/default canonical-root FTS paths: expected 2, found 1"])
     );
 
     const ftsSource = await fs.readFile(path.resolve(process.cwd(), "src", "fts5.ts"), "utf8");

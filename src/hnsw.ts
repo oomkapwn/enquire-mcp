@@ -11,7 +11,7 @@
 // Persistence: SHIPPED in v2.16.0. Current storage uses immutable
 // `.hnsw.<nonce>.bin` generations + a meta-last `.hnsw.meta.json` pointer next
 // to `.embed.db`. Staleness check via `EmbedDb.computeSignature`.
-// The compact format-3 pointer is capped at 64 KiB; immutable native
+// The compact format-4 pointer is capped at 64 KiB; immutable native
 // generations are capped at 1 GiB on both publication and load. Writer peak
 // memory remains proportional to the in-memory graph during native
 // serialization; these byte caps are not a constant-memory save claim. An
@@ -633,8 +633,26 @@ function resolveHnswDbGenerationAuthority(
       }
     );
   }
-  const dbInstanceUuid: unknown = supplied.dbInstanceUuid;
-  const dbMutationEpoch: unknown = supplied.dbMutationEpoch;
+  const admitted = admitHnswDbGenerationAuthority(supplied);
+  if (
+    signatureAuthority &&
+    (signatureAuthority.dbInstanceUuid !== admitted.dbInstanceUuid ||
+      signatureAuthority.dbMutationEpoch !== admitted.dbMutationEpoch)
+  ) {
+    throw new TypeError("HNSW EmbedDb generation authority differs from the receipt signature");
+  }
+  return admitted;
+}
+
+function admitHnswDbGenerationAuthority(
+  supplied: Readonly<HnswDbGenerationAuthority>
+): Readonly<HnswDbGenerationAuthority> {
+  const value: unknown = supplied;
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new TypeError("HNSW EmbedDb generation authority must be an object");
+  }
+  const dbInstanceUuid: unknown = (value as Record<string, unknown>).dbInstanceUuid;
+  const dbMutationEpoch: unknown = (value as Record<string, unknown>).dbMutationEpoch;
   if (
     typeof dbInstanceUuid !== "string" ||
     !DB_INSTANCE_UUID_PATTERN.test(dbInstanceUuid) ||
@@ -642,13 +660,7 @@ function resolveHnswDbGenerationAuthority(
   ) {
     throw new TypeError("HNSW EmbedDb generation authority must contain a lowercase 128-bit UUID and safe epoch");
   }
-  if (
-    signatureAuthority &&
-    (signatureAuthority.dbInstanceUuid !== dbInstanceUuid || signatureAuthority.dbMutationEpoch !== dbMutationEpoch)
-  ) {
-    throw new TypeError("HNSW EmbedDb generation authority differs from the receipt signature");
-  }
-  return { dbInstanceUuid, dbMutationEpoch };
+  return Object.freeze({ dbInstanceUuid, dbMutationEpoch });
 }
 
 async function acquireHnswPublisher(
@@ -779,6 +791,32 @@ export interface HnswDbGenerationAuthority {
 }
 
 /**
+ * Exact immutable HNSW generation candidate for a meta-last pointer.
+ * Callers may retain this receipt across asynchronous DB revalidation and
+ * later request conditional cleanup without treating receipt possession as
+ * proof that publication committed. Cleanup independently admits the live
+ * pointer and its DB authority under the publisher lease.
+ */
+export interface HnswPublicationReceipt {
+  /** Strict same-directory immutable-generation basename. */
+  readonly binFile: string;
+  /** SHA-256 bound into the meta pointer for that generation. */
+  readonly binSha256: string;
+}
+
+/**
+ * Caller-owned output slot populated by {@link HnswIndex.saveTo} once the
+ * immutable generation is ready for meta-last publication. The receipt is a
+ * cleanup candidate, not proof that publication committed: callers may pass
+ * it to the internal stale-generation cleanup helper, which also compares the
+ * live pointer's EmbedDb generation while holding the publisher lease.
+ */
+export interface HnswPublicationReceiptSink {
+  /** Candidate generation for conditional post-publication cleanup. */
+  receipt?: Readonly<HnswPublicationReceipt>;
+}
+
+/**
  * In-memory HNSW index over L2-normalized cosine vectors. Built once on
  * serve start from `EmbedDb.getAllVectors()`; queried per
  * `obsidian_search` / `obsidian_embeddings_search` invocation.
@@ -823,6 +861,9 @@ export interface HnswIndex {
    * @param persistenceScopes - Pinned primary EmbedDb family scopes. Custom
    *   HNSW basenames require this authority; only default hash basenames may
    *   use the legacy fresh-resolution fallback.
+   * @param publication - Optional caller-owned receipt slot. It is cleared at
+   *   invocation and populated before the meta-last commit attempt, so it also
+   *   remains available when a later publisher-lease release throws.
    * @returns `true` after the meta-last pointer commits.
    * @throws {TypeError} If `file` is outside the exact HNSW namespace.
    * @throws {Error} If the graph changes before snapshot, overlaps mutation, or publication fails.
@@ -842,7 +883,8 @@ export interface HnswIndex {
     >,
     signature: string,
     dbGeneration?: Readonly<HnswDbGenerationAuthority>,
-    persistenceScopes?: PersistenceFamilyScopes
+    persistenceScopes?: PersistenceFamilyScopes,
+    publication?: HnswPublicationReceiptSink
   ): Promise<boolean>;
   /**
    * v3.9.0-rc.2 — apply a live-update diff to the in-memory index. The
@@ -1219,9 +1261,15 @@ function wrapNativeIndex(
       }
       return { currentCount: ctor.getCurrentCount(), maxElements: ctor.getMaxElements() };
     },
-    async saveTo(file, rowsByLabel, signature, dbGeneration, persistenceScopes): Promise<boolean> {
+    async saveTo(file, rowsByLabel, signature, dbGeneration, persistenceScopes, publication): Promise<boolean> {
       assertHnswFilePath(file);
       const requestedFile = file;
+      if (publication !== undefined) {
+        if (typeof publication !== "object" || publication === null || Array.isArray(publication)) {
+          throw new TypeError("HnswIndex.saveTo publication receipt slot must be an object");
+        }
+        delete publication.receipt;
+      }
       if (typeof signature !== "string" || signature.length === 0) {
         throw new TypeError("HnswIndex.saveTo signature must be a non-empty string");
       }
@@ -1303,6 +1351,12 @@ function wrapNativeIndex(
             );
             generationPublished = true;
             const meta: HnswPersistedMetaV4 = { ...projectedMeta, binSha256: binary.sha256 };
+            if (publication) {
+              publication.receipt = Object.freeze({
+                binFile: generationBasename,
+                binSha256: binary.sha256
+              });
+            }
             // Meta is the sole generation pointer and is published LAST. A crash
             // before this rename leaves the previous pointer authoritative.
             const serializedMeta = JSON.stringify(meta, null, 2);
@@ -1371,9 +1425,9 @@ function wrapNativeIndex(
   };
 }
 
-interface HnswMetaPointer {
-  binFile: string;
-  binSha256: string;
+interface HnswMetaPointer extends HnswPublicationReceipt {
+  dbInstanceUuid?: string;
+  dbMutationEpoch?: number;
 }
 
 function hnswGenerationBasename(file: string): string {
@@ -1461,6 +1515,125 @@ export async function clearHnswPersistedArtifacts(
   if (operationError !== undefined) throw operationError;
   if (releaseError !== undefined) throw releaseError;
   return operationResult;
+}
+
+/**
+ * Remove a stale HNSW publication while its invalidated EmbedDb generation is
+ * still the live meta pointer. An exact save receipt is a fallback only for a
+ * live legacy pointer without admissible DB authority. The comparison and both
+ * unlinks run under the publisher lease, so a later cooperating publisher
+ * either wins before this operation or runs after cleanup completes. A later
+ * pointer for the same or an older epoch of the invalidated DB instance is
+ * removed; a pointer bound to a newer epoch or different instance is preserved.
+ *
+ * This deliberately leaves unrelated orphan generations for the complete
+ * explicit eraser. A post-save DB drift therefore cannot erase a newer valid
+ * generation merely because it shares the same persistence family.
+ *
+ * @param file - Stable HNSW persistence base passed to `saveTo`.
+ * @param expected - Optional exact generation candidate reported through the save sink.
+ * @param invalidatedDbGeneration - EmbedDb generation proven stale by the caller's post-save receipt check.
+ * @param persistenceScopes - Pinned primary EmbedDb family scopes.
+ * @returns `true` only when the stale live pointer was removed; `false` when
+ *   no pointer exists or a different DB generation is now current.
+ * @throws {TypeError} If `file`, `expected`, or `invalidatedDbGeneration` is malformed.
+ * @throws {Error} If a present pointer cannot be admitted, matching artifacts
+ *   cannot be safely removed, or the lease cannot be released.
+ * @example
+ * await clearHnswPublishedGenerationIfStale("/tmp/0123456789ab.hnsw", receipt, staleDbGeneration);
+ * @internal
+ */
+export async function clearHnswPublishedGenerationIfStale(
+  file: string,
+  expected: Readonly<HnswPublicationReceipt> | undefined,
+  invalidatedDbGeneration: Readonly<HnswDbGenerationAuthority>,
+  persistenceScopes?: PersistenceFamilyScopes
+): Promise<boolean> {
+  assertHnswFilePath(file);
+  const expectedReceipt = expected === undefined ? undefined : admitHnswPublicationReceipt(file, expected);
+  const invalidatedAuthority = admitHnswDbGenerationAuthority(invalidatedDbGeneration);
+  const publisher = await acquireHnswPublisher(file, persistenceScopes);
+  let operationResult = false;
+  let operationError: unknown;
+  try {
+    operationResult = await clearHnswPublishedGenerationIfStaleUnchecked(
+      publisher.file,
+      expectedReceipt,
+      invalidatedAuthority
+    );
+  } catch (error) {
+    operationError = error;
+  }
+  let releaseError: unknown;
+  try {
+    await publisher.lease.release();
+  } catch (error) {
+    releaseError = error;
+  }
+  if (operationError !== undefined && releaseError !== undefined) {
+    throw new AggregateError(
+      [operationError, releaseError],
+      "Conditional HNSW cleanup failed and publisher release was incomplete"
+    );
+  }
+  if (operationError !== undefined) throw operationError;
+  if (releaseError !== undefined) throw releaseError;
+  return operationResult;
+}
+
+function admitHnswPublicationReceipt(
+  file: string,
+  candidate: Readonly<HnswPublicationReceipt>
+): Readonly<HnswPublicationReceipt> {
+  const value: unknown = candidate;
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new TypeError("HNSW publication receipt must be an object");
+  }
+  const binFile: unknown = (value as Record<string, unknown>).binFile;
+  const binSha256: unknown = (value as Record<string, unknown>).binSha256;
+  if (
+    typeof binFile !== "string" ||
+    !isHnswGenerationBasename(file, binFile) ||
+    typeof binSha256 !== "string" ||
+    !SHA256_PATTERN.test(binSha256)
+  ) {
+    throw new TypeError("HNSW publication receipt must name one exact digest-bound generation");
+  }
+  return Object.freeze({ binFile, binSha256 });
+}
+
+async function clearHnswPublishedGenerationIfStaleUnchecked(
+  file: string,
+  expected: Readonly<HnswPublicationReceipt> | undefined,
+  invalidatedDbGeneration: Readonly<HnswDbGenerationAuthority>
+): Promise<boolean> {
+  const metaFile = `${file}.meta.json`;
+  const current = await readHnswMetaPointer(metaFile, file);
+  if (!current) {
+    try {
+      await fs.lstat(metaFile);
+    } catch (error) {
+      if (errnoCode(error) === "ENOENT") return false;
+      throw error;
+    }
+    throw new Error("Refusing conditional HNSW cleanup because the live meta pointer is not admissible");
+  }
+  const exactPublication =
+    expected !== undefined && current.binFile === expected.binFile && current.binSha256 === expected.binSha256;
+  const hasDbAuthority = current.dbInstanceUuid !== undefined && current.dbMutationEpoch !== undefined;
+  const invalidatedAuthority =
+    current.dbInstanceUuid === invalidatedDbGeneration.dbInstanceUuid &&
+    current.dbMutationEpoch !== undefined &&
+    current.dbMutationEpoch <= invalidatedDbGeneration.dbMutationEpoch;
+  if (!invalidatedAuthority && (hasDbAuthority || !exactPublication)) return false;
+
+  const meta = await fs.lstat(metaFile);
+  if (!meta.isFile()) throw new Error("Refusing to remove an unsafe HNSW meta pointer leaf");
+  // Remove the authority first. If generation unlink then fails, restart sees
+  // only an unreferenced orphan and rebuilds instead of loading stale bytes.
+  await fs.unlink(metaFile);
+  await unlinkHnswGeneration(path.join(path.dirname(file), current.binFile));
+  return true;
 }
 
 /**
@@ -1566,7 +1739,7 @@ async function readHnswMetaPointer(metaFile: string, file: string): Promise<Hnsw
     parsed = JSON.parse(await readSensitiveArtifactText(metaFile, MAX_HNSW_META_BYTES)) as unknown;
   } catch {
     // Format 2 stored the full row-preview map and could exceed the compact
-    // format-3 cap. Its pointer fields were written first in a fixed canonical
+    // current compact cap. Its pointer fields were written first in a fixed canonical
     // order, so read only a bounded prefix from the held descriptor for
     // migration cleanup instead of materializing up to 256 MiB of legacy JSON.
     try {
@@ -1594,7 +1767,17 @@ async function readHnswMetaPointer(metaFile: string, file: string): Promise<Hnsw
   ) {
     return null;
   }
-  return { binFile: record.binFile, binSha256: record.binSha256 };
+  const dbInstanceUuid = record.dbInstanceUuid;
+  const dbMutationEpoch = record.dbMutationEpoch;
+  return {
+    binFile: record.binFile,
+    binSha256: record.binSha256,
+    ...(typeof dbInstanceUuid === "string" &&
+    DB_INSTANCE_UUID_PATTERN.test(dbInstanceUuid) &&
+    isHnswDbMutationEpoch(dbMutationEpoch)
+      ? { dbInstanceUuid, dbMutationEpoch }
+      : {})
+  };
 }
 
 async function unlinkHnswGeneration(file: string): Promise<void> {
@@ -1632,7 +1815,7 @@ export function loadHnswFromDisk(
  * `null` (with a stderr warning) if:
  *   • The meta pointer or its immutable generation is missing
  *   • The compact meta pointer exceeds the bounded 64 KiB read cap
- *   • A legacy format-1/format-2 pointer requires a fail-soft rebuild
+ *   • A legacy format-1/format-2/format-3 pointer requires a fail-soft rebuild
  *   • The generation digest or pre/post-load generation receipt differs
  *   • The pointer's EmbedDb instance UUID or mutation epoch differs
  *   • The meta's `signature` doesn't match the caller's current signature

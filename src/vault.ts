@@ -66,6 +66,17 @@ class RenamePrecommitError extends Error {
   }
 }
 
+class RenamePartialCommitError extends Error {
+  constructor(fromRel: string, toRel: string, publication: "hardlink" | "copy", cause: unknown) {
+    const detail = cause instanceof Error ? cause.message : String(cause);
+    super(
+      `Rename destination was published by ${publication} before source removal failed (${detail}); both paths may exist: ${fromRel} -> ${toRel}`,
+      { cause }
+    );
+    this.name = "RenamePartialCommitError";
+  }
+}
+
 function vaultRelative(root: string, abs: string): string {
   const rel = path.relative(root, abs);
   return path.sep === "\\" ? rel.replaceAll("\\", "/") : rel;
@@ -1730,28 +1741,100 @@ export class Vault {
   /**
    * Save withheld rename-destination bytes under `.enquire-rollback/`.
    *
-   * The prefix is hidden from the public vault surface. This does not restore
-   * those bytes onto the destination path; it keeps a copy so a withheld
-   * rollback does not discard them.
+   * The prefix is hidden from the public vault surface. Every call creates a
+   * cryptographically unique, exclusive namespace below a physically verified
+   * recovery root, so a later rollback cannot overwrite an earlier copy and a
+   * planted in-vault parent symlink cannot redirect the write. This does not
+   * restore those bytes onto the destination path; it only preserves a copy.
    *
    * @param destRel - Vault-relative destination path whose snapshot is withheld.
    * @param content - Exact pre-rename destination bytes.
-   * @returns Vault-relative recovery path.
-   * @throws {Error} If the vault is read-only, the derived path is not an
-   *   enquire-rollback path, the path is user-excluded, or the write fails.
+   * User privacy filters authorize the original snapshot path, not this
+   * internal hidden copy. Once `destRel` is admitted, `--read-paths` and
+   * `--exclude-glob` cannot make the rollback discard bytes merely because
+   * `.enquire-rollback/**` is outside the public note surface. Public reads
+   * of the recovery namespace remain intrinsically excluded.
+   *
+   * @returns Unique vault-relative recovery path.
+   * @throws {Error} If the vault is read-only, the original snapshot path is
+   *   excluded, the derived path is not an enquire-rollback path, the recovery
+   *   root is not a real directory, or the exclusive write fails.
    * @internal
    */
   async writeRollbackRecoveryPublic(destRel: string, content: Buffer): Promise<string> {
-    const posix = destRel.replace(/\\/g, "/").replace(/^\/+/u, "");
-    const recoveryRel = `${ENQUIRE_ROLLBACK_SEGMENT}/${posix}`;
-    if (!isEnquireRollbackRel(recoveryRel)) {
-      throw new Error(`Refusing rollback recovery path: ${recoveryRel}`);
+    if (!this.writeEnabled) {
+      throw new Error("Vault is read-only — start the server with --enable-write to save rollback recovery");
     }
+    if (!this.ready) await this.ensureExists();
+    if (content.length > this.maxFileBytes) {
+      throw new Error(`Refusing to write ${content.length} bytes (limit ${this.maxFileBytes})`);
+    }
+    const requestedAbs = this.resolveInside(destRel.replace(/\\/g, "/"));
+    const posix = vaultRelative(this.root, requestedAbs).replace(/\\/g, "/");
+    const lexicalExclusion = this.exclusionReason(posix);
+    if (lexicalExclusion) {
+      throw new Error(`Refusing rollback recovery — snapshot source is excluded by ${lexicalExclusion}: ${posix}`);
+    }
+    const canonicalSourceRel = await this.canonicalRelForPrivacyCheck(requestedAbs);
+    const physicalExclusion = this.exclusionReason(canonicalSourceRel);
+    if (physicalExclusion) {
+      throw new Error(
+        `Refusing rollback recovery — snapshot source is excluded by ${physicalExclusion}: ${canonicalSourceRel}`
+      );
+    }
+    const recoveryRoot = await this.ensureRollbackRecoveryRoot();
+    let namespaceAbs: string | null = null;
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const candidate = path.join(recoveryRoot, randomBytes(16).toString("hex"));
+      try {
+        await this.mkdirSafe(candidate, { mode: 0o700 });
+        namespaceAbs = candidate;
+        break;
+      } catch (error) {
+        if (!isErrnoException(error) || error.code !== "EEXIST") throw error;
+      }
+    }
+    if (namespaceAbs === null) {
+      throw new Error("Unable to allocate an exclusive rollback recovery namespace");
+    }
+    await this.assertRollbackRecoveryDirectory(recoveryRoot, "root");
+    await this.assertRollbackRecoveryDirectory(namespaceAbs, "namespace");
+    const namespaceRel = vaultRelative(this.root, namespaceAbs).replace(/\\/g, "/");
+    const recoveryRel = `${namespaceRel}/${path.posix.basename(posix)}`;
+    if (!isEnquireRollbackRel(recoveryRel)) throw new Error(`Refusing rollback recovery path: ${recoveryRel}`);
     const result = await this.writeNoteContent(recoveryRel, content, {
-      overwrite: true,
+      overwrite: false,
       rollbackRecovery: true
     });
     return result.relPath;
+  }
+
+  private async ensureRollbackRecoveryRoot(): Promise<string> {
+    const recoveryRoot = this.resolveInside(ENQUIRE_ROLLBACK_SEGMENT);
+    let leaf = await this.lstatIfExistsSafe(recoveryRoot);
+    if (leaf === null) {
+      try {
+        await this.mkdirSafe(recoveryRoot, { mode: 0o700 });
+      } catch (error) {
+        if (!isErrnoException(error) || error.code !== "EEXIST") throw error;
+      }
+      leaf = await this.lstatIfExistsSafe(recoveryRoot);
+    }
+    if (leaf === null || !leaf.isDirectory() || leaf.isSymbolicLink()) {
+      throw new Error("Rollback recovery root must be a real directory");
+    }
+    await this.assertRollbackRecoveryDirectory(recoveryRoot, "root");
+    return recoveryRoot;
+  }
+
+  private async assertRollbackRecoveryDirectory(directory: string, role: "root" | "namespace"): Promise<void> {
+    const leaf = await this.lstatIfExistsSafe(directory);
+    if (leaf === null || !leaf.isDirectory() || leaf.isSymbolicLink()) {
+      throw new Error(`Rollback recovery ${role} must be a real directory`);
+    }
+    if ((await this.realpathSafe(directory)) !== directory) {
+      throw new Error(`Rollback recovery ${role} must resolve to its own physical directory`);
+    }
   }
 
   private async writeNoteContent(
@@ -1937,7 +2020,12 @@ export class Vault {
     const reason = this.exclusionReason(rel);
     if (reason === null) return null;
     if (rollbackRecovery && reason === "hidden or reserved vault path" && isEnquireRollbackRel(rel)) {
-      return this.userExclusionReason(rel);
+      // writeRollbackRecoveryPublic already admitted the original snapshot
+      // path through both lexical and canonical privacy checks. The derived
+      // recovery path is an internal, intrinsically hidden sink: user filters
+      // describe the public note surface and must not discard bytes solely
+      // because this private namespace does not match them.
+      return null;
     }
     return reason;
   }
@@ -2165,7 +2253,9 @@ export class Vault {
    * of the same canonical directory entry, confirmed by exact realpath plus
    * `dev` + `ino`, or a classified-distinct destination with `overwrite`.
    * A distinct hardlink destination fails closed even with `overwrite`;
-   * byte rollback cannot restore link topology.
+   * byte rollback cannot restore link topology. If an exclusive link/copy
+   * publishes the destination but source removal then fails, the rejection
+   * explicitly reports that both paths may exist.
    *
    * For non-identical path requests, the optional planning receipt is
    * reclassified after the final mutation path guards and immediately before
@@ -2179,7 +2269,8 @@ export class Vault {
    * @returns Vault-relative source/destination paths and destination mtime.
    * @throws {Error} If a path is excluded or unsafe, a distinct destination
    *   exists without overwrite, destination identity is unproven or changed,
-   *   or the destination is a distinct hardlink entry.
+   *   the destination is a distinct hardlink entry, or a two-step move
+   *   published the destination but could not remove the source.
    * @example
    * ```ts
    * await vault.renameFile("Inbox/Draft.md", "Archive/Draft.md");
@@ -2301,7 +2392,8 @@ export class Vault {
         // EXDEV (cross-device link) is the realistic fallback: vault on a
         // bind-mount, source on the underlying fs. Fall back to an exclusive
         // copy followed by unlink; this preserves destination admission but
-        // does not claim the two-step move itself is atomic.
+        // does not claim the two-step move itself is atomic. A failed source
+        // unlink is a partial commit and is reported as such below.
         if (err instanceof Error && "code" in err && (err as NodeJS.ErrnoException).code === "EXDEV") {
           try {
             await this.copyFileSafe(fromAbs, toAbs, fsConstants.COPYFILE_EXCL);
@@ -2316,20 +2408,29 @@ export class Vault {
             throw copyErr;
           }
           publishedStat = await this.statSafe(toAbs);
-          await this.unlinkSafe(fromAbs);
+          try {
+            await this.unlinkSafe(fromAbs);
+          } catch (unlinkError) {
+            throw new RenamePartialCommitError(fromRel, toRelNorm, "copy", unlinkError);
+          }
         } else {
           throw err;
         }
       }
       // link() succeeded — source still exists at fromAbs as a hard link.
       // Unlink through unlinkSafe so a failed source removal is not reported
-      // as a completed rename. The leftover hardlink pair is recoverable, but
-      // renameNote must not rewrite backlinks on a false move receipt.
+      // as a completed rename. The leftover hardlink pair is recoverable, and
+      // the dedicated partial-commit error lets renameNote report an incomplete
+      // rollback rather than claiming cancellation restored the old topology.
       // The EXDEV copy path already unlinked; a second unlinkSafe would ENOENT
       // after a completed move (the swallowed fs.unlink.catch used to hide both).
       if (linked) {
         publishedStat = await this.statSafe(fromAbs);
-        await this.unlinkSafe(fromAbs);
+        try {
+          await this.unlinkSafe(fromAbs);
+        } catch (unlinkError) {
+          throw new RenamePartialCommitError(fromRel, toRelNorm, "hardlink", unlinkError);
+        }
       }
     }
     this.deleteCacheEntry(fromAbs);

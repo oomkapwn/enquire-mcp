@@ -1233,6 +1233,138 @@ describe("CLI subcommands E2E (against built dist/)", () => {
     await expect(fs.stat(sharedIndex)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it("privacy query/eval preserve the shared FTS through a parent symlink alias", async (ctx) => {
+    if (!distExists()) return ctx.skip();
+    if (!canRunFts5) return ctx.skip();
+    await fs.mkdir(path.join(vault, "Public"), { recursive: true });
+    await fs.mkdir(path.join(vault, "Private"), { recursive: true });
+    await fs.writeFile(path.join(vault, "Public", "Visible.md"), "aliasprivacy visible evidence\n");
+    await fs.writeFile(path.join(vault, "Private", "Secret.md"), "aliasprivacy forbidden evidence\n");
+
+    const realVault = await fs.realpath(vault);
+    const sharedIndex = defaultIndexFile(realVault);
+    const seed = spawnSync(process.execPath, [distEntry, "query", "aliasprivacy", "--vault", vault, "--json"], {
+      encoding: "utf8",
+      timeout: 20_000
+    });
+    expect(seed.status, seed.stderr).toBe(0);
+
+    const Database = (await import("better-sqlite3")).default;
+    const readPaths = (file: string): string[] => {
+      const db = new Database(file, { readonly: true, fileMustExist: true });
+      try {
+        return (
+          db.prepare("SELECT DISTINCT rel_path FROM chunks ORDER BY rel_path").all() as Array<{ rel_path: string }>
+        ).map((row) => row.rel_path);
+      } finally {
+        db.close();
+      }
+    };
+    expect(readPaths(sharedIndex)).toEqual(expect.arrayContaining(["Public/Visible.md", "Private/Secret.md"]));
+
+    const sharedParentAlias = path.join(tmpdir, "shared-index-parent-alias");
+    try {
+      await fs.symlink(path.dirname(sharedIndex), sharedParentAlias, process.platform === "win32" ? "junction" : "dir");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EPERM") return ctx.skip();
+      throw error;
+    }
+    const aliasedSharedIndex = path.join(sharedParentAlias, path.basename(sharedIndex));
+    const privacyArgs = ["--read-paths", "Public/**", "--json"];
+
+    const query = spawnSync(
+      process.execPath,
+      [distEntry, "query", "aliasprivacy", "--vault", vault, "--index-file", aliasedSharedIndex, ...privacyArgs],
+      { encoding: "utf8", timeout: 20_000 }
+    );
+    expect(query.status, query.stderr).toBe(0);
+    const queryResult = JSON.parse(query.stdout) as { matches?: Array<{ path?: string }> };
+    expect(queryResult.matches?.some((match) => match.path === "Public/Visible.md")).toBe(true);
+    expect(queryResult.matches?.some((match) => match.path === "Private/Secret.md")).toBe(false);
+    expect(readPaths(sharedIndex)).toEqual(expect.arrayContaining(["Public/Visible.md", "Private/Secret.md"]));
+
+    const queriesFile = path.join(tmpdir, "alias-privacy-eval.jsonl");
+    await fs.writeFile(
+      queriesFile,
+      `${JSON.stringify({ id: "alias", query: "aliasprivacy", relevant: ["Public/Visible.md"] })}\n`
+    );
+    const evalRun = spawnSync(
+      process.execPath,
+      [
+        distEntry,
+        "eval",
+        "--vault",
+        vault,
+        "--queries",
+        queriesFile,
+        "--persistent-index",
+        "--index-file",
+        aliasedSharedIndex,
+        ...privacyArgs
+      ],
+      { encoding: "utf8", timeout: 20_000 }
+    );
+    expect(evalRun.status, evalRun.stderr).toBe(0);
+    expect(readPaths(sharedIndex)).toEqual(expect.arrayContaining(["Public/Visible.md", "Private/Secret.md"]));
+
+    // NEGATIVE control: a parent symlink alone is not enough to suppress
+    // persistence. A target under a physically distinct parent remains a
+    // caller-owned privacy index and must contain only admitted rows.
+    const dedicatedParent = path.join(tmpdir, "dedicated-index-parent");
+    const dedicatedParentAlias = path.join(tmpdir, "dedicated-index-parent-alias");
+    await fs.mkdir(dedicatedParent);
+    await fs.symlink(dedicatedParent, dedicatedParentAlias, process.platform === "win32" ? "junction" : "dir");
+    const dedicatedIndex = path.join(dedicatedParent, "dedicated.fts5.db");
+    const aliasedDedicatedIndex = path.join(dedicatedParentAlias, path.basename(dedicatedIndex));
+    const dedicatedRun = spawnSync(
+      process.execPath,
+      [distEntry, "query", "aliasprivacy", "--vault", vault, "--index-file", aliasedDedicatedIndex, ...privacyArgs],
+      { encoding: "utf8", timeout: 20_000 }
+    );
+    expect(dedicatedRun.status, dedicatedRun.stderr).toBe(0);
+    expect(readPaths(dedicatedIndex)).toContain("Public/Visible.md");
+    expect(readPaths(dedicatedIndex)).not.toContain("Private/Secret.md");
+
+    // The lease scope NFC-normalizes its identity, but that identity is not a
+    // storage pathname. On filesystems where NFC and NFD leaves are distinct,
+    // preserve the exact selected NFD leaf and never create an NFC sibling.
+    const normalizationParent = path.join(tmpdir, "normalization-sensitive-index-parent");
+    await fs.mkdir(normalizationParent);
+    const nfdIndex = path.join(normalizationParent, "cafe\u0301.fts5.db");
+    const nfcIndex = path.join(normalizationParent, path.basename(nfdIndex).normalize("NFC"));
+    await fs.writeFile(nfdIndex, "");
+    const aliasesNfc = await fs
+      .lstat(nfcIndex)
+      .then(() => true)
+      .catch((error: NodeJS.ErrnoException) => {
+        if (error.code === "ENOENT") return false;
+        throw error;
+      });
+    if (!aliasesNfc) {
+      const normalizedRun = spawnSync(
+        process.execPath,
+        [distEntry, "query", "aliasprivacy", "--vault", vault, "--index-file", nfdIndex, ...privacyArgs],
+        { encoding: "utf8", timeout: 20_000 }
+      );
+      expect(normalizedRun.status, normalizedRun.stderr).toBe(0);
+      expect(readPaths(nfdIndex)).toContain("Public/Visible.md");
+      expect(readPaths(nfdIndex)).not.toContain("Private/Secret.md");
+      await expect(fs.lstat(nfcIndex)).rejects.toMatchObject({ code: "ENOENT" });
+    }
+
+    // Identity uncertainty fails closed: without a resolvable persistence
+    // parent the CLI still serves privacy-filtered in-memory results, but it
+    // must not create or synchronize the requested persistent index.
+    const unprovenIndex = path.join(tmpdir, "missing-index-parent", "unproven.fts5.db");
+    const unprovenRun = spawnSync(
+      process.execPath,
+      [distEntry, "query", "aliasprivacy", "--vault", vault, "--index-file", unprovenIndex, ...privacyArgs],
+      { encoding: "utf8", timeout: 20_000 }
+    );
+    expect(unprovenRun.status, unprovenRun.stderr).toBe(0);
+    await expect(fs.lstat(unprovenIndex)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("`enquire-mcp index` builds the FTS5 index and reports per-status counts", async (ctx) => {
     if (!distExists()) return ctx.skip();
     if (!canRunFts5) return ctx.skip();

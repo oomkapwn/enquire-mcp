@@ -13,7 +13,12 @@
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 // @ts-expect-error — .mjs build script, no type declarations (CLI guarded by isEntrypoint).
-import { benchmarkEmbeddingSyncComplete, parseBenchArgs, resolveBenchWrite } from "../scripts/run-benchmarks.mjs";
+import {
+  applyBenchmarkGraphTieBreak,
+  benchmarkEmbeddingSyncComplete,
+  parseBenchArgs,
+  resolveBenchWrite
+} from "../scripts/run-benchmarks.mjs";
 
 const CANON = "/repo/bench/benchmarks.json";
 
@@ -25,12 +30,57 @@ const CANON = "/repo/bench/benchmarks.json";
 // proves the import is side-effect-free by simply having succeeded (the two pure
 // exports are callable and no process.exit fired) AND pins the structural close.
 describe("run-benchmarks.mjs import isolation (rc.16 RC15-TESTINFRA-1)", () => {
-  it("importing for pure exports has no dist-load side effect (both exports usable)", () => {
+  it("imports pure helpers without dist side effects and mirrors the product graph tie-break", () => {
     // If the module still process.exit'd or failed a top-level dist import, this
     // file wouldn't have loaded at all. Reaching here + calling the pure fn proves it.
     expect(typeof parseBenchArgs).toBe("function");
     expect(typeof resolveBenchWrite).toBe("function");
+    expect(typeof applyBenchmarkGraphTieBreak).toBe("function");
     expect(parseBenchArgs([])).toEqual({ allowPartial: false, output: null });
+
+    // Equal RRF scores may be reordered by in-degree. This fixture also pins
+    // the path contract: only the trailing numeric chunk id is stripped, a
+    // literal `#` in the filename survives, and NFD/case variants match NFC.
+    const accentedChunk = "Folder/Cafe\u0301# Notes.md#2";
+    const tied = [
+      { id: "Neutral.md", score: 0.1 },
+      { id: accentedChunk, score: 0.1 },
+      { id: "Other.md", score: 0.05 }
+    ];
+    expect(applyBenchmarkGraphTieBreak(tied, new Map([["Other.md", new Set(["folder/CAFÉ# NOTES"])]]))).toEqual([
+      { id: accentedChunk, score: 0.1 },
+      { id: "Neutral.md", score: 0.1 },
+      { id: "Other.md", score: 0.05 }
+    ]);
+
+    // NEGATIVE control for the former benchmark-only alpha mutation: even
+    // thirty inbound links cannot overtake a genuinely stronger RRF score,
+    // and the fused scores themselves remain byte-for-byte unchanged.
+    const unequal = [
+      { id: "Strong.md", score: 0.2 },
+      { id: "Linked.md", score: 0.1 },
+      ...Array.from({ length: 30 }, (_, i) => ({ id: `Source-${i}.md`, score: 0.01 }))
+    ];
+    const manyLinks = new Map(Array.from({ length: 30 }, (_, i) => [`Source-${i}.md`, new Set(["Linked"])]));
+    const originalScores = new Map(unequal.map((candidate) => [candidate.id, candidate.score]));
+    const unequalRanked = applyBenchmarkGraphTieBreak(unequal, manyLinks);
+    expect(unequalRanked.slice(0, 2)).toEqual([
+      { id: "Strong.md", score: 0.2 },
+      { id: "Linked.md", score: 0.1 }
+    ]);
+    expect(new Map(unequalRanked.map((candidate) => [candidate.id, candidate.score]))).toEqual(originalScores);
+
+    // A link donor outside the fused candidate set cannot affect the tie.
+    // This pins the caller boundary behind product `topK=max(limit*4, 30)`:
+    // a rank-41+ donor is absent when the benchmark result limit is 10.
+    const boundaryTie = [
+      { id: "B.md", score: 0.1 },
+      { id: "A.md", score: 0.1 }
+    ];
+    expect(applyBenchmarkGraphTieBreak(boundaryTie, new Map([["LateSource.md", new Set(["A"])]]))).toEqual([
+      { id: "B.md", score: 0.1 },
+      { id: "A.md", score: 0.1 }
+    ]);
   });
 });
 

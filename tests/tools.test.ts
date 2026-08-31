@@ -732,6 +732,65 @@ describe("validateNoteProposal — anti-slop write linter (v0.12)", () => {
     }
   });
 
+  it("classifies a proposed tag from beyond the listTags 2000-row slice by exact identity", async () => {
+    const v = new Vault(root);
+    const tailTag = "zzzz-existing-after-dashboard-cap";
+    const entries: FileEntry[] = Array.from({ length: 2_001 }, (_, index) => ({
+      absPath: path.join(root, `synthetic-${index}.md`),
+      relPath: `synthetic-${index}.md`,
+      basename: `synthetic-${index}.md`,
+      mtimeMs: index,
+      sizeBytes: 1,
+      sourceRevision: `synthetic:${index}`
+    }));
+    const inventory = vi.spyOn(v, "listFilesByExtensionsBounded").mockResolvedValue({
+      entries,
+      visitedEntries: entries.length,
+      complete: true
+    });
+    const read = vi.spyOn(v, "readNoteUncached").mockImplementation(async (absPath, knownMtimeMs) => {
+      const index = Number.parseInt(path.basename(absPath).slice("synthetic-".length, -".md".length), 10);
+      const tag = index === entries.length - 1 ? tailTag : `a${String(index).padStart(4, "0")}`;
+      return {
+        content: `#${tag}`,
+        parsed: {
+          frontmatter: {},
+          body: `#${tag}`,
+          bodyStartLine: 1,
+          wikilinks: [],
+          embeds: [],
+          tags: [tag]
+        },
+        mtimeMs: knownMtimeMs ?? 0
+      };
+    });
+    try {
+      const existing = await validateNoteProposal(v, {
+        path: "Inbox/reuse-tail.md",
+        content: `---\ntags: [${tailTag}]\n---\nbody\n`
+      });
+      expect(existing.tags).toContainEqual({ name: tailTag, status: "existing" });
+      expect(existing.warnings.some((warning) => warning.kind === "new-tag")).toBe(false);
+      expect(read).toHaveBeenCalledTimes(entries.length);
+
+      // NEGATIVE control: completing the exact same bounded scan without a
+      // matching identity must still classify a genuinely absent tag as new.
+      const absentTag = "zzzz-genuinely-absent";
+      const absent = await validateNoteProposal(v, {
+        path: "Inbox/new-tail.md",
+        content: `---\ntags: [${absentTag}]\n---\nbody\n`
+      });
+      expect(absent.tags).toContainEqual({ name: absentTag, status: "new" });
+      expect(absent.warnings.some((warning) => warning.kind === "new-tag" && warning.message.includes(absentTag))).toBe(
+        true
+      );
+      expect(inventory).toHaveBeenCalledTimes(2);
+    } finally {
+      read.mockRestore();
+      inventory.mockRestore();
+    }
+  });
+
   it("path collision in mode=create blocks (errors), in mode=overwrite warns instead", async () => {
     const v = new Vault(root);
     // Alpha.md already exists in test vault.

@@ -17,7 +17,14 @@ const ALLOW_ONLY_CONTROL = ["allow", "Only"].join("");
 const SET_CONFIG_CONTROL = ["set", "Config"].join("");
 const TARGET_CONTROLS = new Set([ALLOW_ONLY_CONTROL, ONLY_CONTROL, SET_CONFIG_CONTROL]);
 const MAX_TARGET_CONTROL_LENGTH = Math.max(...[...TARGET_CONTROLS].map((control) => control.length));
-const GENERATED_TOP_LEVEL_DIRS = new Set([".git", "coverage", "dist", "node_modules"]);
+const OPAQUE_TOP_LEVEL_DIRS = new Set([".git", "coverage", "dist", "node_modules"]);
+const GENERATED_EXECUTABLE_DIRS = new Set([
+  ".mcpb-stage",
+  ".pages-dist",
+  ".vitest-cache",
+  "docs/api-reference",
+  "false"
+]);
 const FOCUS_CONTROL_HINT =
   "A reserved Vitest focus/runtime-config spelling appears on a guarded executable surface. Remove the control " +
   "or rewrite benign data flow; use CLI test-name filters only for local diagnostics.";
@@ -344,8 +351,9 @@ export function inspectStaticVitestFocusControls(source, filename) {
 /**
  * Enumerate the complete first-party JavaScript/TypeScript executable-source census.
  *
- * Only generated/install roots (`coverage`, `dist`, `node_modules`) and Git
- * metadata are excluded; every other repository directory is traversed.
+ * Only exact generated/install roots declared in `.gitignore` and Git metadata
+ * are excluded; every other repository directory, including near-miss names,
+ * is traversed.
  *
  * @param {string} repoRoot Absolute repository root.
  * @returns {string[]} Sorted repository-relative source paths.
@@ -356,11 +364,13 @@ export function firstPartyVitestFocusSourceFiles(repoRoot) {
     const absoluteDirectory = relativeDirectory === "" ? repoRoot : join(repoRoot, relativeDirectory);
     for (const entry of readdirSync(absoluteDirectory, { withFileTypes: true })) {
       const relativeEntry = relativeDirectory === "" ? entry.name : `${relativeDirectory}/${entry.name}`;
-      if (relativeDirectory === "" && GENERATED_TOP_LEVEL_DIRS.has(entry.name)) continue;
+      if (relativeDirectory === "" && OPAQUE_TOP_LEVEL_DIRS.has(entry.name)) continue;
+      if (entry.isSymbolicLink()) {
+        throw new Error(`focus-control source census refuses symbolic link ${relativeEntry}`);
+      }
+      if (entry.isDirectory() && GENERATED_EXECUTABLE_DIRS.has(relativeEntry)) continue;
       if (entry.isDirectory()) {
         walk(relativeEntry);
-      } else if (entry.isSymbolicLink()) {
-        throw new Error(`focus-control source census refuses symbolic link ${relativeEntry}`);
       } else if (entry.isFile() && SOURCE_EXTENSIONS.has(extname(entry.name))) files.push(relativeEntry);
     }
   };

@@ -20,9 +20,11 @@ import { EmbedDb } from "../src/embed-db.js";
 import {
   buildHnsw as buildHnswWithoutScopes,
   clearHnswPersistedArtifacts as clearHnswPersistedArtifactsWithoutScopes,
+  clearHnswPublishedGenerationIfStale as clearHnswPublishedGenerationIfStaleWithoutScopes,
   type HnswBuildOptions,
   type HnswIndex,
   type HnswPersistedMeta,
+  type HnswPublicationReceiptSink,
   hnswResultsToHits,
   hnswResultsToReceiptHits,
   isHnswGenerationBasename,
@@ -51,13 +53,14 @@ async function testSemanticScopes(file: string): Promise<PersistenceFamilyScopes
 async function buildHnsw(vectors: ReadonlyArray<LabeledVector>, opts: HnswBuildOptions): Promise<HnswIndex> {
   const index = await buildHnswWithoutScopes(vectors, opts);
   const saveWithoutTestAuthority = index.saveTo.bind(index);
-  index.saveTo = async (file, rowsByLabel, signature, dbGeneration, persistenceScopes) =>
+  index.saveTo = async (file, rowsByLabel, signature, dbGeneration, persistenceScopes, publication) =>
     saveWithoutTestAuthority(
       file,
       rowsByLabel,
       signature,
       dbGeneration,
-      persistenceScopes ?? (await testSemanticScopes(file))
+      persistenceScopes ?? (await testSemanticScopes(file)),
+      publication
     );
   return index;
 }
@@ -745,6 +748,188 @@ describe("HNSW persistence (v2.16.0)", () => {
     const afterReplacement = loaded.index.searchKnn(replacement, 5, { ef: 30 });
     expect(afterReplacement.labels[0]).toBe(900);
     expect(afterReplacement.labels).not.toContain(105);
+  });
+
+  it("(NEGATIVE control) conditional stale cleanup preserves a newer published generation", async () => {
+    const persistFile = path.join(dir, "conditional-newer.hnsw");
+    const persistenceScopes = await testSemanticScopes(persistFile);
+    const staleAuthority = { dbInstanceUuid: "a".repeat(32), dbMutationEpoch: 11 };
+    const currentAuthority = { dbInstanceUuid: "a".repeat(32), dbMutationEpoch: 12 };
+    const vectorA = l2(new Float32Array([1, 2, 3, 4]));
+    const vectorB = l2(new Float32Array([4, 3, 2, 1]));
+    const indexA = await buildHnsw([{ label: 801, vector: vectorA }], { dim: 4, maxElements: 1, seed: 801 });
+    const indexB = await buildHnsw([{ label: 802, vector: vectorB }], { dim: 4, maxElements: 1, seed: 802 });
+    const publicationA: HnswPublicationReceiptSink = {};
+    const publicationB: HnswPublicationReceiptSink = {};
+
+    await indexA.saveTo(
+      persistFile,
+      new Map([[801, persistedRow(801)]]),
+      "conditional-race-a",
+      staleAuthority,
+      persistenceScopes,
+      publicationA
+    );
+    await indexB.saveTo(
+      persistFile,
+      new Map([[802, persistedRow(802)]]),
+      "conditional-race-b",
+      currentAuthority,
+      persistenceScopes,
+      publicationB
+    );
+    const stale = publicationA.receipt;
+    const current = publicationB.receipt;
+    if (!stale || !current) throw new Error("saveTo did not return publication receipts");
+    expect(current.binFile).not.toBe(stale.binFile);
+
+    await expect(
+      clearHnswPublishedGenerationIfStaleWithoutScopes(persistFile, stale, staleAuthority, persistenceScopes)
+    ).resolves.toBe(false);
+    const meta = JSON.parse(await fs.readFile(`${persistFile}.meta.json`, "utf8")) as {
+      binFile: string;
+      binSha256: string;
+    };
+    expect(meta).toMatchObject(current);
+    await expect(fs.access(path.join(dir, current.binFile))).resolves.toBeUndefined();
+    await expect(
+      loadHnswFromDisk(
+        persistFile,
+        "conditional-race-b",
+        trustedHnswShape([802], 4, new Map([[802, vectorB]]), currentAuthority)
+      )
+    ).resolves.not.toBeNull();
+  });
+
+  it("removes a later publication bound to the same invalidated DB generation", async () => {
+    const persistFile = path.join(dir, "conditional-stale-later.hnsw");
+    const persistenceScopes = await testSemanticScopes(persistFile);
+    const staleAuthority = { dbInstanceUuid: "c".repeat(32), dbMutationEpoch: 21 };
+    const vectorA = l2(new Float32Array([1, 3, 2, 4]));
+    const vectorB = l2(new Float32Array([4, 2, 3, 1]));
+    const indexA = await buildHnsw([{ label: 811, vector: vectorA }], { dim: 4, maxElements: 1, seed: 811 });
+    const indexB = await buildHnsw([{ label: 812, vector: vectorB }], { dim: 4, maxElements: 1, seed: 812 });
+    const publicationA: HnswPublicationReceiptSink = {};
+    const publicationB: HnswPublicationReceiptSink = {};
+
+    await indexA.saveTo(
+      persistFile,
+      new Map([[811, persistedRow(811)]]),
+      "conditional-stale-a",
+      staleAuthority,
+      persistenceScopes,
+      publicationA
+    );
+    await indexB.saveTo(
+      persistFile,
+      new Map([[812, persistedRow(812)]]),
+      "conditional-stale-b",
+      staleAuthority,
+      persistenceScopes,
+      publicationB
+    );
+    const stale = publicationA.receipt;
+    const laterStale = publicationB.receipt;
+    if (!stale || !laterStale) throw new Error("saveTo did not return publication receipts");
+    expect(laterStale.binFile).not.toBe(stale.binFile);
+
+    await expect(
+      clearHnswPublishedGenerationIfStaleWithoutScopes(persistFile, stale, staleAuthority, persistenceScopes)
+    ).resolves.toBe(true);
+    await expect(fs.lstat(`${persistFile}.meta.json`)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.lstat(path.join(dir, laterStale.binFile))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("removes an older same-instance publication without relying on an exact save receipt", async () => {
+    const persistFile = path.join(dir, "conditional-older-authority.hnsw");
+    const persistenceScopes = await testSemanticScopes(persistFile);
+    const olderAuthority = { dbInstanceUuid: "f".repeat(32), dbMutationEpoch: 50 };
+    const invalidatedAuthority = { dbInstanceUuid: "f".repeat(32), dbMutationEpoch: 51 };
+    const vector = l2(new Float32Array([3, 1, 4, 2]));
+    const index = await buildHnsw([{ label: 814, vector }], { dim: 4, maxElements: 1, seed: 814 });
+    const publication: HnswPublicationReceiptSink = {};
+    await index.saveTo(
+      persistFile,
+      new Map([[814, persistedRow(814)]]),
+      "conditional-older-authority",
+      olderAuthority,
+      persistenceScopes,
+      publication
+    );
+    const older = publication.receipt;
+    if (!older) throw new Error("saveTo did not return a publication receipt");
+
+    await expect(
+      clearHnswPublishedGenerationIfStaleWithoutScopes(persistFile, undefined, invalidatedAuthority, persistenceScopes)
+    ).resolves.toBe(true);
+    await expect(fs.lstat(`${persistFile}.meta.json`)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.lstat(path.join(dir, older.binFile))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("conditional stale cleanup removes the exact current publication", async () => {
+    const persistFile = path.join(dir, "conditional-current.hnsw");
+    const persistenceScopes = await testSemanticScopes(persistFile);
+    const staleAuthority = { dbInstanceUuid: "d".repeat(32), dbMutationEpoch: 31 };
+    const vector = l2(new Float32Array([1, 4, 2, 3]));
+    const index = await buildHnsw([{ label: 803, vector }], { dim: 4, maxElements: 1, seed: 803 });
+    const publication: HnswPublicationReceiptSink = {};
+    await index.saveTo(
+      persistFile,
+      new Map([[803, persistedRow(803)]]),
+      "conditional-current",
+      staleAuthority,
+      persistenceScopes,
+      publication
+    );
+    const receipt = publication.receipt;
+    if (!receipt) throw new Error("saveTo did not return a publication receipt");
+    const unrelatedBasename = `${path.basename(persistFile)}.${"9".repeat(48)}.bin`;
+    const unrelatedGeneration = path.join(dir, unrelatedBasename);
+    await fs.writeFile(unrelatedGeneration, "UNRELATED_ORPHAN");
+
+    await expect(
+      clearHnswPublishedGenerationIfStaleWithoutScopes(persistFile, receipt, staleAuthority, persistenceScopes)
+    ).resolves.toBe(true);
+    await expect(fs.lstat(`${persistFile}.meta.json`)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.lstat(path.join(dir, receipt.binFile))).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.readFile(unrelatedGeneration, "utf8")).resolves.toBe("UNRELATED_ORPHAN");
+  });
+
+  it("removes the invalidated current publication without a save receipt", async () => {
+    const persistFile = path.join(dir, "conditional-no-receipt.hnsw");
+    const persistenceScopes = await testSemanticScopes(persistFile);
+    const staleAuthority = { dbInstanceUuid: "e".repeat(32), dbMutationEpoch: 41 };
+    const vector = l2(new Float32Array([2, 4, 1, 3]));
+    const index = await buildHnsw([{ label: 813, vector }], { dim: 4, maxElements: 1, seed: 813 });
+    const publication: HnswPublicationReceiptSink = {};
+    await index.saveTo(
+      persistFile,
+      new Map([[813, persistedRow(813)]]),
+      "conditional-no-receipt",
+      staleAuthority,
+      persistenceScopes,
+      publication
+    );
+    const current = publication.receipt;
+    if (!current) throw new Error("saveTo did not return a publication receipt");
+
+    await expect(
+      clearHnswPublishedGenerationIfStaleWithoutScopes(persistFile, undefined, staleAuthority, persistenceScopes)
+    ).resolves.toBe(true);
+    await expect(fs.lstat(`${persistFile}.meta.json`)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.lstat(path.join(dir, current.binFile))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("reports a present but inadmissible pointer instead of silently skipping stale cleanup", async () => {
+    const persistFile = path.join(dir, "conditional-malformed.hnsw");
+    const persistenceScopes = await testSemanticScopes(persistFile);
+    const staleAuthority = { dbInstanceUuid: "1".repeat(32), dbMutationEpoch: 61 };
+    await fs.writeFile(`${persistFile}.meta.json`, "{malformed");
+
+    await expect(
+      clearHnswPublishedGenerationIfStaleWithoutScopes(persistFile, undefined, staleAuthority, persistenceScopes)
+    ).rejects.toThrow(/live meta pointer is not admissible/i);
+    await expect(fs.readFile(`${persistFile}.meta.json`, "utf8")).resolves.toBe("{malformed");
   });
 
   it.each(["f32", "int8"] as const)(

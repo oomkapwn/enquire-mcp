@@ -92,7 +92,7 @@ the same outcome?
 | **Available-signal fallback + quarantine on uncertain semantic state** | ✅ | ✕ | ✕ | ✕ |
 | **Read-only default + explicit write gate + privacy filters** | ✅ | ✕ | ✕ | ✕ |
 | **46 tools + 19 MCP prompts + semver-bound MCP contract** | ✅ | ✕ | ✕ | ✕ |
-| **2228 tests + 13 release gates + signed npm provenance** | ✅ | ✕ | ✕ | ✕ |
+| **2246 tests + 13 release gates + signed npm provenance** | ✅ | ✕ | ✕ | ✕ |
 
 **Legend:** `✅` means the complete row is built in. `✕` means the complete
 combination was not documented on the reviewed public product surface; it does
@@ -156,7 +156,7 @@ These numbers are derived from the current repository and guarded by CI:
 |---|---|
 | Tool count | **46** |
 | MCP prompt count | **19** |
-| Test count (public) | **2228** |
+| Test count (public) | **2246** |
 | Release-required CI gates | **13** |
 | Supported embedder languages | **50+** |
 | Default write posture | **Off / read-only** |
@@ -362,6 +362,13 @@ subcommand is omitted; a configuration without `--vault` is not working.
 > is instead enabled by `--feedback-weight`; it stores the canonical absolute
 > vault root plus relative path keys, counts, and ISO timestamps locally
 > without storing note bodies or query text and without modifying vault notes.
+> One narrow internal recovery sink also exists for enabled writes: after the
+> original source/destination path passes `--read-paths` and
+> `--exclude-glob`, incomplete rename compensation may preserve its exact raw bytes
+> under hidden vault-local `.enquire-rollback/` even if that derived path
+> misses those filters. MCP tools cannot read the snapshots; clear/prune commands do not remove
+> them, so the operator must inspect/recover and purge them manually under the
+> [security policy](../SECURITY.md).
 
 ### Proof links
 

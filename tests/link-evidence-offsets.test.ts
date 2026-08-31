@@ -1,7 +1,7 @@
 import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { parseNote } from "../src/parser.js";
 import { getBacklinks, getOutboundLinks, getUnresolvedWikilinks } from "../src/tools/read.js";
 import { Vault } from "../src/vault.js";
@@ -49,6 +49,47 @@ describe("wikilink source evidence", () => {
     await fs.writeFile(path.join(root, "Poison.md"), "See [[Missing|see `x`]]\n");
     const poisoned = await getUnresolvedWikilinks(vault, { limit: 10 });
     expect(poisoned.some((hit) => hit.from_path === "Source.md" && hit.snippet.includes("real-one"))).toBe(true);
+    expect(
+      poisoned.some(
+        (hit) => hit.from_path === "Poison.md" && hit.target === "Missing" && hit.snippet.includes("see `x`")
+      )
+    ).toBe(true);
+  });
+
+  it("recovers unique fallback evidence while refusing decoys and duplicate literals", async () => {
+    const source = [
+      "```md",
+      "[[Decoy]]",
+      "```",
+      "real [[Decoy]]",
+      "real [[Repeated]]",
+      "again [[Repeated]]",
+      "real [[Unique]]"
+    ].join("\n");
+    await fs.writeFile(path.join(root, "Source.md"), source);
+    const vault = new Vault(root);
+    const originalRead = vault.readNote.bind(vault);
+    const read = vi.spyOn(vault, "readNote").mockImplementation(async (...args) => {
+      const note = await originalRead(...args);
+      if (!String(args[0]).endsWith("Source.md")) return note;
+      return {
+        ...note,
+        parsed: {
+          ...note.parsed,
+          wikilinks: note.parsed.wikilinks.map((link) => ({ ...link, sourceStart: 0, sourceEnd: 1 }))
+        }
+      };
+    });
+    try {
+      const hits = await getUnresolvedWikilinks(vault, { limit: 10 });
+      expect(hits).toHaveLength(1);
+      expect(hits[0]).toMatchObject({ from_path: "Source.md", target: "Unique", line: 7 });
+      expect(hits[0]?.snippet).toContain("real [[Unique]]");
+      expect(hits.map((hit) => hit.target)).not.toContain("Decoy");
+      expect(hits.map((hit) => hit.target)).not.toContain("Repeated");
+    } finally {
+      read.mockRestore();
+    }
   });
 
   it("uses admitted offsets for backlink snippets with duplicate literals", async () => {

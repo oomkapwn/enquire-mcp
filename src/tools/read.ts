@@ -1,6 +1,6 @@
 import { parseDql, runDql } from "../dql.js";
 import { foldTag, lookupFoldedKey } from "../name-fold.js";
-import type { Embed, Wikilink } from "../parser.js";
+import { type Embed, parseNote, scanWikilinkInners, type Wikilink } from "../parser.js";
 import { computeStaleness, DEFAULT_STALE_DAYS } from "../staleness.js";
 import { noteHeadings } from "../structure.js";
 import type { FileEntry, Vault } from "../vault.js";
@@ -434,6 +434,8 @@ export interface BacklinkHit {
 }
 
 type LinkCandidate = { link: Wikilink; kind: "wikilink" | "embed" };
+type LinkEvidence = { start: number; length: number };
+type LinkEvidenceFallbacks = Map<string, LinkEvidence | null>;
 
 function orderedLinkCandidates(
   parsed: Readonly<{ wikilinks: readonly Wikilink[]; embeds: readonly Embed[] }>,
@@ -450,9 +452,90 @@ function orderedLinkCandidates(
   return candidates;
 }
 
-function admittedLinkEvidence(content: string, candidate: LinkCandidate): { start: number; length: number } {
-  const { link, kind } = candidate;
-  const expected = `${kind === "embed" ? "![[" : "[["}${link.raw}]]`;
+function expectedLinkSource(candidate: LinkCandidate): string {
+  return `${candidate.kind === "embed" ? "![[" : "[["}${candidate.link.raw}]]`;
+}
+
+function sourceLinkTarget(inner: string): string {
+  const beforePipe = inner.split("|", 1)[0] ?? "";
+  const beforeBlock = beforePipe.split("^", 1)[0] ?? "";
+  return (beforeBlock.split("#", 1)[0] ?? "").trim();
+}
+
+function structurallyAdmittedLinkEvidence(
+  content: string,
+  candidate: LinkCandidate,
+  start: number | undefined,
+  end: number | undefined
+): LinkEvidence | null {
+  if (
+    typeof start !== "number" ||
+    typeof end !== "number" ||
+    !Number.isSafeInteger(start) ||
+    !Number.isSafeInteger(end) ||
+    start < 0 ||
+    end <= start ||
+    end > content.length
+  ) {
+    return null;
+  }
+  const prefix = candidate.kind === "embed" ? "![[" : "[[";
+  const source = content.slice(start, end);
+  if (!source.startsWith(prefix) || !source.endsWith("]]")) return null;
+  if (candidate.kind === "wikilink" && start > 0 && content[start - 1] === "!") return null;
+  const inner = source.slice(prefix.length, -2);
+  if (sourceLinkTarget(inner) !== candidate.link.target) return null;
+  return { start, length: end - start };
+}
+
+function canonicalExactLinkFallbacks(content: string): LinkEvidenceFallbacks {
+  const fallbacks: LinkEvidenceFallbacks = new Map();
+  let reparsed: ReturnType<typeof parseNote>;
+  const rawOccurrenceCounts = new Map<string, number>();
+  try {
+    // `parseNote` enforces the shared source/occurrence/capture budgets. Reparse
+    // only after supplied evidence failed; this excludes fenced/inline-code
+    // decoys rather than searching raw markdown for a convenient literal. The
+    // two raw scans use the same bounded scanner solely to prove that the exact
+    // literal occurs once in the entire source, including masked regions.
+    reparsed = parseNote(content);
+    // PARSER RAW BY DESIGN: count masked byte-identical decoys; never admit them as link evidence.
+    for (const inner of scanWikilinkInners(content, false)) {
+      const exact = `[[${inner}]]`;
+      rawOccurrenceCounts.set(exact, (rawOccurrenceCounts.get(exact) ?? 0) + 1);
+    }
+    // PARSER RAW BY DESIGN: count masked byte-identical decoys; never admit them as embed evidence.
+    for (const inner of scanWikilinkInners(content, true)) {
+      const exact = `![[${inner}]]`;
+      rawOccurrenceCounts.set(exact, (rawOccurrenceCounts.get(exact) ?? 0) + 1);
+    }
+  } catch {
+    return fallbacks;
+  }
+  for (const candidate of orderedLinkCandidates(reparsed, true)) {
+    const evidence = structurallyAdmittedLinkEvidence(
+      content,
+      candidate,
+      candidate.link.sourceStart,
+      candidate.link.sourceEnd
+    );
+    if (evidence === null) continue;
+    const expected = expectedLinkSource(candidate);
+    if (content.slice(evidence.start, evidence.start + evidence.length) !== expected) continue;
+    // Any byte-identical source occurrence is ambiguous, even when the other
+    // one is in a fenced/inline-code region and absent from canonical parse.
+    if (rawOccurrenceCounts.get(expected) !== 1) {
+      fallbacks.set(expected, null);
+      continue;
+    }
+    fallbacks.set(expected, fallbacks.has(expected) ? null : evidence);
+  }
+  return fallbacks;
+}
+
+function admittedLinkEvidence(content: string, candidate: LinkCandidate): LinkEvidence {
+  const { link } = candidate;
+  const expected = expectedLinkSource(candidate);
   const start = link.sourceStart;
   const end = link.sourceEnd;
   if (
@@ -470,12 +553,27 @@ function admittedLinkEvidence(content: string, candidate: LinkCandidate): { star
   return { start, length: end - start };
 }
 
-function tryAdmittedLinkEvidence(content: string, candidate: LinkCandidate): { start: number; length: number } | null {
+function tryAdmittedLinkEvidence(
+  content: string,
+  candidate: LinkCandidate,
+  fallbackEvidence: () => LinkEvidenceFallbacks
+): LinkEvidence | null {
   try {
     return admittedLinkEvidence(content, candidate);
   } catch (err) {
     if (err instanceof Error && err.message === "Parsed wikilink evidence no longer matches its source generation") {
-      return null;
+      // Canonical inline-code stripping preserves offsets but masks the raw
+      // payload (`[[Missing|see `x`]]` becomes `Missing|see    ` in the parsed
+      // view). Admit that bounded span only when its delimiters, link kind and
+      // target still causally match the source. If the offset itself is bad,
+      // fall back only to one unique, canonically parsed exact occurrence.
+      const structural = structurallyAdmittedLinkEvidence(
+        content,
+        candidate,
+        candidate.link.sourceStart,
+        candidate.link.sourceEnd
+      );
+      return structural ?? fallbackEvidence().get(expectedLinkSource(candidate)) ?? null;
     }
     throw err;
   }
@@ -487,7 +585,9 @@ function tryAdmittedLinkEvidence(content: string, candidate: LinkCandidate): { s
  *
  * Scans the full vault, so cost is O(N notes × parse). Use {@link getNoteNeighbors}
  * if you also need outbound links + tag siblings in one call. Sorted by
- * `count` desc (most-linking notes first).
+ * `count` desc (most-linking notes first). Snippet evidence accepts a masked
+ * inline-code span only when its delimiters, link kind, and target still match;
+ * corrupt or ambiguous fallback evidence is omitted.
  *
  * @param vault - The vault to search.
  * @param args - One of `path` or `title` is required to identify the target.
@@ -523,6 +623,9 @@ export async function getBacklinks(
     const { content, parsed } = await vault.readNote(e.absPath, e.mtimeMs);
     const linkBag = orderedLinkCandidates(parsed, includeEmbeds);
     if (!linkBag.length) continue;
+    let fallbackEvidence: LinkEvidenceFallbacks | null = null;
+    const getFallbackEvidence = (): LinkEvidenceFallbacks =>
+      (fallbackEvidence ??= canonicalExactLinkFallbacks(content));
 
     let count = 0;
     const kindFlags = { wikilink: false, embed: false };
@@ -533,7 +636,7 @@ export async function getBacklinks(
       count += 1;
       kindFlags[kind] = true;
       if (snippets.length < 2) {
-        const evidence = tryAdmittedLinkEvidence(content, { link, kind });
+        const evidence = tryAdmittedLinkEvidence(content, { link, kind }, getFallbackEvidence);
         if (evidence !== null) {
           const { snippet } = sliceSnippet(content, evidence.start, evidence.length);
           if (snippet) snippets.push(snippet);
@@ -622,6 +725,9 @@ export interface UnresolvedWikilink {
  *
  * Useful for housekeeping: detecting moved/deleted notes, typos, or
  * orphaned `[[Future Note]]` placeholders. Cost is O(N notes × outbound).
+ * Masked inline-code spans require matching delimiters, kind, and target;
+ * corrupt offsets fall back only to one unique canonical exact occurrence,
+ * while ambiguous or decoy evidence is omitted.
  *
  * @param vault - The vault to scan.
  * @param args - All optional. `folder` restricts the source scan (broken
@@ -651,12 +757,15 @@ export async function getUnresolvedWikilinks(
     if (out.length >= limit) break;
     const { content, parsed } = await vault.readNote(e.absPath, e.mtimeMs);
     const candidates = orderedLinkCandidates(parsed, includeEmbeds);
+    let fallbackEvidence: LinkEvidenceFallbacks | null = null;
+    const getFallbackEvidence = (): LinkEvidenceFallbacks =>
+      (fallbackEvidence ??= canonicalExactLinkFallbacks(content));
     for (const { link, kind } of candidates) {
       if (out.length >= limit) break;
       if (!link.target) continue;
       const match = findBestMatch(all, link.target, e.relPath);
       if (match) continue;
-      const evidence = tryAdmittedLinkEvidence(content, { link, kind });
+      const evidence = tryAdmittedLinkEvidence(content, { link, kind }, getFallbackEvidence);
       if (evidence === null) continue;
       const { snippet, line } = sliceSnippet(content, evidence.start, evidence.length);
       out.push({

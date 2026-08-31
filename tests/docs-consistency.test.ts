@@ -39,6 +39,122 @@ async function read(rel: string): Promise<string> {
   return fs.readFile(path.join(repoRoot, rel), "utf8");
 }
 
+function graphBoostOverclaims(file: string, source: string): string[] {
+  const problems: string[] = [];
+  if (/\bPageRank\b/iu.test(source)) problems.push(`${file}: graph boost is not PageRank`);
+  if (/graph[- ]boost[^\n]{0,160}(?:α|alpha)\s*(?:=|[×*])/iu.test(source)) {
+    problems.push(`${file}: graph boost has no alpha score addend`);
+  }
+  return problems;
+}
+
+function benchmarkGraphBoostProblems(source: string): string[] {
+  const problems: string[] = [];
+  if (/1-step personalized PageRank[\s\S]{0,200}graph-boost score/iu.test(source)) {
+    problems.push("benchmark fixture claims PageRank graph boost");
+  }
+  if (/\bconst\s+ALPHA\s*=|\bf\.score\s*\+=/u.test(source)) {
+    problems.push("benchmark mutates RRF scores with an alpha addend");
+  }
+  if (/\btopK:\s*50\b/u.test(source)) {
+    problems.push("benchmark fusion candidate cap differs from product limit formula");
+  }
+  return problems;
+}
+
+function rollbackRecoveryDisclosureProblems(source: string): string[] {
+  const problems: string[] = [];
+  if (!/<vault>\/\.enquire-rollback\/<128-bit-random-namespace>\/<original-basename>/u.test(source)) {
+    problems.push("missing exact rollback recovery location");
+  }
+  if (!/exact raw\s+bytes/iu.test(source)) problems.push("missing raw snapshot disclosure");
+  if (!/original source\/destination path must pass[\s\S]{0,180}visibility checks/iu.test(source)) {
+    problems.push("missing original-path admission boundary");
+  }
+  if (!/does not reapply `--read-paths` or `--exclude-glob`/u.test(source)) {
+    problems.push("missing derived-path privacy-filter exception");
+  }
+  if (!/hidden-path policy[\s\S]{0,100}prevents MCP tools\s+from reading/iu.test(source)) {
+    problems.push("missing public-read exclusion");
+  }
+  if (!/mode `0700`/u.test(source)) problems.push("missing recovery namespace permissions");
+  if (!/Successfully written recovery snapshots[\s\S]{0,320}manually purges\s+`\.enquire-rollback\/`/iu.test(source)) {
+    problems.push("missing manual retention and purge disclosure");
+  }
+  if (!/Stop every write-enabled enquire\s+process[\s\S]{0,120}before inspection and purge/iu.test(source)) {
+    problems.push("missing stopped-process purge boundary");
+  }
+  if (!/None of `clear-cache`[\s\S]{0,180}`prune` removes[\s\S]{0,80}`\.enquire-rollback\/`/u.test(source)) {
+    problems.push("missing clear-command non-erasure disclosure");
+  }
+  return problems;
+}
+
+function rollbackRecoveryAgentSurfaceProblems(file: string, source: string): string[] {
+  const problems: string[] = [];
+  if (!/`.enquire-rollback\/`/u.test(source)) problems.push(`${file}: missing recovery namespace`);
+  if (!/exact raw\s+(?:bytes|snapshot)|raw vault-local artifacts/iu.test(source)) {
+    problems.push(`${file}: missing raw-byte disclosure`);
+  }
+  if (!/`--read-paths`[\s\S]{0,180}`--exclude-glob`|`--exclude-glob`[\s\S]{0,180}`--read-paths`/u.test(source)) {
+    problems.push(`${file}: missing original-filter boundary`);
+  }
+  if (!/(?:tools|MCP tools) (?:still )?cannot read|invisible to tools/iu.test(source)) {
+    problems.push(`${file}: missing public-read exclusion`);
+  }
+  if (!/purge (?:it|them) manually|purges it manually/iu.test(source)) {
+    problems.push(`${file}: missing manual purge`);
+  }
+  if (!/clear\/prune commands do not remove/iu.test(source)) {
+    problems.push(`${file}: missing clear-command non-erasure`);
+  }
+  if (!/SECURITY\.md|security policy/iu.test(source)) problems.push(`${file}: missing security-policy pointer`);
+  return problems;
+}
+
+function baseQueryApiContractProblems(source: string): string[] {
+  const start = source.indexOf("## `obsidian_query_base`");
+  const end = source.indexOf("\n## `", Math.max(0, start + 1));
+  const section = start >= 0 ? source.slice(start, end > start ? end : source.length) : "";
+  const problems: string[] = [];
+  if (section.length === 0) problems.push("missing obsidian_query_base section");
+  if (
+    !section.includes(
+      "{ base_path, view: string | null, total_matched: number, truncated: boolean, matches: Array<{ path, title, matched_on: Record<string, unknown> }>, unevaluated_predicates: string[] }"
+    )
+  ) {
+    problems.push("stale BaseQueryResult return shape");
+  }
+  if (section.includes("frontmatter_subset")) problems.push("removed frontmatter_subset field remains");
+  if (!/whole query rejects instead of returning a partial `BaseQueryResult` or `total_matched`/u.test(section)) {
+    problems.push("missing exact-total rejection contract");
+  }
+  return problems;
+}
+
+function v4HistoryAttributionProblems(llms: string, context: string): string[] {
+  const rc1Line = llms.split("\n").find((line) => line.startsWith("- **v4.0.0-rc.1:**")) ?? "";
+  const rc7Line =
+    llms.split("\n").find((line) => line.startsWith("- **v4.0.0-rc.7 current persistence boundary:**")) ?? "";
+  const problems: string[] = [];
+  if (!/on-disk persistence behavior remained compatible with v3 at that release/u.test(rc1Line)) {
+    problems.push("llms.txt: rc.1 compatibility boundary missing");
+  }
+  if (/exact family suffix|format 4/iu.test(rc1Line)) {
+    problems.push("llms.txt: later persistence break attributed to rc.1");
+  }
+  if (!/exact family suffixes/u.test(rc7Line) || !/metadata format 4/u.test(rc7Line)) {
+    problems.push("llms.txt: current rc.7 persistence boundary missing");
+  }
+  if (!/v4\.0\.0-rc\.1[\s\S]{0,180}kept on-disk persistence formats compatible/u.test(context)) {
+    problems.push("llms-ctx.txt: rc.1 compatibility boundary missing");
+  }
+  if (!/current `v4\.0\.0-rc\.7`[\s\S]{0,300}exact family suffixes[\s\S]{0,180}metadata format 4/u.test(context)) {
+    problems.push("llms-ctx.txt: current rc.7 persistence boundary missing");
+  }
+  return problems;
+}
+
 async function refreshVitestBootstrapFixtureReceipt(root: string): Promise<void> {
   const lines: string[] = [];
   for (const filename of EXPECTED_VITEST_BOOTSTRAP_FILES) {
@@ -217,6 +333,55 @@ const PREVIEW_FONT_SOURCE = Object.freeze({
   archiveUrl: "https://github.com/liberationfonts/liberation-fonts/files/7261482/liberation-fonts-ttf-2.1.5.tar.gz",
   archiveSha256: "7191c669bf38899f73a2094ed00f7b800553364f90e2637010a69c0e268f25d0",
   archiveDirectory: "liberation-fonts-ttf-2.1.5"
+});
+
+describe("graph-boost claim truth", () => {
+  it("rejects PageRank/alpha across current source, benchmark/agent docs, and every README", async () => {
+    const readmes = (await fs.readdir(repoRoot)).filter((name) => /^README(?:\.[^.]+)?\.md$/u.test(name));
+    expect(readmes.length, "canonical README plus translations must be scanned").toBeGreaterThan(1);
+    const files = ["src/tools/search.ts", "docs/benchmarks.md", "llms.txt", ...readmes];
+    const problems: string[] = [];
+    for (const file of files) problems.push(...graphBoostOverclaims(file, await read(file)));
+    expect(problems).toEqual([]);
+
+    const search = await read("src/tools/search.ts");
+    const benchmarks = await read("docs/benchmarks.md");
+    const benchmarkRunner = await read("scripts/run-benchmarks.mjs");
+    expect(search).toContain("equal RRF-score ties");
+    expect(search).toContain("score addend");
+    expect(benchmarks).toContain("in-degree tie-break (no score addend)");
+    expect(benchmarkGraphBoostProblems(benchmarkRunner)).toEqual([]);
+    expect(benchmarkRunner).toContain("fused = applyBenchmarkGraphTieBreak(fused, outLinks);");
+    expect(benchmarkRunner).toContain("const fusionTopK = Math.max(resultLimit * 4, 30);");
+    expect(benchmarkRunner).toContain("{ topK: fusionTopK }");
+    expect(benchmarkRunner).toContain("const scoreCmp = b.score - a.score;");
+    expect(benchmarkRunner).toContain("return (inDegreeById.get(b.id) ?? 0) - (inDegreeById.get(a.id) ?? 0);");
+  });
+
+  it("flags the former PageRank and alpha claims (NEGATIVE control)", () => {
+    expect(graphBoostOverclaims("fixture.md", "graph-boost reranks via 1-step personalised PageRank")).toEqual([
+      "fixture.md: graph boost is not PageRank"
+    ]);
+    expect(graphBoostOverclaims("fixture.md", "wikilink graph-boost (α=0.005)")).toEqual([
+      "fixture.md: graph boost has no alpha score addend"
+    ]);
+    expect(graphBoostOverclaims("fixture.md", "graph-boost (α × wikilink in-degree)")).toEqual([
+      "fixture.md: graph boost has no alpha score addend"
+    ]);
+    expect(
+      benchmarkGraphBoostProblems(
+        "const ALPHA = 0.005; for (const f of fused) if (inDegree > 0) f.score += ALPHA * inDegree;"
+      )
+    ).toEqual(["benchmark mutates RRF scores with an alpha addend"]);
+    expect(
+      benchmarkGraphBoostProblems(
+        "a 1-step personalized PageRank seeded by candidates produces a small graph-boost score"
+      )
+    ).toEqual(["benchmark fixture claims PageRank graph boost"]);
+    expect(benchmarkGraphBoostProblems("reciprocalRankFusion(arms, { topK: 50 })")).toEqual([
+      "benchmark fusion candidate cap differs from product limit formula"
+    ]);
+  });
 });
 
 const PREVIEW_FONT_SHA256 = Object.freeze({
@@ -1799,6 +1964,16 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
     expect(renderedWikiLint).toContain("label that component capped");
 
     const api = await read("docs/api.md");
+    expect(baseQueryApiContractProblems(api)).toEqual([]);
+    expect(
+      baseQueryApiContractProblems(
+        "## `obsidian_query_base`\n\n**Returns:** `{ path, view, matches: Array<{ path, title, frontmatter_subset }> }`.\n\n## `next`"
+      )
+    ).toEqual([
+      "stale BaseQueryResult return shape",
+      "removed frontmatter_subset field remains",
+      "missing exact-total rejection contract"
+    ]);
     expect(api).toContain("skipped_pdf_candidates: string[]");
     expect(api).toContain("never parsed as Markdown");
     expect(api).toContain("preview it with `dry_run=true`");
@@ -1837,6 +2012,54 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
       findFeedbackStorageUnderclaim("The sidecar stores only relative note paths + counts and nothing else.")
     ).not.toBeNull();
     expect(findFeedbackStorageUnderclaim("The feedback sidecar holds relative paths + counts only.")).not.toBeNull();
+
+    const rollbackSecurity = await read("SECURITY.md");
+    expect(rollbackRecoveryDisclosureProblems(rollbackSecurity)).toEqual([]);
+    expect(
+      rollbackRecoveryDisclosureProblems(
+        "All write paths obey --read-paths. Rename cancellation may store a recovery copy somewhere."
+      )
+    ).toEqual([
+      "missing exact rollback recovery location",
+      "missing raw snapshot disclosure",
+      "missing original-path admission boundary",
+      "missing derived-path privacy-filter exception",
+      "missing public-read exclusion",
+      "missing recovery namespace permissions",
+      "missing manual retention and purge disclosure",
+      "missing stopped-process purge boundary",
+      "missing clear-command non-erasure disclosure"
+    ]);
+    for (const file of ["llms.txt", "llms-ctx.txt", "docs/COMPARISON.md"] as const) {
+      expect(rollbackRecoveryAgentSurfaceProblems(file, await read(file))).toEqual([]);
+    }
+    expect(v4HistoryAttributionProblems(await read("llms.txt"), await read("llms-ctx.txt"))).toEqual([]);
+    expect(
+      v4HistoryAttributionProblems(
+        "- **v4.0.0-rc.1:** official SDK; exact family suffixes and metadata format 4.",
+        "published v4.0.0-rc.1 moved transports; current v4.0.0-rc.7 carries it"
+      )
+    ).toEqual([
+      "llms.txt: rc.1 compatibility boundary missing",
+      "llms.txt: later persistence break attributed to rc.1",
+      "llms.txt: current rc.7 persistence boundary missing",
+      "llms-ctx.txt: rc.1 compatibility boundary missing",
+      "llms-ctx.txt: current rc.7 persistence boundary missing"
+    ]);
+    expect(
+      rollbackRecoveryAgentSurfaceProblems(
+        "fixture.md",
+        "Privacy filters apply at every write boundary. Local cache and indexes persist."
+      )
+    ).toEqual([
+      "fixture.md: missing recovery namespace",
+      "fixture.md: missing raw-byte disclosure",
+      "fixture.md: missing original-filter boundary",
+      "fixture.md: missing public-read exclusion",
+      "fixture.md: missing manual purge",
+      "fixture.md: missing clear-command non-erasure",
+      "fixture.md: missing security-policy pointer"
+    ]);
   });
 
   it("STABILITY.md tool-count header matches actual registered tool count", async () => {
@@ -3271,13 +3494,40 @@ export type NegativeMissingSubpath = typeof import("@oomkapwn/enquire-mcp/fts5-m
     };
     expect(mcpbVersionProblems(readme, packageVersion)).toEqual([]);
     expect(mcpbVersionProblems(quickstart, packageVersion)).toEqual([]);
-    // A6 extra-phase: after the 4.0.0-rc.6 retarget, acquisition docs must not still
-    // advertise the unpublished predecessor tag. The existing arity-6 NEGATIVE
+    // rc.7 extra-phase: acquisition docs must not advertise any of the three
+    // tagged-but-unpublished predecessors. The existing arity-6 NEGATIVE
     // below still binds the live package.json version.
     expect(readme).not.toContain("/releases/tag/v4.0.0-rc.4");
     expect(quickstart).not.toContain("/releases/tag/v4.0.0-rc.4");
     expect(readme).not.toContain("/releases/tag/v4.0.0-rc.5");
     expect(quickstart).not.toContain("/releases/tag/v4.0.0-rc.5");
+    expect(readme).not.toContain("/releases/tag/v4.0.0-rc.6");
+    expect(quickstart).not.toContain("/releases/tag/v4.0.0-rc.6");
+    const hnswSource = await read("src/hnsw.ts");
+    const currentHnswFormat = /const HNSW_META_FORMAT_VERSION = (\d+);/u.exec(hnswSource)?.[1];
+    expect(currentHnswFormat).toBe("4");
+    const hnswFormatProblems = (text: string, format: string): string[] => {
+      const problems: string[] = [];
+      if (!new RegExp(`\\bformat(?:-| )${format}\\b`, "u").test(text)) problems.push("missing current format");
+      if (format !== "3" && /\bformat(?:-| )3\b/u.test(text)) problems.push("stale format-3 claim");
+      return problems;
+    };
+    expect(hnswFormatProblems("compact format-4 pointer", "4")).toEqual([]);
+    expect(hnswFormatProblems("compact format-3 pointer", "4")).toEqual([
+      "missing current format",
+      "stale format-3 claim"
+    ]);
+    const hnswSourceRebuildProblems = (text: string): string[] =>
+      text.includes("A legacy format-1/format-2/format-3 pointer requires a fail-soft rebuild")
+        ? []
+        : ["source loader docs must classify format 1/2/3 as rebuild-only"];
+    expect(hnswSourceRebuildProblems(hnswSource)).toEqual([]);
+    expect(hnswSourceRebuildProblems("A legacy format-1/format-2 pointer requires a fail-soft rebuild")).toEqual([
+      "source loader docs must classify format 1/2/3 as rebuild-only"
+    ]);
+    for (const surface of ["STABILITY.md", "SECURITY.md", "docs/api.md", "llms.txt", "llms-ctx.txt"] as const) {
+      expect(hnswFormatProblems(await read(surface), currentHnswFormat ?? "missing"), surface).toEqual([]);
+    }
     expect(mcpbVersionProblems(replaceAllExactly(readme, packageVersion, "0.0.0-stale", 6), packageVersion)).toEqual([
       "release tag drift",
       "asset filename drift"

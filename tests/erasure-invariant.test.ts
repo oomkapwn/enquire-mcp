@@ -1296,17 +1296,40 @@ function hnswServerAtomicityProblems(source: string): string[] {
 
   const saveCalls = calls.filter((call) => call.expression.getText(sourceFile) === "index.saveTo");
   const saveAuthority = saveCalls[0]?.arguments[3];
+  const persistAuthorityDeclarations = declarations("persistDbGeneration");
+  const persistAuthorityAssignments: ts.BinaryExpression[] = [];
+  const collectPersistAuthorityAssignments = (node: ts.Node): void => {
+    if (
+      ts.isBinaryExpression(node) &&
+      node.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+      node.left.getText(sourceFile) === "persistDbGeneration"
+    ) {
+      persistAuthorityAssignments.push(node);
+    }
+    ts.forEachChild(node, collectPersistAuthorityAssignments);
+  };
+  collectPersistAuthorityAssignments(body);
+  const persistAuthorityAssignment = persistAuthorityAssignments[0];
+  const persistedAuthority =
+    persistAuthorityAssignment && ts.isObjectLiteralExpression(persistAuthorityAssignment.right)
+      ? persistAuthorityAssignment.right
+      : undefined;
   if (
     saveCalls.length !== 1 ||
     saveCalls[0]?.arguments[0]?.getText(sourceFile) !== "persistFile" ||
     saveCalls[0]?.arguments[1]?.getText(sourceFile) !== "afterAsync.rowsByLabel" ||
     saveCalls[0]?.arguments[2]?.getText(sourceFile) !== "afterAsync.receipt.signature" ||
-    !saveAuthority ||
-    !ts.isObjectLiteralExpression(saveAuthority) ||
-    objectPropertyValue(saveAuthority, sourceFile, "dbInstanceUuid")?.getText(sourceFile) !==
+    saveAuthority?.getText(sourceFile) !== "persistDbGeneration" ||
+    persistAuthorityDeclarations.length !== 1 ||
+    persistAuthorityDeclarations[0]?.initializer?.getText(sourceFile) !== "null" ||
+    persistAuthorityAssignments.length !== 1 ||
+    !persistedAuthority ||
+    objectPropertyValue(persistedAuthority, sourceFile, "dbInstanceUuid")?.getText(sourceFile) !==
       "afterAsync.receipt.dbInstanceUuid" ||
-    objectPropertyValue(saveAuthority, sourceFile, "dbMutationEpoch")?.getText(sourceFile) !==
-      "afterAsync.receipt.dbMutationEpoch"
+    objectPropertyValue(persistedAuthority, sourceFile, "dbMutationEpoch")?.getText(sourceFile) !==
+      "afterAsync.receipt.dbMutationEpoch" ||
+    (persistAuthorityAssignment?.getStart(sourceFile) ?? Number.POSITIVE_INFINITY) >=
+      (saveCalls[0]?.getStart(sourceFile) ?? -1)
   ) {
     problems.push("server persistence must bind the pointer to the same post-build DB UUID and epoch receipt");
   }
@@ -4046,6 +4069,15 @@ describe("erasure-completeness invariant (rc.36, P-2 class)", () => {
             source,
             "dbInstanceUuid: afterAsync.receipt.dbInstanceUuid",
             "dbInstanceUuid: buildSnapshot.receipt.dbInstanceUuid"
+          )
+      },
+      {
+        mutant: "save bypasses the retained post-build DB generation authority",
+        apply: (source: string) =>
+          replaceExactly(
+            source,
+            "                          persistDbGeneration,\n                          db.getPersistenceFamilyScopes(),",
+            "                          buildSnapshot.receipt,\n                          db.getPersistenceFamilyScopes(),"
           )
       },
       {

@@ -10,6 +10,7 @@ import * as path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { EmbedDb, hnswPersistBase } from "../src/embed-db.js";
 import { defaultIndexFile, FtsIndex } from "../src/fts5.js";
+import type { HnswPublicationReceipt, HnswPublicationReceiptSink } from "../src/hnsw.js";
 import { textResult } from "../src/mcp-result.js";
 import { searchHybrid } from "../src/tools/index.js";
 import {
@@ -2142,13 +2143,19 @@ describe("prepareServerDeps — complete semantic-generation admission", () => {
     const drift = await createSemanticAdmissionFixture();
     const driftPersistFile = hnswPersistBase(drift.embedFile);
     const persistEvents: string[] = [];
-    const clear = vi.fn(async (file: unknown, scopes: unknown) => {
+    const driftPublication: HnswPublicationReceipt = {
+      binFile: `${path.basename(driftPersistFile)}.${"a".repeat(48)}.bin`,
+      binSha256: "b".repeat(64)
+    };
+    const clear = vi.fn(async (file: unknown, _expected: unknown, _invalidated: unknown, _scopes: unknown) => {
       persistEvents.push("clear");
-      const actual = await vi.importActual<typeof import("../src/hnsw.js")>("../src/hnsw.js");
-      return actual.clearHnswPersistedArtifacts(file as string, scopes as never);
+      await fs.unlink(`${String(file)}.meta.json`);
+      return true;
     });
     const driftSaveTo = vi.fn(async (file: unknown, ..._args: unknown[]) => {
       persistEvents.push("save");
+      const publication = _args[4] as HnswPublicationReceiptSink | undefined;
+      if (publication) publication.receipt = driftPublication;
       await fs.writeFile(`${String(file)}.meta.json`, '{"formatVersion":4}\n');
       const writer = new EmbedDb({
         file: drift.embedFile,
@@ -2183,7 +2190,7 @@ describe("prepareServerDeps — complete semantic-generation admission", () => {
       applyDiff: async () => {},
       saveTo: driftSaveTo
     }));
-    installSemanticAdmissionRuntimeMocks(driftBuild, { clearHnswPersistedArtifacts: clear });
+    installSemanticAdmissionRuntimeMocks(driftBuild, { clearHnswPublishedGenerationIfStale: clear });
     const driftStderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     try {
       const [{ prepareServerDeps }, { embeddingsSearch: isolatedEmbeddingsSearch }] = await Promise.all([
@@ -2196,7 +2203,12 @@ describe("prepareServerDeps — complete semantic-generation admission", () => {
       expect(driftSaveTo).toHaveBeenCalledTimes(1);
       expect(driftSaveTo.mock.calls[0]?.[0]).toBe(driftPersistFile);
       expect(persistEvents).toEqual(["save", "clear"]);
-      expect(clear).toHaveBeenCalledWith(driftPersistFile, driftSaveTo.mock.calls[0]?.[4]);
+      expect(clear).toHaveBeenCalledWith(
+        driftPersistFile,
+        driftPublication,
+        driftSaveTo.mock.calls[0]?.[3],
+        driftSaveTo.mock.calls[0]?.[4]
+      );
       expect(deps.hnswContext).toBeNull();
       expect(deps.watcherHealth).toMatchObject({ semanticUsable: true, hnswUsable: true });
       await expect(fs.lstat(`${driftPersistFile}.meta.json`)).rejects.toMatchObject({ code: "ENOENT" });
@@ -2223,14 +2235,14 @@ describe("prepareServerDeps — complete semantic-generation admission", () => {
     const throwDrift = await createSemanticAdmissionFixture();
     const throwPersistFile = hnswPersistBase(throwDrift.embedFile);
     const throwPersistEvents: string[] = [];
-    const throwClear = vi.fn(async (file: unknown, scopes: unknown) => {
+    await fs.writeFile(`${throwPersistFile}.meta.json`, '{"formatVersion":4}\n');
+    const throwClear = vi.fn(async (file: unknown, _expected: unknown, _invalidated: unknown, _scopes: unknown) => {
       throwPersistEvents.push("clear");
-      const actual = await vi.importActual<typeof import("../src/hnsw.js")>("../src/hnsw.js");
-      return actual.clearHnswPersistedArtifacts(file as string, scopes as never);
+      await fs.unlink(`${String(file)}.meta.json`);
+      return true;
     });
-    const throwSaveTo = vi.fn(async (file: unknown, ..._args: unknown[]) => {
+    const throwSaveTo = vi.fn(async (_file: unknown, ..._args: unknown[]) => {
       throwPersistEvents.push("save");
-      await fs.writeFile(`${String(file)}.meta.json`, '{"formatVersion":4}\n');
       const writer = new EmbedDb({
         file: throwDrift.embedFile,
         vaultRoot: throwDrift.vaultRoot,
@@ -2264,7 +2276,7 @@ describe("prepareServerDeps — complete semantic-generation admission", () => {
       applyDiff: async () => {},
       saveTo: throwSaveTo
     }));
-    installSemanticAdmissionRuntimeMocks(throwBuild, { clearHnswPersistedArtifacts: throwClear });
+    installSemanticAdmissionRuntimeMocks(throwBuild, { clearHnswPublishedGenerationIfStale: throwClear });
     const throwStderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     try {
       const [{ prepareServerDeps }, { embeddingsSearch: isolatedEmbeddingsSearch }] = await Promise.all([
@@ -2277,7 +2289,12 @@ describe("prepareServerDeps — complete semantic-generation admission", () => {
       expect(throwSaveTo).toHaveBeenCalledTimes(1);
       expect(throwSaveTo.mock.calls[0]?.[0]).toBe(throwPersistFile);
       expect(throwPersistEvents).toEqual(["save", "clear"]);
-      expect(throwClear).toHaveBeenCalledWith(throwPersistFile, throwSaveTo.mock.calls[0]?.[4]);
+      expect(throwClear).toHaveBeenCalledWith(
+        throwPersistFile,
+        undefined,
+        throwSaveTo.mock.calls[0]?.[3],
+        throwSaveTo.mock.calls[0]?.[4]
+      );
       expect(deps.hnswContext).toBeNull();
       expect(deps.watcherHealth).toMatchObject({ semanticUsable: true, hnswUsable: true });
       await expect(fs.lstat(`${throwPersistFile}.meta.json`)).rejects.toMatchObject({ code: "ENOENT" });

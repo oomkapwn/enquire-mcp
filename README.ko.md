@@ -17,7 +17,7 @@
 [![CI](https://github.com/oomkapwn/enquire-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/oomkapwn/enquire-mcp/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/@oomkapwn/enquire-mcp.svg?label=npm&color=cb3837)](https://www.npmjs.com/package/@oomkapwn/enquire-mcp)
 [![downloads](https://img.shields.io/npm/dm/@oomkapwn/enquire-mcp.svg?color=cb3837)](https://www.npmjs.com/package/@oomkapwn/enquire-mcp)
-[![tests](https://img.shields.io/badge/tests-2228%20contracts-brightgreen.svg)](#️-신뢰)
+[![tests](https://img.shields.io/badge/tests-2246%20contracts-brightgreen.svg)](#️-신뢰)
 [![stable](https://img.shields.io/badge/v3.11.x-stable-brightgreen.svg)](./STABILITY.md)
 [![build provenance](https://img.shields.io/badge/build_provenance-SLSA_L2-blue.svg)](https://slsa.dev/spec/v1.0/levels#build-l2)
 [![MCP](https://img.shields.io/badge/MCP-2026--07--28-8A2BE2.svg)](https://modelcontextprotocol.io/)
@@ -55,7 +55,7 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 > 3. **`serve` 중 enquire가 시작하는 외부 네트워크 호출 0건.** q8 임베딩 모델은 **당신의 머신에서** 실행되어 **당신이** 작성한 마크다운을 인덱싱합니다 — 그래서 클라우드 API 키가 아니라 명시적인 일회성 로컬 다운로드(~118 MB)입니다. 콘텐츠는 연결한 MCP 클라이언트에만 반환되며, 해당 클라이언트나 터널의 데이터 처리는 그 자체의 신뢰 경계입니다([강제됨](./SECURITY.md), 희망 사항이 아님).
 > 4. **신선도를 인식하는 회상.** 모든 결과는 노트가 얼마나 오래되었는지 보고합니다. 선택형 최신성 재순위는 에이전트가 신선한 지식을 선호하고 재검증이 필요한 오래된 사실을 표시하도록 합니다 — 망각을 인식하는 최전선이, 당신의 파일이 이미 가진 `mtime` 위에 구축됩니다.
 
-**도구 46개 · MCP 프롬프트 19개 · 단위 테스트 2228+개 · 50+ 개 언어 · v3.11.x stable · semver 결속 · MIT · npm 빌드 출처 증명(SLSA L2).**
+**도구 46개 · MCP 프롬프트 19개 · 단위 테스트 2246+개 · 50+ 개 언어 · v3.11.x stable · semver 결속 · MIT · npm 빌드 출처 증명(SLSA L2).**
 
 ---
 
@@ -74,7 +74,7 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 | **Obsidian 지식 표면 전체** | ✅ Markdown, wikilink, frontmatter, Canvas, Bases, PDF, OCR |
 | **어려운 질문을 위한 agentic retrieval** | ✅ HyDE, sub-question decomposition, context packs, GraphRAG-light, MCP 프롬프트 19개 |
 | **통제권을 잃지 않는 확장성** | ✅ HNSW live update, persistence, adaptive refill, int8 quantization |
-| **프로덕션 신뢰** | ✅ 기본 read-only, privacy filter, 인증 HTTP, semver contracts, 2228 tests, 13 release gates, SLSA L2 provenance |
+| **프로덕션 신뢰** | ✅ 기본 read-only, privacy filter, 인증 HTTP, semver contracts, 2246 tests, 13 release gates, SLSA L2 provenance |
 
 **하나의 Vault. 모든 에이전트. 완전한 검색 스택. 클라우드 종속 없음.**
 
@@ -104,7 +104,7 @@ enquire-mcp serve --vault ~/Documents/Obsidian\ Vault
 
 ### 검토 가능한 데스크톱 번들이 필요하신가요? MCPB Basic
 
-[GitHub Release `v4.0.0-rc.6`](https://github.com/oomkapwn/enquire-mcp/releases/tag/v4.0.0-rc.6)는 `enquire-mcp-basic-4.0.0-rc.6.mcpb`와 checksum, inventory, SBOM, notices, provenance를 제공합니다. 번들에는 서버 JavaScript와 일반 의존성이 포함되며, 호환 MCPB 호스트가 Node.js 22.13 이상을 제공해야 합니다.
+[GitHub Release `v4.0.0-rc.7`](https://github.com/oomkapwn/enquire-mcp/releases/tag/v4.0.0-rc.7)는 `enquire-mcp-basic-4.0.0-rc.7.mcpb`와 checksum, inventory, SBOM, notices, provenance를 제공합니다. 번들에는 서버 JavaScript와 일반 의존성이 포함되며, 호환 MCPB 호스트가 Node.js 22.13 이상을 제공해야 합니다.
 
 Basic은 정확히 **13개의 읽기 전용 도구**와 **0개의 프롬프트**로 제한됩니다. 쓰기, 영구 인덱스, 모델, PDF/OCR, watcher는 없습니다. 실제 데스크톱 GUI, 서명, 디렉터리 승인 및 카탈로그는 유지관리자의 검증이 남아 있습니다. enquire는 serve 중 외부 호출을 시작하지 않지만 요청된 노트 텍스트는 연결된 MCP 클라이언트로 전달되며 해당 클라이언트의 개인정보 보호 조건을 따릅니다.
 
@@ -113,7 +113,7 @@ Basic은 정확히 **13개의 읽기 전용 도구**와 **0개의 프롬프트**
 **완전한 하이브리드 성능을 원하시나요?** 하이브리드 사전 점검을 마친 뒤 서버를 시작하세요:
 
 ```bash
-npm install -g @oomkapwn/enquire-mcp@4.0.0-rc.6      # exact prerelease package
+npm install -g @oomkapwn/enquire-mcp@4.0.0-rc.7      # exact prerelease package
 enquire-mcp --version
 # recommended: preview first, then explicitly apply the same package-coherent plan
 enquire-mcp first-run --tier hybrid --client claude-desktop --vault <path>
@@ -187,7 +187,7 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 ### 잘 작동하는 예시 쿼리
 
 - *"내가 가격 전략을 논한 모든 노트를 찾아서 그 변화를 요약해줘."* — RRF 융합 + 리랭커가 "변화"를 의미적으로 처리합니다
-- *"PostgreSQL 대 MongoDB에 대한 내 결정이 뭐였지? 데일리 노트를 인용해."* — 위키링크 그래프 부스트가 핵심 결정 문서를 떠오르게 합니다
+- *"PostgreSQL 대 MongoDB에 대한 내 결정이 뭐였지? 데일리 노트를 인용해."* — 융합 후보의 RRF 점수가 같을 때 후보 집합의 위키링크 진입 차수가 동점을 해소합니다
 - *"Анализируй мои заметки о RAG за последние 3 месяца"* — 다국어 임베딩 + frontmatter 날짜 필터
 - *"LLaMA-3 논문 PDF의 어떤 페이지가 스케일링을 다루지?"* — `[page: N]` 인용과 함께 검색에 융합된 PDF
 - *"내 리서치 Vault의 주제별 커뮤니티를 보여줘 — 내가 어떤 테마를 탐구해왔지?"* — `obsidian_get_communities` (GraphRAG-light)
@@ -198,7 +198,7 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 
 **1 — AI 에이전트를 위한 장기 기억.** 당신의 Obsidian Vault를 아무 MCP 호환 에이전트(Claude Code, Claude Desktop, Cursor, ChatGPT, Codex, OpenClaw)에 넣으세요. 이제 에이전트는 당신이 작성한 모든 회의 노트, 일지 항목, 리서치 로그, 결정 문서에 대해 — 세션, 모델, 공급자를 가로질러 — 영속적이고 시맨틱한 회상을 갖습니다. 벤더 내장 메모리와 달리, 당신의 지식은 한 벤더의 클라우드에 갇히지 않습니다. 그것은 당신이 소유하고 자유롭게 이전할 수 있는 일반 마크다운에 존재합니다.
 
-**2 — 개인 지식 베이스 / 두 번째 뇌.** 하이브리드 검색은 50+ 개 언어 중 어느 언어로든, *어떤* 표현에 대해서도 올바른 노트를 떠오르게 합니다. 2년 전의 러시아어 일지 항목에 대해 영어로 물어도 올바른 결과를 얻습니다. 위키링크 그래프 부스트는 당신의 지식 그래프 중심에 있는 노트를 재순위합니다. GraphRAG-light는 주제별 커뮤니티를 떠오르게 합니다 — 당신이 만든 줄 잊고 있던 연결을 발견하세요. PDF는 `[page: N]` 인용과 함께 검색에 융합되어, 리서치 논문과 회의 녹취록이 일등급 기억이 됩니다.
+**2 — 개인 지식 베이스 / 두 번째 뇌.** 하이브리드 검색은 50+ 개 언어 중 어느 언어로든, *어떤* 표현에 대해서도 올바른 노트를 떠오르게 합니다. 2년 전의 러시아어 일지 항목에 대해 영어로 물어도 올바른 결과를 얻습니다. 위키링크 그래프 부스트는 후보 집합의 진입 차수로 동일한 RRF 점수의 동점만 해소합니다. GraphRAG-light는 주제별 커뮤니티를 떠오르게 합니다 — 당신이 만든 줄 잊고 있던 연결을 발견하세요. PDF는 `[page: N]` 인용과 함께 검색에 융합되어, 리서치 논문과 회의 녹취록이 일등급 기억이 됩니다.
 
 **3 — 에이전트형 RAG / 컨텍스트 엔지니어링.** `obsidian_search`는 신호별 점수를 노출해, 에이전트가 각 결과가 *왜* 순위에 올랐는지 볼 수 있습니다. HyDE는 검색 전에 모호한 쿼리를 풍부한 가설적 답변으로 미리 재작성합니다. 하위 질문 분해는 멀티홉 질문("우리 가격 전략이 어떻게 변했고 고객 반응은 어땠지?")을 독립적인 하위 쿼리로 쪼개고 결과를 융합해 처리합니다. 내장 평가 하니스(NDCG / Recall / MRR)는 벤더 벤치마크를 신뢰하는 대신 당신 자신의 쿼리로 검색 품질을 측정하게 해줍니다.
 
@@ -241,7 +241,7 @@ graph LR
     RR --> R[Ranked hits<br/>per_signal observability]
 ```
 
-`obsidian_search`는 사용 가능한 신호를 자동 감지하고 우아하게 성능을 낮춥니다. 위키링크 그래프 부스트는 1-스텝 개인화 PageRank로 top-K를 재순위합니다. 선택형 크로스 인코더 리랭킹은 측정된 +15.5 NDCG@10을 위해 top-N을 재채점합니다. 모든 결과는 `per_signal: { bm25, tfidf, embeddings }`를 반환해, 왜 그 순위에 올랐는지 볼 수 있습니다.
+`obsidian_search`는 사용 가능한 신호를 자동 감지하고 우아하게 성능을 낮춥니다. 위키링크 그래프 부스트는 후보 집합 내 위키링크 인디그리로 동일한 RRF 점수만 타이브레이크합니다. 선택형 크로스 인코더 리랭킹은 측정된 +15.5 NDCG@10을 위해 top-N을 재채점합니다. 모든 결과는 `per_signal: { bm25, tfidf, embeddings }`를 반환해, 왜 그 순위에 올랐는지 볼 수 있습니다.
 
 | 등급 | 설정 | 얻는 것 |
 |---|---|---|
@@ -285,7 +285,7 @@ graph LR
 | **HTTP 전송** | Bearer 인증 (상수 시간 SHA-256 + `timingSafeEqual`), 토큰별 속도 제한, 엄격한 CORS |
 | **Frontmatter** | `js-yaml@5` `load` (YAML 1.2 코어 스키마, 기본 안전) — 코드 실행 없음 |
 | **캐시 + 인덱스 파일** | POSIX 모드가 동작하는 환경에서 Enquire는 민감한 파일에 `0600`을 최선 노력으로 다시 적용하며, Enquire가 만든 부모 디렉터리는 `0700`으로 시작하고 기존/사용자 지정 부모는 운영자가 관리 |
-| **단위 테스트 2228개 · 릴리스 필수 CI 검사 13개 · 현재 브랜치 보호 전체 13개** | 현재 검증된 릴리스 상태이며 운영 세부사항은 아래에 고정되어 있습니다. |
+| **단위 테스트 2246개 · 릴리스 필수 CI 검사 13개 · 현재 브랜치 보호 전체 13개** | 현재 검증된 릴리스 상태이며 운영 세부사항은 아래에 고정되어 있습니다. |
 | **CI** | `release.yml`은 **릴리스 gate 13개**를 직접 나열하며 모든 PR에서 전부 실행합니다(`lint`, `test (22)`, `test (24)`, `smoke`, `audit`, `coverage`, `version-consistency`, `docs`, `oia`, `protocol-conformance`, `package-consumer`, `mcpb-basic`, `docker`). 고정된 Windows hostile-filesystem job `test-windows`는 추가로 이름이 있는 check-run이며 `smoke`의 차단 전제조건으로 전이적으로 강제됩니다. 현재 브랜치 보호는 **13개 모두**를 강제합니다(브랜치 보호 스냅샷은 2026-08-21 실시간 확인). `test-macos`는 `continue-on-error`가 있는 유일한 권고 job입니다. `docker` gate는 image를 build하고 bounded CLI 및 MCP introspection probe를 실행합니다. CodeQL은 [GitHub default setup](https://docs.github.com/code-security/code-scanning/automatically-scanning-your-code-with-code-scanning/configuring-default-setup)을 통해 별도의 미보호 분석 2개를 실행합니다. npm publish 전에 `release.yml`이 태깅된 SHA에서 직접 나열한 13개 gate를 다시 확인합니다. |
 | **커버리지** | 라인 ≥86% · 구문 ≥82% · 함수 ≥75% · 브랜치 ≥74% (게이트됨) |
 | **릴리스** | 태그별 npm + GitHub 릴리스 · semver · **서명된 빌드 출처 증명** (npm + Sigstore, SLSA Build L2; L3 생성기는 로드맵에) |
@@ -326,7 +326,7 @@ graph LR
 ```bash
 git clone https://github.com/oomkapwn/enquire-mcp.git
 cd enquire-mcp && npm install
-npm test       # 전체 스위트 (2228개 테스트)
+npm test       # 전체 스위트 (2246개 테스트)
 npm run lint   # 경고 0건
 npm run build  # tsc → dist/
 ```

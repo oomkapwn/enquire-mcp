@@ -34,7 +34,7 @@ import { releaseMutationVersionedTransitionAuditProblems } from "./release-mutat
 
 const repoRoot = path.resolve(__dirname, "..");
 const RELEASE_MUTATION_IDENTITY_FIXTURE_SHA256 = "8205d24e6d42dd4cb8986368611514131abe701434beb30150e33ea08f4b1288";
-const RELEASE_MUTATION_TRANSITION_FIXTURE_SHA256 = "114dd16bde29faf3726cf998cb6110dfcd07dc0d2720c42a92ac900380cff300";
+const RELEASE_MUTATION_TRANSITION_FIXTURE_SHA256 = "3c0cbb2b74c36f81be1758d3cea8383a9129977962b251674783a03fa6a2e871";
 const releaseMutationIdentityFixturePath = path.join(repoRoot, "tests/fixtures/release-mutation-identity.v2.json");
 const releaseMutationTransitionFixturePath = path.join(repoRoot, "tests/fixtures/release-mutation-transition.v3.json");
 const releaseIntegritySourcePath = path.join(repoRoot, "tests/release-integrity.test.ts");
@@ -286,7 +286,7 @@ const EXPECTED_REPOSITORY_MUTATION_HELPER_CALL_ENTRIES = [
   ],
   [
     "docs-consistency.test.ts",
-    { count: 53, sha256: "026bb453d24c2e13f08c60556958322c06b6fc61ec55d8e7fade36e857f6cb2c" }
+    { count: 53, sha256: "07af4bada76b7e1f926b64d56370a047ef2e5087efd757c2cffbeed1a3debccd" }
   ],
   [
     "enforcement-guard-invariant.test.ts",
@@ -294,7 +294,7 @@ const EXPECTED_REPOSITORY_MUTATION_HELPER_CALL_ENTRIES = [
   ],
   [
     "erasure-invariant.test.ts",
-    { count: 104, sha256: "3f0c236b37c04f0f5209b02c5eeb81ff6893e2794fdf850a2110999d2c92691f" }
+    { count: 105, sha256: "3fdd93042614437cdc215fdcf467480b15b1896e273c5c5b03392dbdb1abc485" }
   ],
   [
     "embeddings-offline.test.ts",
@@ -316,11 +316,11 @@ const EXPECTED_REPOSITORY_MUTATION_HELPER_CALL_ENTRIES = [
   ],
   [
     "k1-ast-invariant.test.ts",
-    { count: 4, sha256: "f8543de2020d5acd3ba355fd9d9f7ce433fb9b6e6c1d171acab8ac014eac4766" }
+    { count: 4, sha256: "801dfdc49534a44fd8e9ae7b8c5c39d00ba12c2b05718d56be8ed3784ae9494f" }
   ],
   [
     "k1-class-invariant.test.ts",
-    { count: 100, sha256: "bba71123746679eb2da9184d7cbf73bace5fba7ce73817c4bac370d57102c9a2" }
+    { count: 100, sha256: "18eb3e36d45871dc8af6d2e618cc6eb39cd8b244e21f6d257ae9c1925d0943ba" }
   ],
   ["jsonld.test.ts", { count: 11, sha256: "ec02eb24004f2c975daa1b3a668451217e2884cec7cf301e33f91f8bce98d05b" }],
   [
@@ -329,7 +329,7 @@ const EXPECTED_REPOSITORY_MUTATION_HELPER_CALL_ENTRIES = [
   ],
   [
     "no-internal-imports.test.ts",
-    { count: 79, sha256: "0ffa1d9bca5c883b8ccfa206c0676a3a02bc8ca124c7521bf00d5b87d6e9aba1" }
+    { count: 79, sha256: "c3413880df2aa51c216f7f3cf73f609cce0405cbf4f03f8cfb97a72e6a232b7e" }
   ],
   ["ocr-admission.test.ts", { count: 2, sha256: "90087510a75587d7bc1e3f94812692b128d5466f4aba05638305fa2815809faa" }],
   ["pages.test.ts", { count: 53, sha256: "bce9e4ba732c418f8f9779814cb9febc937844730cb224933b931df6bed8f21e" }],
@@ -968,10 +968,10 @@ type ReviewedOrdinaryTransformId = (typeof REVIEWED_ORDINARY_TRANSFORMS)[number]
 // the complete source file, so a reachable decoy, relocated clone, or severed
 // helper consumer cannot inherit authority from the same filename/title/count.
 const EXPECTED_REVIEWED_ORDINARY_OWNER_SHA256_ENTRIES = [
-  ["pdf OCR quote normalization", "1780f7f8b05070220f49ae4586b52b796a79c21388acd784ec3ee8709769e668"],
-  ["pdf OCR whitespace normalization", "1780f7f8b05070220f49ae4586b52b796a79c21388acd784ec3ee8709769e668"],
-  ["lifecycle whitespace normalization", "feed4e83b7ea451e40a976396c85a46e25586b9849b05022b6ff2f858da9b0c0"],
-  ["release gate parenthesis unescape", "95e7982264bbd5c5712c005f0486da5e1b29d2d3957a420a2cfc44aa9b210e5d"],
+  ["pdf OCR quote normalization", "5e72a5517eb41c9c40e22d5c50da60dc631b9a5c4770d8e36d09c0e0678067ad"],
+  ["pdf OCR whitespace normalization", "5e72a5517eb41c9c40e22d5c50da60dc631b9a5c4770d8e36d09c0e0678067ad"],
+  ["lifecycle whitespace normalization", "700b056f53b1e00932487e1fc95d69ba2fb82f0d87c0b5d87dbbca42b70e113a"],
+  ["release gate parenthesis unescape", "32aaa33de677163b757bd2a055cb5bc43e1c31ce0a623cb0ca50e17e03608b5f"],
   ["entrypoint block-comment stripping", "319def01444e238d986cd6674091a75f17ce843b71ac7e74e2c1aeba07741b0a"],
   ["entrypoint line-comment stripping", "319def01444e238d986cd6674091a75f17ce843b71ac7e74e2c1aeba07741b0a"],
   ["release-check open-parenthesis unescape", "e12c9f3c715151d4535e1531ca2c067e426973eae147b325fbac7b990bd36108"],
@@ -986,18 +986,18 @@ const EXPECTED_REVIEWED_ORDINARY_OWNER_SHA256_ENTRIES = [
   ["GitHub environment-token redaction", "d8ab2f87a80b4c0cbe4af8bf3e0f59391219109390fb4f6bcac01b23d41cda65"],
   ["GitHub authorization-header redaction", "d8ab2f87a80b4c0cbe4af8bf3e0f59391219109390fb4f6bcac01b23d41cda65"],
   ["GitHub diagnostic whitespace compaction", "d8ab2f87a80b4c0cbe4af8bf3e0f59391219109390fb4f6bcac01b23d41cda65"],
-  ["erasure source-path separator normalization", "3b89adabe6904f98add38a570ff29669bb8ab5b8ae3c3eabae4cc3faa53cce4c"],
-  ["SQLite positive-shape label normalization", "7f1649fadf90b9770a141c234e5a7f391df9ed5b0fd96e880b28ad6b71498e2f"],
-  ["SQLite suffix label normalization", "ea6ed99edfcffb8e5f0045e8b752635780d91ffa5fcee8554cb6bebb823088ac"],
-  ["sensitive-reader kind label normalization", "825c1499e89ae8a356c0d95a771841b2fd96c93f6b9094f3d783a18be9f2e266"],
-  ["sensitive-reader growth label normalization", "57522a53037186bd73e6009e064f56527b9995826ece3c7c88fdfd2756e6fd23"],
-  ["publisher kind label normalization", "dbdbeceb385475c63fdd65c52a02d69f0df72f270fc1733841d7bed3ecc02623"],
-  ["hardlink route label normalization", "8869c89d87f15f690cdfbfc352a1d9006a415c200d3880a4e35ad1b3fc148988"],
-  ["K-1 statement semicolon normalization", "16d035dcb619ed86a565e7aa31d24ffe1eaf3be6126768a6934d95ffb5075997"],
-  ["K-1 block-comment stripping", "c95678067a8bf775dec72803fda97aeda6b12479bf8420e9566259b4b42ce4db"],
-  ["K-1 line-comment stripping", "c95678067a8bf775dec72803fda97aeda6b12479bf8420e9566259b4b42ce4db"],
-  ["K-1 module-extension normalization", "bc404e5a8e70ddc5bb994b3a7b034d78220733dbe37a12042480791a898db328"],
-  ["K-1 source-path separator normalization", "5670a5f7333b64334a4f5204633aae6159e607fbc9cd4d936b0495357e1e457f"],
+  ["erasure source-path separator normalization", "55f8d68523334521a13fc4f7e0a3b6c4396b2933a0945438e21aab90a521886f"],
+  ["SQLite positive-shape label normalization", "60d91f2d206174bddd1c5356c71ee7cb3e64a1848fa457381148df0881e0d3f0"],
+  ["SQLite suffix label normalization", "254c5a33bc11bc5e8f14e0af9b42ea092ea19d6000a9552649ccb6c287ffcdeb"],
+  ["sensitive-reader kind label normalization", "d48017802df2c086f1e6bab4f5bb551c72d1bb15633db5842b710a2747aeba08"],
+  ["sensitive-reader growth label normalization", "e540a624068c0af19ac1f35fe9b931156990d31601b04d92db03d47d34c1efc3"],
+  ["publisher kind label normalization", "5b6c892bb1defbf07fafc9bc30dd3a18fc3c82a3c19424e17b7538b99844514f"],
+  ["hardlink route label normalization", "600c518045c0728fe3ffc48d560978f5c8280985f057cd5327b4d4decb1fabd6"],
+  ["K-1 statement semicolon normalization", "66d52f1be206a5ef726ef08805cbf93fdfd0096de99d79a8a589e68c05253905"],
+  ["K-1 block-comment stripping", "8dddd70b6df52a4a1293e075305042dbd8074d1c7704f980a12de4ccc8f8f040"],
+  ["K-1 line-comment stripping", "8dddd70b6df52a4a1293e075305042dbd8074d1c7704f980a12de4ccc8f8f040"],
+  ["K-1 module-extension normalization", "b40eeb247a138652ba67ff4223232b98a90f609257b60a9295be443e9aa24e2b"],
+  ["K-1 source-path separator normalization", "20cf76a2051639112cbd33255ca172937f20f0806ddd7aa154ab787d14500736"],
   ["line-terminator block-comment stripping", "61bbbea7aac48eafa3a24d78998eb49e81a6e7911953f3c25ead27692923a80d"],
   ["line-terminator line-comment stripping", "61bbbea7aac48eafa3a24d78998eb49e81a6e7911953f3c25ead27692923a80d"],
   ["ReDoS source-path separator normalization", "1b31e3478ce12f357ad0de08f669cdd462aef1c92b5e40ea2b7252bf483dc9bd"],

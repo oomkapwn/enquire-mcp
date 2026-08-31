@@ -101,7 +101,14 @@ import { replaceExactly } from "./helpers/exact-source-mutation.js";
 
 const repoRoot = path.resolve(__dirname, "..");
 const EXECUTABLE_SOURCE_EXTENSIONS = new Set([".cjs", ".cts", ".js", ".jsx", ".mjs", ".mts", ".ts", ".tsx"]);
-const GENERATED_EXECUTABLE_ROOTS = new Set([".git", "coverage", "dist", "node_modules"]);
+const OPAQUE_EXECUTABLE_ROOTS = new Set([".git", "coverage", "dist", "node_modules"]);
+const GENERATED_EXECUTABLE_ROOTS = new Set([
+  ".mcpb-stage",
+  ".pages-dist",
+  ".vitest-cache",
+  "docs/api-reference",
+  "false"
+]);
 const RESTRICTED_MODULES = ["cli", "server", "tool-registry", "prompts"];
 const COVERAGE_ONLY_TEST_EXCLUSIONS = [
   "tests/meta-invariant-coverage.test.ts",
@@ -198,10 +205,11 @@ async function independentExecutableSourceCensus(root: string, relativeDirectory
   const files: string[] = [];
   for (const entry of await fs.readdir(absoluteDirectory, { withFileTypes: true })) {
     const relativeEntry = relativeDirectory === "" ? entry.name : `${relativeDirectory}/${entry.name}`;
-    if (relativeDirectory === "" && GENERATED_EXECUTABLE_ROOTS.has(entry.name)) continue;
+    if (relativeDirectory === "" && OPAQUE_EXECUTABLE_ROOTS.has(entry.name)) continue;
     if (entry.isSymbolicLink()) {
       throw new Error(`independent executable-source census refuses symbolic link ${relativeEntry}`);
     }
+    if (entry.isDirectory() && GENERATED_EXECUTABLE_ROOTS.has(relativeEntry)) continue;
     if (entry.isDirectory()) {
       files.push(...(await independentExecutableSourceCensus(root, relativeEntry)));
     } else if (entry.isFile() && EXECUTABLE_SOURCE_EXTENSIONS.has(path.extname(entry.name))) {
@@ -2043,6 +2051,7 @@ describe("Class A invariant — no test imports value from registration boilerpl
     expect(focusSourceFiles).toEqual(await independentExecutableSourceCensus(repoRoot));
     expect(focusSourceFiles).toContain("site/site.js");
     expect(focusSourceFiles).toContain("tests/fixtures/k1-invariant/good.ts");
+    expect(focusSourceFiles).not.toContain("docs/api-reference/assets/main.js");
     expect(inspectRepositoryVitestBootstrap(repoRoot)).toEqual([]);
     expect(vitestBootstrapImportClosureProblems(await readVitestBootstrapImportSources(repoRoot))).toEqual([]);
     expect(inspectRepositoryVitestSelectionControls(repoRoot)).toEqual([]);
@@ -2407,8 +2416,54 @@ describe("Class A invariant — no test imports value from registration boilerpl
       expect(() => firstPartyVitestFocusSourceFiles(symlinkScratch)).toThrow(
         "focus-control source census refuses symbolic link linked"
       );
+      await fs.unlink(path.join(symlinkScratch, "linked"));
+      const generatedDocsDirectory = path.join(symlinkScratch, "docs");
+      await fs.mkdir(generatedDocsDirectory);
+      await fs.symlink(
+        realDirectory,
+        path.join(generatedDocsDirectory, "api-reference"),
+        process.platform === "win32" ? "junction" : "dir"
+      );
+      expect(() => firstPartyVitestFocusSourceFiles(symlinkScratch)).toThrow(
+        "focus-control source census refuses symbolic link docs/api-reference"
+      );
     } finally {
       await fs.rm(symlinkScratch, { recursive: true, force: true });
+    }
+
+    const generatedScratch = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-focus-generated-"));
+    try {
+      const generatedRoots = [
+        ".git",
+        ".mcpb-stage",
+        ".pages-dist",
+        ".vitest-cache",
+        "coverage",
+        "dist",
+        "docs/api-reference",
+        "false",
+        "node_modules"
+      ];
+      for (const generatedRoot of generatedRoots) {
+        const directory = path.join(generatedScratch, generatedRoot);
+        await fs.mkdir(directory, { recursive: true });
+        await fs.writeFile(path.join(directory, "generated.js"), 'it.only("generated decoy", () => {});\n');
+      }
+      const nearMissDirectory = path.join(generatedScratch, "docs", "api-reference-live");
+      await fs.mkdir(nearMissDirectory, { recursive: true });
+      const nearMissPath = path.join(nearMissDirectory, "reviewed.js");
+      await fs.writeFile(nearMissPath, "export const reviewed = true;\n");
+
+      const generatedCensus = firstPartyVitestFocusSourceFiles(generatedScratch);
+      expect(generatedCensus).toEqual(["docs/api-reference-live/reviewed.js"]);
+      expect(inspectRepositoryVitestFocusControls(generatedScratch)).toEqual([]);
+
+      await fs.writeFile(nearMissPath, 'it.only("first-party decoy", () => {});\n');
+      expect(inspectRepositoryVitestFocusControls(generatedScratch)).toEqual([
+        expect.objectContaining({ file: "docs/api-reference-live/reviewed.js", kind: "VITEST-FOCUS-ONLY" })
+      ]);
+    } finally {
+      await fs.rm(generatedScratch, { recursive: true, force: true });
     }
 
     const parseScratch = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-focus-parse-"));

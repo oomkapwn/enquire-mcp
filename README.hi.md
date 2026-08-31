@@ -50,7 +50,7 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 > 3. **`serve` के दौरान enquire द्वारा शुरू की गई outbound network calls शून्य।** q8 embedding मॉडल **आपकी मशीन पर** चलता है और उसी markdown को अनुक्रमित करता है जो **आपने** लिखी — इसीलिए यह एक स्पष्ट, एक-बार का स्थानीय डाउनलोड (~118 MB) है, न कि कोई क्लाउड API key। सामग्री केवल आपके जोड़े हुए MCP client को लौटाई जाती है; उस client या tunnel की data handling उसकी अपनी trust boundary है ([प्रवर्तित](./SECURITY.md), केवल आकांक्षात्मक नहीं)।
 > 4. **ताज़गी-सजग recall।** हर परिणाम बताता है कि नोट कितना पुराना है; वैकल्पिक recency re-ranking एजेंट को ताज़ा ज्ञान को प्राथमिकता देने और बासी तथ्यों को पुनः-सत्यापन हेतु चिह्नित करने देता है — भूलने-के-प्रति-सजग सीमांत, जो आपकी फ़ाइलों में पहले से मौजूद `mtime` पर बना है।
 
-**46 टूल · 19 MCP प्रॉम्प्ट · 2228+ यूनिट टेस्ट · 50+ भाषाएँ · v3.11.x स्थिर · semver-बाध्य · MIT · npm बिल्ड प्रोवेनेंस (SLSA L2)।**
+**46 टूल · 19 MCP प्रॉम्प्ट · 2246+ यूनिट टेस्ट · 50+ भाषाएँ · v3.11.x स्थिर · semver-बाध्य · MIT · npm बिल्ड प्रोवेनेंस (SLSA L2)।**
 
 ---
 
@@ -69,7 +69,7 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 | **पूरा Obsidian knowledge surface** | ✅ Markdown, wikilinks, frontmatter, Canvas, Bases, PDF और OCR |
 | **कठिन सवालों के लिए agentic retrieval** | ✅ HyDE, sub-question decomposition, context packs, GraphRAG-light और 19 MCP prompts |
 | **नियंत्रण छोड़े बिना scale** | ✅ HNSW live updates, persistence, adaptive refill और int8 quantization |
-| **Production trust** | ✅ read-only default, privacy filters, authenticated HTTP, semver contracts, 2228 tests, 13 release gates और SLSA L2 provenance |
+| **Production trust** | ✅ read-only default, privacy filters, authenticated HTTP, semver contracts, 2246 tests, 13 release gates और SLSA L2 provenance |
 
 **एक vault। हर agent। पूरा retrieval stack। कोई cloud lock-in नहीं।**
 
@@ -99,7 +99,7 @@ enquire-mcp serve --vault ~/Documents/Obsidian\ Vault
 
 ### समीक्षा योग्य डेस्कटॉप बंडल चाहिए? MCPB Basic
 
-[GitHub Release `v4.0.0-rc.6`](https://github.com/oomkapwn/enquire-mcp/releases/tag/v4.0.0-rc.6) में `enquire-mcp-basic-4.0.0-rc.6.mcpb` उसके checksum, inventory, SBOM, notices और provenance के साथ उपलब्ध है। बंडल में server JavaScript और सामान्य dependencies हैं; संगत MCPB host को Node.js 22.13 या नया संस्करण देना होगा।
+[GitHub Release `v4.0.0-rc.7`](https://github.com/oomkapwn/enquire-mcp/releases/tag/v4.0.0-rc.7) में `enquire-mcp-basic-4.0.0-rc.7.mcpb` उसके checksum, inventory, SBOM, notices और provenance के साथ उपलब्ध है। बंडल में server JavaScript और सामान्य dependencies हैं; संगत MCPB host को Node.js 22.13 या नया संस्करण देना होगा।
 
 Basic में ठीक **13 read-only tools** और **0 prompts** हैं: कोई write, persistent index, model, PDF/OCR या watcher नहीं। वास्तविक desktop GUI, signing, directory approval और catalog की maintainer validation अभी बाकी है। serve करते समय enquire कोई outbound call शुरू नहीं करता, लेकिन मांगा गया note text जुड़े MCP client तक जाता है और उसकी privacy terms के अधीन होता है।
 
@@ -108,7 +108,7 @@ Basic में ठीक **13 read-only tools** और **0 prompts** हैं:
 **पूरी हाइब्रिड शक्ति चाहिए?** हाइब्रिड प्रीफ़्लाइट पूरा करें, फिर सर्व करें:
 
 ```bash
-npm install -g @oomkapwn/enquire-mcp@4.0.0-rc.6      # exact prerelease package
+npm install -g @oomkapwn/enquire-mcp@4.0.0-rc.7      # exact prerelease package
 enquire-mcp --version
 # recommended: preview first, then explicitly apply the same package-coherent plan
 enquire-mcp first-run --tier hybrid --client claude-desktop --vault <path>
@@ -182,7 +182,7 @@ bearer auth के साथ टनल के माध्यम से `serve-h
 ### उदाहरण क्वेरियाँ जो अच्छी तरह काम करती हैं
 
 - *"हर वह नोट ढूँढो जहाँ मैंने मूल्य-निर्धारण रणनीति पर चर्चा की, विकास का सारांश दो।"* — RRF fusion + reranker "विकास" को सिमेंटिक रूप से संभालता है
-- *"PostgreSQL बनाम MongoDB पर मेरा निर्णय क्या था? डेली नोट उद्धृत करो।"* — wikilink ग्राफ़-बूस्ट केंद्रीय निर्णय दस्तावेज़ को सामने लाता है
+- *"PostgreSQL बनाम MongoDB पर मेरा निर्णय क्या था? डेली नोट उद्धृत करो।"* — fused candidates के RRF scores बराबर होने पर candidate-set wikilink in-degree tie-break करता है
 - *"Анализируй мои заметки о RAG за последние 3 месяца"* — बहुभाषी embeddings + frontmatter तिथि फ़िल्टर
 - *"LLaMA-3 पेपर PDF के कौन-से पृष्ठ स्केलिंग की बात करते हैं?"* — `[page: N]` उद्धरणों के साथ खोज में घुले PDF
 - *"मेरे शोध vault में विषयगत समुदाय दिखाओ — मैं किन विषयों की खोज कर रहा हूँ?"* — `obsidian_get_communities` (GraphRAG-light)
@@ -193,7 +193,7 @@ bearer auth के साथ टनल के माध्यम से `serve-h
 
 **1 — AI एजेंट्स के लिए दीर्घकालिक स्मृति।** अपने Obsidian vault को किसी भी MCP-संगत एजेंट (Claude Code, Claude Desktop, Cursor, ChatGPT, Codex, OpenClaw) में जोड़ें। एजेंट के पास अब आपके लिखे हर मीटिंग नोट, जर्नल प्रविष्टि, शोध लॉग और निर्णय दस्तावेज़ पर टिकाऊ, सिमेंटिक recall होता है — सत्रों, मॉडलों और प्रदाताओं के पार। किसी vendor की built-in memory के विपरीत, आपका ज्ञान किसी एक विक्रेता के क्लाउड में बंद नहीं होता; यह सादे markdown में रहता है जो आपका अपना है और जिसे आप स्वतंत्र रूप से माइग्रेट कर सकते हैं।
 
-**2 — व्यक्तिगत ज्ञान-आधार / दूसरा दिमाग।** हाइब्रिड retrieval *किसी भी* शब्द-रचना के लिए, 50+ भाषाओं में से किसी में भी, सही नोट सामने लाता है। दो साल पुरानी रूसी-भाषा जर्नल प्रविष्टि के बारे में अंग्रेज़ी में पूछें, सही हिट पाएँ। Wikilink ग्राफ़-बूस्ट उन नोट्स को री-रैंक करता है जो आपके ज्ञान-ग्राफ़ के केंद्र में बैठे हैं। GraphRAG-light विषयगत समुदायों को सामने लाता है — उन संबंधों की खोज करें जिन्हें बनाना आप भूल गए थे। PDF `[page: N]` उद्धरणों के साथ खोज में घुल-मिल जाते हैं ताकि शोध-पत्र और मीटिंग ट्रांसक्रिप्ट प्रथम-श्रेणी स्मृति बन जाएँ।
+**2 — व्यक्तिगत ज्ञान-आधार / दूसरा दिमाग।** हाइब्रिड retrieval *किसी भी* शब्द-रचना के लिए, 50+ भाषाओं में से किसी में भी, सही नोट सामने लाता है। दो साल पुरानी रूसी-भाषा जर्नल प्रविष्टि के बारे में अंग्रेज़ी में पूछें, सही हिट पाएँ। Wikilink ग्राफ़-बूस्ट केवल बराबर RRF scores के बीच candidate-set wikilink in-degree से tie-break करता है। GraphRAG-light विषयगत समुदायों को सामने लाता है — उन संबंधों की खोज करें जिन्हें बनाना आप भूल गए थे। PDF `[page: N]` उद्धरणों के साथ खोज में घुल-मिल जाते हैं ताकि शोध-पत्र और मीटिंग ट्रांसक्रिप्ट प्रथम-श्रेणी स्मृति बन जाएँ।
 
 **3 — एजेंटिक RAG / संदर्भ इंजीनियरिंग।** `obsidian_search` प्रति-संकेत स्कोर उजागर करता है ताकि एजेंट देख सके कि हर हिट *क्यों* रैंक हुई। HyDE retrieval से पहले अस्पष्ट क्वेरियों को समृद्ध काल्पनिक उत्तरों में पुनः-लिखता है। उप-प्रश्न विघटन बहु-हॉप प्रश्नों ("हमारी मूल्य-निर्धारण रणनीति कैसे विकसित हुई और ग्राहक की प्रतिक्रिया क्या थी?") को स्वतंत्र उप-क्वेरियों में तोड़कर, परिणाम fuse करके संभालता है। अंतर्निहित eval harness (NDCG / Recall / MRR) आपको विक्रेता बेंचमार्क पर भरोसा करने के बजाय अपनी क्वेरियों पर retrieval गुणवत्ता मापने देता है।
 
@@ -236,7 +236,7 @@ graph LR
     RR --> R[Ranked hits<br/>per_signal observability]
 ```
 
-`obsidian_search` उपलब्ध संकेतों का स्वचालित पता लगाता है और सुंदरता से degrade होता है। Wikilink ग्राफ़-बूस्ट सिंगल-स्टेप personalised PageRank के माध्यम से top-K को री-रैंक करता है। वैकल्पिक cross-encoder reranking top-N को पुनः स्कोर करता है, मापा गया +15.5 NDCG@10। हर हिट `per_signal: { bm25, tfidf, embeddings }` लौटाता है ताकि आप देख सकें कि वह *क्यों* रैंक हुई।
+`obsidian_search` उपलब्ध संकेतों का स्वचालित पता लगाता है और सुंदरता से degrade होता है। Wikilink ग्राफ़-बूस्ट केवल बराबर RRF scores के बीच candidate-set wikilink in-degree से tie-break करता है। वैकल्पिक cross-encoder reranking top-N को पुनः स्कोर करता है, मापा गया +15.5 NDCG@10। हर हिट `per_signal: { bm25, tfidf, embeddings }` लौटाता है ताकि आप देख सकें कि वह *क्यों* रैंक हुई।
 
 स्तरों में सक्षम करें, आवश्यकतानुसार लें:
 
@@ -282,7 +282,7 @@ graph LR
 | **HTTP ट्रांसपोर्ट** | Bearer auth (constant-time SHA-256 + `timingSafeEqual`), प्रति-token rate-limit, सख़्त CORS |
 | **Frontmatter** | `js-yaml@5` `load` (YAML 1.2 core schema, डिफ़ॉल्ट रूप से सुरक्षित) — कोई कोड निष्पादन नहीं |
 | **कैश + इंडेक्स फ़ाइलें** | POSIX मोड उपलब्ध होने पर Enquire संवेदनशील फ़ाइलों पर सर्वोत्तम-प्रयास से `0600` फिर लागू करता है; Enquire द्वारा बनाई गई पैरेंट डायरेक्टरी `0700` से शुरू होती है, जबकि मौजूदा/कस्टम पैरेंट ऑपरेटर-प्रबंधित रहती है |
-| **2228 यूनिट टेस्ट · 13 release-required CI जाँच · सभी 13 वर्तमान में branch-protected** | वर्तमान verified release posture; operational detail नीचे pinned है। |
+| **2246 यूनिट टेस्ट · 13 release-required CI जाँच · सभी 13 वर्तमान में branch-protected** | वर्तमान verified release posture; operational detail नीचे pinned है। |
 | **CI** | `release.yml` सीधे **13 release gates** सूचीबद्ध करता है, और हर PR पर ये सभी चलते हैं: `lint`, `test (22)`, `test (24)`, `smoke`, `audit`, `coverage`, `version-consistency`, `docs`, `oia`, `protocol-conformance`, `package-consumer`, `mcpb-basic`, और `docker`। Pinned Windows hostile-filesystem job `test-windows` एक अतिरिक्त named check-run है, जिसे `smoke` की blocking prerequisite के रूप में transitively लागू किया जाता है। Branch protection अब सभी **13** को लागू करता है (branch-protection snapshot 2026-08-21 को live-verified)। `test-macos` `continue-on-error` वाला एकमात्र सलाहकारी job है। `docker` gate image बनाता है और bounded CLI तथा MCP introspection probes चलाता है; CodeQL [GitHub default setup](https://docs.github.com/code-security/code-scanning/automatically-scanning-your-code-for-vulnerabilities-and-errors/configuring-default-setup-for-code-scanning) के जरिए दो अलग unprotected analysis चलाता है। npm publish से पहले `release.yml` tagged SHA पर सीधे सूचीबद्ध सभी 13 gates की फिर जाँच करता है। |
 | **कवरेज** | लाइनें ≥86% · statements ≥82% · functions ≥75% · branches ≥74% (gated) |
 | **रिलीज़** | प्रति tag npm + GitHub release · semver · **साइन्ड बिल्ड प्रोवेनेंस** (npm + Sigstore, SLSA Build L2; L3 जनरेटर रोडमैप पर) |
@@ -323,7 +323,7 @@ graph LR
 ```bash
 git clone https://github.com/oomkapwn/enquire-mcp.git
 cd enquire-mcp && npm install
-npm test       # पूर्ण सूट (2228 टेस्ट)
+npm test       # पूर्ण सूट (2246 टेस्ट)
 npm run lint   # ज़ीरो वॉर्निंग
 npm run build  # tsc → dist/
 ```

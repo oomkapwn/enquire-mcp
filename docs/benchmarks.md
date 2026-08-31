@@ -53,8 +53,8 @@ folders:
 - `Inbox/` — 5 unrelated notes (recipes, travel, movies)
 - `INDEX.md` + `Reference/INDEX.md` — two hub pages
 
-Notes cross-reference via wikilinks so the post-RRF graph-boost arm has a
-real graph to walk. Each note's body is a fixed string (no `Date.now()`,
+Notes cross-reference via wikilinks so equal RRF scores can exercise the
+candidate-set in-degree tie-break. Each note's body is a fixed string (no `Date.now()`,
 no randomness); mtimes are pinned to `2026-05-15T00:00:00Z` via `utimes()`
 so the FTS5/embed-db source_state hashes are bit-identical across runs.
 
@@ -117,7 +117,7 @@ the `enquire-mcp eval` CLI subcommand.
 | BM25 only            | `FtsIndex.search` directly, chunks collapsed to notes                                                           |
 | TF-IDF only          | `semanticSearch` from `src/tools/search.ts`                                                                     |
 | Embeddings only      | `embeddingsSearch` against an `EmbedDb` built with `bge` model (BGE-small-en, 384-dim, ~33 MB)                  |
-| Hybrid               | `searchHybrid` — BM25 + TF-IDF + embeddings fused via RRF (k=60) + wikilink graph-boost (α=0.005)               |
+| Hybrid               | `searchHybrid` — BM25 + TF-IDF + embeddings fused via RRF (k=60) + candidate-set wikilink in-degree tie-break (no score addend) |
 | Hybrid + reranker    | `searchHybrid` + BGE-reranker-base (q8-quantized, ~280 MB) cross-encoder re-scoring top-50, injected via `rerankerOverride` |
 | Hybrid + reranker + HyDE-sim | Same as above, but the embeddings arm uses a hand-authored "hypothetical answer" string in place of the query (Gao et al. 2023). Scored on the 25-query subset that has authored HyDE answers. |
 

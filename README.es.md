@@ -48,7 +48,7 @@ Tu bóveda de Obsidian se convierte en **memoria a largo plazo persistente y con
 > 3. **Cero llamadas de red salientes iniciadas por enquire durante `serve`.** El modelo de embeddings q8 se ejecuta **en tu máquina** e indexa el markdown que **tú** escribiste: por eso es una descarga local explícita y única (~118 MB), no una clave de API en la nube. El contenido solo se devuelve al cliente MCP que conectas; el tratamiento que haga ese cliente o túnel de los datos es su propio límite de confianza ([garantizado](./SECURITY.md), no aspiracional).
 > 4. **Recuperación consciente de la frescura.** Cada resultado informa de la antigüedad de la nota; el reordenamiento por recencia opcional permite que un agente prefiera el conocimiento reciente y marque los hechos obsoletos para reverificación: la frontera consciente del olvido, construida sobre el `mtime` que tus archivos ya tienen.
 
-**46 herramientas · 19 prompts MCP · 2228+ pruebas unitarias · 50+ idiomas · v3.11.x estable · ligado a semver · MIT · procedencia de compilación en npm (SLSA L2).**
+**46 herramientas · 19 prompts MCP · 2246+ pruebas unitarias · 50+ idiomas · v3.11.x estable · ligado a semver · MIT · procedencia de compilación en npm (SLSA L2).**
 
 ---
 
@@ -67,7 +67,7 @@ Tu bóveda de Obsidian se convierte en **memoria a largo plazo persistente y con
 | **Toda la superficie de conocimiento de Obsidian** | ✅ Markdown, wikilinks, frontmatter, Canvas, Bases, PDF y OCR |
 | **Recuperación agéntica para preguntas difíciles** | ✅ HyDE, descomposición en subpreguntas, paquetes de contexto, GraphRAG-light y 19 prompts MCP |
 | **Escala sin ceder el control** | ✅ Actualizaciones HNSW en vivo, persistencia, relleno adaptativo y cuantización int8 |
-| **Confianza para producción** | ✅ Solo lectura por defecto, filtros de privacidad, HTTP autenticado, contratos semver, 2228 pruebas, 13 gates de publicación y procedencia SLSA L2 |
+| **Confianza para producción** | ✅ Solo lectura por defecto, filtros de privacidad, HTTP autenticado, contratos semver, 2246 pruebas, 13 gates de publicación y procedencia SLSA L2 |
 
 **Una bóveda. Todos los agentes. La pila completa. Sin dependencia de la nube.**
 
@@ -97,7 +97,7 @@ Conéctalo a cualquier cliente MCP:
 
 ### ¿Un paquete de escritorio revisable? MCPB Basic
 
-El [GitHub Release `v4.0.0-rc.6`](https://github.com/oomkapwn/enquire-mcp/releases/tag/v4.0.0-rc.6) ofrece `enquire-mcp-basic-4.0.0-rc.6.mcpb` junto con su checksum, inventario, SBOM, avisos y procedencia. El paquete incluye el JavaScript del servidor y dependencias normales; el host MCPB compatible debe proporcionar Node.js 22.13 o posterior.
+El [GitHub Release `v4.0.0-rc.7`](https://github.com/oomkapwn/enquire-mcp/releases/tag/v4.0.0-rc.7) ofrece `enquire-mcp-basic-4.0.0-rc.7.mcpb` junto con su checksum, inventario, SBOM, avisos y procedencia. El paquete incluye el JavaScript del servidor y dependencias normales; el host MCPB compatible debe proporcionar Node.js 22.13 o posterior.
 
 Basic queda limitado a **13 herramientas de solo lectura** y **0 prompts**: sin escritura, índices persistentes, modelos, PDF/OCR ni watcher. Aún falta la validación del mantenedor en la GUI real, firma, aprobación del directorio y catálogo. enquire no inicia llamadas salientes al servir, pero el texto solicitado pasa al cliente MCP conectado y queda sujeto a sus términos de privacidad.
 
@@ -106,7 +106,7 @@ Basic queda limitado a **13 herramientas de solo lectura** y **0 prompts**: sin 
 **¿Quieres toda la potencia híbrida?** Completa la preparación híbrida y luego inicia el servidor:
 
 ```bash
-npm install -g @oomkapwn/enquire-mcp@4.0.0-rc.6      # exact prerelease package
+npm install -g @oomkapwn/enquire-mcp@4.0.0-rc.7      # exact prerelease package
 enquire-mcp --version
 # recommended: preview first, then explicitly apply the same package-coherent plan
 enquire-mcp first-run --tier hybrid --client claude-desktop --vault <path>
@@ -180,7 +180,7 @@ El mismo comando `npx -y @oomkapwn/enquire-mcp serve --vault <path>` funciona pa
 ### Ejemplos de consultas que funcionan bien
 
 - *"Encuentra cada nota donde hablé de estrategia de precios, resume la evolución."* — la fusión RRF + el reranker manejan "evolución" semánticamente
-- *"¿Cuál fue mi decisión sobre PostgreSQL vs MongoDB? Cita la nota diaria."* — el graph-boost de wikilinks saca a la luz el documento de decisión central
+- *"¿Cuál fue mi decisión sobre PostgreSQL vs MongoDB? Cita la nota diaria."* — cuando los candidatos fusionados empatan en puntuación RRF, el grado de entrada de wikilinks del conjunto candidato desempata
 - *"Анализируй мои заметки о RAG за последние 3 месяца"* — embeddings multilingües + filtro de fecha en el frontmatter
 - *"¿Qué páginas del PDF del artículo de LLaMA-3 hablan del escalado?"* — PDF mezclados en la búsqueda con citas `[page: N]`
 - *"Muéstrame las comunidades temáticas de mi bóveda de investigación: ¿qué temas he estado explorando?"* — `obsidian_get_communities` (GraphRAG-light)
@@ -191,7 +191,7 @@ El mismo comando `npx -y @oomkapwn/enquire-mcp serve --vault <path>` funciona pa
 
 **1 —— Memoria a largo plazo para agentes de IA.** Conecta tu bóveda de Obsidian a cualquier agente compatible con MCP (Claude Code, Claude Desktop, Cursor, ChatGPT, Codex, OpenClaw). El agente dispone entonces de una recuperación semántica duradera sobre cada nota de reunión, entrada de diario, registro de investigación y documento de decisión que hayas escrito jamás, a través de sesiones, modelos y proveedores. A diferencia de la memoria integrada de un proveedor, tu conocimiento no queda encerrado en la nube de un proveedor; vive en markdown plano que posees y puedes migrar libremente.
 
-**2 —— Base de conocimiento personal / segundo cerebro.** La recuperación híbrida saca a la luz la nota correcta para *cualquier* formulación, en cualquiera de más de 50 idiomas. Pregunta en inglés por una entrada de diario en ruso de hace dos años y obtén el resultado correcto. El graph-boost de wikilinks reordena las notas que están en el centro de tu grafo de conocimiento. GraphRAG-light revela comunidades temáticas: descubre conexiones que olvidaste haber hecho. Los PDF se mezclan en la búsqueda con citas `[page: N]`, de modo que artículos de investigación y transcripciones de reuniones pasan a ser memoria de primera clase.
+**2 —— Base de conocimiento personal / segundo cerebro.** La recuperación híbrida saca a la luz la nota correcta para *cualquier* formulación, en cualquiera de más de 50 idiomas. Pregunta en inglés por una entrada de diario en ruso de hace dos años y obtén el resultado correcto. El graph-boost de wikilinks solo desempata puntuaciones RRF iguales mediante el grado de entrada dentro del conjunto candidato. GraphRAG-light revela comunidades temáticas: descubre conexiones que olvidaste haber hecho. Los PDF se mezclan en la búsqueda con citas `[page: N]`, de modo que artículos de investigación y transcripciones de reuniones pasan a ser memoria de primera clase.
 
 **3 —— RAG agéntico / ingeniería de contexto.** `obsidian_search` expone las puntuaciones por señal para que el agente vea *por qué* se posicionó cada resultado. HyDE reescribe de antemano las consultas vagas en respuestas hipotéticas ricas antes de la recuperación. La descomposición en subpreguntas resuelve preguntas multi-salto dividiéndolas en subconsultas independientes y fusionando los resultados. El arnés de evaluación incorporado (NDCG / Recall / MRR) te permite medir la calidad de recuperación con tus propias consultas en lugar de confiar en los benchmarks del proveedor.
 
@@ -234,7 +234,7 @@ graph LR
     RR --> R[Ranked hits<br/>per_signal observability]
 ```
 
-`obsidian_search` detecta automáticamente las señales disponibles y degrada con elegancia. El graph-boost de wikilinks reordena el top-K mediante un PageRank personalizado de un paso. El reranking con cross-encoder opcional vuelve a puntuar el top-N para +15.5 NDCG@10 medido. Cada resultado devuelve `per_signal: { bm25, tfidf, embeddings }`, para que veas POR QUÉ se posicionó.
+`obsidian_search` detecta automáticamente las señales disponibles y degrada con elegancia. El graph-boost de wikilinks solo desempata puntuaciones RRF iguales usando el grado de entrada dentro del conjunto candidato. El reranking con cross-encoder opcional vuelve a puntuar el top-N para +15.5 NDCG@10 medido. Cada resultado devuelve `per_signal: { bm25, tfidf, embeddings }`, para que veas POR QUÉ se posicionó.
 
 | Nivel | Configuración | Lo que obtienes |
 |---|---|---|
@@ -278,7 +278,7 @@ Además 3 recursos MCP (`obsidian://vault/info`, `obsidian://note/{path}`, `obsi
 | **Transporte HTTP** | Autenticación bearer (SHA-256 de tiempo constante + `timingSafeEqual`), límite de tasa por token, CORS estricto |
 | **Frontmatter** | `js-yaml@5` `load` (esquema núcleo YAML 1.2, seguro por defecto) — sin ejecución de código |
 | **Archivos de caché + índice** | Cuando funcionan los modos POSIX, Enquire vuelve a aplicar `0600` a los archivos sensibles con el mejor esfuerzo; un directorio padre creado por Enquire empieza con `0700`, mientras que uno existente/personalizado sigue administrado por el operador |
-| **2228 pruebas unitarias · 13 comprobaciones de CI requeridas para release · las 13 protegidas actualmente** | Estado de publicación verificado; el detalle operativo está fijado debajo. |
+| **2246 pruebas unitarias · 13 comprobaciones de CI requeridas para release · las 13 protegidas actualmente** | Estado de publicación verificado; el detalle operativo está fijado debajo. |
 | **CI** | `release.yml` enumera directamente **13 gates de release**, todos ejecutados en cada PR: `lint`, `test (22)`, `test (24)`, `smoke`, `audit`, `coverage`, `version-consistency`, `docs`, `oia`, `protocol-conformance`, `package-consumer`, `mcpb-basic` y `docker`. El job Windows hostile-filesystem fijado `test-windows` es un check-run adicional con nombre, exigido de forma transitiva como prerrequisito bloqueante de `smoke`. La protección de rama exige ahora los **13** (snapshot verificado en vivo el 2026-08-21). `test-macos` es el único job indicativo con `continue-on-error`. El gate `docker` construye la imagen y ejecuta probes acotados de CLI e introspección MCP; CodeQL ejecuta dos análisis separados no protegidos mediante el [default setup de GitHub](https://docs.github.com/code-security/code-scanning/automatically-scanning-your-code-for-vulnerabilities-and-errors/configuring-default-setup-for-code-scanning). Antes de npm publish, `release.yml` reverifica los 13 gates que enumera directamente en el SHA etiquetado. |
 | **Cobertura** | Líneas ≥86 % · sentencias ≥82 % · funciones ≥75 % · ramas ≥74 % (con guarda) |
 | **Publicación de versiones** | npm + GitHub release por cada tag · semver · **procedencia de compilación firmada** (npm + Sigstore, SLSA Build L2; generador L3 en la hoja de ruta) |

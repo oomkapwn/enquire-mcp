@@ -15,7 +15,7 @@
 [![CI](https://github.com/oomkapwn/enquire-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/oomkapwn/enquire-mcp/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/@oomkapwn/enquire-mcp.svg?label=npm&color=cb3837)](https://www.npmjs.com/package/@oomkapwn/enquire-mcp)
 [![downloads](https://img.shields.io/npm/dm/@oomkapwn/enquire-mcp.svg?color=cb3837)](https://www.npmjs.com/package/@oomkapwn/enquire-mcp)
-[![tests](https://img.shields.io/badge/tests-2228%20contracts-brightgreen.svg)](#️-confiance)
+[![tests](https://img.shields.io/badge/tests-2246%20contracts-brightgreen.svg)](#️-confiance)
 [![stable](https://img.shields.io/badge/v3.11.x-stable-brightgreen.svg)](./STABILITY.md)
 [![build provenance](https://img.shields.io/badge/build_provenance-SLSA_L2-blue.svg)](https://slsa.dev/spec/v1.0/levels#build-l2)
 [![MCP](https://img.shields.io/badge/MCP-2026--07--28-8A2BE2.svg)](https://modelcontextprotocol.io/)
@@ -53,7 +53,7 @@ Votre coffre Obsidian devient une **mémoire à long terme persistante et interr
 > 3. **Aucun appel réseau sortant initié par enquire pendant `serve`.** Les modèles sont mis en cache localement après un téléchargement explicite et unique depuis HuggingFace. Le contenu est renvoyé uniquement au client MCP connecté ; le traitement des données par ce client ou tunnel constitue sa propre frontière de confiance.
 > 4. **Rappel conscient de la fraîcheur.** Chaque résultat indique l'âge de la note ; le reclassement par récence optionnel permet à un agent de préférer le savoir frais et de signaler les faits périmés à revérifier — la frontière consciente de l'oubli, bâtie sur le `mtime` que vos fichiers possèdent déjà.
 
-**46 outils · 19 prompts MCP · 2228+ tests unitaires · 50+ langues · v3.11.x stable · lié au semver · MIT · provenance de build npm (SLSA L2).**
+**46 outils · 19 prompts MCP · 2246+ tests unitaires · 50+ langues · v3.11.x stable · lié au semver · MIT · provenance de build npm (SLSA L2).**
 
 ---
 
@@ -72,7 +72,7 @@ Votre coffre Obsidian devient une **mémoire à long terme persistante et interr
 | **Toute la surface de connaissance Obsidian** | ✅ Markdown, wikilinks, frontmatter, Canvas, Bases, PDF et OCR |
 | **Récupération agentique pour les questions difficiles** | ✅ HyDE, décomposition en sous-questions, context packs, GraphRAG-light et 19 prompts MCP |
 | **Passage à l'échelle sans perdre le contrôle** | ✅ Mises à jour HNSW en direct, persistance, refill adaptatif et quantification int8 |
-| **Confiance en production** | ✅ Lecture seule par défaut, filtres de confidentialité, HTTP authentifié, contrats semver, 2228 tests, 13 gates de publication et provenance SLSA L2 |
+| **Confiance en production** | ✅ Lecture seule par défaut, filtres de confidentialité, HTTP authentifié, contrats semver, 2246 tests, 13 gates de publication et provenance SLSA L2 |
 
 **Un coffre. Tous les agents. La pile complète. Aucun verrouillage cloud.**
 
@@ -102,7 +102,7 @@ Connectez-le à n'importe quel client MCP :
 
 ### Un bundle desktop vérifiable ? MCPB Basic
 
-La [GitHub Release `v4.0.0-rc.6`](https://github.com/oomkapwn/enquire-mcp/releases/tag/v4.0.0-rc.6) fournit `enquire-mcp-basic-4.0.0-rc.6.mcpb` avec sa somme de contrôle, son inventaire, son SBOM, ses notices et sa provenance. Le bundle contient le JavaScript serveur et les dépendances ordinaires ; l'hôte MCPB compatible doit fournir Node.js 22.13 ou plus récent.
+La [GitHub Release `v4.0.0-rc.7`](https://github.com/oomkapwn/enquire-mcp/releases/tag/v4.0.0-rc.7) fournit `enquire-mcp-basic-4.0.0-rc.7.mcpb` avec sa somme de contrôle, son inventaire, son SBOM, ses notices et sa provenance. Le bundle contient le JavaScript serveur et les dépendances ordinaires ; l'hôte MCPB compatible doit fournir Node.js 22.13 ou plus récent.
 
 Basic est limité à **13 outils en lecture seule** et **0 prompt** : aucune écriture, aucun index persistant, modèle, PDF/OCR ou watcher. Les essais réels de GUI desktop, signature, autorisation du dossier et annuaire restent à valider par le mainteneur. enquire n'émet aucun appel sortant pendant le service, mais le texte demandé est transmis au client MCP connecté et relève ensuite de ses conditions de confidentialité.
 
@@ -111,7 +111,7 @@ Basic est limité à **13 outils en lecture seule** et **0 prompt** : aucune éc
 **Vous voulez toute la puissance hybride ?** Exécutez le preflight hybride, puis démarrez le serveur :
 
 ```bash
-npm install -g @oomkapwn/enquire-mcp@4.0.0-rc.6      # exact prerelease package
+npm install -g @oomkapwn/enquire-mcp@4.0.0-rc.7      # exact prerelease package
 enquire-mcp --version
 # recommended: preview first, then explicitly apply the same package-coherent plan
 enquire-mcp first-run --tier hybrid --client claude-desktop --vault <path>
@@ -185,7 +185,7 @@ La même commande `npx -y @oomkapwn/enquire-mcp serve --vault <path>` fonctionne
 ### Exemples de requêtes qui fonctionnent bien
 
 - *« Trouve chaque note où j'ai discuté de stratégie tarifaire, résume l'évolution. »* — la fusion RRF + le reranker gèrent « évolution » sémantiquement
-- *« Quelle a été ma décision sur PostgreSQL vs MongoDB ? Cite la note quotidienne. »* — le graph-boost de wikilinks fait remonter le document de décision central
+- *« Quelle a été ma décision sur PostgreSQL vs MongoDB ? Cite la note quotidienne. »* — lorsque les candidats fusionnés ont le même score RRF, le degré entrant des wikilinks dans l'ensemble candidat les départage
 - *« Анализируй мои заметки о RAG за последние 3 месяца »* — embeddings multilingues + filtre de date sur le frontmatter
 - *« De quelles pages du PDF de l'article LLaMA-3 parle-t-on de mise à l'échelle ? »* — PDF fondus dans la recherche avec citations `[page: N]`
 - *« Montre-moi les communautés thématiques de mon coffre de recherche — quels thèmes ai-je explorés ? »* — `obsidian_get_communities` (GraphRAG-light)
@@ -196,7 +196,7 @@ La même commande `npx -y @oomkapwn/enquire-mcp serve --vault <path>` fonctionne
 
 **1 — Mémoire à long terme pour les agents IA.** Déposez votre coffre Obsidian dans n'importe quel agent compatible MCP (Claude Code, Claude Desktop, Cursor, ChatGPT, Codex, OpenClaw). L'agent dispose désormais d'un rappel sémantique durable sur chaque note de réunion, entrée de journal, journal de recherche et document de décision que vous ayez jamais écrit — à travers les sessions, les modèles et les fournisseurs. Contrairement à la mémoire intégrée d'un fournisseur, votre savoir n'est pas enfermé dans le cloud d'un seul fournisseur ; il vit dans du markdown brut qui vous appartient et que vous pouvez migrer librement.
 
-**2 — Base de connaissances personnelle / second cerveau.** La récupération hybride fait remonter la bonne note pour *n'importe quelle* formulation, dans l'une des 50+ langues. Posez une question en anglais sur une entrée de journal en russe d'il y a deux ans, obtenez le bon résultat. Le graph-boost de wikilinks reclasse les notes qui se trouvent au centre de votre graphe de connaissances. GraphRAG-light fait émerger des communautés thématiques — découvrez des connexions que vous aviez oublié avoir faites. Les PDF se fondent dans la recherche avec des citations `[page: N]`, de sorte que les articles de recherche et les transcriptions de réunions deviennent une mémoire de premier ordre.
+**2 — Base de connaissances personnelle / second cerveau.** La récupération hybride fait remonter la bonne note pour *n'importe quelle* formulation, dans l'une des 50+ langues. Posez une question en anglais sur une entrée de journal en russe d'il y a deux ans, obtenez le bon résultat. Le graph-boost de wikilinks départage uniquement les scores RRF égaux selon le degré entrant dans l'ensemble candidat. GraphRAG-light fait émerger des communautés thématiques — découvrez des connexions que vous aviez oublié avoir faites. Les PDF se fondent dans la recherche avec des citations `[page: N]`, de sorte que les articles de recherche et les transcriptions de réunions deviennent une mémoire de premier ordre.
 
 **3 — RAG agentique / ingénierie de contexte.** `obsidian_search` expose les scores par signal pour que l'agent voie *pourquoi* chaque résultat a été classé. HyDE réécrit au préalable les requêtes vagues en réponses hypothétiques riches avant la récupération. La décomposition en sous-questions gère les questions multi-sauts (« comment notre stratégie tarifaire a-t-elle évolué et quelle a été la réaction des clients ? ») en les découpant en sous-requêtes indépendantes, puis en fusionnant les résultats. Le harnais d'évaluation intégré (NDCG / Recall / MRR) vous permet de mesurer la qualité de récupération sur vos propres requêtes plutôt que de faire confiance aux benchmarks des fournisseurs.
 
@@ -239,7 +239,7 @@ graph LR
     RR --> R[Ranked hits<br/>per_signal observability]
 ```
 
-`obsidian_search` détecte automatiquement les signaux disponibles et se dégrade avec élégance. Le graph-boost de wikilinks reclasse le top-K via un PageRank personnalisé d'un pas. Le reranking par cross-encoder optionnel re-score le top-N pour +15.5 NDCG@10 mesuré. Chaque résultat renvoie `per_signal: { bm25, tfidf, embeddings }` pour que vous voyiez POURQUOI il a été classé.
+`obsidian_search` détecte automatiquement les signaux disponibles et se dégrade avec élégance. Le graph-boost de wikilinks départage uniquement les scores RRF égaux selon le degré entrant dans l'ensemble candidat. Le reranking par cross-encoder optionnel re-score le top-N pour +15.5 NDCG@10 mesuré. Chaque résultat renvoie `per_signal: { bm25, tfidf, embeddings }` pour que vous voyiez POURQUOI il a été classé.
 
 | Niveau | Configuration | Ce que vous obtenez |
 |---|---|---|
@@ -283,7 +283,7 @@ Plus 3 ressources MCP (`obsidian://vault/info`, `obsidian://note/{path}`, `obsid
 | **Transport HTTP** | Auth bearer (SHA-256 à temps constant + `timingSafeEqual`), limite de débit par token, CORS strict |
 | **Frontmatter** | `js-yaml@5` `load` (schéma cœur YAML 1.2, sûr par défaut) — aucune exécution de code |
 | **Fichiers de cache + index** | Enquire réapplique au mieux `0600` aux fichiers sensibles lorsque les modes POSIX fonctionnent ; un parent créé par Enquire démarre en `0700`, tandis qu’un parent existant/personnalisé reste géré par l’opérateur |
-| **2228 tests unitaires · 13 contrôles CI requis pour la release · les 13 actuellement protégés** | Posture de publication vérifiée ; le détail opérationnel est fixé ci-dessous. |
+| **2246 tests unitaires · 13 contrôles CI requis pour la release · les 13 actuellement protégés** | Posture de publication vérifiée ; le détail opérationnel est fixé ci-dessous. |
 | **CI** | `release.yml` énumère directement **13 gates de release**, tous exécutés sur chaque PR : `lint`, `test (22)`, `test (24)`, `smoke`, `audit`, `coverage`, `version-consistency`, `docs`, `oia`, `protocol-conformance`, `package-consumer`, `mcpb-basic` et `docker`. Le job Windows hostile-filesystem épinglé `test-windows` est un check-run nommé supplémentaire, imposé transitivement comme prérequis bloquant de `smoke`. La protection de branche impose désormais les **13** (snapshot vérifié en direct le 2026-08-21). `test-macos` est le seul job indicatif avec `continue-on-error`. Le gate `docker` construit l'image et exécute des probes bornés du CLI et de l'introspection MCP ; CodeQL exécute deux analyses séparées non protégées via le [default setup de GitHub](https://docs.github.com/code-security/code-scanning/automatically-scanning-your-code-for-vulnerabilities-and-errors/configuring-default-setup-for-code-scanning). Avant npm publish, `release.yml` revérifie les 13 gates qu'il énumère directement sur le SHA taggé. |
 | **Couverture** | Lignes ≥86 % · instructions ≥82 % · fonctions ≥75 % · branches ≥74 % (sous garde) |
 | **Publications** | npm + release GitHub par tag · semver · **provenance de build signée** (npm + Sigstore, SLSA Build L2 ; générateur L3 sur la feuille de route) |
@@ -324,7 +324,7 @@ Canal : `npm install @oomkapwn/enquire-mcp` → dernière version stable (`@late
 ```bash
 git clone https://github.com/oomkapwn/enquire-mcp.git
 cd enquire-mcp && npm install
-npm test       # suite complète (2228 tests)
+npm test       # suite complète (2246 tests)
 npm run lint   # zéro avertissement
 npm run build  # tsc → dist/
 ```

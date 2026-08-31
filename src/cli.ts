@@ -70,6 +70,7 @@ import {
   shellQuote
 } from "./mcp-config.js";
 import { ocrLangIsInstalled, resolveTessdataDir } from "./ocr.js";
+import { resolvePersistenceLeaseScope } from "./persistence-lease.js";
 import { validateServeHttpRetrievalOpts } from "./retrieval-opts.js";
 import { FTS_SCHEMA_VERSION } from "./schema-contract.js";
 import { type ServeOptions, startServer, syncEmbedDb, syncPdfEmbedDb } from "./server.js";
@@ -107,11 +108,17 @@ interface HttpServeCli extends Omit<ServeOptions, "tokenize"> {
  * at search time via the Vault they construct. They must not persist those
  * filters as FTS deletions into the shared default per-vault index
  * (`defaultIndexFile`), which `serve --persistent-index` also uses. Identity is
- * the resolved path, not whether `--index-file` was spelled: naming the default
- * file is still the shared file. A different `--index-file` is a dedicated
- * index the caller owns; privacy-filtered sync there remains the M-8 contract.
- * `path.resolve` equality is the bound — not case-fold, realpath, or hardlink
- * identity. Privacy on that shared destination also skips `open()` unless
+ * resolved through the persistence-lease canonical parent + target identity,
+ * not whether `--index-file` was spelled: naming the default file through a
+ * parent-directory symlink is still the shared file. A proven-distinct
+ * `--index-file` is a dedicated index the caller owns; privacy-filtered sync
+ * there remains the M-8 contract. The selected parent is canonicalized before
+ * discovery/open so stable lexical parent aliases converge, while the exact
+ * leaf spelling remains the caller-selected storage path rather than the
+ * NFC/folded lease identity. An
+ * identity-resolution failure is not proof of a dedicated target and
+ * therefore fails closed by withholding sync.
+ * Privacy on that shared or unproven destination also skips `open()` unless
  * this invocation's discovery is already `owned` at the live `FTS_SCHEMA_VERSION`:
  * missing, empty, and legacy files at discovery time are left untouched
  * (search uses `ftsIndex: null`) because `open()` CREATE/DROP+rebuilds then
@@ -121,29 +128,51 @@ interface HttpServeCli extends Omit<ServeOptions, "tokenize"> {
  * sync. `serve` / `serve-http` are writers of the Vault they were started with
  * and are unchanged.
  */
-function shouldSyncPersistentFtsFromPrivacyVault(
+async function resolvePersistentFtsReadTarget(
   opts: {
     excludeGlob?: string[];
     readPaths?: string[];
   },
   indexFile: string,
   vaultRoot: string
-): boolean {
+): Promise<{ file: string; shouldSync: boolean }> {
   const privacyActive = (opts.excludeGlob?.length ?? 0) > 0 || (opts.readPaths?.length ?? 0) > 0;
-  if (!privacyActive) return true;
-  return path.resolve(indexFile) !== path.resolve(defaultIndexFile(vaultRoot));
+  if (!privacyActive) return { file: indexFile, shouldSync: true };
+  let selected: Awaited<ReturnType<typeof resolvePersistenceLeaseScope>>;
+  try {
+    selected = await resolvePersistenceLeaseScope({ targetPath: indexFile, familyKey: "fts5-v1" });
+  } catch {
+    return { file: indexFile, shouldSync: false };
+  }
+  // `targetName` is an NFC-normalized lease identity, not a storage pathname.
+  // Preserve the exact caller-selected leaf so a normalization-sensitive
+  // filesystem cannot redirect an existing NFD index to a new NFC sibling.
+  const canonicalSelected = path.join(selected.canonicalParent, path.basename(path.resolve(indexFile)));
+  const sharedFile = defaultIndexFile(vaultRoot);
+  try {
+    const shared = await resolvePersistenceLeaseScope({ targetPath: sharedFile, familyKey: "fts5-v1" });
+    const sameParentIdentity =
+      selected.parentIdentity.dev === shared.parentIdentity.dev &&
+      selected.parentIdentity.ino === shared.parentIdentity.ino;
+    if (selected.canonicalParent === shared.canonicalParent && !sameParentIdentity) {
+      return { file: canonicalSelected, shouldSync: false };
+    }
+    return {
+      file: canonicalSelected,
+      shouldSync: !(sameParentIdentity && selected.targetName === shared.targetName)
+    };
+  } catch (error) {
+    const defaultParentIsMissing =
+      typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
+    return {
+      file: canonicalSelected,
+      shouldSync: defaultParentIsMissing && canonicalSelected !== path.resolve(sharedFile)
+    };
+  }
 }
 
-function shouldOpenPersistentFtsForReadPath(
-  opts: {
-    excludeGlob?: string[];
-    readPaths?: string[];
-  },
-  indexFile: string,
-  vaultRoot: string,
-  discovered: FtsIndexDiscovery
-): boolean {
-  if (shouldSyncPersistentFtsFromPrivacyVault(opts, indexFile, vaultRoot)) return true;
+function shouldOpenPersistentFtsForReadPath(shouldSync: boolean, discovered: FtsIndexDiscovery): boolean {
+  if (shouldSync) return true;
   return discovered.kind === "owned" && discovered.meta.schema_version === String(FTS_SCHEMA_VERSION);
 }
 
@@ -578,7 +607,7 @@ export async function main(invocation?: ConfigInput["invocation"]): Promise<void
   program
     .command("query")
     .description(
-      "Run a one-shot hybrid search (BM25 + TF-IDF + embeddings, RRF-fused) from the CLI and print the results — for quick smoke-tests / CI / debugging without an MCP client. Reuses the persistent per-vault FTS5 index (same as `serve --persistent-index`). `--exclude-glob` / `--read-paths` filter this invocation's results; they do not rewrite that shared index. Pass a path-distinct `--index-file` to persist a dedicated privacy-filtered index."
+      "Run a one-shot hybrid search (BM25 + TF-IDF + embeddings, RRF-fused) from the CLI and print the results — for quick smoke-tests / CI / debugging without an MCP client. Reuses the persistent per-vault FTS5 index (same as `serve --persistent-index`). `--exclude-glob` / `--read-paths` filter this invocation's results; they do not rewrite that shared index. Pass a proven physically distinct `--index-file` to persist a dedicated privacy-filtered index."
     )
     .argument("<text>", "Search query")
     .requiredOption("--vault <path>", "Path to the Obsidian vault root")
@@ -606,7 +635,9 @@ export async function main(invocation?: ConfigInput["invocation"]): Promise<void
         const v = new Vault(opts.vault, { excludeGlobs: opts.excludeGlob, readPaths: opts.readPaths });
         await v.ensureExists();
         const limit = parsePositiveInt(opts.limit ?? "10", "--limit");
-        const indexFile = opts.indexFile ?? defaultIndexFile(v.root);
+        const selectedIndexFile = opts.indexFile ?? defaultIndexFile(v.root);
+        const ftsTarget = await resolvePersistentFtsReadTarget(opts, selectedIndexFile, v.root);
+        const indexFile = ftsTarget.file;
         // Discover the full admitted configuration before constructing (v3.6.4
         // K-1: never DROP TABLE on a mismatch) — identical to `eval`.
         const discovered = await discoverFtsIndexConfig(indexFile, v.root);
@@ -614,13 +645,14 @@ export async function main(invocation?: ConfigInput["invocation"]): Promise<void
           throw new Error("FTS index configuration could not be verified");
         }
         const honoredTokenize: TokenizeMode = discovered.kind === "owned" ? discovered.meta.tokenize_mode : "unicode61";
-        const openFts = shouldOpenPersistentFtsForReadPath(opts, indexFile, v.root, discovered);
+        const shouldSyncFts = ftsTarget.shouldSync;
+        const openFts = shouldOpenPersistentFtsForReadPath(shouldSyncFts, discovered);
         let result: Awaited<ReturnType<typeof searchHybrid>>;
         if (openFts) {
           const ftsIndex = new FtsIndex({ file: indexFile, vaultRoot: v.root, tokenize: honoredTokenize });
           try {
             await ftsIndex.open(discovered);
-            if (shouldSyncPersistentFtsFromPrivacyVault(opts, indexFile, v.root)) {
+            if (shouldSyncFts) {
               await syncFtsIndex(v, ftsIndex);
             }
             result = await searchHybrid(v, { query: text, limit }, { ftsIndex, embedFile: embedDbPath(v.root) });
@@ -1616,25 +1648,28 @@ export async function main(invocation?: ConfigInput["invocation"]): Promise<void
         // Optional FTS5 index.
         let ftsIndex: FtsIndex | null = null;
         if (opts.persistentIndex) {
-          const indexFile = opts.indexFile ?? defaultIndexFile(v.root);
+          const selectedIndexFile = opts.indexFile ?? defaultIndexFile(v.root);
+          const ftsTarget = await resolvePersistentFtsReadTarget(opts, selectedIndexFile, v.root);
+          const indexFile = ftsTarget.file;
           // v3.6.4 K-1 closure (eval = diagnostic, MUST never destroy):
           // discover the admitted tokenize_mode before constructing. Without discovery,
           // an eval run against a `--tokenize trigram`-built index would
           // silently DROP TABLE because the default `unicode61` mismatches.
           // Same historical K-1 class; doctor now uses immutable byte snapshots.
           // B5: a privacy-filtered Vault must not sync deletions into the
-          // shared default index; a path-distinct `--index-file` still syncs (M-8).
+          // shared default index; a proven physically distinct `--index-file` still syncs (M-8).
           const discovered = await discoverFtsIndexConfig(indexFile, v.root);
           if (discovered.kind === "refused") {
             throw new Error("FTS index configuration could not be verified");
           }
           const honoredTokenize: TokenizeMode =
             discovered.kind === "owned" ? discovered.meta.tokenize_mode : "unicode61";
-          if (shouldOpenPersistentFtsForReadPath(opts, indexFile, v.root, discovered)) {
+          const shouldSyncFts = ftsTarget.shouldSync;
+          if (shouldOpenPersistentFtsForReadPath(shouldSyncFts, discovered)) {
             ftsIndex = new FtsIndex({ file: indexFile, vaultRoot: v.root, tokenize: honoredTokenize });
             try {
               await ftsIndex.open(discovered);
-              if (shouldSyncPersistentFtsFromPrivacyVault(opts, indexFile, v.root)) {
+              if (shouldSyncFts) {
                 await syncFtsIndex(v, ftsIndex);
               }
             } catch (err) {

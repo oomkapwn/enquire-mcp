@@ -1948,7 +1948,7 @@ export async function embeddingsSearch(
 export interface SearchHitExplain {
   /** RRF-fused rank + score right after Reciprocal Rank Fusion, BEFORE any re-rank stage. The three ranker arms that fed it live in the hit's `per_signal`. */
   rrf: { rank: number; score: number };
-  /** Wikilink graph-boost (v2.3.0): in-degree among the fused top-K. `score_delta` is 0 — in_degree breaks equal RRF totals and is not added to the fused score. Present only when graph-boost ran AND this hit received a boost. */
+  /** Wikilink graph-boost (v2.3.0): in-degree among the fused top-K. `score_delta` is 0 — in_degree breaks equal RRF totals and is not added to the fused score. Present only when graph-boost ran AND this hit has nonzero candidate-set in-degree. */
   graph_boost?: { in_degree: number; score_delta: number };
   /** Cross-encoder reranker (v2.9.0): the reranker score + rank before/after the rerank re-sort. Present only when a reranker ran and scored this hit. */
   reranker?: { score: number; rank_before: number; rank_after: number };
@@ -2216,9 +2216,9 @@ async function filterCurrentHybridHits(
  * - Only TF-IDF → fall back to TF-IDF-only ranking
  *
  * Two Obsidian-specific signal layers ride on top of RRF:
- * - **Wikilink graph-boost** (v2.3.0): re-rank fused top-K by counting how
- *   many other top-K hits link to each one. Wikilinks are the differentiating
- *   Obsidian primitive; no cross-project uniqueness is implied.
+ * - **Wikilink graph-boost** (v2.3.0): break equal RRF-score ties by counting
+ *   how many other fused candidates link to each one. Wikilinks are the
+ *   differentiating Obsidian primitive; no cross-project uniqueness is implied.
  * - **Cross-encoder reranker** (v2.9.0, opt-in): re-score top-N candidates
  *   with a BGE-style cross-encoder. ~30-50ms / query overhead on M1 CPU.
  *
@@ -2600,9 +2600,9 @@ export async function searchHybrid(
      *  chunk; "block" returns each chunk as a distinct hit so you see the
      *  multiple-paragraph case where one note covers a topic in two places. */
     granularity?: "note" | "block";
-    /** v2.3.0: post-RRF graph boost — rerank by counting how many other
-     *  top-K hits link to each one. Default true; set false to disable for
-     *  diagnostic comparison (e.g. measuring whether boost helped). */
+    /** v2.3.0: post-RRF graph boost — break equal-score ties by counting
+     *  how many other fused candidates link to each one. Default true; set
+     *  false to disable for diagnostic comparison. */
     graph_boost?: boolean;
     /**
      * v3.10 (rc.10) — optional frontmatter filter. A `{ key: value }` map;
@@ -3023,7 +3023,7 @@ export async function searchHybrid(
       tfidf: tfidfRanked.map((h) => ({ id: h.id, rank: h.rank, score: h.score })),
       embeddings: embedRanked.map((h) => ({ id: h.id, rank: h.rank, score: h.score }))
     },
-    { topK: Math.max(limit * 4, 30) } // overshoot — graph boost may rerank
+    { topK: Math.max(limit * 4, 30) } // overshoot — supply the candidate-set in-degree tie-break
   );
 
   // v3.10.0-rc.8 (post-rc.7 audit) — privacy guard at the SOURCE, for parity
@@ -3051,9 +3051,10 @@ export async function searchHybrid(
   }
 
   // ─── v2.3.0: Wikilink graph-boost ───────────────────────────────────────
-  // Re-rank top-K by counting how many *other* top-K hits link to each one.
-  // Equivalent to a 1-step personalised PageRank seeded by the fused top-K.
-  // in_degree is a sort key after RRF, not a score addend: it breaks equal
+  // Break equal RRF-score ties by counting how many *other* fused candidates
+  // link to each one. This is a bounded candidate-set in-degree signal, not
+  // an iterative graph rank: there is no damping, propagation, or score addend.
+  // in_degree is a sort key after RRF: it breaks equal
   // RRF totals and cannot override a stronger ranker signal. Requires no new
   // index — uses already-cached parsed wikilinks per note.
   // This requires an Obsidian-aware layer over the retrieval engine:

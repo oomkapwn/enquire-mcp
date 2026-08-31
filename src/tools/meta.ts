@@ -14,7 +14,7 @@ import { iterateBodyLines } from "../structure.js";
 import type { FileEntry, Vault } from "../vault.js";
 import { stripTrailingLineEnds } from "../wildcard-match.js";
 import { listExactScanEntries } from "./limits.js";
-import { getBacklinks, getRecentEdits, listTags } from "./read.js";
+import { getBacklinks, getRecentEdits } from "./read.js";
 import { type SearchHybridHit, searchHybrid } from "./search.js";
 import { resolveTarget } from "./write.js";
 
@@ -90,6 +90,28 @@ interface ValidationSuggestionBatch {
   candidatesPerTarget: number;
 }
 
+/** Find only the proposed tag identities in one already-admitted exact vault snapshot. */
+async function existingProposedTags(
+  vault: Vault,
+  entries: readonly FileEntry[],
+  proposedTags: ReadonlySet<string>
+): Promise<Set<string>> {
+  const remaining = new Set([...proposedTags].map((tag) => foldTag(tag)));
+  const existing = new Set<string>();
+  if (remaining.size === 0) return existing;
+
+  for (const entry of entries) {
+    const { parsed } = await vault.readNoteUncached(entry.absPath, entry.mtimeMs);
+    for (const tag of parsed.tags) {
+      const folded = foldTag(tag);
+      if (!remaining.delete(folded)) continue;
+      existing.add(folded);
+    }
+    if (remaining.size === 0) break;
+  }
+  return existing;
+}
+
 /** Rank typo hints for every distinct broken target under one shared budget. */
 function validationSuggestions(entries: readonly FileEntry[], targets: readonly string[]): ValidationSuggestionBatch {
   const uniqueTargets = [...new Set(targets)];
@@ -144,6 +166,10 @@ function validationSuggestions(entries: readonly FileEntry[], targets: readonly 
  * disk. Always returns a structured result for ANY input, even malformed —
  * path-traversal errors become `kind: "path-traversal"` errors rather than
  * exceptions.
+ *
+ * Proposed-tag existence is checked against the same complete, walker-bounded
+ * vault snapshot used for wikilink resolution. The validator never treats the
+ * ranked, capped `listTags` dashboard view as proof that a tag is absent.
  *
  * v3.7.16 P2-14 — errors[] now includes `path-excluded` when the
  * proposed destination is blocked by `--exclude-glob` / `--read-paths`.
@@ -321,10 +347,6 @@ export async function validateNoteProposal(vault: Vault, args: ValidateProposalA
   }
 
   // 4. Tag pre-classification (existing vs new).
-  // listTags defaults to a 200-row dashboard slice; classification must use the
-  // function's existing 2000 ceiling so a live tag sorted after the top 200 is
-  // not reported as new. Vaults with more than 2000 distinct tags remain bounded.
-  const existingTags = new Set((await listTags(vault, { limit: 2000 })).map((t) => foldTag(t.tag)));
   const proposedTagsRaw = new Set<string>();
   // Frontmatter tags.
   const fmData = yamlReport.parsed ? parseFrontmatter(args.content).data : {};
@@ -341,6 +363,12 @@ export async function validateNoteProposal(vault: Vault, args: ValidateProposalA
   for (const m of sanitizedBodyAfterFm.normalize("NFC").matchAll(INLINE_TAG_RE)) {
     if (m[1]) proposedTagsRaw.add(m[1]);
   }
+  // `listTags` is intentionally a ranked dashboard slice (at most 2000 rows),
+  // not an existence oracle. Reuse the complete, bounded snapshot admitted for
+  // wikilink resolution and scan only until every proposed folded identity is
+  // found. A real tag can therefore never become "new" merely because 2000
+  // more-frequent/alphabetically-earlier tags precede it.
+  const existingTags = await existingProposedTags(vault, all, proposedTagsRaw);
   const tags: ValidateProposalResult["tags"] = [];
   for (const t of proposedTagsRaw) {
     const status = existingTags.has(foldTag(t)) ? "existing" : "new";
@@ -348,7 +376,7 @@ export async function validateNoteProposal(vault: Vault, args: ValidateProposalA
     if (status === "new") {
       warnings.push({
         kind: "new-tag",
-        message: `#${t} is new — won't fork an existing tag (case-insensitive check)`
+        message: `#${t} is new — no matching tag exists in the complete bounded vault scan`
       });
     }
   }

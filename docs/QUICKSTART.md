@@ -25,20 +25,20 @@ For the stable zero-setup server shown in Step 3, install `@latest`:
 npm install -g @oomkapwn/enquire-mcp
 ```
 
-This source guide also documents the `v4.0.0-rc.6` preview. It keeps the v3 tool/prompt/resource and CLI surface while moving to the official MCP SDK v2: modern `2026-07-28` and supported legacy clients share one registration factory, with strict no-downgrade routing and remote protocol/package gates. It also includes the tier-aware source-preserving doctor, preview-first `first-run`, verified client-specific install actions, explicit q8 local embedding weights, and the literal Node 22.13.0 runtime floor. npm `@latest` remains stable v3; to exercise v4, install this exact prerelease globally and keep preparation plus generated runtime on this one installation:
+This source guide also documents the `v4.0.0-rc.7` preview. It keeps the v3 tool/prompt/resource and CLI surface while moving to the official MCP SDK v2: modern `2026-07-28` and supported legacy clients share one registration factory, with strict no-downgrade routing and remote protocol/package gates. It also includes the tier-aware source-preserving doctor, preview-first `first-run`, verified client-specific install actions, explicit q8 local embedding weights, and the literal Node 22.13.0 runtime floor. npm `@latest` remains stable v3; to exercise v4, install this exact prerelease globally and keep preparation plus generated runtime on this one installation:
 
 ```bash
-npm install -g @oomkapwn/enquire-mcp@4.0.0-rc.6
+npm install -g @oomkapwn/enquire-mcp@4.0.0-rc.7
 enquire-mcp --version
 ```
 
-Expected output: the newest `@latest` version for the stable path, or exactly `4.0.0-rc.6` after selecting the preview. The [CHANGELOG](../CHANGELOG.md) identifies the exact contents of each channel.
+Expected output: the newest `@latest` version for the stable path, or exactly `4.0.0-rc.7` after selecting the preview. The [CHANGELOG](../CHANGELOG.md) identifies the exact contents of each channel.
 
 ### Alternative preview path — MCPB Basic
 
-The [`v4.0.0-rc.6` GitHub Release](https://github.com/oomkapwn/enquire-mcp/releases/tag/v4.0.0-rc.6) provides the Basic bundle below together with its checksum, inventory, SBOM, notices, and provenance. Your MCPB-compatible host must supply Node.js 22.13 or newer; the bundle supplies the server JavaScript and ordinary JavaScript dependencies.
+The [`v4.0.0-rc.7` GitHub Release](https://github.com/oomkapwn/enquire-mcp/releases/tag/v4.0.0-rc.7) provides the Basic bundle below together with its checksum, inventory, SBOM, notices, and provenance. Your MCPB-compatible host must supply Node.js 22.13 or newer; the bundle supplies the server JavaScript and ordinary JavaScript dependencies.
 
-1. Download `enquire-mcp-basic-4.0.0-rc.6.mcpb` and its `.sha256` file.
+1. Download `enquire-mcp-basic-4.0.0-rc.7.mcpb` and its `.sha256` file.
 2. Verify the downloaded bundle against that checksum.
 3. Open the `.mcpb` in your compatible host, review its manifest, and choose the one vault directory it may access.
 4. Start a new client conversation and ask it to list or search your notes. If you choose this path, skip the npm-specific configuration in Steps 2–3.

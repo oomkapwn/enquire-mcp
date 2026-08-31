@@ -12,7 +12,7 @@ import { findBestMatch, stripMd } from "./meta.js";
  * Request-lifecycle options accepted by rollback-capable batch write tools.
  */
 export interface WriteOperationOptions {
-  /** MCP request cancellation signal. Aborted batch effects are rolled back. */
+  /** MCP request cancellation signal. Aborted batch effects are rolled back, or any incomplete compensation is reported. */
   signal?: AbortSignal;
 }
 
@@ -216,8 +216,10 @@ export interface RenameNoteResult {
  * @param options - Optional MCP cancellation signal. Under a stable
  *   out-of-process filesystem identity, cancellation during the apply phase
  *   restores rewritten backlinks, source path/content, and a snapshotted
- *   overwritten destination before rejecting. The planning receipt narrows
- *   but cannot eliminate an out-of-process check/use or ABA race.
+ *   overwritten destination before rejecting. A two-step exclusive move that
+ *   publishes its destination but cannot remove its source is reported as an
+ *   incomplete rollback rather than a successful cancellation. The planning
+ *   receipt narrows but cannot eliminate an out-of-process check/use or ABA race.
  * @returns A {@link RenameNoteResult} with per-file rewrites and totals.
  * @throws {Error} If source doesn't exist, a distinct destination exists and
  *   `overwrite` is false, source equals destination, destination is a distinct
@@ -446,6 +448,9 @@ export async function renameNote(
         throw err;
       }
       const failures = await restoreNoteSnapshots(vault, committedBacklinks);
+      if (err instanceof Error && err.name === "RenamePartialCommitError") {
+        failures.push(`${fromRel} → ${toRelCheck}: ${err.message}`);
+      }
       let reverseReturned = false;
       if (renamed) {
         try {
@@ -465,17 +470,25 @@ export async function renameNote(
       // reverse-fail still recreates via sourcePlan (A1 phase 4). Reverse
       // success still overwrites dest-at-source with original bytes.
       let reverseFailOccupant = false;
+      let reverseFailNonFile = false;
+      let reverseFailProbeFailure: string | null = null;
       if (renamed && !reverseReturned) {
         try {
           const occupantLeaf = await vault.lstatIfExistsPublic(fromRel);
           reverseFailOccupant = occupantLeaf?.isFile === true;
-        } catch {
-          reverseFailOccupant = false;
+          reverseFailNonFile = occupantLeaf !== null && !occupantLeaf.isFile;
+        } catch (probeError) {
+          const probeCode = (probeError as { code?: string } | null)?.code;
+          if (probeCode !== "ENOENT" && probeCode !== "ENOTDIR") {
+            reverseFailProbeFailure = probeError instanceof Error ? probeError.message : String(probeError);
+          }
         }
       }
+      const reverseFailSourceUnsafe = reverseFailOccupant || reverseFailNonFile || reverseFailProbeFailure !== null;
       let sourceRestoreWithheld = false;
+      let sourceSnapshotRestored = false;
       if (sourcePlan && sourceCommitted) {
-        if (reverseFailOccupant) {
+        if (reverseFailSourceUnsafe) {
           sourceRestoreWithheld = true;
           const sourceBytes = Buffer.isBuffer(sourcePlan.before)
             ? sourcePlan.before
@@ -487,23 +500,32 @@ export async function renameNote(
           } catch (recoveryErr) {
             recoveryFailure = recoveryErr instanceof Error ? recoveryErr.message : String(recoveryErr);
           }
+          const unsafeSourceReason = reverseFailOccupant
+            ? `a regular file is present at ${fromRel}`
+            : reverseFailNonFile
+              ? `a non-regular filesystem entry is present at ${fromRel}`
+              : `the source path could not be inspected (${reverseFailProbeFailure ?? "unknown probe failure"})`;
           if (recoveryRel !== null) {
             failures.push(
-              `${fromRel}: pre-rename source bytes NOT restored — saved at ${recoveryRel} — a regular ` +
-                `file is present at ${fromRel} after reverse rename did not return, so ${fromRel} may ` +
+              `${fromRel}: pre-rename source bytes NOT restored — saved at ${recoveryRel} — ${unsafeSourceReason} ` +
+                `after reverse rename did not return, so ${fromRel} may ` +
                 `hold a concurrent occupant. The renamed note remains at ${toRelCheck}.`
             );
           } else {
             failures.push(
-              `${fromRel}: pre-rename source bytes NOT restored and NOT recoverable — a regular file is ` +
-                `present at ${fromRel} after reverse rename did not return, so overwriting it could ` +
+              `${fromRel}: pre-rename source bytes NOT restored and NOT recoverable — ${unsafeSourceReason} after ` +
+                `reverse rename did not return, so overwriting it could ` +
                 `destroy a concurrent occupant.` +
                 (recoveryFailure !== null ? ` Recovery write failed: ${recoveryFailure}` : "")
             );
           }
         }
         if (!sourceRestoreWithheld) {
-          failures.push(...(await restoreNoteSnapshots(vault, [{ path: sourcePlan.path, before: sourcePlan.before }])));
+          const sourceRestoreFailures = await restoreNoteSnapshots(vault, [
+            { path: sourcePlan.path, before: sourcePlan.before }
+          ]);
+          sourceSnapshotRestored = sourceRestoreFailures.length === 0;
+          failures.push(...sourceRestoreFailures);
         }
       }
       if (destinationBefore && renamed) {
@@ -516,9 +538,9 @@ export async function renameNote(
         // regular file — a non-file result, ENOENT, or ENOTDIR — or when a
         // regular file was already present after reverse rename did not return.
         // That occupant is not a returned source. An unresolved probe error
-        // leaves the question open, and refusing there would abandon the
-        // destination in states where the source is in fact safe, which is
-        // strictly worse than the pre-fix behaviour.
+        // also leaves the question open, so rollback fails closed: destination
+        // bytes go to append-only recovery instead of overwriting the only
+        // observable copy of the renamed source.
         //
         // BOUNDED CLAIM, deliberately — read it as written, it is narrow.
         // A stat cannot establish content identity, so this does NOT prove the
@@ -533,9 +555,10 @@ export async function renameNote(
         // and the restore is withheld. A regular-file occupant at `fromRel` after
         // reverse rename did not return is also not proof the renamed note is
         // safe, with or without a sourcePlan: dest restore is withheld on that
-        // occupant. Source-snapshot restore is withheld only when sourcePlan
-        // exists. Remaining concurrent mutators are still a third hardlink or
-        // an ABA race between probe and restore.
+        // occupant. Source-snapshot restore is also withheld when the source
+        // leaf is non-regular or cannot be inspected. Remaining concurrent
+        // mutators are still a third hardlink or an ABA race between probe and
+        // restore.
         //
         // What the branch buys is the property that was actually broken: the
         // renamed note's content is no longer overwritten on the strength of a
@@ -564,7 +587,14 @@ export async function renameNote(
           if (probeCode === "ENOENT" || probeCode === "ENOTDIR") sourceAbsent = true;
           else probeFailure = probeErr instanceof Error ? probeErr.message : String(probeErr);
         }
-        if (sourceAbsent || reverseFailOccupant) {
+        const sourcePresenceUnknown = probeFailure !== null || reverseFailProbeFailure !== null;
+        // A regular file observed only after a failed reverse is not evidence
+        // that it contains the renamed source: it may have appeared between
+        // the two probes. Permit destination restore only after this operation
+        // positively returned the source (reverse move) or recreated it from
+        // its own snapshot.
+        const reverseFailedWithoutSourceRecovery = !reverseReturned && !sourceSnapshotRestored && !sourceAbsent;
+        if (sourceAbsent || reverseFailSourceUnsafe || sourcePresenceUnknown || reverseFailedWithoutSourceRecovery) {
           const destBytes = Buffer.isBuffer(destinationBefore.before)
             ? destinationBefore.before
             : Buffer.from(destinationBefore.before, "utf8");
@@ -582,10 +612,20 @@ export async function renameNote(
                     `file is present at ${fromRel} after reverse rename did not return, so that occupant is not ` +
                     `proof the renamed note is safe. The renamed note remains at ${toRelCheck}. The destination's ` +
                     `own pre-rename content is at ${recoveryRel}.`
-                : `${toRelCheck}: pre-rename destination bytes NOT restored — saved at ${recoveryRel} — no regular ` +
-                    `file is present at ${fromRel}, so ${toRelCheck} may hold the only copy of the renamed note. ` +
-                    `Check ${toRelCheck}: if it holds the renamed content, moving it back to ${fromRel} by hand ` +
-                    `recovers THAT note. The destination's own pre-rename content is at ${recoveryRel}.`
+                : sourcePresenceUnknown
+                  ? `${toRelCheck}: pre-rename destination bytes NOT restored — saved at ${recoveryRel} — ` +
+                    `could not confirm whether a regular file is present at ${fromRel}. Overwriting ${toRelCheck} ` +
+                    `could destroy the only copy of the renamed note. The destination's own pre-rename content ` +
+                    `is at ${recoveryRel}.`
+                  : reverseFailedWithoutSourceRecovery
+                    ? `${toRelCheck}: pre-rename destination bytes NOT restored — saved at ${recoveryRel} — the ` +
+                      `reverse rename did not return and no source snapshot restore committed. A regular file now ` +
+                      `present at ${fromRel} is not proof that it contains the renamed note. The renamed note remains ` +
+                      `at ${toRelCheck}. The destination's own pre-rename content is at ${recoveryRel}.`
+                    : `${toRelCheck}: pre-rename destination bytes NOT restored — saved at ${recoveryRel} — no regular ` +
+                      `file is present at ${fromRel}, so ${toRelCheck} may hold the only copy of the renamed note. ` +
+                      `Check ${toRelCheck}: if it holds the renamed content, moving it back to ${fromRel} by hand ` +
+                      `recovers THAT note. The destination's own pre-rename content is at ${recoveryRel}.`
             );
           } else {
             failures.push(
@@ -594,18 +634,26 @@ export async function renameNote(
                     `present at ${fromRel} after reverse rename did not return, so that occupant is not proof the ` +
                     `renamed note is safe. Overwriting ${toRelCheck} could destroy the renamed note.` +
                     (recoveryFailure !== null ? ` Recovery write failed: ${recoveryFailure}` : "")
-                : `${toRelCheck}: pre-rename destination bytes NOT restored and NOT recoverable — no regular ` +
-                    `file is present at ${fromRel}, so ${toRelCheck} may hold the only copy of that note's ` +
-                    `content and overwriting it could destroy it. Check ${toRelCheck}: if it holds the ` +
-                    `renamed content, moving it back to ${fromRel} by hand recovers THAT note only — the ` +
-                    `destination's own pre-rename content is gone either way.` +
+                : sourcePresenceUnknown
+                  ? `${toRelCheck}: pre-rename destination bytes NOT restored and NOT recoverable — could not ` +
+                    `confirm whether a regular file is present at ${fromRel}. Overwriting ${toRelCheck} could ` +
+                    `destroy the only copy of the renamed note.` +
                     (recoveryFailure !== null ? ` Recovery write failed: ${recoveryFailure}` : "")
+                  : reverseFailedWithoutSourceRecovery
+                    ? `${toRelCheck}: pre-rename destination bytes NOT restored and NOT recoverable — the reverse ` +
+                      `rename did not return and no source snapshot restore committed. A regular file now present ` +
+                      `at ${fromRel} is not proof that it contains the renamed note; overwriting ${toRelCheck} ` +
+                      `could destroy the only copy.` +
+                      (recoveryFailure !== null ? ` Recovery write failed: ${recoveryFailure}` : "")
+                    : `${toRelCheck}: pre-rename destination bytes NOT restored and NOT recoverable — no regular ` +
+                      `file is present at ${fromRel}, so ${toRelCheck} may hold the only copy of that note's ` +
+                      `content and overwriting it could destroy it. Check ${toRelCheck}: if it holds the ` +
+                      `renamed content, moving it back to ${fromRel} by hand recovers THAT note only — the ` +
+                      `destination's own pre-rename content is gone either way.` +
+                      (recoveryFailure !== null ? ` Recovery write failed: ${recoveryFailure}` : "")
             );
           }
         } else {
-          if (probeFailure !== null) {
-            failures.push(`${fromRel}: could not confirm the source is present (${probeFailure})`);
-          }
           failures.push(...(await restoreNoteSnapshots(vault, [destinationBefore])));
         }
       }

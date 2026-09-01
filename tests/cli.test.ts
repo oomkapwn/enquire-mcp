@@ -2053,16 +2053,29 @@ describe("CLI subcommands E2E (against built dist/)", () => {
     };
 
     for (const scenario of [
-      { label: "missing model", modelState: "missing", failMatch: undefined, expected: /fixture model missing/i },
-      { label: "corrupt model", modelState: "corrupt", failMatch: undefined, expected: /fixture model corrupt/i },
+      {
+        label: "missing model",
+        fileStem: "missing-model",
+        modelState: "missing",
+        failMatch: undefined,
+        expected: /fixture model missing/i
+      },
+      {
+        label: "corrupt model",
+        fileStem: "corrupt-model",
+        modelState: "corrupt",
+        failMatch: undefined,
+        expected: /fixture model corrupt/i
+      },
       {
         label: "corpus inference",
+        fileStem: "corpus-inference",
         modelState: "present",
         failMatch: "Apollo project notes",
         expected: /replacement Markdown embed sync rejected Apollo\.md/i
       }
     ] as const) {
-      const embedFile = path.join(tmpdir, `${scenario.modelState}-${scenario.label.replaceAll(" ", "-")}.embed.db`);
+      const embedFile = path.join(tmpdir, `${scenario.modelState}-${scenario.fileStem}.embed.db`);
       const seed = new EmbedDb({
         file: embedFile,
         vaultRoot: realVault,

@@ -36,7 +36,7 @@ let vaultRoot: string;
 let embedFile: string;
 
 beforeEach(async () => {
-  root = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-embed-replacement-"));
+  root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "enquire-embed-replacement-")));
   vaultRoot = path.join(root, "vault");
   embedFile = path.join(root, "cache", "vault.embed.db");
   await fs.mkdir(vaultRoot, { recursive: true });

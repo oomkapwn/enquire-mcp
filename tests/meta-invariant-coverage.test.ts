@@ -34,7 +34,7 @@ import { releaseMutationVersionedTransitionAuditProblems } from "./release-mutat
 
 const repoRoot = path.resolve(__dirname, "..");
 const RELEASE_MUTATION_IDENTITY_FIXTURE_SHA256 = "8205d24e6d42dd4cb8986368611514131abe701434beb30150e33ea08f4b1288";
-const RELEASE_MUTATION_TRANSITION_FIXTURE_SHA256 = "3c0cbb2b74c36f81be1758d3cea8383a9129977962b251674783a03fa6a2e871";
+const RELEASE_MUTATION_TRANSITION_FIXTURE_SHA256 = "3696a9efaf93b37f0a95931e4a17fc9311db222f6de7ed3976fe4b513954f602";
 const releaseMutationIdentityFixturePath = path.join(repoRoot, "tests/fixtures/release-mutation-identity.v2.json");
 const releaseMutationTransitionFixturePath = path.join(repoRoot, "tests/fixtures/release-mutation-transition.v3.json");
 const releaseIntegritySourcePath = path.join(repoRoot, "tests/release-integrity.test.ts");

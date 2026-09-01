@@ -3678,7 +3678,12 @@ describe("K-1 class invariant (v3.6.3 methodological guard; recursive scan since
     { store: "Embed" as const, file: "embed-db.ts", spec: EMBED_ADMISSION_ORDER }
   ])("rejects a $store authority snapshot after the first await", async ({ file, spec }) => {
     const source = await fs.readFile(path.resolve(process.cwd(), "src", file), "utf8");
-    const mutant = replaceExactly(source, spec.cloneStatement, `await Promise.resolve();\n    ${spec.cloneStatement}`);
+    const mutant = mutatePublicOpenExactly(
+      source,
+      spec,
+      spec.cloneStatement,
+      `await Promise.resolve();\n    ${spec.cloneStatement}`
+    );
     expect(publicOpenWrapperProblems(mutant, spec)).toContain(
       `${spec.label} public open: caller authority is not snapshotted before the first await`
     );
@@ -3797,7 +3802,12 @@ describe("K-1 class invariant (v3.6.3 methodological guard; recursive scan since
   ])("rejects a $store admission guard moved from openOnce into public open", async ({ file, spec }) => {
     const source = await fs.readFile(path.resolve(process.cwd(), "src", file), "utf8");
     const removed = replaceExactly(source, spec.firstGuard, "void 0;");
-    const mutant = replaceExactly(removed, spec.cloneStatement, `${spec.firstGuard}\n    ${spec.cloneStatement}`);
+    const mutant = mutatePublicOpenExactly(
+      removed,
+      spec,
+      spec.cloneStatement,
+      `${spec.firstGuard}\n    ${spec.cloneStatement}`
+    );
     expect(admissionOrderProblems(mutant, spec)).toContain(
       `${spec.label} openOnce: exact AST first guard is not unique`
     );

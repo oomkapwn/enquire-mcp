@@ -10,6 +10,7 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   assertEmbedDbRecoveryOwnership,
+  checkpointEmbedDbForReplacement,
   clearPeekCache,
   decodeInt8Vector,
   discoverEmbedDbConfig,
@@ -30,7 +31,7 @@ import {
   PersistenceLeaseOwnershipError
 } from "../src/persistence-lease.js";
 import { EMBED_DB_SCHEMA_VERSION } from "../src/schema-contract.js";
-import { SEMANTIC_PERSISTENCE_FAMILY_KEY } from "../src/semantic-persistence.js";
+import { SEMANTIC_PERSISTENCE_FAMILY_KEY, withSemanticPersistenceEraser } from "../src/semantic-persistence.js";
 import { watcherActivationGuardPath } from "../src/watcher-activation-guard.js";
 
 let dir: string;
@@ -1471,6 +1472,43 @@ describe("EmbedDb", () => {
     await db2.closeAndRelease();
   });
 
+  it("checkpoints only the exact expected embedding generation and preserves every logical row", async () => {
+    const file = path.join(dir, "replacement-checkpoint.embed.db");
+    const seed = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
+    await seed.open();
+    seed.upsertNote("old.md", 1, [
+      { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "old", vector: l2([1, 0, 0, 0]) }
+    ]);
+    await seed.closeAndRelease();
+    const staleExpected = await discoverEmbedDbConfig(file, "/v");
+
+    const newer = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
+    await newer.open(staleExpected);
+    newer.upsertNote("newer.md", 2, [
+      { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "newer", vector: l2([0, 1, 0, 0]) }
+    ]);
+    await newer.closeAndRelease();
+    const afterConcurrentMutation = await exactEmbedLogicalSnapshot(file);
+
+    await expect(
+      withSemanticPersistenceEraser(file, undefined, (eraser) =>
+        checkpointEmbedDbForReplacement("/v", staleExpected, eraser)
+      )
+    ).rejects.toThrow(/configuration changed before open/);
+    expect(await exactEmbedLogicalSnapshot(file)).toEqual(afterConcurrentMutation);
+
+    const currentExpected = await discoverEmbedDbConfig(file, "/v");
+    await expect(
+      withSemanticPersistenceEraser(file, undefined, (eraser) =>
+        checkpointEmbedDbForReplacement("/v", currentExpected, eraser)
+      )
+    ).resolves.toBeUndefined();
+    expect(await exactEmbedLogicalSnapshot(file)).toEqual(afterConcurrentMutation);
+    for (const suffix of ["-wal", "-shm", "-journal"]) {
+      await expect(fs.lstat(`${file}${suffix}`)).rejects.toMatchObject({ code: "ENOENT" });
+    }
+  });
+
   it("rebuilds when dim changes", async () => {
     const file = path.join(dir, "test.embed.db");
     const db1 = new EmbedDb({ file, vaultRoot: "/v1", modelAlias: "multilingual", dim: 4 });
@@ -1776,6 +1814,49 @@ describe("EmbedDb", () => {
         `${p} should be removed`
       ).toBe(false);
     }
+  });
+
+  it("clearOnDisk removes a released crash-leftover staged EmbedDb family", async () => {
+    const file = path.join(dir, "staged.embed.db");
+    const db = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
+    await db.open();
+    db.upsertNote("live.md", 1000, [
+      { chunkIndex: 0, lineStart: 1, lineEnd: 1, textPreview: "live secret", vector: l2([1, 0, 0, 0]) }
+    ]);
+    await db.closeAndRelease();
+    const stage = `${file}.enquire-stage-${"d".repeat(48)}`;
+    const stagedMain = path.join(stage, "artifact.embed.db");
+    const leaseRoot = path.join(stage, ".enquire-mcp-leases");
+    await fs.mkdir(stage, { mode: 0o700 });
+    await fs.writeFile(stagedMain, "staged secret", { mode: 0o600 });
+    for (const digest of ["a".repeat(64), "b".repeat(64)]) {
+      await fs.mkdir(path.join(leaseRoot, digest), { recursive: true, mode: 0o700 });
+    }
+
+    await expect(db.clearOnDisk()).resolves.toBe(true);
+    await expect(fs.lstat(file)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.lstat(stage)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("clearOnDisk preserves the live family when a staged EmbedDb lease is active", async () => {
+    const file = path.join(dir, "active-stage.embed.db");
+    const liveBytes = Buffer.from("LIVE_EMBED_DB_SENTINEL");
+    await fs.writeFile(file, liveBytes, { mode: 0o600 });
+    const stage = `${file}.enquire-stage-${"e".repeat(48)}`;
+    const stagedMain = path.join(stage, "artifact.embed.db");
+    const leaseRoot = path.join(stage, ".enquire-mcp-leases");
+    const activeScope = path.join(leaseRoot, "c".repeat(64));
+    await fs.mkdir(activeScope, { recursive: true, mode: 0o700 });
+    await fs.mkdir(path.join(leaseRoot, "d".repeat(64)), { mode: 0o700 });
+    await fs.writeFile(stagedMain, "STAGED_EMBED_DB_SENTINEL", { mode: 0o600 });
+    const marker = path.join(activeScope, `lease.shared.${process.pid}.${"f".repeat(32)}.json`);
+    await fs.writeFile(marker, "ACTIVE_STAGE_LEASE_SENTINEL", { mode: 0o600 });
+    const db = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
+
+    await expect(db.clearOnDisk()).rejects.toThrow(/lease scope is still active/);
+    expect(await fs.readFile(file)).toEqual(liveBytes);
+    expect(await fs.readFile(stagedMain, "utf8")).toBe("STAGED_EMBED_DB_SENTINEL");
+    expect(await fs.readFile(marker, "utf8")).toBe("ACTIVE_STAGE_LEASE_SENTINEL");
   });
 
   it("(negative control) clearOnDisk leaves UNRELATED sidecars untouched (P-2)", async () => {

@@ -31,6 +31,11 @@ import {
 } from "./cli-help.js";
 import { assertEmbedDbRecoveryOwnership, discoverEmbedDbConfig, EmbedDb } from "./embed-db.js";
 import {
+  embedConfigurationNeedsReplacement,
+  loadValidatedEmbedder,
+  replaceEmbeddingIndex
+} from "./embed-replacement.js";
+import {
   DEFAULT_MODEL_ALIAS,
   DEFAULT_RERANKER_ALIAS,
   EMBEDDING_MODELS,
@@ -1004,33 +1009,52 @@ export async function main(invocation?: ConfigInput["invocation"]): Promise<void
             `enquire build-embeddings: honoring existing quantization=${storedConfiguration.quantization} (pass --quantize-embeddings to override)\n`
           );
         }
-        const db = new EmbedDb({
-          file: embedFile,
-          vaultRoot: vault.root,
-          modelAlias: model.alias,
-          dim: model.dim,
-          quantization
-        });
         const lateChunkContext =
           opts.lateChunkContext !== undefined
             ? Math.max(0, parsePositiveInt(opts.lateChunkContext, "--late-chunk-context"))
             : 0;
-        await db.open(discovered);
-        try {
-          process.stderr.write(`enquire: loading embedder ${model.alias} (${model.hfId})...\n`);
-          const embedder = await loadEmbedder(model.alias);
-          const report = await syncEmbedDb(vault, db, embedder, { lateChunkContext });
-          process.stdout.write(
-            `enquire: embed db ${embedFile} (md) — added=${report.added} updated=${report.updated} deleted=${report.deleted} unchanged=${report.unchanged} total_chunks=${report.total_chunks}${lateChunkContext > 0 ? ` late-chunk-context=${lateChunkContext}` : ""}${quantization !== "f32" ? ` quantization=${quantization}` : ""}\n`
-          );
-          if (opts.includePdfs) {
-            const pdfReport = await syncPdfEmbedDb(vault, db, embedder, { lateChunkContext });
-            process.stdout.write(
-              `enquire: embed db ${embedFile} (pdf) — added=${pdfReport.added} updated=${pdfReport.updated} deleted=${pdfReport.deleted} unchanged=${pdfReport.unchanged} total_chunks=${pdfReport.total_chunks}\n`
-            );
+        process.stderr.write(`enquire: loading embedder ${model.alias} (${model.hfId})...\n`);
+        const embedder = await loadValidatedEmbedder(model);
+        let report: Awaited<ReturnType<typeof syncEmbedDb>>;
+        let pdfReport: Awaited<ReturnType<typeof syncPdfEmbedDb>> | undefined;
+        if (embedConfigurationNeedsReplacement(discovered, model, quantization)) {
+          const replacement = await replaceEmbeddingIndex({
+            file: embedFile,
+            vault,
+            expectedDiscovery: discovered,
+            model,
+            quantization,
+            embedder,
+            includePdfs: opts.includePdfs,
+            lateChunkContext
+          });
+          report = replacement.markdown;
+          pdfReport = replacement.pdf;
+        } else {
+          const db = new EmbedDb({
+            file: embedFile,
+            vaultRoot: vault.root,
+            modelAlias: model.alias,
+            dim: model.dim,
+            quantization
+          });
+          await db.open(discovered);
+          try {
+            report = await syncEmbedDb(vault, db, embedder, { lateChunkContext });
+            if (opts.includePdfs) {
+              pdfReport = await syncPdfEmbedDb(vault, db, embedder, { lateChunkContext });
+            }
+          } finally {
+            await db.closeAndRelease();
           }
-        } finally {
-          await db.closeAndRelease();
+        }
+        process.stdout.write(
+          `enquire: embed db ${embedFile} (md) — added=${report.added} updated=${report.updated} deleted=${report.deleted} unchanged=${report.unchanged} total_chunks=${report.total_chunks}${lateChunkContext > 0 ? ` late-chunk-context=${lateChunkContext}` : ""}${quantization !== "f32" ? ` quantization=${quantization}` : ""}\n`
+        );
+        if (pdfReport) {
+          process.stdout.write(
+            `enquire: embed db ${embedFile} (pdf) — added=${pdfReport.added} updated=${pdfReport.updated} deleted=${pdfReport.deleted} unchanged=${pdfReport.unchanged} total_chunks=${pdfReport.total_chunks}\n`
+          );
         }
       }
     );
@@ -1526,40 +1550,52 @@ export async function main(invocation?: ConfigInput["invocation"]): Promise<void
         // Step 2: Install-model (load the resolved/honored model).
         process.stdout.write("\n>> Step 2/3: Install embedding model\n");
         const t0 = Date.now();
-        const embedder = await loadEmbedder(setupModel.alias);
-        const [smokeVec] = await embedder.embed(["hello"]);
-        if (!smokeVec || smokeVec.length !== setupModel.dim) {
-          throw new Error(
-            `Model ${setupModel.alias} loaded but dim mismatch: ${smokeVec?.length} vs ${setupModel.dim}`
-          );
-        }
+        const embedder = await loadValidatedEmbedder(setupModel);
         process.stdout.write(
           `   model ${setupModel.alias} ready (${setupModel.dim}-dim, ${Date.now() - t0}ms warmup, cached under ${resolveTransformersCacheDir() ?? "the transformers.js model cache"})\n`
         );
 
         // Step 3: build-embeddings.
         process.stdout.write("\n>> Step 3/3: Build embedding index\n");
-        const db = new EmbedDb({
-          file: embedFile,
-          vaultRoot: v.root,
-          modelAlias: setupModel.alias,
-          dim: setupModel.dim,
-          quantization
-        });
-        await db.open(discoveredEmbed);
-        try {
-          const embReport = await syncEmbedDb(v, db, embedder);
-          process.stdout.write(
-            `   embed-db (md): added=${embReport.added} updated=${embReport.updated} unchanged=${embReport.unchanged} chunks=${embReport.total_chunks}${quantization !== "f32" ? ` quantization=${quantization}` : ""}\n`
-          );
-          if (opts.includePdfs) {
-            const pdfReport = await syncPdfEmbedDb(v, db, embedder);
-            process.stdout.write(
-              `   embed-db (pdf): added=${pdfReport.added} updated=${pdfReport.updated} unchanged=${pdfReport.unchanged} chunks=${pdfReport.total_chunks}\n`
-            );
+        let embReport: Awaited<ReturnType<typeof syncEmbedDb>>;
+        let pdfReport: Awaited<ReturnType<typeof syncPdfEmbedDb>> | undefined;
+        if (embedConfigurationNeedsReplacement(discoveredEmbed, setupModel, quantization)) {
+          const replacement = await replaceEmbeddingIndex({
+            file: embedFile,
+            vault: v,
+            expectedDiscovery: discoveredEmbed,
+            model: setupModel,
+            quantization,
+            embedder,
+            includePdfs: opts.includePdfs
+          });
+          embReport = replacement.markdown;
+          pdfReport = replacement.pdf;
+        } else {
+          const db = new EmbedDb({
+            file: embedFile,
+            vaultRoot: v.root,
+            modelAlias: setupModel.alias,
+            dim: setupModel.dim,
+            quantization
+          });
+          await db.open(discoveredEmbed);
+          try {
+            embReport = await syncEmbedDb(v, db, embedder);
+            if (opts.includePdfs) {
+              pdfReport = await syncPdfEmbedDb(v, db, embedder);
+            }
+          } finally {
+            await db.closeAndRelease();
           }
-        } finally {
-          await db.closeAndRelease();
+        }
+        process.stdout.write(
+          `   embed-db (md): added=${embReport.added} updated=${embReport.updated} unchanged=${embReport.unchanged} chunks=${embReport.total_chunks}${quantization !== "f32" ? ` quantization=${quantization}` : ""}\n`
+        );
+        if (pdfReport) {
+          process.stdout.write(
+            `   embed-db (pdf): added=${pdfReport.added} updated=${pdfReport.updated} unchanged=${pdfReport.unchanged} chunks=${pdfReport.total_chunks}\n`
+          );
         }
 
         const doctorTier = opts.includePdfs ? "hybrid-live" : "hybrid";

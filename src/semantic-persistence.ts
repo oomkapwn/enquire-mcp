@@ -9,6 +9,9 @@ import { assertEmbedDbFilePath, assertHnswFilePath } from "./persistence-path.js
 /** One coordinated persistence family shared by EmbedDb and its HNSW derivatives. */
 export const SEMANTIC_PERSISTENCE_FAMILY_KEY = "embed-hnsw-v1";
 
+/** Coordination family that serializes staged EmbedDb replacement against full-family erasure. */
+export const EMBED_REPLACEMENT_STAGE_FAMILY_KEY = "embed-replacement-stage-v1";
+
 const DEFAULT_HNSW_BASENAME_PATTERN = /^[0-9a-f]{12}\.hnsw$/u;
 const activeSemanticErasers = new WeakSet<object>();
 
@@ -151,4 +154,78 @@ export async function withSemanticPersistenceEraser<T>(
   if (operationError !== undefined) throw operationError;
   if (releaseError !== undefined) throw releaseError;
   return operationResult as T;
+}
+
+async function withEmbedReplacementStageRole<T>(
+  targetPath: string,
+  role: "publisher" | "eraser",
+  operation: () => Promise<T>
+): Promise<T> {
+  assertEmbedDbFilePath(targetPath);
+  const lease = await acquirePersistenceFamilyLease({
+    targetPath,
+    familyKey: EMBED_REPLACEMENT_STAGE_FAMILY_KEY,
+    role
+  });
+  let operationResult: T | undefined;
+  let operationError: unknown;
+  try {
+    operationResult = await operation();
+  } catch (error) {
+    operationError = error;
+  }
+  let releaseError: unknown;
+  try {
+    await lease.release();
+  } catch (error) {
+    releaseError = error;
+  }
+  if (operationError !== undefined && releaseError !== undefined) {
+    throw new AggregateError(
+      [operationError, releaseError],
+      "Embedding replacement stage operation failed and barrier release was incomplete"
+    );
+  }
+  if (operationError !== undefined) throw operationError;
+  if (releaseError !== undefined) throw releaseError;
+  return operationResult as T;
+}
+
+/**
+ * Hold the staged-replacement publisher barrier for one complete prepare,
+ * promotion, and callback cleanup lifetime.
+ *
+ * @param targetPath - Final `.embed.db` target whose stage namespace is protected.
+ * @param operation - Complete staged replacement operation.
+ * @returns The operation result after the exact barrier marker is released.
+ * @throws If the barrier conflicts, the operation fails, or exact release is incomplete.
+ * @example
+ * await withEmbedReplacementStagePublisher(file, async () => buildAndPromoteReplacement());
+ * @internal
+ */
+export async function withEmbedReplacementStagePublisher<T>(
+  targetPath: string,
+  operation: () => Promise<T>
+): Promise<T> {
+  return withEmbedReplacementStageRole(targetPath, "publisher", operation);
+}
+
+/**
+ * Hold the staged-replacement eraser barrier across a complete EmbedDb/HNSW
+ * family clear. Acquiring this barrier before the semantic-family eraser gives
+ * replacement and clear one consistent lock order.
+ *
+ * @param targetPath - Final `.embed.db` target whose stage namespace is protected.
+ * @param operation - Complete destructive family operation.
+ * @returns The operation result after the exact barrier marker is released.
+ * @throws If an active replacement conflicts, the operation fails, or exact release is incomplete.
+ * @example
+ * await withEmbedReplacementStageEraser(file, async () => clearSemanticFamily());
+ * @internal
+ */
+export async function withEmbedReplacementStageEraser<T>(
+  targetPath: string,
+  operation: () => Promise<T>
+): Promise<T> {
+  return withEmbedReplacementStageRole(targetPath, "eraser", operation);
 }

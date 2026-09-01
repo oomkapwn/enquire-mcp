@@ -50,7 +50,7 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 > 3. **`serve` के दौरान enquire द्वारा शुरू की गई outbound network calls शून्य।** q8 embedding मॉडल **आपकी मशीन पर** चलता है और उसी markdown को अनुक्रमित करता है जो **आपने** लिखी — इसीलिए यह एक स्पष्ट, एक-बार का स्थानीय डाउनलोड (~118 MB) है, न कि कोई क्लाउड API key। सामग्री केवल आपके जोड़े हुए MCP client को लौटाई जाती है; उस client या tunnel की data handling उसकी अपनी trust boundary है ([प्रवर्तित](./SECURITY.md), केवल आकांक्षात्मक नहीं)।
 > 4. **ताज़गी-सजग recall।** हर परिणाम बताता है कि नोट कितना पुराना है; वैकल्पिक recency re-ranking एजेंट को ताज़ा ज्ञान को प्राथमिकता देने और बासी तथ्यों को पुनः-सत्यापन हेतु चिह्नित करने देता है — भूलने-के-प्रति-सजग सीमांत, जो आपकी फ़ाइलों में पहले से मौजूद `mtime` पर बना है।
 
-**46 टूल · 19 MCP प्रॉम्प्ट · 2246+ यूनिट टेस्ट · 50+ भाषाएँ · v3.11.x स्थिर · semver-बाध्य · MIT · npm बिल्ड प्रोवेनेंस (SLSA L2)।**
+**46 टूल · 19 MCP प्रॉम्प्ट · 2270+ यूनिट टेस्ट · 50+ भाषाएँ · v3.11.x स्थिर · semver-बाध्य · MIT · npm बिल्ड प्रोवेनेंस (SLSA L2)।**
 
 ---
 
@@ -69,7 +69,7 @@ claude mcp add obsidian -- npx -y @oomkapwn/enquire-mcp serve --vault ~/Document
 | **पूरा Obsidian knowledge surface** | ✅ Markdown, wikilinks, frontmatter, Canvas, Bases, PDF और OCR |
 | **कठिन सवालों के लिए agentic retrieval** | ✅ HyDE, sub-question decomposition, context packs, GraphRAG-light और 19 MCP prompts |
 | **नियंत्रण छोड़े बिना scale** | ✅ HNSW live updates, persistence, adaptive refill और int8 quantization |
-| **Production trust** | ✅ read-only default, privacy filters, authenticated HTTP, semver contracts, 2246 tests, 13 release gates और SLSA L2 provenance |
+| **Production trust** | ✅ read-only default, privacy filters, authenticated HTTP, semver contracts, 2270 tests, 13 release gates और SLSA L2 provenance |
 
 **एक vault। हर agent। पूरा retrieval stack। कोई cloud lock-in नहीं।**
 
@@ -282,7 +282,7 @@ graph LR
 | **HTTP ट्रांसपोर्ट** | Bearer auth (constant-time SHA-256 + `timingSafeEqual`), प्रति-token rate-limit, सख़्त CORS |
 | **Frontmatter** | `js-yaml@5` `load` (YAML 1.2 core schema, डिफ़ॉल्ट रूप से सुरक्षित) — कोई कोड निष्पादन नहीं |
 | **कैश + इंडेक्स फ़ाइलें** | POSIX मोड उपलब्ध होने पर Enquire संवेदनशील फ़ाइलों पर सर्वोत्तम-प्रयास से `0600` फिर लागू करता है; Enquire द्वारा बनाई गई पैरेंट डायरेक्टरी `0700` से शुरू होती है, जबकि मौजूदा/कस्टम पैरेंट ऑपरेटर-प्रबंधित रहती है |
-| **2246 यूनिट टेस्ट · 13 release-required CI जाँच · सभी 13 वर्तमान में branch-protected** | वर्तमान verified release posture; operational detail नीचे pinned है। |
+| **2270 यूनिट टेस्ट · 13 release-required CI जाँच · सभी 13 वर्तमान में branch-protected** | वर्तमान verified release posture; operational detail नीचे pinned है। |
 | **CI** | `release.yml` सीधे **13 release gates** सूचीबद्ध करता है, और हर PR पर ये सभी चलते हैं: `lint`, `test (22)`, `test (24)`, `smoke`, `audit`, `coverage`, `version-consistency`, `docs`, `oia`, `protocol-conformance`, `package-consumer`, `mcpb-basic`, और `docker`। Pinned Windows hostile-filesystem job `test-windows` एक अतिरिक्त named check-run है, जिसे `smoke` की blocking prerequisite के रूप में transitively लागू किया जाता है। Branch protection अब सभी **13** को लागू करता है (branch-protection snapshot 2026-08-21 को live-verified)। `test-macos` `continue-on-error` वाला एकमात्र सलाहकारी job है। `docker` gate image बनाता है और bounded CLI तथा MCP introspection probes चलाता है; CodeQL [GitHub default setup](https://docs.github.com/code-security/code-scanning/automatically-scanning-your-code-for-vulnerabilities-and-errors/configuring-default-setup-for-code-scanning) के जरिए दो अलग unprotected analysis चलाता है। npm publish से पहले `release.yml` tagged SHA पर सीधे सूचीबद्ध सभी 13 gates की फिर जाँच करता है। |
 | **कवरेज** | लाइनें ≥86% · statements ≥82% · functions ≥75% · branches ≥74% (gated) |
 | **रिलीज़** | प्रति tag npm + GitHub release · semver · **साइन्ड बिल्ड प्रोवेनेंस** (npm + Sigstore, SLSA Build L2; L3 जनरेटर रोडमैप पर) |
@@ -323,7 +323,7 @@ graph LR
 ```bash
 git clone https://github.com/oomkapwn/enquire-mcp.git
 cd enquire-mcp && npm install
-npm test       # पूर्ण सूट (2246 टेस्ट)
+npm test       # पूर्ण सूट (2270 टेस्ट)
 npm run lint   # ज़ीरो वॉर्निंग
 npm run build  # tsc → dist/
 ```

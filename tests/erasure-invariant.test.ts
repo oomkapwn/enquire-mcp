@@ -41,12 +41,14 @@ import {
 } from "../src/persistence-path.js";
 import { SEMANTIC_PERSISTENCE_FAMILY_KEY } from "../src/semantic-persistence.js";
 import {
+  preflightSensitiveArtifactTempEntry,
   preflightSqliteArtifactFamily,
   publishSensitiveArtifact,
   readSensitiveArtifactText,
   removeSensitiveArtifactTemps,
   sensitiveArtifactFinalBasename,
-  sha256SensitiveArtifact
+  sha256SensitiveArtifact,
+  withPreparedSensitiveArtifact
 } from "../src/sensitive-artifact.js";
 import { Vault } from "../src/vault.js";
 import { replaceExactly } from "./helpers/exact-source-mutation.js";
@@ -210,7 +212,21 @@ const ERASURE_MANIFEST = [
     family: "embed-db + HNSW sidecars (vectors + raw text_preview)",
     file: "src/embed-db.ts",
     eraser: "clearOnDisk",
-    requiredTokens: ["-wal", "-shm", "-journal", "hnswPersistBase(", "clearHnswPersistedArtifactsWithEraser("],
+    requiredTokens: [
+      "-wal",
+      "-shm",
+      "-journal",
+      "hnswPersistBase(",
+      "withEmbedReplacementStageEraser(",
+      "clearHnswPersistedArtifactsWithEraser(",
+      "preflightSensitiveArtifactTemps(this.file)",
+      "removeSensitiveArtifactTemps(this.file)"
+    ],
+    orderedTokens: [
+      "withEmbedReplacementStageEraser(",
+      "withSemanticPersistenceEraser(",
+      "preflightSensitiveArtifactTemps(this.file)"
+    ],
     routeMembers: [
       {
         file: "src/hnsw.ts",
@@ -320,7 +336,7 @@ interface SqliteNativeOpenRoute {
   id: string;
   file: "src/fts5.ts" | "src/embed-db.ts";
   member: string;
-  fileArgument: "file" | "this.file";
+  fileArgument: "canonicalFile" | "file" | "this.file";
   loaderNeedle: "loadBetterSqlite()" | 'import("better-sqlite3")';
   constructorNeedle: string;
 }
@@ -373,6 +389,14 @@ const SQLITE_NATIVE_OPEN_ROUTES: readonly SqliteNativeOpenRoute[] = [
     fileArgument: "file",
     loaderNeedle: "loadBetterSqlite()",
     constructorNeedle: "new Ctor(file, { readonly: true, fileMustExist: true })"
+  },
+  {
+    id: "Embed replacement checkpoint",
+    file: "src/embed-db.ts",
+    member: "checkpointEmbedDbForReplacement",
+    fileArgument: "canonicalFile",
+    loaderNeedle: "loadBetterSqlite()",
+    constructorNeedle: "new Ctor(canonicalFile, { fileMustExist: true })"
   },
   {
     id: "Embed diagnostic peek",
@@ -2705,13 +2729,13 @@ function sqliteNativeOpenProblems(overrides: ReadonlyMap<string, string> = new M
     };
     visit(sourceFile);
   }
-  if (diskConstructors !== 7) problems.push(`SQLite disk-constructor census expected 7, found ${diskConstructors}`);
+  if (diskConstructors !== 8) problems.push(`SQLite disk-constructor census expected 8, found ${diskConstructors}`);
   if (bindingProbes !== 2) problems.push(`SQLite binding-probe census expected 2, found ${bindingProbes}`);
   if (diagnosticSnapshots !== 2) {
     problems.push(`SQLite diagnostic-snapshot census expected 2, found ${diagnosticSnapshots}`);
   }
   if (literalImports !== 6) problems.push(`SQLite literal-import census expected 6, found ${literalImports}`);
-  if (sharedLoaderCalls !== 4) problems.push(`SQLite shared-loader census expected 4, found ${sharedLoaderCalls}`);
+  if (sharedLoaderCalls !== 5) problems.push(`SQLite shared-loader census expected 5, found ${sharedLoaderCalls}`);
   problems.push(...unexpectedConstructors.map((site) => `SQLite unexpected constructor ${site}`));
   return problems;
 }
@@ -3325,6 +3349,160 @@ describe("erasure-completeness invariant (rc.36, P-2 class)", () => {
       }
     }
   );
+
+  it("prepared native publisher keeps an exact .embed.db stage private until commit", async () => {
+    const finalPath = path.join(cacheDir, "prepared.embed.db");
+    await fs.writeFile(finalPath, "OLD_EMBED_GENERATION", { flag: "wx", mode: 0o600 });
+    let stagedPath = "";
+
+    const callbackResult = await withPreparedSensitiveArtifact(
+      finalPath,
+      async (candidate) => {
+        stagedPath = candidate;
+        expect(candidate.endsWith(".embed.db")).toBe(true);
+        await fs.writeFile(candidate, "NEW_EMBED_GENERATION");
+      },
+      async (prepared) => {
+        expect(prepared.stagedPath).toBe(stagedPath);
+        expect(prepared.sha256).toMatch(/^[0-9a-f]{64}$/);
+        expect(await fs.readFile(finalPath, "utf8")).toBe("OLD_EMBED_GENERATION");
+        expect(await fs.readFile(prepared.stagedPath, "utf8")).toBe("NEW_EMBED_GENERATION");
+        await prepared.commit();
+        return "committed" as const;
+      }
+    );
+
+    expect(callbackResult).toBe("committed");
+    expect(await fs.readFile(finalPath, "utf8")).toBe("NEW_EMBED_GENERATION");
+    await expect(fs.lstat(path.dirname(stagedPath))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("prepared native publisher cleans an uncommitted SQLite main and sidecars", async () => {
+    const finalPath = path.join(cacheDir, "abandoned.embed.db");
+    let stageRoot = "";
+
+    await expect(
+      withPreparedSensitiveArtifact(
+        finalPath,
+        async (stagedPath) => {
+          stageRoot = path.dirname(stagedPath);
+          await fs.writeFile(stagedPath, "UNCOMMITTED_MAIN");
+          for (const suffix of SQLITE_SIDECAR_SUFFIXES) {
+            await fs.writeFile(`${stagedPath}${suffix}`, `UNCOMMITTED${suffix}`);
+          }
+        },
+        async () => "validated-without-commit"
+      )
+    ).resolves.toBe("validated-without-commit");
+
+    await expect(fs.lstat(finalPath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.lstat(stageRoot)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("prepared publisher rejects post-hash mutation and preserves the old final generation", async () => {
+    const finalPath = path.join(cacheDir, "mutated.embed.db");
+    await fs.writeFile(finalPath, "OLD_MUTATION_SENTINEL", { flag: "wx", mode: 0o600 });
+    let stageRoot = "";
+
+    await expect(
+      withPreparedSensitiveArtifact(
+        finalPath,
+        async (stagedPath) => {
+          stageRoot = path.dirname(stagedPath);
+          await fs.writeFile(stagedPath, "PREPARED_BYTES");
+        },
+        async (prepared) => {
+          await fs.appendFile(prepared.stagedPath, "_MUTATED_AFTER_HASH");
+          await prepared.commit();
+        }
+      )
+    ).rejects.toThrow(/changed after it was prepared/);
+
+    expect(await fs.readFile(finalPath, "utf8")).toBe("OLD_MUTATION_SENTINEL");
+    await expect(fs.lstat(stageRoot)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("prepared SQLite publisher refuses commit while a staged WAL survives", async () => {
+    const finalPath = path.join(cacheDir, "live-wal.embed.db");
+    let stageRoot = "";
+
+    await expect(
+      withPreparedSensitiveArtifact(
+        finalPath,
+        async (stagedPath) => {
+          stageRoot = path.dirname(stagedPath);
+          await fs.writeFile(stagedPath, "MAIN_WITH_LIVE_WAL");
+          await fs.writeFile(`${stagedPath}-wal`, "LIVE_WAL_BYTES");
+        },
+        async (prepared) => prepared.commit()
+      )
+    ).rejects.toThrow(/SQLite stage retains sidecars/);
+
+    await expect(fs.lstat(finalPath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.lstat(stageRoot)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("crash cleanup preflights and removes an exact staged embedding SQLite family", async () => {
+    const finalPath = path.join(cacheDir, "crashed.embed.db");
+    const stagePath = `${finalPath}.enquire-stage-${"3".repeat(48)}`;
+    const stagedMain = path.join(stagePath, "artifact.embed.db");
+    await fs.mkdir(stagePath, { mode: 0o700 });
+    await fs.writeFile(stagedMain, "CRASHED_MAIN", { mode: 0o600 });
+    for (const suffix of SQLITE_SIDECAR_SUFFIXES) {
+      await fs.writeFile(`${stagedMain}${suffix}`, `CRASHED${suffix}`, { mode: 0o600 });
+    }
+
+    await expect(preflightSensitiveArtifactTempEntry(stagePath)).resolves.toBe(true);
+    await expect(removeSensitiveArtifactTemps(finalPath)).resolves.toBe(1);
+    await expect(fs.lstat(stagePath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("crash cleanup removes only an exact released staged embedding lease namespace", async () => {
+    const finalPath = path.join(cacheDir, "released-lease.embed.db");
+    const stagePath = `${finalPath}.enquire-stage-${"4".repeat(48)}`;
+    const stagedMain = path.join(stagePath, "artifact.embed.db");
+    const leaseRoot = path.join(stagePath, ".enquire-mcp-leases");
+    await fs.mkdir(stagePath, { mode: 0o700 });
+    await fs.writeFile(stagedMain, "RELEASED_LEASE_MAIN", { mode: 0o600 });
+    for (const digest of ["a".repeat(64), "b".repeat(64)]) {
+      await fs.mkdir(path.join(leaseRoot, digest), { recursive: true, mode: 0o700 });
+    }
+
+    await expect(preflightSensitiveArtifactTempEntry(stagePath)).resolves.toBe(true);
+    await expect(removeSensitiveArtifactTemps(finalPath)).resolves.toBe(1);
+    await expect(fs.lstat(stagePath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("crash cleanup preserves a staged embedding family with an active lease marker", async () => {
+    const finalPath = path.join(cacheDir, "active-lease.embed.db");
+    const stagePath = `${finalPath}.enquire-stage-${"5".repeat(48)}`;
+    const stagedMain = path.join(stagePath, "artifact.embed.db");
+    const leaseRoot = path.join(stagePath, ".enquire-mcp-leases");
+    const activeScope = path.join(leaseRoot, "c".repeat(64));
+    await fs.mkdir(activeScope, { recursive: true, mode: 0o700 });
+    await fs.mkdir(path.join(leaseRoot, "d".repeat(64)), { mode: 0o700 });
+    await fs.writeFile(stagedMain, "ACTIVE_LEASE_MAIN", { mode: 0o600 });
+    const marker = path.join(activeScope, `lease.shared.${process.pid}.${"e".repeat(32)}.json`);
+    await fs.writeFile(marker, "ACTIVE_LEASE_MARKER", { mode: 0o600 });
+
+    await expect(preflightSensitiveArtifactTempEntry(stagePath)).rejects.toThrow(/lease scope is still active/);
+    expect(await fs.readFile(stagedMain, "utf8")).toBe("ACTIVE_LEASE_MAIN");
+    expect(await fs.readFile(marker, "utf8")).toBe("ACTIVE_LEASE_MARKER");
+  });
+
+  it("crash cleanup refuses an embedding stage with a foreign child before deletion", async () => {
+    const finalPath = path.join(cacheDir, "foreign-child.embed.db");
+    const stagePath = `${finalPath}.enquire-stage-${"2".repeat(48)}`;
+    const stagedMain = path.join(stagePath, "artifact.embed.db");
+    const foreignChild = path.join(stagePath, "foreign.txt");
+    await fs.mkdir(stagePath, { mode: 0o700 });
+    await fs.writeFile(stagedMain, "STAGED_MAIN_SENTINEL", { mode: 0o600 });
+    await fs.writeFile(foreignChild, "FOREIGN_CHILD_SENTINEL", { mode: 0o600 });
+
+    await expect(preflightSensitiveArtifactTempEntry(stagePath)).rejects.toThrow(/unexpected entries/);
+    expect(await fs.readFile(stagedMain, "utf8")).toBe("STAGED_MAIN_SENTINEL");
+    expect(await fs.readFile(foreignChild, "utf8")).toBe("FOREIGN_CHILD_SENTINEL");
+  });
 
   it.for([{ kind: "Unix-domain socket" as const }])(
     "publisher refuses a $kind final leaf before rename and leaves it intact",
@@ -4644,7 +4822,7 @@ describe("erasure-completeness invariant (rc.36, P-2 class)", () => {
       expect(cacheSnapshotProblems(apply(source))).not.toEqual([]);
     });
 
-    it.each(["7 disk opens, 2 binding probes, and 2 path-free diagnostic snapshots"])(
+    it.each(["8 disk opens, 2 binding probes, and 2 path-free diagnostic snapshots"])(
       "SQLite family-preflight closed-world census accepts exactly %s",
       () => {
         expect(sqliteNativeOpenProblems()).toEqual([]);
@@ -4755,6 +4933,15 @@ describe("erasure-completeness invariant (rc.36, P-2 class)", () => {
           missingErasureTokens(body, m.requiredTokens),
           `${m.file}#${m.eraser} is missing an erasure route`
         ).toEqual([]);
+        if ("orderedTokens" in m) {
+          const positions = m.orderedTokens.map((token) => body.indexOf(token));
+          expect(
+            positions.every(
+              (position, index) => position >= 0 && (index === 0 || position > (positions[index - 1] ?? -1))
+            ),
+            `${m.file}#${m.eraser} changed its destructive lock/preflight order`
+          ).toBe(true);
+        }
         const routes = "routeMembers" in m ? m.routeMembers : [];
         for (const route of routes) {
           const routeSource = readFileSync(path.join(repoRoot, route.file), "utf8");

@@ -5,7 +5,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { EmbedDb, peekEmbedDbMeta } from "../src/embed-db.js";
+import { EmbedDb, hnswPersistBase, peekEmbedDbMeta } from "../src/embed-db.js";
 import { FeedbackStore } from "../src/feedback.js";
 import { defaultIndexFile, peekFtsMetaSafe } from "../src/fts5.js";
 import { parsePositiveInt, parseQuantizationMode, prepareServerDeps } from "../src/index.js";
@@ -2020,4 +2020,134 @@ describe("CLI subcommands E2E (against built dist/)", () => {
     expect(await fs.readFile(controlMarker, "utf8")).toMatch(/fetch: https:\/\/example\.invalid\/model/);
     expect(control.stderr).toMatch(/TEST NETWORK TRIPWIRE/);
   }, 15_000);
+
+  it("`build-embeddings` preserves the exact usable generation through model and corpus failures", async (ctx) => {
+    if (!distExists()) return ctx.skip();
+    if (!canRunFts5) return ctx.skip();
+    const realVault = await fs.realpath(vault);
+    const registerFixture = path.resolve(__dirname, "fixtures", "transformers-test-loader", "register.mjs");
+    const nodeOptions = [process.env.NODE_OPTIONS, `--import=${pathToFileURL(registerFixture).href}`]
+      .filter(Boolean)
+      .join(" ");
+    const Database = (await import("better-sqlite3")).default;
+    const logicalSnapshot = (file: string): unknown => {
+      const db = new Database(file, { readonly: true, fileMustExist: true });
+      try {
+        return {
+          meta: db.prepare("SELECT key, value FROM meta ORDER BY key").all(),
+          embeddings: db
+            .prepare(
+              `SELECT id, rel_path, chunk_index, line_start, line_end, text_preview,
+                      hex(vector) AS vector_hex, kind
+               FROM embeddings
+               ORDER BY id`
+            )
+            .all(),
+          sourceState: db.prepare("SELECT * FROM source_state ORDER BY rel_path, kind").all(),
+          sourceQuarantine: db.prepare("SELECT * FROM source_quarantine ORDER BY rel_path, kind").all(),
+          sourceRevision: db.prepare("SELECT * FROM source_revision ORDER BY rel_path, kind").all()
+        };
+      } finally {
+        db.close();
+      }
+    };
+
+    for (const scenario of [
+      { label: "missing model", modelState: "missing", failMatch: undefined, expected: /fixture model missing/i },
+      { label: "corrupt model", modelState: "corrupt", failMatch: undefined, expected: /fixture model corrupt/i },
+      {
+        label: "corpus inference",
+        modelState: "present",
+        failMatch: "Apollo project notes",
+        expected: /replacement Markdown embed sync rejected Apollo\.md/i
+      }
+    ] as const) {
+      const embedFile = path.join(tmpdir, `${scenario.modelState}-${scenario.label.replaceAll(" ", "-")}.embed.db`);
+      const seed = new EmbedDb({
+        file: embedFile,
+        vaultRoot: realVault,
+        modelAlias: "bge",
+        dim: 384,
+        quantization: "f32"
+      });
+      await seed.open();
+      try {
+        const oldVector = new Float32Array(384);
+        oldVector[0] = 1;
+        seed.upsertNote("Legacy.md", 1, [
+          {
+            chunkIndex: 0,
+            lineStart: 1,
+            lineEnd: 1,
+            textPreview: `OLD_USABLE_${scenario.label}`,
+            vector: oldVector
+          }
+        ]);
+      } finally {
+        await seed.closeAndRelease();
+      }
+
+      const hnswBase = hnswPersistBase(embedFile);
+      const hnswArtifacts = [
+        `${hnswBase}.bin`,
+        `${hnswBase}.meta.json`,
+        `${hnswBase}.${"b".repeat(48)}.bin`
+      ];
+      for (const [index, artifact] of hnswArtifacts.entries()) {
+        await fs.writeFile(artifact, `HNSW_${scenario.label}_${index}`, { mode: 0o600 });
+      }
+      const beforeLogical = logicalSnapshot(embedFile);
+      const beforeBytes = await fs.readFile(embedFile);
+      const beforeStat = mutationFingerprint(await fs.stat(embedFile));
+      const hnswBefore = await Promise.all(hnswArtifacts.map((artifact) => fs.readFile(artifact)));
+      const networkMarker = path.join(tmpdir, `${scenario.modelState}-${scenario.label}.network`);
+      const modelMarker = path.join(tmpdir, `${scenario.modelState}-${scenario.label}.model`);
+
+      const result = spawnSync(
+        process.execPath,
+        [
+          distEntry,
+          "build-embeddings",
+          "--vault",
+          vault,
+          "--embed-file",
+          embedFile,
+          "--embedding-model",
+          "multilingual",
+          "--quantize-embeddings",
+          "f32"
+        ],
+        {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            NODE_OPTIONS: nodeOptions,
+            ENQUIRE_TEST_MODEL_STATE: scenario.modelState,
+            ENQUIRE_TEST_MODEL_MARKER: modelMarker,
+            ENQUIRE_TEST_NETWORK_MARKER: networkMarker,
+            ...(scenario.failMatch === undefined ? {} : { ENQUIRE_TEST_EMBED_FAIL_MATCH: scenario.failMatch })
+          },
+          timeout: 10_000
+        }
+      );
+      const diagnostic = `${result.stdout ?? ""}${result.stderr ?? ""}`;
+
+      expect(result.error, result.stderr).toBeUndefined();
+      expect(result.status, diagnostic).not.toBe(0);
+      expect(diagnostic).toMatch(scenario.expected);
+      expect(await fs.readFile(modelMarker, "utf8")).toContain("@huggingface/transformers");
+      await expect(fs.lstat(networkMarker)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(logicalSnapshot(embedFile)).toEqual(beforeLogical);
+      expect(await fs.readFile(embedFile)).toEqual(beforeBytes);
+      expect(mutationFingerprint(await fs.stat(embedFile))).toEqual(beforeStat);
+      for (const [index, artifact] of hnswArtifacts.entries()) {
+        expect(await fs.readFile(artifact)).toEqual(hnswBefore[index]);
+      }
+      expect(
+        (await fs.readdir(path.dirname(embedFile))).filter((entry) =>
+          entry.startsWith(`${path.basename(embedFile)}.enquire-stage-`)
+        )
+      ).toEqual([]);
+    }
+  }, 20_000);
 });

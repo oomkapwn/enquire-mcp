@@ -12,7 +12,7 @@ import type { loadEmbedder } from "./embeddings.js";
 import { type FileEntry, MAX_INDEX_SYNC_FILES, MAX_INDEX_SYNC_VISITED_ENTRIES, type Vault } from "./vault.js";
 
 /** Failure posture for a bulk embedding synchronization. */
-export type EmbedSyncMode = "fail-soft" | "strict";
+export type EmbedSyncMode = "fail-soft" | "strict" | "replacement";
 
 /** Options shared by Markdown and PDF bulk embedding synchronization. */
 export interface EmbedSyncOptions {
@@ -21,7 +21,10 @@ export interface EmbedSyncOptions {
   /**
    * `"fail-soft"` keeps normal user builds moving past a bad file.
    * `"strict"` aborts on the first failed/empty file and rejects any final
-   * database-integrity mismatch. Defaults to `"fail-soft"`.
+   * database-integrity mismatch. `"replacement"` provides the same audited,
+   * fail-fast error posture for a staged replacement database while accepting
+   * legitimately empty source files as accounted inputs. Defaults to
+   * `"fail-soft"`.
    */
   mode?: EmbedSyncMode;
 }
@@ -55,13 +58,13 @@ export interface EmbedSyncEvidence extends EmbedSyncReport, EmbedKindAudit {
   complete: boolean;
 }
 
-/** Strict-mode failure carrying the final audit when one was available. */
+/** Audited-sync failure carrying the final audit when one was available. */
 export class EmbedSyncIncompleteError extends Error {
   /** Evidence snapshot for a final integrity mismatch; null on fail-fast file errors. */
   readonly report: EmbedSyncEvidence | null;
 
   /**
-   * @param message Human-readable strict-sync failure.
+   * @param message Human-readable audited-sync failure.
    * @param report Final evidence snapshot when the sync reached its audit.
    * @param cause Original per-file failure for fail-fast errors.
    */
@@ -110,7 +113,7 @@ export interface EmbedSyncCounters {
   failed: number;
 }
 
-/** Expensive physical evidence computed only for strict synchronization. */
+/** Expensive physical evidence computed only for audited synchronization. */
 export interface EmbedSyncIntegrity {
   /** Whether all physical checks in this structure actually ran. */
   audited: boolean;
@@ -162,8 +165,16 @@ export function finalizeEmbedSyncEvidence(
   ];
   const rawCountsValid = rawCounts.every((value) => Number.isSafeInteger(value) && value >= 0);
   const accountedFiles = counters.added + counters.updated + counters.unchanged + counters.empty + counters.failed;
+  const auditedMode = mode === "strict" || mode === "replacement";
+  const sourceCoverageComplete =
+    mode === "replacement"
+      ? audit.indexed_files === counters.totalFiles - counters.empty &&
+        (audit.indexed_chunks > 0 || counters.empty === counters.totalFiles)
+      : counters.empty === 0 &&
+        audit.indexed_files === counters.totalFiles &&
+        (counters.totalFiles === 0 || audit.indexed_chunks > 0);
   const complete =
-    mode === "strict" &&
+    auditedMode &&
     integrity.audited &&
     rawCountsValid &&
     typeof integrity.manifestSha256 === "string" &&
@@ -171,12 +182,10 @@ export function finalizeEmbedSyncEvidence(
     counters.processedFiles === counters.totalFiles &&
     accountedFiles === counters.totalFiles &&
     counters.failed === 0 &&
-    counters.empty === 0 &&
-    audit.indexed_files === counters.totalFiles &&
+    sourceCoverageComplete &&
     audit.declared_chunks === audit.indexed_chunks &&
     audit.mismatched_files === 0 &&
-    integrity.invalidVectors === 0 &&
-    (counters.totalFiles === 0 || audit.indexed_chunks > 0);
+    integrity.invalidVectors === 0;
   return {
     mode,
     audited: integrity.audited,
@@ -196,21 +205,21 @@ export function finalizeEmbedSyncEvidence(
   };
 }
 
-function strictFileFailure(
+function failFastFileFailure(
   mode: EmbedSyncMode,
   kind: "Markdown" | "PDF",
   relPath: string,
   reason: string,
   cause?: unknown
 ): void {
-  if (mode !== "strict") return;
-  throw new EmbedSyncIncompleteError(`strict ${kind} embed sync rejected ${relPath}: ${reason}`, null, cause);
+  if (mode === "fail-soft") return;
+  throw new EmbedSyncIncompleteError(`${mode} ${kind} embed sync rejected ${relPath}: ${reason}`, null, cause);
 }
 
 function enforceFinalCompleteness(report: EmbedSyncEvidence, kind: "Markdown" | "PDF"): EmbedSyncEvidence {
-  if (report.mode === "strict" && !report.complete) {
+  if (report.mode !== "fail-soft" && !report.complete) {
     throw new EmbedSyncIncompleteError(
-      `strict ${kind} embed sync incomplete: ${report.indexed_files}/${report.total_files} files, ` +
+      `${report.mode} ${kind} embed sync incomplete: ${report.indexed_files}/${report.total_files} files, ` +
         `${report.indexed_chunks}/${report.declared_chunks} chunks, ${report.mismatched_files} mismatched, ` +
         `${report.invalid_vectors} invalid vectors`,
       report
@@ -224,15 +233,18 @@ function enforceFinalCompleteness(report: EmbedSyncEvidence, kind: "Markdown" | 
  *
  * Default mode preserves the historical fail-soft CLI behavior: a bad note is
  * logged and the remaining notes continue. Strict mode is for evidence-grade
- * callers and aborts before they can write a result artifact.
+ * callers and aborts before they can write a result artifact, including for
+ * an empty note. Replacement mode is for a staged database: it retains the
+ * same physical evidence and error fail-fast guarantees but accounts for
+ * legitimately empty notes without indexing them.
  *
  * @param vault Vault whose Markdown notes are synchronized.
  * @param db Persistent embedding database to update.
  * @param embedder Loaded local embedding model.
  * @param opts Context and failure-posture options.
- * @returns Raw counters. Strict mode adds the physical/vector audit and exact
- *   manifest; fail-soft mode returns explicit unaudited placeholders so normal
- *   startup does not add an O(all embedding rows) scan.
+ * @returns Raw counters. Strict and replacement modes add the physical/vector
+ *   audit and exact manifest; fail-soft mode returns explicit unaudited
+ *   placeholders so normal startup does not add an O(all embedding rows) scan.
  * @example
  * const evidence = await syncEmbedDb(vault, db, embedder, { mode: "strict" });
  * if (!evidence.complete) throw new Error("unexpected incomplete strict sync");
@@ -275,8 +287,10 @@ export async function syncEmbedDb(
       if (result === null) {
         empty += 1;
         processed += 1;
-        if (mode === "strict") db.quarantineSource(entry.relPath, "md");
-        strictFileFailure(mode, "Markdown", entry.relPath, "note has no embeddable chunks");
+        if (mode === "strict") {
+          db.quarantineSource(entry.relPath, "md");
+          failFastFileFailure(mode, "Markdown", entry.relPath, "note has no embeddable chunks");
+        }
         db.deleteNote(entry.relPath);
         continue;
       }
@@ -294,7 +308,7 @@ export async function syncEmbedDb(
       const detail = err instanceof Error ? err.message : String(err);
       process.stderr.write(`enquire: skipping ${entry.relPath} during embed sync — ${detail}\n`);
       db.quarantineSource(entry.relPath, "md");
-      strictFileFailure(mode, "Markdown", entry.relPath, detail, err);
+      failFastFileFailure(mode, "Markdown", entry.relPath, detail, err);
     }
     processed += 1;
     if (processed % logEvery === 0 || processed === totalToProcess) {
@@ -331,11 +345,11 @@ export async function syncEmbedDb(
         empty,
         failed
       },
-      mode === "strict"
+      mode !== "fail-soft"
         ? db.auditKind("md")
         : { indexed_files: 0, declared_chunks: 0, indexed_chunks: 0, mismatched_files: 0 },
       db.totalChunks(),
-      mode === "strict"
+      mode !== "fail-soft"
         ? {
             audited: true,
             invalidVectors: db.auditVectorHealth("md").invalid_vectors,
@@ -350,15 +364,17 @@ export async function syncEmbedDb(
 /**
  * Incrementally synchronize PDFs into an {@link EmbedDb}.
  *
- * Image-only PDFs count as `empty`; ordinary callers remain fail-soft while a
- * future evidence-grade PDF benchmark may opt into strict rejection.
+ * Image-only PDFs count as `empty`; ordinary callers remain fail-soft, strict
+ * callers reject them, and replacement callers account for them without
+ * weakening the final physical audit.
  *
  * @param vault Vault whose PDF files are synchronized.
  * @param db Persistent embedding database to update.
  * @param embedder Loaded local embedding model.
  * @param opts Context and failure-posture options.
- * @returns Raw counters. Strict mode adds the PDF-scoped physical/vector audit
- *   and manifest; fail-soft mode returns explicit unaudited placeholders.
+ * @returns Raw counters. Strict and replacement modes add the PDF-scoped
+ *   physical/vector audit and manifest; fail-soft mode returns explicit
+ *   unaudited placeholders.
  * @example
  * const evidence = await syncPdfEmbedDb(vault, db, embedder, { mode: "strict" });
  * console.log(evidence.indexed_files, evidence.indexed_chunks);
@@ -400,8 +416,10 @@ export async function syncPdfEmbedDb(
       if (result === null) {
         empty += 1;
         processed += 1;
-        if (mode === "strict") db.quarantineSource(entry.relPath, "pdf");
-        strictFileFailure(mode, "PDF", entry.relPath, "PDF is image-only, scanned, or empty");
+        if (mode === "strict") {
+          db.quarantineSource(entry.relPath, "pdf");
+          failFastFileFailure(mode, "PDF", entry.relPath, "PDF is image-only, scanned, or empty");
+        }
         // A prior failed attempt may have left only a durable quarantine
         // marker (no source_state/embedding rows). A successful empty result
         // is still authoritative and must clear that marker idempotently, or
@@ -425,7 +443,7 @@ export async function syncPdfEmbedDb(
       const detail = err instanceof Error ? err.message : String(err);
       process.stderr.write(`enquire: skipping ${entry.relPath} during pdf-embed sync — ${detail}\n`);
       db.quarantineSource(entry.relPath, "pdf");
-      strictFileFailure(mode, "PDF", entry.relPath, detail, err);
+      failFastFileFailure(mode, "PDF", entry.relPath, detail, err);
     }
     processed += 1;
     if (processed % logEvery === 0 || processed === totalToProcess) {
@@ -463,11 +481,11 @@ export async function syncPdfEmbedDb(
         empty,
         failed
       },
-      mode === "strict"
+      mode !== "fail-soft"
         ? db.auditKind("pdf")
         : { indexed_files: 0, declared_chunks: 0, indexed_chunks: 0, mismatched_files: 0 },
       db.totalChunks(),
-      mode === "strict"
+      mode !== "fail-soft"
         ? {
             audited: true,
             invalidVectors: db.auditVectorHealth("pdf").invalid_vectors,

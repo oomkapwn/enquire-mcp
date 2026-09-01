@@ -5,6 +5,11 @@ import * as path from "node:path";
 const TOKEN_BYTES = 24;
 const TOKEN_HEX_LENGTH = TOKEN_BYTES * 2;
 const STAGED_ARTIFACT_BASENAME = "artifact";
+const STAGED_EMBED_ARTIFACT_BASENAME = `${STAGED_ARTIFACT_BASENAME}.embed.db`;
+const STAGED_LEASE_ROOT_BASENAME = ".enquire-mcp-leases";
+const STAGED_LEASE_SCOPE_BASENAME_PATTERN = /^[0-9a-f]{64}$/u;
+const STAGED_EMBED_LEASE_SCOPE_COUNT = 2;
+const SQLITE_SIDECAR_SUFFIXES = ["-wal", "-shm", "-journal"] as const;
 const GENERATED_ENTRY_PATTERN = new RegExp(
   `^(.+)\\.enquire-(tmp|stage)-([0-9a-f]{${TOKEN_HEX_LENGTH}})(?![\\s\\S])`,
   "is"
@@ -31,13 +36,24 @@ interface GeneratedEntry {
 
 interface InspectedGeneratedEntry {
   generated: GeneratedEntry;
-  hasStagedChild: boolean;
+  stagedChildren: string[];
+  leaseScopeDirectories: string[];
 }
 
 /** Result of publishing one sensitive filesystem artifact. @internal */
 export interface SensitiveArtifactReceipt {
   /** SHA-256 of the held staged descriptor after the producer returns. */
   sha256: string;
+}
+
+/** Callback-scoped sensitive artifact ready for caller-controlled publication. @internal */
+export interface PreparedSensitiveArtifact {
+  /** Exact prepared path, valid only while the callback is active. */
+  readonly stagedPath: string;
+  /** SHA-256 of the stable, fsync'd staged generation. */
+  readonly sha256: string;
+  /** Atomically rename the still-unchanged staged generation onto its final path. */
+  commit(): Promise<void>;
 }
 
 /**
@@ -89,15 +105,67 @@ export async function publishSensitiveArtifact(
   source: string | Uint8Array | SensitiveArtifactPathWriter,
   maxBytes = Number.MAX_SAFE_INTEGER
 ): Promise<SensitiveArtifactReceipt> {
+  return withPreparedSensitiveArtifact(
+    finalPath,
+    source,
+    async (prepared) => {
+      await prepared.commit();
+      return { sha256: prepared.sha256 };
+    },
+    maxBytes
+  );
+}
+
+/**
+ * Prepare a sensitive artifact and expose one callback-scoped atomic commit.
+ *
+ * The staged inode remains held after it is written, chmod'd, fsync'd, and
+ * hashed. `commit()` revalidates the complete descriptor receipt, refuses a
+ * SQLite stage with live WAL/SHM/rollback-journal sidecars, closes the held
+ * descriptor, and atomically renames the exact owned inode onto `finalPath`.
+ * Returning or throwing without commit erases the owned stage best-effort.
+ * A commit started inside the callback is awaited even if the callback forgets
+ * to await it; leaked callback state cannot publish after the callback settles.
+ *
+ * For a native writer targeting an exact `.embed.db` final path, `stagedPath`
+ * also ends in `.embed.db` so the normal embedding path admission remains in
+ * force. Crash cleanup recognizes that staged main plus only its exact SQLite
+ * `-wal`, `-shm`, and `-journal` children and a fully released, exact empty
+ * two-scope lease namespace. Any retained lease marker fails closed.
+ *
+ * @param finalPath - Final artifact path whose parent already exists.
+ * @param source - Bytes to write, or a native producer that fills a staged path.
+ * @param use - Callback that validates the prepared generation and optionally commits it.
+ * @param maxBytes - Maximum bytes admitted from the held staged descriptor.
+ * @returns The callback result after any started commit settles and cleanup completes.
+ * @throws If preparation, bounded validation, callback work, or atomic commit fails.
+ * @example
+ * await withPreparedSensitiveArtifact(
+ *   "/tmp/index.embed.db",
+ *   async (stagedPath) => buildIndex(stagedPath),
+ *   async (prepared) => prepared.commit()
+ * );
+ * @internal
+ */
+export async function withPreparedSensitiveArtifact<Result>(
+  finalPath: string,
+  source: string | Uint8Array | SensitiveArtifactPathWriter,
+  use: (prepared: PreparedSensitiveArtifact) => Promise<Result>,
+  maxBytes = Number.MAX_SAFE_INTEGER
+): Promise<Result> {
   if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) {
     throw new RangeError("Sensitive artifact publish limit must be a non-negative safe integer");
   }
   const owned =
     typeof source === "function" ? await reserveStagedArtifact(finalPath) : await reserveSiblingTemp(finalPath);
-  let published = false;
+  let callbackActive = true;
+  let callbackCompleted = false;
+  let committed = false;
+  const commitState: { attempt: Promise<void> | null } = { attempt: null };
   try {
     if (typeof source === "function") {
       await source(owned.tempPath);
+      await removeOwnedEmptyEmbedLeaseNamespace(owned);
     } else {
       await owned.handle?.writeFile(source);
     }
@@ -114,20 +182,44 @@ export async function publishSensitiveArtifact(
     await handle.chmod(0o600);
     await handle.sync();
     const sha256 = await sha256StableHandle(handle, maxBytes);
-    await handle.close();
-    owned.handle = null;
-
     await assertPathStillOwned(owned.tempPath, owned.tempIdentity);
-    await assertReplaceableFinalLeaf(finalPath);
-    await fs.rename(owned.tempPath, finalPath);
-    published = true;
-    // Publication committed at rename. A best-effort empty-stage cleanup must
-    // never turn that committed success into a reported failure/retry ambiguity.
-    if (owned.stagePath) await removeOwnedEmptyStage(owned.stagePath, owned.stageIdentity).catch(() => {});
-    return { sha256 };
+    const preparedStat = await handle.stat({ bigint: true });
+    const prepared: PreparedSensitiveArtifact = {
+      stagedPath: owned.tempPath,
+      sha256,
+      commit: () => {
+        if (!callbackActive) {
+          return Promise.reject(new Error("Sensitive artifact commit escaped its preparation callback"));
+        }
+        commitState.attempt ??= (async () => {
+          const beforeCommit = await handle.stat({ bigint: true });
+          if (!sameStableFileReceipt(preparedStat, beforeCommit)) {
+            throw new Error("Sensitive artifact changed after it was prepared");
+          }
+          await assertNoStagedSqliteSidecars(owned.tempPath);
+          await handle.close();
+          owned.handle = null;
+          await assertPathStillOwned(owned.tempPath, owned.tempIdentity);
+          await assertReplaceableFinalLeaf(finalPath);
+          await fs.rename(owned.tempPath, finalPath);
+          committed = true;
+          // Publication committed at rename. A best-effort empty-stage cleanup
+          // must never turn that success into a reported failure/retry ambiguity.
+          if (owned.stagePath) await removeOwnedEmptyStage(owned.stagePath, owned.stageIdentity).catch(() => {});
+        })();
+        return commitState.attempt;
+      }
+    };
+    const result = await use(prepared);
+    callbackCompleted = true;
+    callbackActive = false;
+    if (commitState.attempt) await commitState.attempt;
+    return result;
   } finally {
+    callbackActive = false;
+    if (!callbackCompleted && commitState.attempt) await commitState.attempt.catch(() => {});
     if (owned.handle) await owned.handle.close().catch(() => {});
-    if (!published) await cleanupOwnedTemp(owned);
+    if (!committed) await cleanupOwnedTemp(owned);
   }
 }
 
@@ -336,8 +428,9 @@ export async function preflightSensitiveArtifactTempEntry(entryPath: string): Pr
  * Remove one crash-leftover publisher temp/stage entry by its exact generated name.
  *
  * Regular temps and symlink leaves are unlinked directly. A stage is removed
- * only when it is a non-symlink directory containing at most the single fixed
- * staged-artifact entry; recursive deletion is never used.
+ * only when it is a non-symlink directory containing either the single fixed
+ * staged-artifact entry or, for an `.embed.db` target, that exact main plus its
+ * recognized SQLite sidecars; recursive deletion is never used.
  *
  * @param entryPath - Exact generated temp or stage path.
  * @returns `true` when an entry was removed, `false` when it was already absent.
@@ -353,10 +446,8 @@ export async function removeSensitiveArtifactTempEntry(entryPath: string): Promi
     await fs.unlink(entryPath);
     return true;
   }
-  if (inspected.hasStagedChild) {
-    const childPath = path.join(entryPath, STAGED_ARTIFACT_BASENAME);
-    await fs.unlink(childPath);
-  }
+  await removeInspectedEmptyEmbedLeaseNamespace(entryPath, inspected.leaseScopeDirectories);
+  for (const child of orderedStagedChildrenForRemoval(inspected)) await fs.unlink(path.join(entryPath, child));
   await fs.rmdir(entryPath);
   return true;
 }
@@ -375,28 +466,64 @@ async function inspectSensitiveArtifactTempEntry(entryPath: string): Promise<Ins
     if (!entryStat.isFile() && !entryStat.isSymbolicLink()) {
       throw new Error("Refusing to erase a malformed sensitive-artifact temporary entry");
     }
-    return { generated, hasStagedChild: false };
+    return { generated, stagedChildren: [], leaseScopeDirectories: [] };
   }
   if (entryStat.isSymbolicLink() || !entryStat.isDirectory()) {
     throw new Error("Refusing to erase a malformed sensitive-artifact staging directory");
   }
   const children = await fs.readdir(entryPath);
-  const child = children[0];
-  if (children.length > 1) {
-    throw new Error("Refusing to erase a sensitive-artifact stage with unexpected entries");
-  }
-  if (child) {
+  const expectedChildren = stagedArtifactFamilyBasenames(generated.finalBasename);
+  const matchedExpected = new Set<string>();
+  let leaseScopeDirectories: string[] = [];
+  for (const child of children) {
     const childPath = path.join(entryPath, child);
-    const expectedChildPath = path.join(entryPath, STAGED_ARTIFACT_BASENAME);
-    if (child !== STAGED_ARTIFACT_BASENAME && !(await sameCanonicalDirectoryEntry(childPath, expectedChildPath))) {
+    if (
+      stagedArtifactMainBasename(generated.finalBasename) === STAGED_EMBED_ARTIFACT_BASENAME &&
+      child === STAGED_LEASE_ROOT_BASENAME
+    ) {
+      if (leaseScopeDirectories.length > 0) {
+        throw new Error("Refusing to erase a sensitive-artifact stage with an ambiguous lease namespace");
+      }
+      leaseScopeDirectories = await inspectEmptyEmbedLeaseNamespace(entryPath);
+      continue;
+    }
+    let expectedChild = expectedChildren.find((candidate) => candidate === child);
+    if (!expectedChild) {
+      const aliases: string[] = [];
+      for (const candidate of expectedChildren) {
+        if (await sameCanonicalDirectoryEntry(childPath, path.join(entryPath, candidate))) aliases.push(candidate);
+      }
+      if (aliases.length !== 1) {
+        if (
+          expectedChildren.some((candidate) => normalizedEntrySpelling(candidate) === normalizedEntrySpelling(child))
+        ) {
+          throw new Error("Refusing to erase a sensitive-artifact stage with an ambiguous child entry");
+        }
+        throw new Error("Refusing to erase a sensitive-artifact stage with unexpected entries");
+      }
+      expectedChild = aliases[0];
+    }
+    if (!expectedChild || matchedExpected.has(expectedChild)) {
       throw new Error("Refusing to erase a sensitive-artifact stage with an ambiguous child entry");
     }
+    matchedExpected.add(expectedChild);
     const childStat = await fs.lstat(childPath);
     if (!childStat.isFile() && !childStat.isSymbolicLink()) {
       throw new Error("Refusing to erase a malformed sensitive-artifact staged file");
     }
   }
-  return { generated, hasStagedChild: child !== undefined };
+  return {
+    generated,
+    stagedChildren: children.filter((child) => child !== STAGED_LEASE_ROOT_BASENAME),
+    leaseScopeDirectories
+  };
+}
+
+function orderedStagedChildrenForRemoval(inspected: InspectedGeneratedEntry): string[] {
+  const mainBasename = stagedArtifactMainBasename(inspected.generated.finalBasename);
+  return [...inspected.stagedChildren].sort(
+    (left, right) => Number(left === mainBasename) - Number(right === mainBasename)
+  );
 }
 
 /**
@@ -502,7 +629,7 @@ async function reserveStagedArtifact(finalPath: string): Promise<OwnedTemp> {
   const basename = path.basename(finalPath);
   for (let attempt = 0; attempt < 4; attempt += 1) {
     const stagePath = path.join(parent, `${basename}.enquire-stage-${randomToken()}`);
-    const tempPath = path.join(stagePath, STAGED_ARTIFACT_BASENAME);
+    const tempPath = path.join(stagePath, stagedArtifactMainBasename(basename));
     let stageIdentity: FileIdentity | null = null;
     let tempIdentity: FileIdentity | null = null;
     let handle: import("node:fs/promises").FileHandle | null = null;
@@ -611,6 +738,17 @@ async function sha256StableHandle(
 }
 
 async function cleanupOwnedTemp(owned: OwnedTemp): Promise<void> {
+  if (owned.stagePath && owned.stageIdentity) {
+    try {
+      await removeOwnedEmptyEmbedLeaseNamespace(owned);
+    } catch {
+      // A live/malformed lease namespace means the staged database may still
+      // be in use. Preserve the complete private stage rather than unlinking
+      // its main file out from under an unproved owner.
+      return;
+    }
+    await cleanupOwnedSqliteSidecars(owned).catch(() => {});
+  }
   try {
     await assertPathStillOwned(owned.tempPath, owned.tempIdentity);
     await fs.unlink(owned.tempPath);
@@ -620,11 +758,111 @@ async function cleanupOwnedTemp(owned: OwnedTemp): Promise<void> {
   if (owned.stagePath) await removeOwnedEmptyStage(owned.stagePath, owned.stageIdentity).catch(() => {});
 }
 
+async function removeOwnedEmptyEmbedLeaseNamespace(owned: OwnedTemp): Promise<void> {
+  if (!owned.stagePath || !owned.stageIdentity || path.basename(owned.tempPath) !== STAGED_EMBED_ARTIFACT_BASENAME) {
+    return;
+  }
+  const stage = await fs.lstat(owned.stagePath, { bigint: true });
+  if (stage.isSymbolicLink() || !stage.isDirectory() || !sameFileIdentity(stage, owned.stageIdentity)) {
+    throw new Error("Sensitive artifact staging directory changed before lease cleanup");
+  }
+  const scopes = await inspectEmptyEmbedLeaseNamespace(owned.stagePath);
+  await removeInspectedEmptyEmbedLeaseNamespace(owned.stagePath, scopes);
+}
+
+async function inspectEmptyEmbedLeaseNamespace(stagePath: string): Promise<string[]> {
+  const leaseRoot = path.join(stagePath, STAGED_LEASE_ROOT_BASENAME);
+  let root: import("node:fs").BigIntStats;
+  try {
+    root = await fs.lstat(leaseRoot, { bigint: true });
+  } catch (error) {
+    if (errnoCode(error) === "ENOENT") return [];
+    throw error;
+  }
+  if (root.isSymbolicLink() || !root.isDirectory()) {
+    throw new Error("Sensitive artifact staged lease root is not a real directory");
+  }
+  if (process.platform !== "win32" && (root.mode & 0o777n) !== 0o700n) {
+    throw new Error("Sensitive artifact staged lease root is not private");
+  }
+  const scopes = await fs.readdir(leaseRoot);
+  if (
+    scopes.length !== STAGED_EMBED_LEASE_SCOPE_COUNT ||
+    scopes.some((scope) => !STAGED_LEASE_SCOPE_BASENAME_PATTERN.test(scope))
+  ) {
+    throw new Error("Sensitive artifact staged lease namespace is not an exact released family");
+  }
+  for (const scope of scopes) {
+    const scopePath = path.join(leaseRoot, scope);
+    const entry = await fs.lstat(scopePath, { bigint: true });
+    if (entry.isSymbolicLink() || !entry.isDirectory()) {
+      throw new Error("Sensitive artifact staged lease scope is not a real directory");
+    }
+    if (process.platform !== "win32" && (entry.mode & 0o777n) !== 0o700n) {
+      throw new Error("Sensitive artifact staged lease scope is not private");
+    }
+    if ((await fs.readdir(scopePath)).length !== 0) {
+      throw new Error("Sensitive artifact staged lease scope is still active");
+    }
+  }
+  return scopes;
+}
+
+async function removeInspectedEmptyEmbedLeaseNamespace(stagePath: string, scopes: readonly string[]): Promise<void> {
+  if (scopes.length === 0) return;
+  const leaseRoot = path.join(stagePath, STAGED_LEASE_ROOT_BASENAME);
+  for (const scope of scopes) await fs.rmdir(path.join(leaseRoot, scope));
+  await fs.rmdir(leaseRoot);
+}
+
+async function cleanupOwnedSqliteSidecars(owned: OwnedTemp): Promise<void> {
+  if (!owned.stagePath || !owned.stageIdentity || path.basename(owned.tempPath) !== STAGED_EMBED_ARTIFACT_BASENAME) {
+    return;
+  }
+  const stage = await fs.lstat(owned.stagePath, { bigint: true });
+  if (stage.isSymbolicLink() || !stage.isDirectory() || !sameFileIdentity(stage, owned.stageIdentity)) return;
+  for (const suffix of SQLITE_SIDECAR_SUFFIXES) {
+    const sidecar = `${owned.tempPath}${suffix}`;
+    let entry: import("node:fs").Stats;
+    try {
+      entry = await fs.lstat(sidecar);
+    } catch (err) {
+      if (errnoCode(err) === "ENOENT") continue;
+      throw err;
+    }
+    if (!entry.isFile() && !entry.isSymbolicLink()) return;
+    await fs.unlink(sidecar);
+  }
+}
+
 async function removeOwnedEmptyStage(stagePath: string, expected: FileIdentity | null): Promise<void> {
   if (!expected) return;
   const stage = await fs.lstat(stagePath, { bigint: true });
   if (stage.isSymbolicLink() || !stage.isDirectory() || !sameFileIdentity(stage, expected)) return;
   await fs.rmdir(stagePath);
+}
+
+async function assertNoStagedSqliteSidecars(stagedPath: string): Promise<void> {
+  if (path.basename(stagedPath) !== STAGED_EMBED_ARTIFACT_BASENAME) return;
+  for (const suffix of SQLITE_SIDECAR_SUFFIXES) {
+    try {
+      await fs.lstat(`${stagedPath}${suffix}`);
+    } catch (err) {
+      if (errnoCode(err) === "ENOENT") continue;
+      throw err;
+    }
+    throw new Error("Sensitive artifact SQLite stage retains sidecars before commit");
+  }
+}
+
+function stagedArtifactMainBasename(finalBasename: string): string {
+  return finalBasename.endsWith(".embed.db") ? STAGED_EMBED_ARTIFACT_BASENAME : STAGED_ARTIFACT_BASENAME;
+}
+
+function stagedArtifactFamilyBasenames(finalBasename: string): string[] {
+  const mainBasename = stagedArtifactMainBasename(finalBasename);
+  if (mainBasename !== STAGED_EMBED_ARTIFACT_BASENAME) return [mainBasename];
+  return [mainBasename, ...SQLITE_SIDECAR_SUFFIXES.map((suffix) => `${mainBasename}${suffix}`)];
 }
 
 function parseGeneratedEntry(entryBasename: string): GeneratedEntry | null {
@@ -656,6 +894,17 @@ function sameFileIdentity(left: FileIdentity, right: FileIdentity): boolean {
   // Some unusual filesystems report a non-identifying 0/0 pair. Treat that as
   // unprovable and fail closed instead of accepting any replacement as equal.
   return left.ino !== 0n && left.dev === right.dev && left.ino === right.ino;
+}
+
+function sameStableFileReceipt(left: import("node:fs").BigIntStats, right: import("node:fs").BigIntStats): boolean {
+  return (
+    left.isFile() &&
+    right.isFile() &&
+    sameFileIdentity(left, right) &&
+    left.size === right.size &&
+    left.mtimeNs === right.mtimeNs &&
+    left.ctimeNs === right.ctimeNs
+  );
 }
 
 /**

@@ -294,7 +294,7 @@ const EXPECTED_REPOSITORY_MUTATION_HELPER_CALL_ENTRIES = [
   ],
   [
     "erasure-invariant.test.ts",
-    { count: 105, sha256: "3fdd93042614437cdc215fdcf467480b15b1896e273c5c5b03392dbdb1abc485" }
+    { count: 105, sha256: "4a58437359c826c444ea81fb4427503ff2e05fd2e3a7c142ecb9cd09e3e23407" }
   ],
   [
     "embeddings-offline.test.ts",
@@ -316,11 +316,11 @@ const EXPECTED_REPOSITORY_MUTATION_HELPER_CALL_ENTRIES = [
   ],
   [
     "k1-ast-invariant.test.ts",
-    { count: 4, sha256: "801dfdc49534a44fd8e9ae7b8c5c39d00ba12c2b05718d56be8ed3784ae9494f" }
+    { count: 4, sha256: "d77ba6dc1772f6205bc271417c60f7e72ae2dc54cded6c52700922fc13486a62" }
   ],
   [
     "k1-class-invariant.test.ts",
-    { count: 100, sha256: "18eb3e36d45871dc8af6d2e618cc6eb39cd8b244e21f6d257ae9c1925d0943ba" }
+    { count: 102, sha256: "07ecdcd22c8c3af935e14623d446bc5c94d5da161b976e89602ebbeb28aafbb5" }
   ],
   ["jsonld.test.ts", { count: 11, sha256: "ec02eb24004f2c975daa1b3a668451217e2884cec7cf301e33f91f8bce98d05b" }],
   [

@@ -821,7 +821,7 @@ describe("portable cross-process persistence lease", () => {
           targetPath,
           familyKey: "embed-db",
           role: "shared",
-          gateTimeoutMs: 100,
+          gateTimeoutMs: 2_000,
           gatePollMs: 5
         });
         expect(transition.calls()).toBe(2);

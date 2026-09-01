@@ -3,10 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { discoverEmbedDbConfig, EmbedDb, hnswPersistBase } from "../src/embed-db.js";
-import {
-  embedConfigurationNeedsReplacement,
-  replaceEmbeddingIndex
-} from "../src/embed-replacement.js";
+import { embedConfigurationNeedsReplacement, replaceEmbeddingIndex } from "../src/embed-replacement.js";
 import { syncEmbedDb } from "../src/embed-sync.js";
 import type { Embedder, EmbeddingModel } from "../src/embeddings.js";
 import { acquirePersistenceFamilyLease } from "../src/persistence-coordination.js";
@@ -15,10 +12,7 @@ import {
   getProcessPersistenceLeaseDebtStatus,
   inspectPersistenceLeases
 } from "../src/persistence-lease.js";
-import {
-  EMBED_REPLACEMENT_STAGE_FAMILY_KEY,
-  SEMANTIC_PERSISTENCE_FAMILY_KEY
-} from "../src/semantic-persistence.js";
+import { EMBED_REPLACEMENT_STAGE_FAMILY_KEY, SEMANTIC_PERSISTENCE_FAMILY_KEY } from "../src/semantic-persistence.js";
 import { Vault } from "../src/vault.js";
 
 const OLD_MODEL: EmbeddingModel = Object.freeze({
@@ -416,19 +410,12 @@ describe("staged embedding replacement", () => {
     let releaseFaults = 0;
     vi.spyOn(fs, "rename").mockImplementation(async (oldPath, newPath) => {
       await realRename(oldPath, newPath);
-      if (
-        path.basename(String(newPath)) === path.basename(embedFile) &&
-        String(oldPath).includes(".enquire-stage-")
-      ) {
+      if (path.basename(String(newPath)) === path.basename(embedFile) && String(oldPath).includes(".enquire-stage-")) {
         commitObserved = true;
       }
     });
     vi.spyOn(fs, "unlink").mockImplementation(async (candidate) => {
-      if (
-        commitObserved &&
-        releaseFaults < 2 &&
-        path.basename(String(candidate)).startsWith("lease.eraser.")
-      ) {
+      if (commitObserved && releaseFaults < 2 && path.basename(String(candidate)).startsWith("lease.eraser.")) {
         releaseFaults += 1;
         throw Object.assign(new Error("synthetic persistent post-commit release failure"), { code: "EIO" });
       }

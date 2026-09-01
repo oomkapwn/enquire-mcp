@@ -9,10 +9,7 @@ import {
 } from "./embed-db.js";
 import { type EmbedSyncEvidence, syncEmbedDb, syncPdfEmbedDb } from "./embed-sync.js";
 import { type Embedder, type EmbeddingModel, loadEmbedder } from "./embeddings.js";
-import {
-  clearHnswPersistedArtifactsWithEraser,
-  preflightHnswPersistedArtifacts
-} from "./hnsw.js";
+import { clearHnswPersistedArtifactsWithEraser, preflightHnswPersistedArtifacts } from "./hnsw.js";
 import { PersistenceLeaseOwnershipError, resolvePersistenceLeaseScope } from "./persistence-lease.js";
 import { EMBED_DB_SCHEMA_VERSION } from "./schema-contract.js";
 import {
@@ -240,9 +237,7 @@ export async function replaceEmbeddingIndex(opts: {
             throw new Error("Staged embedding replacement lacks complete corpus evidence");
           }
           const report: EmbedReplacementReport =
-            pdfReport === undefined
-              ? { markdown: markdownReport }
-              : { markdown: markdownReport, pdf: pdfReport };
+            pdfReport === undefined ? { markdown: markdownReport } : { markdown: markdownReport, pdf: pdfReport };
           committedReport = report;
           await withSemanticPersistenceEraser(finalFile, undefined, async (eraser) => {
             await assertWatcherActivationGuardClear(finalFile);

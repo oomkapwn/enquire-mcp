@@ -223,9 +223,6 @@ export async function withEmbedReplacementStagePublisher<T>(
  * await withEmbedReplacementStageEraser(file, async () => clearSemanticFamily());
  * @internal
  */
-export async function withEmbedReplacementStageEraser<T>(
-  targetPath: string,
-  operation: () => Promise<T>
-): Promise<T> {
+export async function withEmbedReplacementStageEraser<T>(targetPath: string, operation: () => Promise<T>): Promise<T> {
   return withEmbedReplacementStageRole(targetPath, "eraser", operation);
 }

@@ -2088,11 +2088,7 @@ describe("CLI subcommands E2E (against built dist/)", () => {
       }
 
       const hnswBase = hnswPersistBase(embedFile);
-      const hnswArtifacts = [
-        `${hnswBase}.bin`,
-        `${hnswBase}.meta.json`,
-        `${hnswBase}.${"b".repeat(48)}.bin`
-      ];
+      const hnswArtifacts = [`${hnswBase}.bin`, `${hnswBase}.meta.json`, `${hnswBase}.${"b".repeat(48)}.bin`];
       for (const [index, artifact] of hnswArtifacts.entries()) {
         await fs.writeFile(artifact, `HNSW_${scenario.label}_${index}`, { mode: 0o600 });
       }

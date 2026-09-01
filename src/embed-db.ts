@@ -41,8 +41,8 @@ import { EMBED_DB_SCHEMA_VERSION } from "./schema-contract.js";
 import {
   type ActiveSemanticPersistenceEraser,
   embedDbPathInSemanticScopes,
-  scopesFromActiveSemanticEraser,
   SEMANTIC_PERSISTENCE_FAMILY_KEY,
+  scopesFromActiveSemanticEraser,
   withEmbedReplacementStageEraser,
   withSemanticPersistenceEraser
 } from "./semantic-persistence.js";

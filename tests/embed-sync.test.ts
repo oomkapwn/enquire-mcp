@@ -597,66 +597,63 @@ describe("finalizeEmbedSyncEvidence", () => {
     ).toBe(true);
   });
 
-  it(
-    "(negative controls) rejects replacement evidence with unaccounted files or zero chunks for a non-empty file",
-    () => {
-      const replacementCounters: EmbedSyncCounters = {
-        ...counters,
-        added: 1,
-        empty: 1
-      };
+  it("(negative controls) rejects replacement evidence with unaccounted files or zero chunks for a non-empty file", () => {
+    const replacementCounters: EmbedSyncCounters = {
+      ...counters,
+      added: 1,
+      empty: 1
+    };
 
-      expect(
-        finalizeEmbedSyncEvidence(
-          "replacement",
-          replacementCounters,
-          { indexed_files: 2, declared_chunks: 2, indexed_chunks: 2, mismatched_files: 0 },
-          2,
-          integrity
-        ).complete
-      ).toBe(false);
+    expect(
+      finalizeEmbedSyncEvidence(
+        "replacement",
+        replacementCounters,
+        { indexed_files: 2, declared_chunks: 2, indexed_chunks: 2, mismatched_files: 0 },
+        2,
+        integrity
+      ).complete
+    ).toBe(false);
 
-      expect(
-        finalizeEmbedSyncEvidence(
-          "replacement",
-          { ...replacementCounters, added: 0 },
-          { indexed_files: 1, declared_chunks: 2, indexed_chunks: 2, mismatched_files: 0 },
-          2,
-          integrity
-        ).complete
-      ).toBe(false);
+    expect(
+      finalizeEmbedSyncEvidence(
+        "replacement",
+        { ...replacementCounters, added: 0 },
+        { indexed_files: 1, declared_chunks: 2, indexed_chunks: 2, mismatched_files: 0 },
+        2,
+        integrity
+      ).complete
+    ).toBe(false);
 
-      expect(
-        finalizeEmbedSyncEvidence(
-          "replacement",
-          replacementCounters,
-          { indexed_files: 1, declared_chunks: 2, indexed_chunks: 1, mismatched_files: 1 },
-          1,
-          integrity
-        ).complete
-      ).toBe(false);
+    expect(
+      finalizeEmbedSyncEvidence(
+        "replacement",
+        replacementCounters,
+        { indexed_files: 1, declared_chunks: 2, indexed_chunks: 1, mismatched_files: 1 },
+        1,
+        integrity
+      ).complete
+    ).toBe(false);
 
-      expect(
-        finalizeEmbedSyncEvidence(
-          "replacement",
-          replacementCounters,
-          { indexed_files: 1, declared_chunks: 0, indexed_chunks: 0, mismatched_files: 0 },
-          0,
-          integrity
-        ).complete
-      ).toBe(false);
+    expect(
+      finalizeEmbedSyncEvidence(
+        "replacement",
+        replacementCounters,
+        { indexed_files: 1, declared_chunks: 0, indexed_chunks: 0, mismatched_files: 0 },
+        0,
+        integrity
+      ).complete
+    ).toBe(false);
 
-      expect(
-        finalizeEmbedSyncEvidence(
-          "replacement",
-          { ...replacementCounters, processedFiles: 1 },
-          { indexed_files: 1, declared_chunks: 2, indexed_chunks: 2, mismatched_files: 0 },
-          2,
-          integrity
-        ).complete
-      ).toBe(false);
-    }
-  );
+    expect(
+      finalizeEmbedSyncEvidence(
+        "replacement",
+        { ...replacementCounters, processedFiles: 1 },
+        { indexed_files: 1, declared_chunks: 2, indexed_chunks: 2, mismatched_files: 0 },
+        2,
+        integrity
+      ).complete
+    ).toBe(false);
+  });
 
   it("(negative controls) recomputes completeness instead of trusting forged counters or audit fields", () => {
     const forgedCounters = {

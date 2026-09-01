@@ -39,11 +39,18 @@ import {
 import { assertEmbedDbFilePath, embedDbFileStem } from "./persistence-path.js";
 import { EMBED_DB_SCHEMA_VERSION } from "./schema-contract.js";
 import {
+  type ActiveSemanticPersistenceEraser,
   embedDbPathInSemanticScopes,
   SEMANTIC_PERSISTENCE_FAMILY_KEY,
+  scopesFromActiveSemanticEraser,
+  withEmbedReplacementStageEraser,
   withSemanticPersistenceEraser
 } from "./semantic-persistence.js";
-import { preflightSqliteArtifactFamily } from "./sensitive-artifact.js";
+import {
+  preflightSensitiveArtifactTemps,
+  preflightSqliteArtifactFamily,
+  removeSensitiveArtifactTemps
+} from "./sensitive-artifact.js";
 import { clearWatcherActivationGuard, preflightWatcherActivationGuardRecovery } from "./watcher-activation-guard.js";
 import { stripTrailingSlashes } from "./wildcard-match.js";
 
@@ -1541,56 +1548,89 @@ export class EmbedDb {
     // An instance must never deadlock against its own shared lifetime. Await
     // the exact retryable release before requesting the exclusive family role.
     await this.closeAndRelease();
-    return withSemanticPersistenceEraser(this.file, this.persistenceScopes ?? undefined, async (eraserCapability) => {
-      this.persistenceScopes ??= eraserCapability.scopes;
-      this.file = embedDbPathInSemanticScopes(this.persistenceScopes);
-      let removed = false;
-      await this.revalidatePersistenceScopes();
-      // Validate any stranded interlock BEFORE deleting the first artifact.
-      // Foreign files/symlinks/special objects and unexpected directory entries
-      // therefore fail closed without turning recovery into an unnecessary
-      // partial erase. The guard is validated again and removed last below.
-      await preflightWatcherActivationGuardRecovery(this.file);
-      // v3.10.0-rc.20 (audit M7) — derive the HNSW persist base via the SHARED
-      // `hnswPersistBase` helper (same one server.ts's writer uses), then delegate
-      // the complete legacy/generation/temp family to the HNSW eraser.
-      const hnswBase = hnswPersistBase(this.file);
-      await preflightHnswPersistedArtifacts(hnswBase);
-      const targets = [this.file, `${this.file}-wal`, `${this.file}-shm`, `${this.file}-journal`];
-      for (const target of targets) {
-        let entry: import("node:fs").Stats;
-        try {
-          entry = await fs.lstat(target);
-        } catch (err) {
-          if (errnoCode(err) === "ENOENT") continue;
-          throw new Error("Unable to inspect embedding-index artifacts before clearing", { cause: err });
-        }
-        if (!entry.isFile() && !entry.isSymbolicLink()) {
-          throw new Error("Refusing to clear an unsafe embedding-index artifact");
-        }
-      }
-      await this.revalidatePersistenceScopes();
-      for (const p of targets) {
-        try {
-          await fs.unlink(p);
-          removed = true;
-        } catch (err) {
-          if (errnoCode(err) !== "ENOENT") {
-            // Recovery must never report success while a permission/type/race
-            // error leaves a derived-data sidecar behind.
-            throw new Error(`Unable to remove embedding-index artifact: ${path.basename(p)}`, { cause: err });
+    // The stage-family eraser is deliberately outermost. A cooperating
+    // replacement holds the conflicting publisher role from before its first
+    // staging mkdir through commit or callback cleanup, so no new stage can
+    // cross the preflight-to-unlink boundary below.
+    return withEmbedReplacementStageEraser(this.file, () =>
+      withSemanticPersistenceEraser(this.file, this.persistenceScopes ?? undefined, async (eraserCapability) => {
+        this.persistenceScopes ??= eraserCapability.scopes;
+        this.file = embedDbPathInSemanticScopes(this.persistenceScopes);
+        let removed = false;
+        await this.revalidatePersistenceScopes();
+        // Validate any stranded interlock BEFORE deleting the first artifact.
+        // Foreign files/symlinks/special objects and unexpected directory entries
+        // therefore fail closed without turning recovery into an unnecessary
+        // partial erase. The guard is validated again and removed last below.
+        await preflightWatcherActivationGuardRecovery(this.file);
+        // v3.10.0-rc.20 (audit M7) — derive the HNSW persist base via the SHARED
+        // `hnswPersistBase` helper (same one server.ts's writer uses), then delegate
+        // the complete legacy/generation/temp family to the HNSW eraser.
+        const hnswBase = hnswPersistBase(this.file);
+        await preflightHnswPersistedArtifacts(hnswBase);
+        // Staged model-switch generations contain the same raw text_preview and
+        // vector material as the live EmbedDb. Admit their complete bounded
+        // namespace before deleting anything so clear-embeddings never reports
+        // success while a released stage survives, and never partially erases
+        // the live family when a stage is still active or malformed.
+        await preflightSensitiveArtifactTemps(this.file);
+        const targets = [this.file, `${this.file}-wal`, `${this.file}-shm`, `${this.file}-journal`];
+        for (const target of targets) {
+          let entry: import("node:fs").Stats;
+          try {
+            entry = await fs.lstat(target);
+          } catch (err) {
+            if (errnoCode(err) === "ENOENT") continue;
+            throw new Error("Unable to inspect embedding-index artifacts before clearing", { cause: err });
+          }
+          if (!entry.isFile() && !entry.isSymbolicLink()) {
+            throw new Error("Refusing to clear an unsafe embedding-index artifact");
           }
         }
-      }
-      await this.revalidatePersistenceScopes();
-      removed = (await clearHnswPersistedArtifactsWithEraser(hnswBase, eraserCapability)) || removed;
-      // Remove the guard LAST. If any derived artifact could not be removed, the
-      // still-present guard keeps the next serve fail-closed. The helper accepts
-      // only its narrow directory shape and never recursively deletes content.
-      removed = (await clearWatcherActivationGuard(this.file)) || removed;
-      await this.revalidatePersistenceScopes();
-      return removed;
-    });
+        await this.revalidatePersistenceScopes();
+        for (const p of targets) {
+          try {
+            await fs.unlink(p);
+            removed = true;
+          } catch (err) {
+            if (errnoCode(err) !== "ENOENT") {
+              // Recovery must never report success while a permission/type/race
+              // error leaves a derived-data sidecar behind.
+              throw new Error(`Unable to remove embedding-index artifact: ${path.basename(p)}`, { cause: err });
+            }
+          }
+        }
+        await this.revalidatePersistenceScopes();
+        removed = (await clearHnswPersistedArtifactsWithEraser(hnswBase, eraserCapability)) || removed;
+        removed = (await removeSensitiveArtifactTemps(this.file)) > 0 || removed;
+        // Remove the guard LAST. If any derived artifact could not be removed, the
+        // still-present guard keeps the next serve fail-closed. The helper accepts
+        // only its narrow directory shape and never recursively deletes content.
+        removed = (await clearWatcherActivationGuard(this.file)) || removed;
+        await this.revalidatePersistenceScopes();
+        return removed;
+      })
+    );
+  }
+
+  /**
+   * Drain this open database's WAL and switch it to self-contained DELETE
+   * journaling before a staged generation is admitted for atomic publication.
+   * Logical tables, metadata, vectors, and the mutation epoch are unchanged.
+   *
+   * @returns Nothing after SQLite confirms a complete checkpoint and journal-mode switch.
+   * @throws If the database is not open, a WAL reader is still busy, or SQLite
+   *   cannot prove the requested standalone state.
+   * @example
+   * ```ts
+   * await db.open();
+   * db.checkpointForReplacement();
+   * await db.closeAndRelease();
+   * ```
+   * @internal
+   */
+  checkpointForReplacement(): void {
+    checkpointOpenEmbedDbForReplacement(this.requireDb());
   }
 
   /**
@@ -3694,6 +3734,18 @@ export type EmbedDbConfigDiscovery =
   | { readonly kind: "refused" }
   | { readonly kind: "owned"; readonly meta: Readonly<EmbedDbOwnedMeta> };
 
+function sameOwnedEmbedMeta(left: Readonly<EmbedDbOwnedMeta>, right: Readonly<EmbedDbOwnedMeta>): boolean {
+  return (
+    left.schema_version === right.schema_version &&
+    left.vault_root === right.vault_root &&
+    left.model_alias === right.model_alias &&
+    left.dim === right.dim &&
+    left.quantization === right.quantization &&
+    left.instance_uuid === right.instance_uuid &&
+    left.mutation_epoch === right.mutation_epoch
+  );
+}
+
 const EMBED_DISCOVERY_CHANGED_ERROR = "Embedding index configuration changed before open";
 
 function cloneEmbedDbOpenDiscovery(expected: EmbedDbConfigDiscovery | undefined): EmbedDbConfigDiscovery | null {
@@ -3842,6 +3894,142 @@ export async function discoverEmbedDbConfig(file: string, expectedVaultRoot: str
     }
   }
   return discovery;
+}
+
+function pragmaJournalMode(value: unknown): string | null {
+  if (!Array.isArray(value) || value.length !== 1) return null;
+  const row = value[0];
+  if (typeof row !== "object" || row === null || Array.isArray(row)) return null;
+  const mode = (row as Record<string, unknown>).journal_mode;
+  return typeof mode === "string" ? mode.toLowerCase() : null;
+}
+
+function checkpointWasComplete(value: unknown): boolean {
+  if (!Array.isArray(value) || value.length !== 1) return false;
+  const row = value[0];
+  if (typeof row !== "object" || row === null || Array.isArray(row)) return false;
+  const busy = (row as Record<string, unknown>).busy;
+  const log = (row as Record<string, unknown>).log;
+  const checkpointed = (row as Record<string, unknown>).checkpointed;
+  return (
+    typeof busy === "number" &&
+    typeof log === "number" &&
+    typeof checkpointed === "number" &&
+    Number.isSafeInteger(busy) &&
+    Number.isSafeInteger(log) &&
+    Number.isSafeInteger(checkpointed) &&
+    busy === 0 &&
+    log >= 0 &&
+    checkpointed === log
+  );
+}
+
+function checkpointOpenEmbedDbForReplacement(db: Db): void {
+  const currentMode = pragmaJournalMode(db.pragma("journal_mode"));
+  if (currentMode === null) throw new Error("Embedding index journal mode could not be verified");
+  if (currentMode === "wal" && !checkpointWasComplete(db.pragma("wal_checkpoint(TRUNCATE)"))) {
+    throw new Error("Embedding index WAL could not be checkpointed completely");
+  }
+  if (pragmaJournalMode(db.pragma("journal_mode = DELETE")) !== "delete") {
+    throw new Error("Embedding index could not enter standalone journal mode");
+  }
+}
+
+async function assertStandaloneSqliteMain(file: string): Promise<void> {
+  if (!(await preflightSqliteArtifactFamily(file))) {
+    throw new Error("Embedding index disappeared while preparing replacement");
+  }
+  for (const sidecar of [`${file}-wal`, `${file}-shm`, `${file}-journal`]) {
+    try {
+      await fs.lstat(sidecar);
+    } catch (error) {
+      if (errnoCode(error) === "ENOENT") continue;
+      throw new Error("Embedding index sidecar state could not be verified before replacement", { cause: error });
+    }
+    throw new Error("Embedding index is not a standalone SQLite generation for replacement");
+  }
+}
+
+/**
+ * Checkpoint an existing owned EmbedDb into one self-contained main file while
+ * the caller holds the exact semantic-family eraser. This operation never runs
+ * schema bootstrap or changes model/vector metadata: it only drains an admitted
+ * WAL and switches SQLite to DELETE journaling so a later atomic main-file
+ * replacement cannot inherit stale WAL/SHM bytes.
+ *
+ * The expected discovery is re-proved on the same writable handle before the
+ * checkpoint and again after close. A watcher mutation during a long staged
+ * rebuild therefore refuses promotion instead of replacing the newer live
+ * generation.
+ *
+ * @param expectedVaultRoot - Exact canonical vault root allowed to own it.
+ * @param expectedDiscovery - Owned generation observed before staged work began.
+ * @param eraser - Active exclusive semantic-family capability.
+ * @returns After the unchanged logical generation is standalone and re-admitted.
+ * @throws If authority changed, checkpointing was busy/incomplete, sidecars
+ *   remain, or the capability does not bind the requested target.
+ * @example
+ * ```ts
+ * await withSemanticPersistenceEraser(file, undefined, async (eraser) => {
+ *   await checkpointEmbedDbForReplacement(vaultRoot, discovery, eraser);
+ * });
+ * ```
+ * @internal
+ */
+export async function checkpointEmbedDbForReplacement(
+  expectedVaultRoot: string,
+  expectedDiscovery: EmbedDbConfigDiscovery,
+  eraser: ActiveSemanticPersistenceEraser
+): Promise<void> {
+  const expected = cloneEmbedDbOpenDiscovery(expectedDiscovery);
+  if (expected?.kind !== "owned") {
+    throw new Error("Embedding replacement requires one previously owned generation");
+  }
+  const scopes = scopesFromActiveSemanticEraser(eraser);
+  const canonicalFile = embedDbPathInSemanticScopes(scopes);
+  await revalidatePersistenceLeaseScope(scopes.namespace);
+  await revalidatePersistenceLeaseScope(scopes.family);
+  if (!(await preflightSqliteArtifactFamily(canonicalFile))) {
+    throw new Error("Embedding index configuration changed before replacement");
+  }
+
+  const Ctor = await loadBetterSqlite();
+  let db: Db | null = null;
+  let operationError: unknown;
+  try {
+    if (!(await preflightSqliteArtifactFamily(canonicalFile))) {
+      throw new Error("Embedding index configuration changed before replacement");
+    }
+    db = new Ctor(canonicalFile, { fileMustExist: true }) as Db;
+    const admission = inspectEmbedAdmission(db, expectedVaultRoot);
+    assertEmbedAdmission(admission);
+    assertExpectedEmbedDiscovery(expected, true, admission);
+    checkpointOpenEmbedDbForReplacement(db);
+  } catch (error) {
+    operationError = error;
+  }
+  let closeError: unknown;
+  try {
+    db?.close();
+  } catch (error) {
+    closeError = error;
+  }
+  if (operationError !== undefined && closeError !== undefined) {
+    throw new AggregateError(
+      [operationError, closeError],
+      "Embedding replacement checkpoint failed and its SQLite handle did not close"
+    );
+  }
+  if (operationError !== undefined) throw operationError;
+  if (closeError !== undefined) throw closeError;
+
+  await assertStandaloneSqliteMain(canonicalFile);
+  await revalidatePersistenceLeaseScope(scopes.namespace);
+  await revalidatePersistenceLeaseScope(scopes.family);
+  const after = await discoverEmbedDbConfig(canonicalFile, expectedVaultRoot);
+  if (after.kind !== "owned" || !sameOwnedEmbedMeta(expected.meta, after.meta)) {
+    throw new Error("Embedding index configuration changed while preparing replacement");
+  }
 }
 
 /**

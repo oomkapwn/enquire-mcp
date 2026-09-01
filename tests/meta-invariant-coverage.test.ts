@@ -34,7 +34,7 @@ import { releaseMutationVersionedTransitionAuditProblems } from "./release-mutat
 
 const repoRoot = path.resolve(__dirname, "..");
 const RELEASE_MUTATION_IDENTITY_FIXTURE_SHA256 = "8205d24e6d42dd4cb8986368611514131abe701434beb30150e33ea08f4b1288";
-const RELEASE_MUTATION_TRANSITION_FIXTURE_SHA256 = "3c0cbb2b74c36f81be1758d3cea8383a9129977962b251674783a03fa6a2e871";
+const RELEASE_MUTATION_TRANSITION_FIXTURE_SHA256 = "3696a9efaf93b37f0a95931e4a17fc9311db222f6de7ed3976fe4b513954f602";
 const releaseMutationIdentityFixturePath = path.join(repoRoot, "tests/fixtures/release-mutation-identity.v2.json");
 const releaseMutationTransitionFixturePath = path.join(repoRoot, "tests/fixtures/release-mutation-transition.v3.json");
 const releaseIntegritySourcePath = path.join(repoRoot, "tests/release-integrity.test.ts");
@@ -294,7 +294,7 @@ const EXPECTED_REPOSITORY_MUTATION_HELPER_CALL_ENTRIES = [
   ],
   [
     "erasure-invariant.test.ts",
-    { count: 105, sha256: "3fdd93042614437cdc215fdcf467480b15b1896e273c5c5b03392dbdb1abc485" }
+    { count: 105, sha256: "4a58437359c826c444ea81fb4427503ff2e05fd2e3a7c142ecb9cd09e3e23407" }
   ],
   [
     "embeddings-offline.test.ts",
@@ -316,11 +316,11 @@ const EXPECTED_REPOSITORY_MUTATION_HELPER_CALL_ENTRIES = [
   ],
   [
     "k1-ast-invariant.test.ts",
-    { count: 4, sha256: "801dfdc49534a44fd8e9ae7b8c5c39d00ba12c2b05718d56be8ed3784ae9494f" }
+    { count: 4, sha256: "d77ba6dc1772f6205bc271417c60f7e72ae2dc54cded6c52700922fc13486a62" }
   ],
   [
     "k1-class-invariant.test.ts",
-    { count: 100, sha256: "18eb3e36d45871dc8af6d2e618cc6eb39cd8b244e21f6d257ae9c1925d0943ba" }
+    { count: 102, sha256: "07ecdcd22c8c3af935e14623d446bc5c94d5da161b976e89602ebbeb28aafbb5" }
   ],
   ["jsonld.test.ts", { count: 11, sha256: "ec02eb24004f2c975daa1b3a668451217e2884cec7cf301e33f91f8bce98d05b" }],
   [
@@ -986,18 +986,18 @@ const EXPECTED_REVIEWED_ORDINARY_OWNER_SHA256_ENTRIES = [
   ["GitHub environment-token redaction", "d8ab2f87a80b4c0cbe4af8bf3e0f59391219109390fb4f6bcac01b23d41cda65"],
   ["GitHub authorization-header redaction", "d8ab2f87a80b4c0cbe4af8bf3e0f59391219109390fb4f6bcac01b23d41cda65"],
   ["GitHub diagnostic whitespace compaction", "d8ab2f87a80b4c0cbe4af8bf3e0f59391219109390fb4f6bcac01b23d41cda65"],
-  ["erasure source-path separator normalization", "55f8d68523334521a13fc4f7e0a3b6c4396b2933a0945438e21aab90a521886f"],
-  ["SQLite positive-shape label normalization", "60d91f2d206174bddd1c5356c71ee7cb3e64a1848fa457381148df0881e0d3f0"],
-  ["SQLite suffix label normalization", "254c5a33bc11bc5e8f14e0af9b42ea092ea19d6000a9552649ccb6c287ffcdeb"],
-  ["sensitive-reader kind label normalization", "d48017802df2c086f1e6bab4f5bb551c72d1bb15633db5842b710a2747aeba08"],
-  ["sensitive-reader growth label normalization", "e540a624068c0af19ac1f35fe9b931156990d31601b04d92db03d47d34c1efc3"],
-  ["publisher kind label normalization", "5b6c892bb1defbf07fafc9bc30dd3a18fc3c82a3c19424e17b7538b99844514f"],
-  ["hardlink route label normalization", "600c518045c0728fe3ffc48d560978f5c8280985f057cd5327b4d4decb1fabd6"],
-  ["K-1 statement semicolon normalization", "66d52f1be206a5ef726ef08805cbf93fdfd0096de99d79a8a589e68c05253905"],
-  ["K-1 block-comment stripping", "8dddd70b6df52a4a1293e075305042dbd8074d1c7704f980a12de4ccc8f8f040"],
-  ["K-1 line-comment stripping", "8dddd70b6df52a4a1293e075305042dbd8074d1c7704f980a12de4ccc8f8f040"],
-  ["K-1 module-extension normalization", "b40eeb247a138652ba67ff4223232b98a90f609257b60a9295be443e9aa24e2b"],
-  ["K-1 source-path separator normalization", "20cf76a2051639112cbd33255ca172937f20f0806ddd7aa154ab787d14500736"],
+  ["erasure source-path separator normalization", "04ffd632f663d469e7eed90a35790073c422c58ffeec1ddbde2409f3a2c56f46"],
+  ["SQLite positive-shape label normalization", "09a46a07c3b1dbf7a9bd84f05d445a665bdbfbc65a2a19c2215ad53957e69f84"],
+  ["SQLite suffix label normalization", "12a6cec320d4e156c5f696d4c5a86654f1e69b24c23b7f91d93a2f033810f637"],
+  ["sensitive-reader kind label normalization", "6ec8abdb9f452fb9f6410a5b56a075c842ea120510a9f589c45b2a5df6e075d6"],
+  ["sensitive-reader growth label normalization", "c370cb610800d11331ed2bf5d875646eaefeabc7aa2552ab82c2a83e34ff8b3d"],
+  ["publisher kind label normalization", "b6150d5505863137def2c129c515cd4d919c5ebdc539426e61c9762a545a718c"],
+  ["hardlink route label normalization", "08a10a651414f0ea82679e9bff6dff2f7eabd364fd7d0cb494ab7a934bd16248"],
+  ["K-1 statement semicolon normalization", "9bb382eb2d071464957b3c6cec271cb2a843dfeeabd9225c92e4497597d839ef"],
+  ["K-1 block-comment stripping", "693d87a3a5e80b88156a062d2935aa3e9e278aad769fd947ec897caffcbb4fdc"],
+  ["K-1 line-comment stripping", "693d87a3a5e80b88156a062d2935aa3e9e278aad769fd947ec897caffcbb4fdc"],
+  ["K-1 module-extension normalization", "784b7429a92f2978670369801a1405dabf00ad7272ca551bee3b62d82068d57f"],
+  ["K-1 source-path separator normalization", "e8e3606f173065c17621ca9aed213fef5b64115ac0dd15702f2acac56f68bf16"],
   ["line-terminator block-comment stripping", "61bbbea7aac48eafa3a24d78998eb49e81a6e7911953f3c25ead27692923a80d"],
   ["line-terminator line-comment stripping", "61bbbea7aac48eafa3a24d78998eb49e81a6e7911953f3c25ead27692923a80d"],
   ["ReDoS source-path separator normalization", "1b31e3478ce12f357ad0de08f669cdd462aef1c92b5e40ea2b7252bf483dc9bd"],
@@ -1005,12 +1005,12 @@ const EXPECTED_REVIEWED_ORDINARY_OWNER_SHA256_ENTRIES = [
   ["ReDoS catastrophic control transform", "99358421ccbe92052218efb7bcf19e31029854d36548144c4a1ac4d68ec5540b"],
   [
     "Embed synchronous admission label normalization",
-    "c12ff82cc8bed1b45e5c3492c9d717173273956d9048bc35f6977cb53ef61b0a"
+    "ecfc1877f6d6968a2097afdb437be162c9142e76858670ecfc4109699046dc64"
   ],
-  ["Embed sidecar route label normalization", "5b48e9b9a2959c6bdb440467141377213fe900a9ef11863b34382af05d8e2c0d"],
+  ["Embed sidecar route label normalization", "8d3311951089ad70cde4e062161b4c1ae68f3c3280d7c10d97eec711b56f73a0"],
   [
     "Embed malformed-generation value normalization",
-    "027d4839019f77948c3a19cdbba304b2087d49fe2903b02f0294c6598ae32c85"
+    "1753eb3978603a8bf54604751be35835c3a861e31609a37776a0ec61e95b2b07"
   ],
   ["embedding index extension mapping", "9b30b5965abe1f6de24f5b0de8392a92859489f735556e39c5f83bac285d87d1"],
   ["FTS route slug normalization", "4c85c74d066bfaf4b0177ad8da61b867bc62ae819b9e5b98becb13d8fbf80028"],

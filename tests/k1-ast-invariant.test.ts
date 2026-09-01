@@ -105,7 +105,18 @@ const PRODUCTION_FILE_PINS: Readonly<Record<string, ProductionFilePin>> = {
       "./tool-registry.js|parseQuantizationMode|parseQuantizationMode"
     ],
     k1Opens: 6,
-    sha256: "ce48dfc7b700bbddd2b84297fea9280c3cfe065bcf5128a17a6fb384766cb97c"
+    sha256: "153c3a7b48a738e9de36f59d2f92a34948c1a84ecc1645805c8a7813b10bd59d"
+  },
+  "src/embed-replacement.ts": {
+    constructors: { EmbedDb: 1, FtsIndex: 0 },
+    discoveries: {
+      discoverEmbedDbConfig: 3,
+      discoverEmbedDbConfigCached: 0,
+      discoverFtsIndexConfig: 0
+    },
+    imports: ["./embed-db.js|EmbedDb|EmbedDb", "./embed-db.js|discoverEmbedDbConfig|discoverEmbedDbConfig"],
+    k1Opens: 1,
+    sha256: "0c0c4e30d47a285634c0e719e13de948c74f15ed18f8d4b62eae5cd375380506"
   },
   "src/server.ts": {
     constructors: { EmbedDb: 2, FtsIndex: 1 },

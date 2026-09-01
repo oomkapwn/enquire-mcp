@@ -209,6 +209,93 @@ describe("bulk embedding synchronization evidence", () => {
     expectPriorRowPreserved(db, "paper.pdf", "pdf");
   });
 
+  it("replacement Markdown sync accounts for empty notes without weakening its physical evidence", async () => {
+    await writeNote("a-empty.md", "---\ntitle: Metadata only\n---\n");
+    await writeNote("z-indexed.md", "Replacement-grade searchable content.\n");
+    const db = await openDb();
+
+    const report = await syncEmbedDb(new Vault(root), db, deterministicEmbedder(), { mode: "replacement" });
+
+    expect(report).toEqual({
+      mode: "replacement",
+      audited: true,
+      added: 1,
+      updated: 0,
+      deleted: 0,
+      unchanged: 0,
+      total_chunks: 1,
+      total_files: 2,
+      processed_files: 2,
+      empty: 1,
+      failed: 0,
+      indexed_files: 1,
+      declared_chunks: 1,
+      indexed_chunks: 1,
+      mismatched_files: 0,
+      invalid_vectors: 0,
+      manifest_sha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+      complete: true
+    });
+    expect(db.getSourceStates("md")).toEqual([expect.objectContaining({ rel_path: "z-indexed.md" })]);
+    expect(db.getQuarantinedPaths("md")).toEqual([]);
+  });
+
+  it("replacement PDF sync accepts zero chunks only when every source PDF is empty", async () => {
+    await fs.writeFile(path.join(root, "a-empty.pdf"), makePdf({ pages: [""] }));
+    await fs.writeFile(path.join(root, "b-empty.pdf"), makePdf({ pages: [""] }));
+    const db = await openDb();
+
+    const report = await syncPdfEmbedDb(new Vault(root), db, deterministicEmbedder(), { mode: "replacement" });
+
+    expect(report).toEqual({
+      mode: "replacement",
+      audited: true,
+      added: 0,
+      updated: 0,
+      deleted: 0,
+      unchanged: 0,
+      total_chunks: 0,
+      total_files: 2,
+      processed_files: 2,
+      empty: 2,
+      failed: 0,
+      indexed_files: 0,
+      declared_chunks: 0,
+      indexed_chunks: 0,
+      mismatched_files: 0,
+      invalid_vectors: 0,
+      manifest_sha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+      complete: true
+    });
+    expect(db.getSourceStates("pdf")).toEqual([]);
+    expect(db.getQuarantinedPaths("pdf")).toEqual([]);
+  });
+
+  it.each(["read", "embed", "upsert"] as const)(
+    "(negative control) replacement mode fails fast when a %s operation throws",
+    async (failurePoint) => {
+      await writeNote("a-failing.md", "FAIL_NEEDLE reaches the selected replacement failure point.\n");
+      await writeNote("z-unreached.md", "A fail-fast replacement must never process this sibling.\n");
+      const db = await openDb();
+      const vault = new Vault(root);
+      const embedder = deterministicEmbedder(failurePoint === "embed" ? "FAIL_NEEDLE" : undefined);
+      if (failurePoint === "read") {
+        vi.spyOn(vault, "readNote").mockRejectedValueOnce(new Error("synthetic replacement read failure"));
+      }
+      if (failurePoint === "upsert") {
+        vi.spyOn(db, "upsertNote").mockImplementation(() => {
+          throw new Error("synthetic replacement upsert failure");
+        });
+      }
+
+      const sync = syncEmbedDb(vault, db, embedder, { mode: "replacement" });
+
+      await expect(sync).rejects.toThrow("replacement Markdown embed sync rejected a-failing.md");
+      expect(db.getSourceStates("md")).toEqual([]);
+      expect(db.getQuarantinedPaths("md")).toEqual(["a-failing.md"]);
+    }
+  );
+
   it("default fail-soft mode records an injected failure and continues with the next note", async () => {
     await writeNote("a-failing.md", "FAIL_NEEDLE must make this note fail.\n");
     await writeNote("z-sibling.md", "The later sibling must still be embedded.\n");
@@ -480,6 +567,92 @@ describe("finalizeEmbedSyncEvidence", () => {
       manifest_sha256: "a".repeat(64),
       complete: true
     });
+  });
+
+  it("derives replacement completeness from accounted empty files and exact physical rows", () => {
+    const replacementCounters: EmbedSyncCounters = {
+      ...counters,
+      added: 1,
+      empty: 1
+    };
+    const replacementAudit = {
+      indexed_files: 1,
+      declared_chunks: 2,
+      indexed_chunks: 2,
+      mismatched_files: 0
+    };
+
+    expect(finalizeEmbedSyncEvidence("replacement", replacementCounters, replacementAudit, 2, integrity).complete).toBe(
+      true
+    );
+
+    expect(
+      finalizeEmbedSyncEvidence(
+        "replacement",
+        { ...replacementCounters, added: 0, empty: 2 },
+        { indexed_files: 0, declared_chunks: 0, indexed_chunks: 0, mismatched_files: 0 },
+        0,
+        integrity
+      ).complete
+    ).toBe(true);
+  });
+
+  it("(negative controls) rejects replacement evidence with unaccounted files or zero chunks for a non-empty file", () => {
+    const replacementCounters: EmbedSyncCounters = {
+      ...counters,
+      added: 1,
+      empty: 1
+    };
+
+    expect(
+      finalizeEmbedSyncEvidence(
+        "replacement",
+        replacementCounters,
+        { indexed_files: 2, declared_chunks: 2, indexed_chunks: 2, mismatched_files: 0 },
+        2,
+        integrity
+      ).complete
+    ).toBe(false);
+
+    expect(
+      finalizeEmbedSyncEvidence(
+        "replacement",
+        { ...replacementCounters, added: 0 },
+        { indexed_files: 1, declared_chunks: 2, indexed_chunks: 2, mismatched_files: 0 },
+        2,
+        integrity
+      ).complete
+    ).toBe(false);
+
+    expect(
+      finalizeEmbedSyncEvidence(
+        "replacement",
+        replacementCounters,
+        { indexed_files: 1, declared_chunks: 2, indexed_chunks: 1, mismatched_files: 1 },
+        1,
+        integrity
+      ).complete
+    ).toBe(false);
+
+    expect(
+      finalizeEmbedSyncEvidence(
+        "replacement",
+        replacementCounters,
+        { indexed_files: 1, declared_chunks: 0, indexed_chunks: 0, mismatched_files: 0 },
+        0,
+        integrity
+      ).complete
+    ).toBe(false);
+
+    expect(
+      finalizeEmbedSyncEvidence(
+        "replacement",
+        { ...replacementCounters, processedFiles: 1 },
+        { indexed_files: 1, declared_chunks: 2, indexed_chunks: 2, mismatched_files: 0 },
+        2,
+        integrity
+      ).complete
+    ).toBe(false);
   });
 
   it("(negative controls) recomputes completeness instead of trusting forged counters or audit fields", () => {

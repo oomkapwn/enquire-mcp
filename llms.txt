@@ -83,7 +83,7 @@ Only the umbrella `obsidian_search` path degrades by available signal: it can co
 - Returned note/PDF context crosses into the connected MCP client; cloud clients, tunnels, and proxies have their own privacy policies and trust boundaries
 - v4 modern and legacy-stateless HTTP are per-request; supported legacy stateful sessions retain sticky GET/SSE/DELETE lifecycle. Admission, authentication, rate/body bounds, protocol-era classification and aggregate persistent-write drain fail closed before shared storage shuts down
 - Local parse-cache, FTS5, embedding/HNSW, and opt-in feedback artifacts persist until their documented clear/prune operation; privacy filters are not retroactive erasure. Successfully written incomplete-rename snapshots are additional raw vault-local artifacts under `.enquire-rollback/`; clear/prune commands do not remove them, so inspect/recover and purge them manually as documented in `SECURITY.md`
-- 2246 unit tests declared; required PR CI runs the general Linux suite plus 8 Windows-only path contracts and a 12-contract startup-interlock rerun in the pinned Windows lane
+- 2270 unit tests declared; required PR CI runs the general Linux suite plus 8 Windows-only path contracts and a 12-contract startup-interlock rerun in the pinned Windows lane
 - 13 release-required CI checks are directly enumerated by `release.yml` and run per PR; all 13 are currently branch-protected (live snapshot verified 2026-08-21)
 - Pinned `test-windows` is an additional named check-run enforced transitively as a blocking prerequisite of `smoke`, beyond the direct inventory above
 - `test-macos` is the only `continue-on-error` advisory job; `docker` is fail-capable and branch-protected; CodeQL runs 2 separate unprotected analyses

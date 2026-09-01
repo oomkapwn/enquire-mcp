@@ -73,7 +73,11 @@ const EXPECTED_PRODUCTION_DISCOVERY_CALLS: Readonly<Record<string, Readonly<Reco
   "src/server.ts": { discoverEmbedDbConfig: 2, discoverFtsIndexConfig: 1 },
   "src/tools/search.ts": { discoverEmbedDbConfigCached: 1 }
 };
-const CONFIGURATION_DEFINING_MODULES = new Set(["src/embed-db.ts", "src/fts5.ts"]);
+// The replacement coordinator owns a separate, stricter three-read inventory
+// below because its pre-stage authority read and post-close candidate read do
+// not each map one-to-one to a constructor. Treating those internal reads as
+// ordinary caller specs would weaken the ten external discovery/open pairs.
+const CONFIGURATION_DEFINING_MODULES = new Set(["src/embed-db.ts", "src/embed-replacement.ts", "src/fts5.ts"]);
 const RAW_PEEK_CALLS = new Set(["peekEmbedDbMeta", "peekEmbedDbMetaCached", "peekFtsMetaSafe"]);
 
 /** Collect real identifier call expressions, excluding definitions and prose. */
@@ -145,6 +149,61 @@ function countLiteral(source: string, needle: string): number {
     count++;
     cursor = at + needle.length;
   }
+}
+
+/** Pin the replacement coordinator's current/staged/final admission chain. */
+function embeddingReplacementAdmissionProblems(source: string): string[] {
+  const problems: string[] = [];
+  const currentDiscovery = "discoverEmbedDbConfig(finalFile, opts.vault.root)";
+  const stagedDiscovery = "discoverEmbedDbConfig(stagedFile, opts.vault.root)";
+  const replacementBarrier = "return await withEmbedReplacementStagePublisher(finalFile, async () => {";
+  const discoveryCalls = productionConfigurationCalls("src/embed-replacement.ts", source).filter(
+    (call) => call.name === "discoverEmbedDbConfig"
+  );
+  if (discoveryCalls.length !== 3) {
+    problems.push(`replacement discovery call inventory: expected 3, found ${discoveryCalls.length}`);
+  }
+  if (countLiteral(source, currentDiscovery) !== 1) {
+    problems.push(
+      `replacement current-generation discovery: expected 1, found ${countLiteral(source, currentDiscovery)}`
+    );
+  }
+  if (countLiteral(source, stagedDiscovery) !== 2) {
+    problems.push(
+      `replacement staged-generation discoveries: expected 2, found ${countLiteral(source, stagedDiscovery)}`
+    );
+  }
+  if (countLiteral(source, "new EmbedDb({") !== 1) {
+    problems.push(
+      `replacement EmbedDb constructor inventory: expected 1, found ${countLiteral(source, "new EmbedDb({")}`
+    );
+  }
+  if (countLiteral(source, replacementBarrier) !== 1) {
+    problems.push(`replacement stage barrier: expected 1, found ${countLiteral(source, replacementBarrier)}`);
+  }
+
+  const orderedMarkers = [
+    replacementBarrier,
+    `const expectedDiscovery = await ${currentDiscovery};`,
+    'throw new Error("Embedding index configuration changed before staged replacement");',
+    "return withPreparedSensitiveArtifact(",
+    `const stagedDiscovery = await ${stagedDiscovery};`,
+    'if (stagedDiscovery.kind !== "empty")',
+    "const stagedDb = new EmbedDb({",
+    "await stagedDb.open(stagedDiscovery);",
+    "await stagedDb.closeAndRelease();",
+    `const admitted = await ${stagedDiscovery};`,
+    "if (!candidateHasExactConfiguration(admitted, opts.vault.root, opts.model, opts.quantization))",
+    "await withSemanticPersistenceEraser(finalFile, undefined, async (eraser) => {"
+  ];
+  let previous = -1;
+  for (const marker of orderedMarkers) {
+    const at = source.indexOf(marker);
+    if (at < 0) problems.push(`replacement admission marker disappeared: ${marker}`);
+    else if (at <= previous) problems.push(`replacement admission order changed at: ${marker}`);
+    previous = Math.max(previous, at);
+  }
+  return problems;
 }
 
 /**
@@ -2546,6 +2605,10 @@ describe("K-1 class invariant (v3.6.3 methodological guard; recursive scan since
     const serverSource = await fs.readFile(path.resolve(process.cwd(), "src", "server.ts"), "utf8");
     const searchSource = await fs.readFile(path.resolve(process.cwd(), "src", "tools", "search.ts"), "utf8");
     const embeddingsSource = await fs.readFile(path.resolve(process.cwd(), "src", "embeddings.ts"), "utf8");
+    const replacementSource = await fs.readFile(
+      path.resolve(process.cwd(), "src", "embed-replacement.ts"),
+      "utf8"
+    );
     const productionSources = await Promise.all(
       files.map(async (file) => ({
         file: path.relative(process.cwd(), file).split(path.sep).join("/"),
@@ -2563,9 +2626,50 @@ describe("K-1 class invariant (v3.6.3 methodological guard; recursive scan since
     expect(productionConfigurationInventoryProblems(configurationCalls)).toEqual([]);
     expect(failClosedSpecInventoryProblems(cliSource, serverSource, searchSource, configurationCalls)).toEqual([]);
     expect(storedEmbeddingConfigurationHelperProblems(embeddingsSource)).toEqual([]);
+    expect(embeddingReplacementAdmissionProblems(replacementSource)).toEqual([]);
     expect(countLiteral(cliSource, "resolveStoredEmbeddingConfiguration(")).toBe(2);
     expect(countLiteral(serverSource, "resolveStoredEmbeddingConfiguration(")).toBe(2);
     expect(countLiteral(searchSource, "resolveStoredEmbeddingConfiguration(")).toBe(1);
+
+    const replacementWithoutRoot = replaceExactly(
+      replacementSource,
+      "discoverEmbedDbConfig(finalFile, opts.vault.root)",
+      "discoverEmbedDbConfig(finalFile)"
+    );
+    expect(embeddingReplacementAdmissionProblems(replacementWithoutRoot)).toContain(
+      "replacement current-generation discovery: expected 1, found 0"
+    );
+    const replacementWithoutBoundOpen = replaceExactly(
+      replacementSource,
+      "await stagedDb.open(stagedDiscovery);",
+      "await stagedDb.open();"
+    );
+    expect(embeddingReplacementAdmissionProblems(replacementWithoutBoundOpen)).toContain(
+      "replacement admission marker disappeared: await stagedDb.open(stagedDiscovery);"
+    );
+    const replacementWithoutFinalAdmission = replaceExactly(
+      replacementSource,
+      "const admitted = await discoverEmbedDbConfig(stagedFile, opts.vault.root);",
+      "const admitted = stagedDiscovery;"
+    );
+    expect(embeddingReplacementAdmissionProblems(replacementWithoutFinalAdmission)).toContain(
+      "replacement staged-generation discoveries: expected 2, found 1"
+    );
+    const replacementWithExtraDiscovery =
+      `${replacementSource}\n` +
+      "async function unlistedReplacementDiscovery(file: string, root: string): Promise<void> { " +
+      "await discoverEmbedDbConfig(file, root); }\n";
+    expect(embeddingReplacementAdmissionProblems(replacementWithExtraDiscovery)).toContain(
+      "replacement discovery call inventory: expected 3, found 4"
+    );
+    const replacementWithoutStageBarrier = replaceExactly(
+      replacementSource,
+      "return await withEmbedReplacementStagePublisher(finalFile, async () => {",
+      "return await (async () => {"
+    );
+    expect(embeddingReplacementAdmissionProblems(replacementWithoutStageBarrier)).toContain(
+      "replacement stage barrier: expected 1, found 0"
+    );
 
     const cliRootFiltersRemoved = replaceExactly(
       replaceExactly(
@@ -3574,7 +3678,12 @@ describe("K-1 class invariant (v3.6.3 methodological guard; recursive scan since
     { store: "Embed" as const, file: "embed-db.ts", spec: EMBED_ADMISSION_ORDER }
   ])("rejects a $store authority snapshot after the first await", async ({ file, spec }) => {
     const source = await fs.readFile(path.resolve(process.cwd(), "src", file), "utf8");
-    const mutant = replaceExactly(source, spec.cloneStatement, `await Promise.resolve();\n    ${spec.cloneStatement}`);
+    const mutant = mutatePublicOpenExactly(
+      source,
+      spec,
+      spec.cloneStatement,
+      `await Promise.resolve();\n    ${spec.cloneStatement}`
+    );
     expect(publicOpenWrapperProblems(mutant, spec)).toContain(
       `${spec.label} public open: caller authority is not snapshotted before the first await`
     );
@@ -3693,7 +3802,12 @@ describe("K-1 class invariant (v3.6.3 methodological guard; recursive scan since
   ])("rejects a $store admission guard moved from openOnce into public open", async ({ file, spec }) => {
     const source = await fs.readFile(path.resolve(process.cwd(), "src", file), "utf8");
     const removed = replaceExactly(source, spec.firstGuard, "void 0;");
-    const mutant = replaceExactly(removed, spec.cloneStatement, `${spec.firstGuard}\n    ${spec.cloneStatement}`);
+    const mutant = mutatePublicOpenExactly(
+      removed,
+      spec,
+      spec.cloneStatement,
+      `${spec.firstGuard}\n    ${spec.cloneStatement}`
+    );
     expect(admissionOrderProblems(mutant, spec)).toContain(
       `${spec.label} openOnce: exact AST first guard is not unique`
     );

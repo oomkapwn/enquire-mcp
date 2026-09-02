@@ -1339,6 +1339,7 @@ export const RELEASE_MUTATION_V3_CHANGED_SOURCES: readonly ReleaseMutationChange
     "manifest.package-lock",
     "manifest.package-json",
     "script.package-consumer",
+    "script.protocol-conformance",
     "script.release-integrity",
     "script.release-transaction",
     "script.version-consistency",
@@ -1356,7 +1357,7 @@ export const RELEASE_MUTATION_V3_CHANGED_SOURCES: readonly ReleaseMutationChange
   }))
 );
 
-/** Exhaustive 11-entry retained-source class whose complete projections must remain equal. */
+/** Exhaustive 10-entry retained-source class whose complete projections must remain equal. */
 export const RELEASE_MUTATION_V3_UNCHANGED_SOURCES: readonly string[] = Object.freeze([
   "fragment.github-release-transaction-tail",
   "fragment.mcpb-actions-artifact-download",
@@ -1367,8 +1368,7 @@ export const RELEASE_MUTATION_V3_UNCHANGED_SOURCES: readonly string[] = Object.f
   "fragment.release-visibility-timeout-guard",
   "fragment.release-visibility-wait",
   "script.mcpb-build",
-  "script.mcpb-consumer",
-  "script.protocol-conformance"
+  "script.mcpb-consumer"
 ]);
 
 /** Historical constant sources removed rather than silently repurposed. */

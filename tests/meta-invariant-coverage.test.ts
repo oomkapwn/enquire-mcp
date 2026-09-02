@@ -359,7 +359,7 @@ const EXPECTED_REPOSITORY_MUTATION_HELPER_CALL_ENTRIES = [
   ],
   [
     "tool-input-admission.test.ts",
-    { count: 1, sha256: "341ceb2e14508a125c2565c64fd389b688c5ba54b1372b16c0fc4cabb30b5512" }
+    { count: 1, sha256: "2e71bb8b1cddaad1f217d2f56689bc1a392f23e07cb1d9653bd464bcdb34b855" }
   ],
   [
     "watcher-startup-order.test.ts",

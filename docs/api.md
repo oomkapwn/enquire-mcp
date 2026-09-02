@@ -682,7 +682,7 @@ Parses a `.base` file into structured JSON (filters, formulas, properties, summa
 
 Runs a `.base` file's filter against the vault's markdown notes, returning an exact full match count plus a bounded slice whose `matched_on` field contains the legacy `tags` / `status` / `type` diagnostics and frontmatter keys referenced by the active filter. Supported DSL: `tag == "x"`, `taggedWith(file.file, "x")`, `linksTo(file.file, "Target")` (basename-resolved), `path startsWith / contains "X"`, `file.name == "X"`, `<frontmatter_key> == / != / contains <value>`, plus `and` / `or` / `not`. Anything else (formula evaluation, date arithmetic, summaries) is **fail-closed since v3.6.2 HN-2** — treated as `false` (excludes the row) and surfaced in `unevaluated_predicates` so the caller sees the typo/unsupported expression in the response. Pre-v3.6.2 these were permissive (`true`); flipped after an external auditor flagged the over-include risk.
 
-Exactness is fail-closed: if the bounded vault walk is incomplete, or any listed note is unreadable or has malformed/admission-failing frontmatter, the whole query rejects instead of returning a partial `BaseQueryResult` or `total_matched`.
+Exactness is reported, never assumed. An incomplete bounded vault walk still rejects outright — there the unseen remainder is unbounded and unnamed. A listed note that is unreadable or has malformed/admission-failing frontmatter is instead SKIPPED: it is named in `skipped_notes` (capped at 20 entries), counted exactly in `skipped_note_count`, and clears `total_matched_exact`, which makes `total_matched` a lower bound. One unparseable note must not make every base in the vault unqueryable, and a caller that needs an exact count checks `total_matched_exact` before treating it as one.
 
 | Argument | Type             | Notes                                                                                                       |
 |----------|------------------|-------------------------------------------------------------------------------------------------------------|
@@ -691,7 +691,7 @@ Exactness is fail-closed: if the bounded vault walk is incomplete, or any listed
 | `folder` | `string?`        | Extra folder scope on top of the base's filters.                                                            |
 | `limit`  | `number?` (≤ 500)| Max matches to return. Default 50.                                                                          |
 
-**Returns:** `{ base_path, view: string | null, total_matched: number, truncated: boolean, matches: Array<{ path, title, matched_on: Record<string, unknown> }>, unevaluated_predicates: string[] }`. Pair with `obsidian_search` for retrieval-quality search; this tool is for explicit saved queries.
+**Returns:** `{ base_path, view: string | null, total_matched: number, total_matched_exact: boolean, skipped_note_count: number, skipped_notes: string[], truncated: boolean, matches: Array<{ path, title, matched_on: Record<string, unknown> }>, unevaluated_predicates: string[] }`. Pair with `obsidian_search` for retrieval-quality search; this tool is for explicit saved queries.
 
 ## `obsidian_list_pdfs` _(v2.7.0)_
 

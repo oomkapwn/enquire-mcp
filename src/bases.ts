@@ -109,11 +109,28 @@ export interface BaseQueryResult {
    * returned slice. Pre-3.6.2 this was `matches.length` after the limit
    * cap, which underreported when more matches existed than `limit`.
    * Callers can now reliably tell when a result was truncated by
-   * comparing `total_matched > matches.length` (or check `truncated`). A
-   * query rejects instead of returning this field when any listed note cannot
-   * be read or its frontmatter cannot be parsed and admitted exactly.
+   * comparing `total_matched > matches.length` (or check `truncated`).
+   *
+   * EXACT ONLY IF `total_matched_exact` is true. Notes the walk listed but
+   * could not admit are skipped rather than rejecting the query, which makes
+   * this a lower bound; an incomplete bounded walk still rejects outright,
+   * because there the unseen remainder is unbounded and unnamed.
    */
   total_matched: number;
+  /**
+   * v4 CL-B1b — false iff at least one listed note was skipped, i.e.
+   * `total_matched` is a LOWER BOUND rather than an exact count. Check this
+   * before reporting `total_matched` as "the number of matching notes".
+   */
+  total_matched_exact: boolean;
+  /** v4 CL-B1b — exact number of listed notes that could not be admitted. */
+  skipped_note_count: number;
+  /**
+   * v4 CL-B1b — vault-relative paths of skipped notes, each with the reason.
+   * Capped at {@link MAX_REPORTED_SKIPPED_NOTES} so a vault full of malformed
+   * notes cannot inflate the response; `skipped_note_count` stays exact.
+   */
+  skipped_notes: string[];
   /** v3.6.2 HN-1 — true iff `total_matched > matches.length` (i.e. the
    *  `limit` capped the response). */
   truncated: boolean;
@@ -141,6 +158,12 @@ const MAX_BASE_FILES = 10_000;
 const MAX_BASE_LIST_VISITED_ENTRIES = 100_000;
 const MAX_BASE_QUERY_VISITED_ENTRIES = 200_000;
 const MAX_BASE_RESULT_LIMIT = 500;
+/**
+ * v4 CL-B1b — cap on the NAMED skipped notes in a `BaseQueryResult`. The count
+ * (`skipped_note_count`) stays exact; only the path list is capped, so a vault
+ * full of malformed notes cannot inflate the MCP response.
+ */
+const MAX_REPORTED_SKIPPED_NOTES = 20;
 const MAX_LISTED_VIEW_NAMES = 100;
 const MAX_LISTED_VIEW_NAME_BYTES = 256;
 const MAX_BASE_FILTER_NODES = 256;
@@ -544,7 +567,11 @@ function insertBoundedHit(hits: BaseQueryHit[], hit: BaseQueryHit, limit: number
  * the filter tree against (file.path, frontmatter, tags). Tags come from
  * frontmatter `tags:` / `tag:` and canonical inline `#tags` in the body.
  * A listed note with unreadable, malformed, or admission-failing frontmatter
- * rejects the whole query so `total_matched` is never a silently partial count.
+ * is SKIPPED, named in `skipped_notes`, counted in `skipped_note_count`, and
+ * clears `total_matched_exact`. It does not reject the query: one unparseable
+ * note must not make every base in the vault unusable. `total_matched` is then
+ * a LOWER BOUND, and a caller that needs an exact count must check
+ * `total_matched_exact` before treating it as one (v4 CL-B1b).
  *
  * NOT a full Obsidian DSL implementation — see module header for the
  * subset we support.
@@ -577,6 +604,18 @@ export async function queryBase(vault: Vault, args: QueryBaseArgs): Promise<Base
   const matches: BaseQueryHit[] = [];
   let totalMatched = 0;
   const unevaluated = new Set<string>();
+  // v4 CL-B1b — a note the walk listed but cannot admit is skipped and
+  // reported, not thrown on. Pre-CL-B1b a single note with a tab-indented
+  // frontmatter key made EVERY base in the vault permanently unqueryable,
+  // which trades one wrong number for total unavailability. Reporting the
+  // skip keeps the integrity property (the caller is never told an inexact
+  // total is exact) without the outage.
+  const skippedNotes: string[] = [];
+  let skippedNoteCount = 0;
+  const skipNote = (relPath: string, reason: string): void => {
+    skippedNoteCount += 1;
+    if (skippedNotes.length < MAX_REPORTED_SKIPPED_NOTES) skippedNotes.push(`${relPath}: ${reason}`);
+  };
   const listing = await vault.listFilesByExtensionsBounded(
     [".md"],
     MAX_SCAN_NOTES,
@@ -595,7 +634,8 @@ export async function queryBase(vault: Vault, args: QueryBaseArgs): Promise<Base
       raw = await vault.readFile(e.absPath);
     } catch {
       // A listed note that cannot be read makes total_matched inexact.
-      throw new Error(`obsidian_query_base cannot report an exact total; unreadable note ${e.relPath}`);
+      skipNote(e.relPath, "unreadable");
+      continue;
     }
     let fm: Record<string, unknown> = {};
     let body = "";
@@ -605,7 +645,8 @@ export async function queryBase(vault: Vault, args: QueryBaseArgs): Promise<Base
       fm = (parsed.data as Record<string, unknown>) ?? {};
       body = parsed.content ?? "";
     } catch {
-      throw new Error(`obsidian_query_base cannot report an exact total; invalid frontmatter in ${e.relPath}`);
+      skipNote(e.relPath, "invalid frontmatter");
+      continue;
     }
     // v3.11.5-rc.3 (post-rc.2 re-sweep, PARSER-DESYNC class) — sanitize (strip fenced +
     // inline code) BEFORE collecting tags/links, matching the canonical parseNote. Pre-rc.3
@@ -668,6 +709,9 @@ export async function queryBase(vault: Vault, args: QueryBaseArgs): Promise<Base
     base_path: baseDoc.path,
     view: effectiveViewName,
     total_matched: totalMatched,
+    total_matched_exact: skippedNoteCount === 0,
+    skipped_note_count: skippedNoteCount,
+    skipped_notes: skippedNotes,
     truncated: totalMatched > matches.length,
     matches,
     unevaluated_predicates: [...unevaluated]

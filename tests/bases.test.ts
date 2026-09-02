@@ -703,7 +703,7 @@ views:
     });
   });
 
-  it("fails closed instead of reporting a partial bounded walk as total_matched", async () => {
+  it("fails closed on a partial walk but SKIPS an unreadable note instead of rejecting", async () => {
     const { root, vault } = await makeBaseVault();
     await fs.writeFile(path.join(root, "q.base"), "filters: 'true'\n");
     const readFile = vi.spyOn(vault, "readFile");
@@ -726,7 +726,17 @@ views:
       return originalRead(relOrAbs);
     });
     try {
-      await expect(queryBase(vault, { path: "q.base" })).rejects.toThrow(/cannot report an exact total.*done\.md/u);
+      // CL-B1b: one unreadable note must not make every base in the vault
+      // unusable. It is skipped, named, and clears `total_matched_exact` — the
+      // integrity property (never call an inexact total exact) is kept without
+      // the outage. Pre-CL-B1b this rejected the whole query.
+      const out = await queryBase(vault, { path: "q.base" });
+      expect(out.total_matched_exact).toBe(false);
+      expect(out.skipped_note_count).toBe(1);
+      expect(out.skipped_notes).toEqual(["done.md: unreadable"]);
+      expect(out.matches.map((match) => match.path)).not.toContain("done.md");
+      // The lower bound is still USEFUL: every admitted note is counted.
+      expect(out.total_matched).toBeGreaterThan(0);
     } finally {
       unreadable.mockRestore();
     }
@@ -740,6 +750,12 @@ views:
     const out = await queryBase(vault, { path: "q.base" });
     expect(out.total_matched).toBe(5);
     expect(out.matches.map((match) => match.path)).toContain("valid.md");
+    // NEGATIVE control for the skip machinery: with nothing to skip, the result
+    // must claim exactness. A `total_matched_exact` hardwired to `false` would
+    // pass the skip tests above and fail here.
+    expect(out.total_matched_exact).toBe(true);
+    expect(out.skipped_note_count).toBe(0);
+    expect(out.skipped_notes).toEqual([]);
   });
 
   it.each([
@@ -758,14 +774,20 @@ views:
       file: "alias.md",
       source: "---\nfirst: &shared\n  value: one\nsecond: *shared\n---\nalias\n"
     }
-  ])("fails closed on $label instead of silently undercounting total_matched", async ({ file, source }) => {
+  ])("skips $label and reports the total as inexact instead of undercounting silently", async ({ file, source }) => {
     const { root, vault } = await makeBaseVault();
     await fs.writeFile(path.join(root, "q.base"), "filters: 'true'\n");
     await fs.writeFile(path.join(root, file), source);
 
-    await expect(queryBase(vault, { path: "q.base" })).rejects.toThrow(
-      new RegExp(`cannot report an exact total.*invalid frontmatter.*${file.replace(".", "\\.")}`, "u")
-    );
+    // CL-B1b: the note is unparseable, so it cannot be matched — but the other
+    // notes can. Reporting the skip is honest; rejecting the query is not the
+    // only way to avoid a lying count, and it costs the whole vault.
+    const out = await queryBase(vault, { path: "q.base" });
+    expect(out.total_matched_exact).toBe(false);
+    expect(out.skipped_note_count).toBe(1);
+    expect(out.skipped_notes).toEqual([`${file}: invalid frontmatter`]);
+    expect(out.matches.map((match) => match.path)).not.toContain(file);
+    expect(out.total_matched).toBe(4);
   });
 
   it("preserves small legacy matched_on diagnostics when no filter is active", async () => {

@@ -236,6 +236,25 @@ export async function replaceEmbeddingIndex(opts: {
           if (!markdownReport?.complete || (opts.includePdfs && !pdfReport?.complete)) {
             throw new Error("Staged embedding replacement lacks complete corpus evidence");
           }
+          // v4 CL-AH4 — a corpus that presented ZERO files is "complete" by the
+          // evidence equations (0 indexed of 0 total, nothing mismatched), so it
+          // passes the check above and the rename below replaces a live owned
+          // generation with an empty index. Retrieval then returns nothing, with
+          // no error anywhere. Reaching here requires `expectedDiscovery.kind`
+          // to be "owned", i.e. a real prior index exists — so this is a
+          // destructive replace, and zero files is far more likely a wrong
+          // --vault, an unmounted volume, or a privacy filter that excluded
+          // everything than an intent to publish emptiness. Emptying an index on
+          // purpose has its own command.
+          const presentedFiles = markdownReport.total_files + (pdfReport?.total_files ?? 0);
+          if (presentedFiles === 0) {
+            throw new Error(
+              "Staged embedding replacement presented zero source files while a populated generation is live. " +
+                "Refusing to replace it with an empty index — check --vault, that the vault is mounted, and that " +
+                "--exclude-glob/--read-paths do not exclude the whole vault. Use clear-embeddings to empty the " +
+                "index deliberately."
+            );
+          }
           const report: EmbedReplacementReport =
             pdfReport === undefined ? { markdown: markdownReport } : { markdown: markdownReport, pdf: pdfReport };
           committedReport = report;

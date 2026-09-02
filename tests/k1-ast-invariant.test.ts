@@ -116,7 +116,7 @@ const PRODUCTION_FILE_PINS: Readonly<Record<string, ProductionFilePin>> = {
     },
     imports: ["./embed-db.js|EmbedDb|EmbedDb", "./embed-db.js|discoverEmbedDbConfig|discoverEmbedDbConfig"],
     k1Opens: 1,
-    sha256: "0c0c4e30d47a285634c0e719e13de948c74f15ed18f8d4b62eae5cd375380506"
+    sha256: "506f0d4582cab1456eaccbf7c8ead606eb8df0f02edb92b6f15a83b883fff233"
   },
   "src/server.ts": {
     constructors: { EmbedDb: 2, FtsIndex: 1 },

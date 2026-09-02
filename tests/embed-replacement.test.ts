@@ -481,6 +481,33 @@ describe("staged embedding replacement", () => {
       expect(await fs.readFile(artifact)).toEqual(hnswBefore[index]);
     }
     expect(await stagedEntries()).toEqual([]);
+
+    // CL-AH4: a corpus presenting ZERO files is "complete" by the evidence
+    // equations — 0 indexed of 0 total, nothing mismatched — so it passes the
+    // completeness gate and the rename publishes an EMPTY index over the live
+    // populated one, after which retrieval silently returns nothing. An empty
+    // listing is far more likely a wrong --vault, an unmounted volume, or a
+    // privacy filter that excluded everything than an intent to publish
+    // emptiness, so the replacement must refuse and leave the generation intact.
+    for (const entry of await fs.readdir(vaultRoot, { withFileTypes: true })) {
+      if (entry.isFile() && entry.name.endsWith(".md")) await fs.rm(path.join(vaultRoot, entry.name));
+    }
+    await expect(
+      replaceEmbeddingIndex({
+        file: embedFile,
+        vault: new Vault(vaultRoot),
+        expectedDiscovery: expected,
+        model: NEW_MODEL,
+        quantization: "f32",
+        embedder: deterministicEmbedder(NEW_MODEL)
+      })
+    ).rejects.toThrow(/presented zero source files/);
+    expect(await exactLogicalSnapshot()).toEqual(before);
+    await expect(discoverEmbedDbConfig(embedFile, vaultRoot)).resolves.toEqual(expected);
+    for (const [index, artifact] of hnswArtifacts.entries()) {
+      expect(await fs.readFile(artifact)).toEqual(hnswBefore[index]);
+    }
+    expect(await stagedEntries()).toEqual([]);
   });
 
   it("refuses a stale expected generation before staging or replacing current rows", async () => {

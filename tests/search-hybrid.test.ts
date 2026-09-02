@@ -833,6 +833,14 @@ describe("searchHybrid — BM25 + TF-IDF fusion path", () => {
         { ftsIndex: longIdx, embedFile: path.join(longRoot, "nonexistent.embed.db") }
       );
       expect(recalled.matches.map((hit) => hit.path).sort()).toEqual(["Alpha.md", "Bravo.md"]);
+      // The result alone does not prove the RELAXATION produced it — TF-IDF at a
+      // lowered floor could have. `bm25` in the signals proves the any-term pass
+      // ran, which is the branch under test.
+      expect(recalled.signals_used).toContain("bm25");
+      // A note is one candidate however many chunks matched. RRF fuses on the
+      // id, so emitting a note once per chunk would count it several times and
+      // let length alone outrank a shorter, better note.
+      expect(new Set(recalled.matches.map((hit) => hit.path)).size).toBe(recalled.matches.length);
     } finally {
       await longIdx.closeAndRelease();
       await fs.rm(longRoot, { recursive: true, force: true });

@@ -3012,18 +3012,36 @@ export async function searchHybrid(
           (hit) => hit,
           (receipts) => ctx.ftsIndex?.currentSourceReceiptMask(receipts) ?? receipts.map(() => false)
         );
-        bm25Ranked = anyHits.map((hit, index) => ({
-          id: granularity === "block" ? `${hit.rel_path}#${hit.chunk_index}` : hit.rel_path,
-          rank: index + 1,
-          score: hit.score,
-          snippet: hit.snippet,
-          chunk_index: hit.chunk_index,
-          line_start: hit.line_start,
-          line_end: hit.line_end,
-          kind: hit.kind,
-          indexed_mtime_ms: hit.indexed_mtime_ms,
-          indexed_revision: hit.indexed_revision
-        }));
+        // The relaxed pass must produce the SAME SHAPE as the strict one. At note
+        // granularity that means collapsing a note's chunks to its best-ranked
+        // hit: emitting one entry per chunk would put duplicate ids into RRF,
+        // which fuses on the id, so a multi-chunk note would be counted several
+        // times and outrank a single-chunk one for no reason but its length.
+        const relaxed = new Map<string, (typeof bm25Ranked)[number]>();
+        anyHits.forEach((hit, index) => {
+          const id = granularity === "block" ? `${hit.rel_path}#${hit.chunk_index}` : hit.rel_path;
+          const existing = relaxed.get(id);
+          if (existing !== undefined && existing.rank <= index + 1) return;
+          relaxed.set(id, {
+            id,
+            rank: index + 1,
+            score: hit.score,
+            snippet: hit.snippet,
+            chunk_index: hit.chunk_index,
+            line_start: hit.line_start,
+            line_end: hit.line_end,
+            kind: hit.kind,
+            indexed_mtime_ms: hit.indexed_mtime_ms,
+            indexed_revision: hit.indexed_revision
+          });
+        });
+        bm25Ranked = [...relaxed.values()].sort((a, b) => a.rank - b.rank);
+        // Ranks must stay consecutive from 1 after the collapse — RRF weights by
+        // rank, so a gap silently discounts every hit below it.
+        for (let index = 0; index < bm25Ranked.length; index++) {
+          const hit = bm25Ranked[index];
+          if (hit) hit.rank = index + 1;
+        }
         if (bm25Ranked.length > 0 && !signalsUsed.includes("bm25")) signalsUsed.push("bm25");
       } catch (err) {
         signalErrors.bm25 = err instanceof Error ? err.message : String(err);

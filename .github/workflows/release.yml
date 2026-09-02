@@ -1498,12 +1498,12 @@ jobs:
           elif [ "$NPM_ACTION" = "publish" ]; then
             node scripts/check-release-integrity.mjs channel-advance \
               "$VERSION" "$PUBLISHED_CHANNEL_VERSION" "$CHANNEL"
-            require_job_reserve 4500 "npm publish"
-            assert_remote_tag_identity
             if [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ] || [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ]; then
               echo "::error::npm publish needs GitHub OIDC, but ACTIONS_ID_TOKEN_REQUEST_URL/TOKEN are absent. This job carries no npm token by design, so npm would authenticate as nobody and fail with ENEEDAUTH after uploading nothing. Restore 'permissions: id-token: write' on npm_publish."
               exit 1
             fi
+            require_job_reserve 4500 "npm publish"
+            assert_remote_tag_identity
             if ! registry_read; then
               echo "::error::npm pre-write check requires one authoritative, bounded full-packument HTTP 200"
               exit 1

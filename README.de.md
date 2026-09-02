@@ -55,7 +55,7 @@ Ihr Obsidian-Vault wird zum **persistenten, abfragbaren Langzeitgedächtnis** f�
 > 3. **Keine von enquire initiierten ausgehenden Netzwerkaufrufe während `serve`.** Das q8-Embedding-Modell läuft **auf Ihrem Rechner** und indexiert das von **Ihnen** geschriebene Markdown — deshalb ist es ein expliziter einmaliger lokaler Download (~118 MB), kein Cloud-API-Schlüssel. Inhalte werden nur an den verbundenen MCP-Client zurückgegeben; dessen oder eines Tunnels Umgang mit den Daten ist dessen eigene Vertrauensgrenze ([erzwungen](./SECURITY.md), nicht nur angestrebt).
 > 4. **Frischebewusster Abruf.** Jeder Treffer meldet, wie alt die Notiz ist; das optionale Reranking nach Aktualität erlaubt es einem Agenten, frisches Wissen zu bevorzugen und veraltete Fakten zur erneuten Überprüfung zu markieren — die vergessensbewusste Front, aufgebaut auf der `mtime`, die Ihre Dateien bereits besitzen.
 
-**46 Tools · 19 MCP-Prompts · 2270+ Unit-Tests · 50+ Sprachen · v3.11.x stable · semver-gebunden · MIT · npm-Build-Provenienz (SLSA L2).**
+**47 Tools · 19 MCP-Prompts · 2270+ Unit-Tests · 50+ Sprachen · v3.11.x stable · semver-gebunden · MIT · npm-Build-Provenienz (SLSA L2).**
 
 ---
 
@@ -255,9 +255,9 @@ graph LR
 
 ---
 
-## 🛠️ Alle 46 Tools
+## 🛠️ Alle 47 Tools
 
-46 Tools insgesamt: 34 stets aktive Lese-Tools (inkl. dem übergreifenden `obsidian_search`) + 4 optionale Lese-Tools + 7 abgesicherte Schreib-Tools + 1 Closed-Loop-Feedback. Vollständige Referenz: **[docs/api.md](./docs/api.md)**.
+47 Tools insgesamt: 34 stets aktive Lese-Tools (inkl. dem übergreifenden `obsidian_search`) + 4 optionale Lese-Tools + 7 abgesicherte Schreib-Tools + 1 Closed-Loop-Feedback. Vollständige Referenz: **[docs/api.md](./docs/api.md)**.
 
 | Kategorie | Tools |
 |---|---|

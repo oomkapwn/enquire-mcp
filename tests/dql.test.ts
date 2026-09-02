@@ -12,7 +12,7 @@ import {
   runDql
 } from "../src/dql.js";
 import { textResult } from "../src/mcp-result.js";
-import { dataviewQuery, listTags } from "../src/tools/index.js";
+import { dataviewQuery, listTags, vaultShape } from "../src/tools/index.js";
 import { Vault } from "../src/vault.js";
 
 let root: string;
@@ -314,6 +314,40 @@ describe("listTags", () => {
     const v = new Vault(root);
     const tags = await listTags(v, { min_count: 2 });
     expect(tags.every((t) => t.count >= 2)).toBe(true);
+
+    // SBS-D3a — the same enumeration, for frontmatter keys. Every other
+    // frontmatter tool needs the key as an argument, so nothing answered "what
+    // keys are there" until now.
+    const shape = await vaultShape(v, {});
+    const status = shape.find((entry) => entry.key === "status");
+    // alpha, beta and ideas all declare `status`; only alpha and beta declare `priority`.
+    expect(status?.count).toBe(3);
+    expect(status?.types).toEqual(["string"]);
+    expect(status?.examples).toContain("active");
+    // A numeric key reports its shape, not a stringified value type.
+    const priority = shape.find((entry) => entry.key === "priority");
+    expect(priority?.types).toEqual(["number"]);
+    expect(priority?.count).toBe(2);
+    // NEGATIVE control: a key nothing declares is absent rather than reported empty.
+    expect(shape.find((entry) => entry.key === "zzz_absent_key")).toBeUndefined();
+
+    // min_count filters the same way it does for tags.
+    const frequent = await vaultShape(v, { min_count: 2 });
+    expect(frequent.every((entry) => entry.count >= 2)).toBe(true);
+
+    // The walk refuses rather than reporting a prefix — an inventory that
+    // silently omits keys cannot be told apart from one that found them all.
+    let reads = 0;
+    const truncated = {
+      ensureExists: async () => undefined,
+      listFilesByExtensionsBounded: async () => ({ entries: [], visitedEntries: 4, complete: false }),
+      readNoteUncached: async () => {
+        reads += 1;
+        throw new Error("unreachable");
+      }
+    } as unknown as Vault;
+    await expect(vaultShape(truncated, {})).rejects.toThrow(/inventory is incomplete/);
+    expect(reads).toBe(0);
   });
 
   it("admits the exact distinct-tag/key-byte boundary and rejects one less", async () => {

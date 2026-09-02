@@ -69,7 +69,7 @@ One install turns your existing vault into a **persistent, queryable knowledge d
 > 5. **A clear data boundary.** enquire initiates zero outbound calls during serve and sends no telemetry. It returns requested context only to the MCP client you connect; that client's own privacy terms govern any later cloud processing. See the exact [privacy policy](./SECURITY.md#privacy-policy).
 > 6. **Vendor-neutral memory.** Your source knowledge remains in portable files. Switch agents or model providers without rebuilding a proprietary memory silo.
 
-**46 tools · 19 MCP prompts · 2270 unit tests · 50+ languages · v3.11.x stable + v4 SDK-v2 preview · semver-bound · MIT · npm build provenance (SLSA L2).**
+**47 tools · 19 MCP prompts · 2270 unit tests · 50+ languages · v3.11.x stable + v4 SDK-v2 preview · semver-bound · MIT · npm build provenance (SLSA L2).**
 
 ---
 
@@ -90,7 +90,7 @@ Most alternatives solve one layer: an in-app similarity panel, a capable search 
 | **Markdown/PDF hybrid recall + Canvas structured tools** | ✅ | ✕ | ✕ | ✕ |
 | **Per-signal scores + stage-by-stage explanations** | ✅ | ✕ | ✕ | ✕ |
 | **One-generation live scan → FTS → ML → HNSW + quarantine** | ✅ | ✕ | ✕ | ✕ |
-| **46 tools + 19 MCP prompts + semver-bound MCP contract** | ✅ | ✕ | ✕ | ✕ |
+| **47 tools + 19 MCP prompts + semver-bound MCP contract** | ✅ | ✕ | ✕ | ✕ |
 | **2270 tests + 13 release gates + signed npm provenance** | ✅ | ✕ | ✕ | ✕ |
 
 <sub>✅ = the complete row is built in. ✕ = the complete combination was not documented on the reviewed public product surface; a project may implement part of the row or add it later. Review date: 2026-07-30. Exact source snapshots and row-by-row boundaries: [competitive evidence](./docs/COMPARISON.md#dated-competitive-evidence).</sub>
@@ -307,9 +307,9 @@ graph LR
 
 ---
 
-## 🛠️ All 46 tools
+## 🛠️ All 47 tools
 
-46 production tools total: 34 always-on read tools (incl. the umbrella `obsidian_search`) + 4 opt-in read + 7 gated writes + 1 closed-loop feedback. Full reference: **[docs/api.md](./docs/api.md)**.
+47 production tools total: 35 always-on read tools (incl. the umbrella `obsidian_search`) + 4 opt-in read + 7 gated writes + 1 closed-loop feedback. Full reference: **[docs/api.md](./docs/api.md)**.
 
 | Category | Tools |
 |---|---|

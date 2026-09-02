@@ -96,6 +96,12 @@ export const TOOL_MANIFEST: readonly ToolManifestEntry[] = [
     summary: "All unique tags with usage counts (frontmatter + inline)."
   },
   {
+    name: "obsidian_vault_shape",
+    kind: "read",
+    gating: "always",
+    summary: "Frontmatter keys that exist, with counts, value shapes, and examples."
+  },
+  {
     name: "obsidian_dataview_query",
     kind: "read",
     gating: "always",

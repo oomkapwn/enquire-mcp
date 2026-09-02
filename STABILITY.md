@@ -10,7 +10,7 @@ On the stable channel after **v3.0.0**, every CLI flag, MCP tool name, MCP resou
 
 `4.0.0-rc.7` is the current preview of the deliberate major boundary for the official MCP TypeScript SDK v2 and MCP protocol revision `2026-07-28`:
 
-- The 46 tool names and argument shapes, 19 prompt names and schemas, resources, CLI flags/defaults, privacy controls, and write gates remain compatible with v3. Storage is not blanket-compatible: the exact custom-path admission boundary and HNSW layout migration are called out below.
+- The 47 tool names and argument shapes, 19 prompt names and schemas, resources, CLI flags/defaults, privacy controls, and write gates remain compatible with v3. Storage is not blanket-compatible: the exact custom-path admission boundary and HNSW layout migration are called out below.
 - Custom persistence paths now require exact case-sensitive family suffixes: `.json` for parse cache (excluding reserved `.feedback.json`/`.hnsw.meta.json` subclasses), `.fts5.db`, `.embed.db`, `.feedback.json`, and `.hnsw`. This is an intentional v4 prerelease break from v3's arbitrary custom spellings. There is no automatic migration or broad legacy eraser: stop all enquire processes, manually inspect/remove the old main and sidecars, then select a compliant path.
 - HNSW persistence now writes an immutable `.hnsw.<nonce>.bin` generation and publishes a compact format-4, digest-bound `.hnsw.meta.json` pointer last. The pointer contains no row paths or previews; the live label/row manifest must come from one atomic EmbedDb snapshot. The exported `HnswPersistedMeta` v1 TypeScript declaration and legacy two-argument `loadHnswFromDisk(file, signature)` overload remain source-compatible, but the two-argument call now deliberately returns `null` instead of trusting caller-writable sidecar row/capacity metadata. Programmatic consumers that want disk reload must pass the additive trusted `HnswLoadOptions`; v1/v2/v3 sidecars rebuild fail-soft. This is an intentional v4 runtime contract break, while the TypeScript call remains compilable.
 - `serve` now uses SDK v2's era-aware stdio entrypoint. `serve-http` accepts strict modern `2026-07-28` exchanges and supported legacy 2025-era clients from the same registered surface; `--stateful` continues to provide sticky sessions, GET/SSE, and DELETE lifecycle for the legacy leg. Malformed or unsupported modern claims are never retried as legacy.
@@ -25,13 +25,13 @@ The `enquire-mcp-basic-4.0.0-rc.7.mcpb` asset is the current build of the delibe
 
 ## v3.x stable surfaces
 
-### MCP tool names (46 tools)
+### MCP tool names (47 tools)
 
-46 tools total = **34 always-on read** + **1 opt-in via `--persistent-index` + `--diagnostic-search-tools`** + **3 opt-in via `--diagnostic-search-tools`** + **7 gated by `--enable-write`** + **1 opt-in via `--feedback-weight`**. Names + argument shapes are stable in v3.x.
+47 tools total = **35 always-on read** + **1 opt-in via `--persistent-index` + `--diagnostic-search-tools`** + **3 opt-in via `--diagnostic-search-tools`** + **7 gated by `--enable-write`** + **1 opt-in via `--feedback-weight`**. Names + argument shapes are stable in v3.x.
 
-**Read — always-on (34):**
+**Read — always-on (35):**
 
-`obsidian_search`, `obsidian_hyde_search`, `obsidian_read_note`, `obsidian_list_notes`, `obsidian_list_tags`, `obsidian_list_canvases`, `obsidian_list_pdfs`, `obsidian_list_bases`, `obsidian_resolve_wikilink`, `obsidian_get_backlinks`, `obsidian_get_outbound_links`, `obsidian_get_note_neighbors`, `obsidian_get_communities`, `obsidian_get_recent_edits`, `obsidian_stale_notes`, `obsidian_get_unresolved_wikilinks`, `obsidian_open_questions`, `obsidian_dataview_query`, `obsidian_frontmatter_get`, `obsidian_frontmatter_search`, `obsidian_find_path`, `obsidian_find_similar`, `obsidian_read_canvas`, `obsidian_read_pdf`, `obsidian_read_base`, `obsidian_query_base`, `obsidian_ocr_pdf`, `obsidian_context_pack`, `obsidian_chat_thread_read`, `obsidian_stats`, `obsidian_lint_wiki`, `obsidian_open_in_ui`, `obsidian_paper_audit`, `obsidian_validate_note_proposal`.
+`obsidian_search`, `obsidian_hyde_search`, `obsidian_read_note`, `obsidian_list_notes`, `obsidian_list_tags`, `obsidian_vault_shape`, `obsidian_list_canvases`, `obsidian_list_pdfs`, `obsidian_list_bases`, `obsidian_resolve_wikilink`, `obsidian_get_backlinks`, `obsidian_get_outbound_links`, `obsidian_get_note_neighbors`, `obsidian_get_communities`, `obsidian_get_recent_edits`, `obsidian_stale_notes`, `obsidian_get_unresolved_wikilinks`, `obsidian_open_questions`, `obsidian_dataview_query`, `obsidian_frontmatter_get`, `obsidian_frontmatter_search`, `obsidian_find_path`, `obsidian_find_similar`, `obsidian_read_canvas`, `obsidian_read_pdf`, `obsidian_read_base`, `obsidian_query_base`, `obsidian_ocr_pdf`, `obsidian_context_pack`, `obsidian_chat_thread_read`, `obsidian_stats`, `obsidian_lint_wiki`, `obsidian_open_in_ui`, `obsidian_paper_audit`, `obsidian_validate_note_proposal`.
 
 **Read — opt-in via `--persistent-index` + `--diagnostic-search-tools` (1):** `obsidian_full_text_search`.
 

@@ -1,5 +1,5 @@
 import { parseDql, runDql } from "../dql.js";
-import { foldTag, lookupFoldedKey } from "../name-fold.js";
+import { foldTag, lookupFoldedKey, nfcLower } from "../name-fold.js";
 import { type Embed, parseNote, scanWikilinkInners, type Wikilink } from "../parser.js";
 import { computeStaleness, DEFAULT_STALE_DAYS } from "../staleness.js";
 import { noteHeadings } from "../structure.js";
@@ -992,6 +992,161 @@ export async function listTags(
     out.push({ tag, count: slot.count, frontmatter_count: slot.fm, inline_count: slot.inline });
   }
   out.sort((a, b) => b.count - a.count || a.tag.localeCompare(b.tag));
+  return out.slice(0, limit);
+}
+
+interface VaultShapeLimits {
+  maxNotes: number;
+  maxVisitedEntries: number;
+  maxDistinctKeys: number;
+  maxKeyUtf8Bytes: number;
+}
+
+function vaultShapeLimits(overrides: Partial<VaultShapeLimits> | undefined): VaultShapeLimits {
+  const production: VaultShapeLimits = {
+    maxNotes: MAX_SCAN_NOTES,
+    maxVisitedEntries: MAX_SCAN_NOTES * 4,
+    maxDistinctKeys: 2_000,
+    maxKeyUtf8Bytes: 128 * 1024
+  };
+  if (overrides === undefined) return production;
+  const narrow = (value: number | undefined, ceiling: number, name: string): number => {
+    if (value === undefined) return ceiling;
+    if (!Number.isSafeInteger(value) || value < 1 || value > ceiling) {
+      throw new RangeError(`vaultShape ${name} must be a positive safe integer no greater than ${ceiling}`);
+    }
+    return value;
+  };
+  return {
+    maxNotes: narrow(overrides.maxNotes, production.maxNotes, "maxNotes"),
+    maxVisitedEntries: narrow(overrides.maxVisitedEntries, production.maxVisitedEntries, "maxVisitedEntries"),
+    maxDistinctKeys: narrow(overrides.maxDistinctKeys, production.maxDistinctKeys, "maxDistinctKeys"),
+    maxKeyUtf8Bytes: narrow(overrides.maxKeyUtf8Bytes, production.maxKeyUtf8Bytes, "maxKeyUtf8Bytes")
+  };
+}
+
+const MAX_SHAPE_EXAMPLE_CHARS = 80;
+
+/** One frontmatter key as it actually occurs across the vault. */
+export interface FrontmatterKeySummary {
+  /**
+   * The key, NFC-lowercased. Lookup folds keys the same way, so `Status` and
+   * `status` are one key to every tool that reads them and are reported as one
+   * here — a caller can use either spelling.
+   */
+  key: string;
+  /** Notes carrying the key. Sort key. */
+  count: number;
+  /** Value shapes observed, sorted — `string`, `number`, `boolean`, `list`, `map`, `null`. */
+  types: string[];
+  /** Up to three short example values, for judging what the key holds. */
+  examples: string[];
+}
+
+function shapeOfValue(value: unknown): string {
+  if (value === null || value === undefined) return "null";
+  if (Array.isArray(value)) return "list";
+  if (typeof value === "object") return "map";
+  return typeof value;
+}
+
+function shapeExample(value: unknown): string | null {
+  if (value === null || value === undefined || typeof value === "object") return null;
+  const text = String(value).replace(/\s+/gu, " ").trim();
+  if (text.length === 0) return null;
+  return text.length > MAX_SHAPE_EXAMPLE_CHARS ? `${text.slice(0, MAX_SHAPE_EXAMPLE_CHARS)}…` : text;
+}
+
+/**
+ * Report which frontmatter keys exist in the vault, how often, and what they hold.
+ *
+ * Every other frontmatter tool requires the key as an argument, which is only
+ * answerable by someone who already knows the vault. This answers the question
+ * that comes first — what is there to ask about — by enumeration rather than
+ * ranking, so the result is exhaustive within its bounds rather than a best
+ * guess.
+ *
+ * The walk is bounded like every other whole-vault scan and refuses rather than
+ * silently reporting a prefix: an inventory that quietly omits keys is worse
+ * than no inventory, because a caller cannot tell the difference between "this
+ * key does not exist" and "the scan stopped early".
+ *
+ * Honors `--exclude-glob` / `--read-paths`: a key that occurs only in filtered
+ * notes is not reported, exactly as its notes are not searchable.
+ *
+ * @param vault - Vault to inventory.
+ * @param args - Optional folder scope, minimum occurrence count, and result cap.
+ * @param limitOverrides - Test-only narrowing of the production scan envelope.
+ * @returns Keys sorted by frequency, then name.
+ * @throws {RangeError} If the bounded walk cannot complete, or the key
+ *   inventory exceeds its distinct-key or aggregate-byte envelope.
+ * @example
+ * ```ts
+ * await vaultShape(vault, { min_count: 2 });
+ * // [{ key: "status", count: 41, types: ["string"], examples: ["open", "done"] }]
+ * ```
+ */
+export async function vaultShape(
+  vault: Vault,
+  args: { folder?: string; min_count?: number; limit?: number },
+  limitOverrides?: Partial<VaultShapeLimits>
+): Promise<FrontmatterKeySummary[]> {
+  const limit = args.limit ?? 200;
+  const minCount = args.min_count ?? 1;
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 2_000) {
+    throw new TypeError("vaultShape limit must be a positive safe integer no greater than 2000");
+  }
+  if (!Number.isSafeInteger(minCount) || minCount < 1) {
+    throw new TypeError("vaultShape min_count must be a positive safe integer");
+  }
+  const limits = vaultShapeLimits(limitOverrides);
+  await vault.ensureExists();
+  const listing = await vault.listFilesByExtensionsBounded(
+    [".md"],
+    limits.maxNotes,
+    limits.maxVisitedEntries,
+    args.folder
+  );
+  if (!listing.complete) {
+    throw new RangeError(
+      `vaultShape inventory is incomplete within ${limits.maxNotes} notes / ${limits.maxVisitedEntries} visited entries`
+    );
+  }
+  const keys = new Map<string, { count: number; types: Set<string>; examples: string[] }>();
+  let keyUtf8Bytes = 0;
+  for (const entry of listing.entries) {
+    const { parsed } = await vault.readNoteUncached(entry.absPath, entry.mtimeMs);
+    const frontmatter = parsed.frontmatter;
+    if (frontmatter === null || typeof frontmatter !== "object" || Array.isArray(frontmatter)) continue;
+    for (const [rawKey, value] of Object.entries(frontmatter as Record<string, unknown>)) {
+      const key = nfcLower(rawKey);
+      let slot = keys.get(key);
+      if (!slot) {
+        if (keys.size >= limits.maxDistinctKeys) {
+          throw new RangeError(`vaultShape found more than ${limits.maxDistinctKeys} distinct frontmatter keys`);
+        }
+        const keyBytes = Buffer.byteLength(key, "utf8");
+        if (keyBytes > limits.maxKeyUtf8Bytes - keyUtf8Bytes) {
+          throw new RangeError(`vaultShape keys exceed ${limits.maxKeyUtf8Bytes} aggregate UTF-8 bytes`);
+        }
+        keyUtf8Bytes += keyBytes;
+        slot = { count: 0, types: new Set<string>(), examples: [] };
+        keys.set(key, slot);
+      }
+      slot.count += 1;
+      slot.types.add(shapeOfValue(value));
+      const example = shapeExample(value);
+      if (example !== null && slot.examples.length < 3 && !slot.examples.includes(example)) {
+        slot.examples.push(example);
+      }
+    }
+  }
+  const out: FrontmatterKeySummary[] = [];
+  for (const [key, slot] of keys) {
+    if (slot.count < minCount) continue;
+    out.push({ key, count: slot.count, types: [...slot.types].sort(), examples: slot.examples });
+  }
+  out.sort((a, b) => b.count - a.count || a.key.localeCompare(b.key));
   return out.slice(0, limit);
 }
 

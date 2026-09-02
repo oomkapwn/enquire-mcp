@@ -159,7 +159,7 @@ The physical pin deliberately prioritizes exact package/cache coherence over aut
 - **Cross-encoder reranking** — pre-cache `rerank-bge`, then add `--enable-reranker`. Measured +15.5 NDCG@10 / +24.7 MRR (60-query ablation).
 - **Approximate nearest-neighbor retrieval** — add `--use-hnsw`. The HNSW index persists to disk to avoid an unchanged-corpus rebuild; benchmark latency and recall on your own vault.
 - **Harder questions** — try `obsidian_hyde_search` (HyDE retrieval, Gao et al 2023) when the literal query phrasing doesn't match how the notes are written.
-- **Full 46-tool surface** — see [`docs/api.md`](./api.md) for every read/write tool, MCP resource, and prompt.
+- **Full 47-tool surface** — see [`docs/api.md`](./api.md) for every read/write tool, MCP resource, and prompt.
 
 The hybrid JSON in [`examples/claude-desktop-hybrid.json`](../examples/claude-desktop-hybrid.json) is an illustrative absolute-executable template. Prefer the physically pinned output from `configure`.
 

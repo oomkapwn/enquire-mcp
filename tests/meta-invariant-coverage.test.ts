@@ -1013,8 +1013,8 @@ const EXPECTED_REVIEWED_ORDINARY_OWNER_SHA256_ENTRIES = [
     "f6ba8edabb8d41b9fbc08254ada72afc4de06a322da94f97a9cb9986e010501e"
   ],
   ["embedding index extension mapping", "9b30b5965abe1f6de24f5b0de8392a92859489f735556e39c5f83bac285d87d1"],
-  ["FTS route slug normalization", "4c85c74d066bfaf4b0177ad8da61b867bc62ae819b9e5b98becb13d8fbf80028"],
-  ["FTS shadow schema fixture extension", "4126dfbeab9070f30db8b4c1ff125d53bd417558b83755adff0511b63c4a4242"],
+  ["FTS route slug normalization", "4b6d6363e46a3492929d27bd0ad52658055ac5a1503dcaa8d0fa3e8237656f6b"],
+  ["FTS shadow schema fixture extension", "aa172c59588674128de076310a859e3ba3fe7f4ed870d6e9cc9c155c213327ad"],
   [
     "watcher existence-guard whitespace normalization",
     "2e02b86949da126f4b7df90da07e0f01b4a1f40628ae8223f6e401ee10d7af24"

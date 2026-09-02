@@ -4,7 +4,7 @@
     "keywordCounts": {
       "$defs": 0,
       "$ref": 0,
-      "additionalProperties": 49,
+      "additionalProperties": 50,
       "allOf": 0,
       "anyOf": 2,
       "const": 1,
@@ -14,7 +14,7 @@
       "items": 6,
       "maxItems": 6,
       "maxLength": 26,
-      "maximum": 42,
+      "maximum": 44,
       "minItems": 3,
       "minLength": 19,
       "minimum": 8,
@@ -262,12 +262,17 @@
         "bytes": 557,
         "depth": 4,
         "name": "obsidian_validate_note_proposal"
+      },
+      {
+        "bytes": 442,
+        "depth": 3,
+        "name": "obsidian_vault_shape"
       }
     ],
-    "totalSchemaBytes": 27651
+    "totalSchemaBytes": 28093
   },
-  "schemaDigest": "sha256:9aae5143f4a142ac3bb8286dd352d2683f4972724b0596542d0ba00277c6e3b4",
-  "toolCount": 46,
+  "schemaDigest": "sha256:363933e2bb6e25e813136c93a2f514328d0ab7c9e444be8066c4e16bf91f1a29",
+  "toolCount": 47,
   "tools": [
     {
       "inputSchema": {
@@ -1678,6 +1683,32 @@
         "type": "object"
       },
       "name": "obsidian_validate_note_proposal"
+    },
+    {
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "folder": {
+            "description": "Restrict to a subfolder",
+            "type": "string"
+          },
+          "limit": {
+            "description": "Max results (default 200)",
+            "exclusiveMinimum": 0,
+            "maximum": 2000,
+            "type": "integer"
+          },
+          "min_count": {
+            "description": "Drop keys used in fewer than this many notes (default 1)",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "name": "obsidian_vault_shape"
     }
   ]
 }

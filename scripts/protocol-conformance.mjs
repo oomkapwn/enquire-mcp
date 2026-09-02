@@ -94,7 +94,7 @@ async function exerciseClient(label, client, transport, expectedEra, sessionExpe
       resourceTemplates: sorted(templatePage.resourceTemplates.map((template) => template.uriTemplate))
     };
 
-    assert.equal(inventory.tools.length, 34, `${label}: default read-only tool inventory drifted`);
+    assert.equal(inventory.tools.length, 35, `${label}: default read-only tool inventory drifted`);
     assert.equal(inventory.prompts.length, 19, `${label}: prompt inventory drifted`);
     assert.ok(inventory.tools.includes("obsidian_read_note"), `${label}: read tool is missing`);
     assert.ok(inventory.tools.includes("obsidian_search"), `${label}: default search tool is missing`);

@@ -454,7 +454,16 @@ export async function renameNote(
       let reverseReturned = false;
       if (renamed) {
         try {
-          await vault.renameFile(toRelNorm, fromRel, { overwrite: true });
+          // NOT `overwrite: true`. A regular file at `fromRel` is a concurrent
+          // occupant, not our vacated path — the guard below says exactly that,
+          // but it only runs when this reverse FAILS. With overwrite the reverse
+          // SUCCEEDS by destroying that occupant via rename(2): no snapshot, no
+          // `.enquire-rollback` copy, and rollback still reports success. In the
+          // intended case `fromRel` is vacant, so classification is `missing`
+          // and the exclusive path ignores `overwrite` — behaviour unchanged.
+          // With an occupant present this throws into the branch below, which is
+          // already implemented and already tested (CL-A13).
+          await vault.renameFile(toRelNorm, fromRel, { overwrite: false });
           reverseReturned = true;
         } catch (rollbackErr) {
           failures.push(

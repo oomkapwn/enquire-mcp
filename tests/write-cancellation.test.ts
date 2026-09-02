@@ -616,6 +616,71 @@ describe("rollback-safe batch write cancellation", () => {
     } finally {
       await fs.rm(lateOccupantRoot, { recursive: true, force: true });
     }
+
+    // Tenth phase — CL-A13. Every occupant phase above makes the reverse rename
+    // THROW, so none of them ever runs the real reverse against an occupied
+    // `fromRel`. That is the gap: the reverse used to be issued with
+    // `overwrite: true`, so with an occupant present it SUCCEEDED by destroying
+    // it via rename(2) — no snapshot, no recovery copy, and rollback still
+    // reported success. Here the occupant is planted and the real reverse runs.
+    // Causal control: restoring `overwrite: true` in src/tools/write.ts makes the
+    // occupant assertion fail.
+    const liveOccupantRoot = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-live-occupant-"));
+    try {
+      const liveSource = "# Source\n\nSOURCE-LIVE-OCCUPANT-SENTINEL\n";
+      const liveOccupant = "OCCUPANT-MUST-SURVIVE\n";
+      await fs.writeFile(path.join(liveOccupantRoot, "Source.md"), liveSource);
+      await fs.writeFile(path.join(liveOccupantRoot, "Dest.md"), "# Dest\n\nDEST-ORIGINAL\n");
+      await fs.writeFile(path.join(liveOccupantRoot, "Caller-A.md"), "A points to [[Source]].\n");
+      const liveVault = new Vault(liveOccupantRoot, { enableWrite: true });
+      await liveVault.ensureExists();
+
+      const liveCtl = new AbortController();
+      const liveWrite = liveVault.writeNote.bind(liveVault);
+      liveVault.writeNote = async (...args: Parameters<Vault["writeNote"]>) => {
+        const result = await liveWrite(...args);
+        const [relPath, content] = args;
+        if (!liveCtl.signal.aborted && relPath.startsWith("Caller-") && content.includes("[[Dest")) {
+          liveCtl.abort(new Error("deterministic post-rename cancellation"));
+        }
+        return result;
+      };
+      const liveRename = liveVault.renameFile.bind(liveVault);
+      let liveReverseAttempts = 0;
+      liveVault.renameFile = async (...args: Parameters<Vault["renameFile"]>) => {
+        const [from, to] = args;
+        if (from === "Dest.md" && to === "Source.md") {
+          liveReverseAttempts += 1;
+          // Plant the occupant, then let the REAL reverse rename run against it.
+          await fs.writeFile(path.join(liveOccupantRoot, "Source.md"), liveOccupant);
+        }
+        return liveRename(...args);
+      };
+
+      const liveRejection = await renameNote(
+        liveVault,
+        { from: "Source.md", to: "Dest.md", overwrite: true },
+        { signal: liveCtl.signal }
+      ).then(
+        () => null,
+        (error: unknown) => error
+      );
+
+      expect(liveReverseAttempts).toBe(1);
+      expect(liveRejection).toBeInstanceOf(Error);
+      // THE PROPERTY: the concurrent occupant is a file this operation never
+      // owned. It must still be on disk, byte-identical.
+      expect(await fs.readFile(path.join(liveOccupantRoot, "Source.md"), "utf8")).toBe(liveOccupant);
+      // And the renamed note is not silently gone: it is either still at the
+      // destination or preserved under the recovery namespace.
+      const liveMessage = liveRejection instanceof Error ? liveRejection.message : String(liveRejection);
+      const liveDestKeptRenamed = (await fs.readFile(path.join(liveOccupantRoot, "Dest.md"), "utf8")).includes(
+        "SOURCE-LIVE-OCCUPANT-SENTINEL"
+      );
+      expect(liveDestKeptRenamed || liveMessage.includes("NOT restored")).toBe(true);
+    } finally {
+      await fs.rm(liveOccupantRoot, { recursive: true, force: true });
+    }
   });
 
   it("rename_note withholds destination restore when the source probe is inconclusive", async () => {

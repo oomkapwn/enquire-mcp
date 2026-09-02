@@ -1778,11 +1778,19 @@ export class EmbedDb {
       const existingQuant = meta?.quantization ?? "f32";
       const quantMatch = uninitialized || existingQuant === this.quantization;
       const requiresBootstrap = uninitialized || !versionMatch || !modelMatch || !dimMatch || !quantMatch;
-      // v2+ embeddings already have `kind`. Same-config historical 2/3/4 only
-      // lack v5 UUID/epoch metadata; dropping the vector table emptied 3.11.6
-      // indexes on the default non-`--watch` serve path (BACKLOG §1.CC A5).
+      // Only schema 4 may keep its vectors. v4 (v3.12.0-rc.19) pinned the q8
+      // inference weights, so 4→5 is a pure metadata upgrade (UUID/epoch) over
+      // vectors already produced in the current model space. Schemas 2 and 3
+      // predate that pin: `v3.11.6:src/embeddings.ts` called `pipeline()` with
+      // no `dtype`, so their vectors came from the FP32 graph and must be
+      // rebuilt — `quantization` records the on-disk BLOB encoding, not the
+      // inference dtype, so `schema_version` is the only carrier of that
+      // distinction. Retaining them would mix two model spaces against q8 query
+      // vectors: silent score corruption, strictly worse than the empty index
+      // this guard exists to prevent (BACKLOG §1.CC A5, §1.CL CL-A5). v1
+      // additionally lacks the `kind` column.
       const keepCompatibleVectors =
-        !uninitialized && !versionMatch && modelMatch && dimMatch && quantMatch && Number(meta?.schema_version) >= 2;
+        !uninitialized && !versionMatch && modelMatch && dimMatch && quantMatch && Number(meta?.schema_version) >= 4;
 
       // Exact current schema + configuration is already a complete durable
       // generation. Reopening it must not rewrite metadata, rotate identity,

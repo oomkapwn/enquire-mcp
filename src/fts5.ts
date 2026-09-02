@@ -2448,7 +2448,7 @@ export class FtsIndex {
    */
   search(
     rawQuery: string,
-    opts: { limit?: number; folder?: string; tag?: string; sinceMtimeMs?: number } = {}
+    opts: { limit?: number; folder?: string; tag?: string; sinceMtimeMs?: number; match?: "all" | "any" } = {}
   ): FtsSearchHit[] {
     return this.searchWithReceipts(rawQuery, opts).map((hit) => ({
       rel_path: hit.rel_path,
@@ -2488,11 +2488,11 @@ export class FtsIndex {
    */
   searchWithReceipts(
     rawQuery: string,
-    opts: { limit?: number; folder?: string; tag?: string; sinceMtimeMs?: number } = {}
+    opts: { limit?: number; folder?: string; tag?: string; sinceMtimeMs?: number; match?: "all" | "any" } = {}
   ): FtsReceiptSearchHit[] {
     const db = this.requireDb();
     const limit = opts.limit ?? 25;
-    const safe = safeFts5Query(rawQuery);
+    const safe = opts.match === "any" ? anyFts5Query(rawQuery) : safeFts5Query(rawQuery);
     if (!safe) return [];
     let matchQuery = `{content title aliases} : (${safe})`;
     const where: string[] = [
@@ -2978,6 +2978,40 @@ export async function syncPdfFtsIndex(vault: Vault, idx: FtsIndex): Promise<PdfF
  * @returns Sanitized query ready to pass to FTS5's `MATCH` operator.
  *   Empty string when input is empty / whitespace-only.
  */
+/**
+ * Sanitize `q` the way {@link safeFts5Query} does, but join the terms with an
+ * explicit `OR` so a document satisfying ANY term matches.
+ *
+ * `safeFts5Query` separates terms with spaces, which FTS5 reads as an implicit
+ * AND — and the unit that must satisfy it is one chunk, not one note. That is
+ * the right default: it is precise, and a question whose words genuinely belong
+ * together should not match documents that merely contain one of them.
+ *
+ * It is the wrong LAST word, though. When the conjunction matches nothing the
+ * choice is not between precision and recall — it is between some ranked
+ * answers and none at all. Callers use this to ask the weaker question only
+ * after the stronger one has come back empty.
+ *
+ * `OR` is emitted unquoted here on purpose: {@link safeFts5Query} deliberately
+ * quotes a user's literal `OR` so they can search for the word, and that
+ * protection is untouched — a term arriving from the query is still quoted, and
+ * only the separators this function inserts are operators.
+ *
+ * @param q - User query string.
+ * @returns An FTS5 `MATCH` expression that any single term satisfies, or the
+ *   empty string when the input has no terms.
+ * @example
+ * ```ts
+ * anyFts5Query("carbonara sourdough"); // '"carbonara" OR "sourdough"' semantics
+ * ```
+ */
+export function anyFts5Query(q: string): string {
+  const terms = safeFts5Query(q).trim();
+  if (terms.length === 0) return "";
+  const parts = terms.split(/\s+(?=(?:[^"]*"[^"]*")*[^"]*$)/u).filter((part) => part.length > 0);
+  return parts.length <= 1 ? terms : parts.join(" OR ");
+}
+
 export function safeFts5Query(q: string): string {
   const RESERVED = new Set(["AND", "OR", "NOT", "NEAR"]);
   const parts = q.trim().split(/\s+/);

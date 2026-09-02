@@ -2987,6 +2987,71 @@ export async function searchHybrid(
     }
   }
 
+  // SBS-D1 — recall fallback. Every ranker above asks a STRICT question: BM25
+  // requires all terms in one chunk, TF-IDF requires a cosine above 0.05. Each
+  // is a good default and a bad last word — a question whose words are all in
+  // the vault, just not together in one chunk and not concentrated enough in a
+  // long note, currently returns nothing at all.
+  //
+  // The relaxation runs ONLY when the strict pass produced no candidate in any
+  // signal. That makes it a provable no-op for every query that answers today:
+  // if anything ranked, nothing here executes, so no existing result can be
+  // reordered. The choice at this point is not precision versus recall — it is
+  // some ranked answers versus none.
+  const strictPassFoundNothing =
+    bm25Ranked.length === 0 && tfidfRanked.length === 0 && embedRanked.length === 0;
+  if (strictPassFoundNothing) {
+    if (ctx.ftsIndex) {
+      try {
+        const anyHits = await filterLiveVaultHits(
+          vault,
+          ctx.ftsIndex
+            .searchWithReceipts(args.query, { limit: fanOutK, folder: args.folder, match: "any" })
+            .filter((hit) => !vault.isExcluded(hit.rel_path)),
+          (hit) => hit.rel_path,
+          fanOutK,
+          (hit) => hit,
+          (receipts) => ctx.ftsIndex?.currentSourceReceiptMask(receipts) ?? receipts.map(() => false)
+        );
+        bm25Ranked = anyHits.map((hit, index) => ({
+          id: granularity === "block" ? `${hit.rel_path}#${hit.chunk_index}` : hit.rel_path,
+          rank: index + 1,
+          score: hit.score,
+          snippet: hit.snippet,
+          chunk_index: hit.chunk_index,
+          line_start: hit.line_start,
+          line_end: hit.line_end,
+          kind: hit.kind,
+          indexed_mtime_ms: hit.indexed_mtime_ms,
+          indexed_revision: hit.indexed_revision
+        }));
+        if (bm25Ranked.length > 0 && !signalsUsed.includes("bm25")) signalsUsed.push("bm25");
+      } catch (err) {
+        signalErrors.bm25 = err instanceof Error ? err.message : String(err);
+      }
+    }
+    try {
+      // The floor exists to keep weak cosines out of a ranked answer. With no
+      // answer to dilute it cannot do that job, and it is the reason a term in
+      // a long note scores near 0.014 against a 0.05 threshold.
+      const unfloored = await semanticSearch(vault, {
+        query: args.query,
+        folder: args.folder,
+        limit: fanOutK,
+        min_score: 0
+      });
+      tfidfRanked = unfloored.matches.map((match, index) => ({
+        id: match.path,
+        rank: index + 1,
+        score: match.score,
+        snippet: match.snippet
+      }));
+      if (tfidfRanked.length > 0 && !signalsUsed.includes("tfidf")) signalsUsed.push("tfidf");
+    } catch (err) {
+      signalErrors.tfidf = err instanceof Error ? err.message : String(err);
+    }
+  }
+
   // B3 — TF-IDF is note-scoped. At block granularity BM25 and embeddings
   // fuse on `path#chunk`. Project each TF-IDF note onto the block ids those
   // rankers already produced for that path; if none exist, emit `path#0`

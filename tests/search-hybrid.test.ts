@@ -793,6 +793,51 @@ describe("searchHybrid — BM25 + TF-IDF fusion path", () => {
     expect(result.matches.length).toBeGreaterThan(0);
     expect(result.matches.every((m) => m.path.startsWith("Cooking/"))).toBe(true);
 
+    // ── SBS-D1: the relaxation runs only when nothing ranked ──
+    // NO-OP control. "OAuth carbonara" has no chunk holding both terms, so BM25
+    // finds nothing — but these notes are short, so TF-IDF clears its floor and
+    // the strict pass DOES produce candidates. The fallback must therefore stay
+    // dormant, and the proof is that `bm25` is absent from the signals: had the
+    // any-term pass run, both notes match it and bm25 would be listed.
+    const noopResult = await searchHybrid(
+      new Vault(ftsRoot),
+      { query: "OAuth carbonara", limit: 5 },
+      { ftsIndex: idx, embedFile: path.join(ftsRoot, "nonexistent.embed.db") }
+    );
+    expect(noopResult.matches.length).toBeGreaterThan(0);
+    expect(noopResult.signals_used).toContain("tfidf");
+    expect(noopResult.signals_used).not.toContain("bm25");
+
+    // RECALL control. Same question shape, but in notes long enough that the
+    // TF-IDF floor also rejects the partial matches. Now every strict signal is
+    // empty, the fallback engages, and the question is answered instead of
+    // returning nothing.
+    const longRoot = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-sbs-d1-"));
+    const longVault = new Vault(longRoot);
+    await longVault.ensureExists();
+    const filler = Array.from({ length: 5000 }, (_, index) => `qq${index.toString(36)}`).join(" ");
+    await fs.writeFile(path.join(longRoot, "Alpha.md"), `alpha appears here. ${filler}\n`);
+    await fs.writeFile(path.join(longRoot, "Bravo.md"), `bravo appears here. ${filler}2\n`);
+    const longIdx = new FtsIndex({ file: defaultIndexFile(longRoot), vaultRoot: longRoot });
+    await longIdx.open();
+    try {
+      for (const entry of await longVault.listMarkdown()) {
+        const note = await longVault.readNote(entry.absPath, entry.mtimeMs);
+        longIdx.reindexFile(entry.relPath, entry.mtimeMs, note.content, [], note.parsed.tags);
+      }
+      // POSITIVE control: the strict conjunction really is empty here.
+      expect(longIdx.search("alpha bravo", { limit: 10 })).toEqual([]);
+      const recalled = await searchHybrid(
+        longVault,
+        { query: "alpha bravo", limit: 5 },
+        { ftsIndex: longIdx, embedFile: path.join(longRoot, "nonexistent.embed.db") }
+      );
+      expect(recalled.matches.map((hit) => hit.path).sort()).toEqual(["Alpha.md", "Bravo.md"]);
+    } finally {
+      await longIdx.closeAndRelease();
+      await fs.rm(longRoot, { recursive: true, force: true });
+    }
+
     // AH-1 receipt controls stay in this established BM25-route test so the
     // causal coverage does not add another test registration.
     {

@@ -255,7 +255,7 @@ O `obsidian_search` detecta automaticamente os sinais disponíveis e degrada de 
 
 ## 🛠️ Todas as 47 ferramentas
 
-47 ferramentas no total: 34 de leitura sempre ativas (incl. a `obsidian_search` guarda-chuva) + 4 de leitura opcionais + 7 escritas restritas + 1 de feedback em ciclo fechado. Referência completa: **[docs/api.md](./docs/api.md)**.
+47 ferramentas no total: 35 de leitura sempre ativas (incl. a `obsidian_search` guarda-chuva) + 4 de leitura opcionais + 7 escritas restritas + 1 de feedback em ciclo fechado. Referência completa: **[docs/api.md](./docs/api.md)**.
 
 | Categoria | Ferramentas |
 |---|---|

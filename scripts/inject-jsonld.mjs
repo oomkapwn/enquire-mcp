@@ -157,7 +157,7 @@ export function buildJsonLdGraph(pkg) {
       "Local Markdown/PDF retrieval: BM25 + TF-IDF + multilingual ML embeddings + RRF + BGE reranking + HNSW/int8 vector search",
       "PDF page citations and optional local Tesseract OCR",
       "Structured Obsidian tools for Canvas, Dataview-style LIST/TABLE queries, and supported Base-filter execution",
-      "46 MCP tools and 19 MCP prompts for agent workflows",
+      "47 MCP tools and 19 MCP prompts for agent workflows",
       "Zero outbound HTTP initiated by enquire during serve; requested context is returned to the connected MCP client",
       "Agentic RAG: HyDE + sub-question decomposition",
       "GraphRAG-light: Louvain community detection over the wikilink graph",

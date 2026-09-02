@@ -250,7 +250,7 @@ graph LR
 
 ## 🛠️ Las 47 herramientas
 
-47 herramientas en total: 34 de lectura siempre activas (incl. el paraguas `obsidian_search`) + 4 opcionales + 7 escrituras restringidas + 1 de retroalimentación de bucle cerrado. Referencia completa: **[docs/api.md](./docs/api.md)**.
+47 herramientas en total: 35 de lectura siempre activas (incl. el paraguas `obsidian_search`) + 4 opcionales + 7 escrituras restringidas + 1 de retroalimentación de bucle cerrado. Referencia completa: **[docs/api.md](./docs/api.md)**.
 
 | Categoría | Herramientas |
 |---|---|

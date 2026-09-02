@@ -257,7 +257,7 @@ graph LR
 
 ## 🛠️ Alle 47 Tools
 
-47 Tools insgesamt: 34 stets aktive Lese-Tools (inkl. dem übergreifenden `obsidian_search`) + 4 optionale Lese-Tools + 7 abgesicherte Schreib-Tools + 1 Closed-Loop-Feedback. Vollständige Referenz: **[docs/api.md](./docs/api.md)**.
+47 Tools insgesamt: 35 stets aktive Lese-Tools (inkl. dem übergreifenden `obsidian_search`) + 4 optionale Lese-Tools + 7 abgesicherte Schreib-Tools + 1 Closed-Loop-Feedback. Vollständige Referenz: **[docs/api.md](./docs/api.md)**.
 
 | Kategorie | Tools |
 |---|---|

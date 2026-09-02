@@ -254,7 +254,7 @@ graph LR
 
 ## 🛠️ सभी 47 टूल
 
-कुल 47 टूल: 34 हमेशा-चालू read (अम्ब्रेला `obsidian_search` सहित) + 4 opt-in read + 7 gated writes + 1 क्लोज़्ड-लूप फ़ीडबैक। पूर्ण संदर्भ: **[docs/api.md](./docs/api.md)**।
+कुल 47 टूल: 35 हमेशा-चालू read (अम्ब्रेला `obsidian_search` सहित) + 4 opt-in read + 7 gated writes + 1 क्लोज़्ड-लूप फ़ीडबैक। पूर्ण संदर्भ: **[docs/api.md](./docs/api.md)**।
 
 | श्रेणी | टूल |
 |---|---|

@@ -66,7 +66,7 @@ describe("buildJsonLdGraph (v3.9.0-rc.17)", () => {
       "BM25 + TF-IDF + multilingual ML embeddings + RRF + BGE reranking + HNSW/int8 vector search"
     );
     expect(featureText).toContain("Dataview-style LIST/TABLE queries");
-    expect(featureText).toContain("46 MCP tools and 19 MCP prompts");
+    expect(featureText).toContain("47 MCP tools and 19 MCP prompts");
     expect(featureText).toContain("requested context is returned to the connected MCP client");
     expect(featureText).toContain("exact Origin allowlisting");
 

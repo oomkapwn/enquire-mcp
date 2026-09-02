@@ -1006,8 +1006,13 @@ function vaultShapeLimits(overrides: Partial<VaultShapeLimits> | undefined): Vau
   const production: VaultShapeLimits = {
     maxNotes: MAX_SCAN_NOTES,
     maxVisitedEntries: MAX_SCAN_NOTES * 4,
-    maxDistinctKeys: 2_000,
-    maxKeyUtf8Bytes: 128 * 1024
+    // Deliberately the same envelope as listTags rather than a tighter one of
+    // its own. A key inventory is bounded by the same forces as a tag inventory,
+    // and a tighter cap here would not be safer — exceeding it REFUSES, so a
+    // vault with many keys would lose the tool entirely rather than get a
+    // smaller answer.
+    maxDistinctKeys: MAX_TAG_DISTINCT,
+    maxKeyUtf8Bytes: MAX_TAG_KEY_UTF8_BYTES
   };
   if (overrides === undefined) return production;
   const narrow = (value: number | undefined, ceiling: number, name: string): number => {
@@ -1118,6 +1123,11 @@ export async function vaultShape(
     const { parsed } = await vault.readNoteUncached(entry.absPath, entry.mtimeMs);
     const frontmatter = parsed.frontmatter;
     if (frontmatter === null || typeof frontmatter !== "object" || Array.isArray(frontmatter)) continue;
+    // `count` is notes, not occurrences. Two raw keys in ONE note can fold to the
+    // same reported key — `Status` and `status` are distinct YAML keys and one
+    // key to every tool that reads them — so without this the note would be
+    // counted twice and the number would not mean what it says.
+    const countedInThisNote = new Set<string>();
     for (const [rawKey, value] of Object.entries(frontmatter as Record<string, unknown>)) {
       const key = nfcLower(rawKey);
       let slot = keys.get(key);
@@ -1133,7 +1143,10 @@ export async function vaultShape(
         slot = { count: 0, types: new Set<string>(), examples: [] };
         keys.set(key, slot);
       }
-      slot.count += 1;
+      if (!countedInThisNote.has(key)) {
+        countedInThisNote.add(key);
+        slot.count += 1;
+      }
       slot.types.add(shapeOfValue(value));
       const example = shapeExample(value);
       if (example !== null && slot.examples.length < 3 && !slot.examples.includes(example)) {

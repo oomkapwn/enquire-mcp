@@ -255,7 +255,7 @@ graph LR
 
 ## 🛠️ Les 47 outils
 
-47 outils au total : 34 de lecture toujours actifs (dont le parapluie `obsidian_search`) + 4 de lecture optionnels + 7 écritures restreintes + 1 de retour en boucle fermée. Référence complète : **[docs/api.md](./docs/api.md)**.
+47 outils au total : 35 de lecture toujours actifs (dont le parapluie `obsidian_search`) + 4 de lecture optionnels + 7 écritures restreintes + 1 de retour en boucle fermée. Référence complète : **[docs/api.md](./docs/api.md)**.
 
 | Catégorie | Outils |
 |---|---|

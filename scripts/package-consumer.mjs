@@ -332,7 +332,7 @@ assert.equal(
   "function",
   "operator ownership-debt error export is missing from the installed package"
 );
-assert.equal(TOOL_MANIFEST.length, 46, "tool-manifest subpath returned the wrong inventory");
+assert.equal(TOOL_MANIFEST.length, 47, "tool-manifest subpath returned the wrong inventory");
 for (const [name, surface] of Object.entries({ Bases, Communities, EmbedDb, Fts5, Hnsw })) {
   assert.ok(Object.keys(surface).length > 0, name + " subpath exported no runtime surface");
 }

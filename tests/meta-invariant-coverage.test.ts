@@ -968,10 +968,10 @@ type ReviewedOrdinaryTransformId = (typeof REVIEWED_ORDINARY_TRANSFORMS)[number]
 // the complete source file, so a reachable decoy, relocated clone, or severed
 // helper consumer cannot inherit authority from the same filename/title/count.
 const EXPECTED_REVIEWED_ORDINARY_OWNER_SHA256_ENTRIES = [
-  ["pdf OCR quote normalization", "f263ff5abfb450dc69c3c38babc4d3fec97d504eebfe5b1adb8c38da4c95433c"],
-  ["pdf OCR whitespace normalization", "f263ff5abfb450dc69c3c38babc4d3fec97d504eebfe5b1adb8c38da4c95433c"],
-  ["lifecycle whitespace normalization", "75e8a2471e27ad3f24e3fc1535e866f13f98900e4dcd71a9ca1f42594fa30223"],
-  ["release gate parenthesis unescape", "283599de342dcd0e162a045dc3779c36ab76a9d24cf801065cc38e488de3c635"],
+  ["pdf OCR quote normalization", "5b94eac8f1b45d56105e33e13fc03e8252090b0278afc73e8e993e01e5f5256d"],
+  ["pdf OCR whitespace normalization", "5b94eac8f1b45d56105e33e13fc03e8252090b0278afc73e8e993e01e5f5256d"],
+  ["lifecycle whitespace normalization", "34e935f9b4097fa624dba82f5e4c7bd25067675f9712530e831555bb5173ae72"],
+  ["release gate parenthesis unescape", "4ba7ffff10e9ec1e9aac4f18873db2fa7f4e765bc638b1a2a49351e414ab3382"],
   ["entrypoint block-comment stripping", "319def01444e238d986cd6674091a75f17ce843b71ac7e74e2c1aeba07741b0a"],
   ["entrypoint line-comment stripping", "319def01444e238d986cd6674091a75f17ce843b71ac7e74e2c1aeba07741b0a"],
   ["release-check open-parenthesis unescape", "e12c9f3c715151d4535e1531ca2c067e426973eae147b325fbac7b990bd36108"],
@@ -996,8 +996,8 @@ const EXPECTED_REVIEWED_ORDINARY_OWNER_SHA256_ENTRIES = [
   ["K-1 statement semicolon normalization", "9bb382eb2d071464957b3c6cec271cb2a843dfeeabd9225c92e4497597d839ef"],
   ["K-1 block-comment stripping", "693d87a3a5e80b88156a062d2935aa3e9e278aad769fd947ec897caffcbb4fdc"],
   ["K-1 line-comment stripping", "693d87a3a5e80b88156a062d2935aa3e9e278aad769fd947ec897caffcbb4fdc"],
-  ["K-1 module-extension normalization", "bec1d52b3e54eb60d1bc2e28ea41228b6847e5c7f83339600f6b506ad3e80949"],
-  ["K-1 source-path separator normalization", "5971db634d342a8044dbdccd270fe3070e07a7ed0406ca8a5ce78e7fb07cb3b9"],
+  ["K-1 module-extension normalization", "62116e0b791489598bcf7911462d849a7535390b5812154c6dfd3acb21e1bd5d"],
+  ["K-1 source-path separator normalization", "1df0e474d2ffb64efc9eb0b79934d531fd5b4600d61f3caa979f14cd5aaa612e"],
   ["line-terminator block-comment stripping", "61bbbea7aac48eafa3a24d78998eb49e81a6e7911953f3c25ead27692923a80d"],
   ["line-terminator line-comment stripping", "61bbbea7aac48eafa3a24d78998eb49e81a6e7911953f3c25ead27692923a80d"],
   ["ReDoS source-path separator normalization", "1b31e3478ce12f357ad0de08f669cdd462aef1c92b5e40ea2b7252bf483dc9bd"],

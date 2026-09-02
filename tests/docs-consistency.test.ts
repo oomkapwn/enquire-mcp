@@ -2976,6 +2976,7 @@ type FtsSearchOptions = {
   folder?: string;
   tag?: string;
   sinceMtimeMs?: number;
+  match?: "all" | "any";
 };
 type EmbedSearchOptions = { folder?: string; minScore?: number };
 type EmbedPeekMeta = {

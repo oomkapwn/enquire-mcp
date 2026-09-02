@@ -38,6 +38,34 @@ describe("TF-IDF exact-overlap contract and generation admission", () => {
     expect(oov.matches).toEqual([]);
     expect(synonymOnly.matches).toEqual([]);
     expect(exactControl.matches.map((hit) => hit.path)).toEqual(["Concept.md"]);
+
+    // ── SBS-R1: the default floor, not the query, is what hides long notes ──
+    // A term present in a SHORT note clears the 0.05 cosine floor; the same kind
+    // of term in a LONG note does not, because cosine divides by the document's
+    // vector length. Nothing about the query changes between the two — only the
+    // note's size — so this is the mechanism behind "every word is in my vault
+    // and I still get nothing" on a real vault, where notes are long.
+    const filler = Array.from({ length: 5000 }, (_, index) => `qq${index.toString(36)}`).join(" ");
+    const { vault: lengthVault } = await scratchVault({
+      "Short.md": "alpha sits alone here.\n",
+      "Long.md": `bravo sits here too. ${filler}\n`
+    });
+
+    // POSITIVE control: in a short note the term clears the floor comfortably.
+    const shortAtDefault = await semanticSearch(lengthVault, { query: "alpha" });
+    expect(shortAtDefault.matches.map((hit) => hit.path)).toEqual(["Short.md"]);
+
+    // The long note's term IS indexed and IS matched — dropping the floor finds it.
+    const longUnfloored = await semanticSearch(lengthVault, { query: "bravo", min_score: 0 });
+    expect(longUnfloored.matches.map((hit) => hit.path)).toEqual(["Long.md"]);
+
+    // Characterization: at the default floor the very same term is invisible.
+    // Both terms are unique to their note, so their IDF is identical and length
+    // is the only variable. With ~5000 distinct tokens the cosine lands near
+    // 0.014 against a 0.05 floor — a wide enough margin that this is a property
+    // of the scoring, not a threshold this fixture happens to straddle.
+    const longAtDefault = await semanticSearch(lengthVault, { query: "bravo" });
+    expect(longAtDefault.matches).toEqual([]);
   });
 
   it("invalidates an alpha→bravo replacement with identical size and restored mtime", async () => {

@@ -2816,7 +2816,12 @@ describe("EmbedDb", () => {
 
       const migrated = new EmbedDb({ file: legacyFile, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
       await migrated.open();
-      expect(migrated.totalChunks()).toBe(legacyVersion === 1 ? 0 : 1);
+      // POSITIVE: rc.19's fp32 → q8 inference-contract migration discards old
+      // vectors. Schemas 1, 2 and 3 all predate the q8 pin, so every one must
+      // rebuild — keeping them would serve FP32-derived vectors against q8
+      // query vectors. Only schema 4 may carry its vectors into 5; that case is
+      // covered separately above.
+      expect(migrated.totalChunks()).toBe(0);
       await migrated.closeAndRelease();
     }
   });

@@ -221,11 +221,26 @@ describe("matchLinesBounded — hard ReDoS sink-bound (v3.10.0-rc.39)", () => {
   const cataMissed = Buffer.from("XFc/KChbY2FdKj8pezAsM318Y3syLDV9YnsyLDV9KXswLDN9JA==", "base64").toString();
 
   it("returns first-capture matches for a safe pattern (POSITIVE control)", async () => {
-    const out = await matchLinesBounded("^Q: (.+)$", ["Q: hello", "nope", "Q: two"], 2000);
+    const wallStart = Date.now();
+    let reported: number | undefined;
+    const out = await matchLinesBounded("^Q: (.+)$", ["Q: hello", "nope", "Q: two"], 2000, (ms) => {
+      reported = ms;
+    });
+    const wallMs = Date.now() - wallStart;
     expect(out).toEqual([
       { idx: 0, q: "hello" },
       { idx: 2, q: "two" }
     ]);
+    // CL-B1a: the reported duration must be MATCHING time, not the call's wall
+    // time. Three trivial lines match in ~0ms while spawning and joining a
+    // worker thread costs milliseconds, so a `reported` that tracked wall time
+    // would fail this. `getOpenQuestions` charges its cross-batch ReDoS budget
+    // with this number; charging wall time let per-batch thread overhead
+    // exhaust the budget on a large vault and reject a legitimate pattern as
+    // catastrophic backtracking.
+    expect(reported).toBeTypeOf("number");
+    expect(reported).toBeGreaterThanOrEqual(0);
+    expect(reported ?? Number.POSITIVE_INFINITY).toBeLessThan(Math.max(wallMs, 1));
   });
 
   it("REJECTS within the budget a pattern isCatastrophicRegex MISSES (the rc.36 residual)", async () => {

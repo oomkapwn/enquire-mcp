@@ -38,6 +38,16 @@ All notable changes to this project will be documented here. The format follows 
 
 **2228 → 2270 source tests.** Forty-two new causal contracts cover the audit closures and staged embedding replacement above; table-driven phases additionally exercise rollback, authority ordering, fail-fast sync operations, clear/replacement interlocks, and promotion refusal without inflating the declared `it()` count.
 
+### Maintainer handoff reflects the post-AH-4 repository state
+
+> **TL;DR:** **The agent handoff now starts from the shipped AH-4 boundary instead of the earlier rc.6 release attempt.** `CLAUDE.md` records that PR #565 completed staged embedding replacement, that its candidate and squash-main checks passed, that no product implementation is currently in flight, and that distribution remains deferred. The next bounded action is a read-only AH-4 sibling sweep before one backlog card is selected.
+>
+> **Bounded claim.** This is a handoff-only documentation correction. It changes no source, test, workflow, version, tag, package, Release, Registry entry, or public runtime contract. It does not authorize AH-5, AH-6, release-mutation work, Dependabot merges, or distribution actions.
+>
+> **Method note:** Reconciled the exact GitHub state, PR #565 merge boundary, candidate and exact-main checks, open pull requests, tags, Releases, CodeQL, and Pages before editing. The detailed working queue and release/operator constraints remain in the private maintainer handoff rather than being duplicated into public documentation. Under D-45 no local package-manager, build, lint, test, coverage, audit, or benchmark workload was used.
+
+- **One current route replaces contradictory next steps.** Read-only AH-4 sibling verification comes first; only an ALLOW permits one re-triaged product card, while distribution remains explicitly paused.
+
 ## [4.0.0-rc.6] — 2026-08-30
 
 ### Release handoff copies the body onto the canonical name; ads retarget to unpublished 4.0.0-rc.6

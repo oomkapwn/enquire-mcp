@@ -127,8 +127,8 @@ export interface BaseQueryResult {
   skipped_note_count: number;
   /**
    * v4 CL-B1b — vault-relative paths of skipped notes, each with the reason.
-   * Capped at {@link MAX_REPORTED_SKIPPED_NOTES} so a vault full of malformed
-   * notes cannot inflate the response; `skipped_note_count` stays exact.
+   * Capped at 20 entries so a vault full of malformed notes cannot inflate the
+   * response; `skipped_note_count` stays exact and uncapped.
    */
   skipped_notes: string[];
   /** v3.6.2 HN-1 — true iff `total_matched > matches.length` (i.e. the

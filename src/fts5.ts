@@ -2997,6 +2997,11 @@ export async function syncPdfFtsIndex(vault: Vault, idx: FtsIndex): Promise<PdfF
  * protection is untouched — a term arriving from the query is still quoted, and
  * only the separators this function inserts are operators.
  *
+ * Terms are separated by a single linear scan that tracks quote state rather
+ * than by a regular expression. A quote-aware split expressed as a lookahead
+ * needs nested quantifiers, which is the shape this project has repeatedly had
+ * to remove from other sinks; a scan cannot exceed linear time for any input.
+ *
  * @param q - User query string.
  * @returns An FTS5 `MATCH` expression that any single term satisfies, or the
  *   empty string when the input has no terms.
@@ -3008,7 +3013,19 @@ export async function syncPdfFtsIndex(vault: Vault, idx: FtsIndex): Promise<PdfF
 export function anyFts5Query(q: string): string {
   const terms = safeFts5Query(q).trim();
   if (terms.length === 0) return "";
-  const parts = terms.split(/\s+(?=(?:[^"]*"[^"]*")*[^"]*$)/u).filter((part) => part.length > 0);
+  const parts: string[] = [];
+  let current = "";
+  let quoted = false;
+  for (const char of terms) {
+    if (char === '"') quoted = !quoted;
+    if (char === " " && !quoted) {
+      if (current.length > 0) parts.push(current);
+      current = "";
+      continue;
+    }
+    current += char;
+  }
+  if (current.length > 0) parts.push(current);
   return parts.length <= 1 ? terms : parts.join(" OR ");
 }
 

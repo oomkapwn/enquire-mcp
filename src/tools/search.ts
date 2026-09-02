@@ -2998,8 +2998,7 @@ export async function searchHybrid(
   // if anything ranked, nothing here executes, so no existing result can be
   // reordered. The choice at this point is not precision versus recall — it is
   // some ranked answers versus none.
-  const strictPassFoundNothing =
-    bm25Ranked.length === 0 && tfidfRanked.length === 0 && embedRanked.length === 0;
+  const strictPassFoundNothing = bm25Ranked.length === 0 && tfidfRanked.length === 0 && embedRanked.length === 0;
   if (strictPassFoundNothing) {
     if (ctx.ftsIndex) {
       try {

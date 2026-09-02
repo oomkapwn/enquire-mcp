@@ -1279,6 +1279,8 @@ jobs:
 
           NPM_PUBLISH_ATTEMPTED=false
 
+          NPM_PUBLISH_LOG=""
+
           NPM_PUBLISH_EXIT=0
 
           CURL_BIN=$(type -P curl)
@@ -1290,6 +1292,8 @@ jobs:
           NPM_BIN=$(type -P npm)
 
           TIMEOUT_BIN=$(type -P timeout)
+
+          GREP_BIN=$(type -P grep)
 
           NODE_VERSION=$("$NODE_BIN" -p "process.versions.node")
 
@@ -1496,6 +1500,10 @@ jobs:
               "$VERSION" "$PUBLISHED_CHANNEL_VERSION" "$CHANNEL"
             require_job_reserve 4500 "npm publish"
             assert_remote_tag_identity
+            if [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ] || [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ]; then
+              echo "::error::npm publish needs GitHub OIDC, but ACTIONS_ID_TOKEN_REQUEST_URL/TOKEN are absent. This job carries no npm token by design, so npm would authenticate as nobody and fail with ENEEDAUTH after uploading nothing. Restore 'permissions: id-token: write' on npm_publish."
+              exit 1
+            fi
             if ! registry_read; then
               echo "::error::npm pre-write check requires one authoritative, bounded full-packument HTTP 200"
               exit 1
@@ -1519,6 +1527,7 @@ jobs:
             "$NODE_BIN" scripts/check-release-integrity.mjs npm-provenance-context "$SOURCE_SHA" "$TAG"
             NPM_PUBLISH_ATTEMPTED=true
             NPM_PUBLISH_CWD=$(/usr/bin/mktemp -d "$RUNNER_TEMP/enquire-npm-publish.XXXXXX")
+            NPM_PUBLISH_LOG=$(/usr/bin/mktemp "$RUNNER_TEMP/enquire-npm-publish-log.XXXXXX")
             if [ ! -d "$NPM_PUBLISH_CWD" ] || [ -L "$NPM_PUBLISH_CWD" ]; then
               echo "::error::npm publish scratch directory is missing, non-directory, or a symlink"
               exit 1
@@ -1540,9 +1549,10 @@ jobs:
                 --@oomkapwn:registry=https://registry.npmjs.org/ \
                 --fetch-retries=0 --fetch-timeout=60000 --strict-ssl=true \
                 --provenance --access public --tag "$CHANNEL" --ignore-scripts
-            )
+            ) > "$NPM_PUBLISH_LOG" 2>&1
             NPM_PUBLISH_EXIT=$?
             set -e
+            cat "$NPM_PUBLISH_LOG"
           else
             echo "::error::npm publication evaluator returned an unknown action"
             exit 1
@@ -1582,6 +1592,9 @@ jobs:
           done
 
           if [ "$NPM_POST_ACTION" != "$EXPECTED_POST_ACTION" ]; then
+            if [ -n "${NPM_PUBLISH_LOG:-}" ] && [ -s "$NPM_PUBLISH_LOG" ] && "$GREP_BIN" -q "ENEEDAUTH" "$NPM_PUBLISH_LOG"; then
+              echo "::error::npm refused the publish with ENEEDAUTH before writing anything. This job publishes with Trusted Publishing and carries no token, so ENEEDAUTH means the registry has no trusted publisher linked to $PACKAGE_NAME. Link one at https://www.npmjs.com/package/$PACKAGE_NAME/access with publisher=GitHub Actions, owner=oomkapwn, repository=enquire-mcp, workflow=release.yml, environment=npm-publish. The convergence error below is a CONSEQUENCE, not the cause."
+            fi
             echo "::error::npm exact SRI/channel state did not converge after 12 bounded reads; publish exit=$NPM_PUBLISH_EXIT"
             exit 1
           fi

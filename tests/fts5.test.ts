@@ -1738,6 +1738,26 @@ describe("FtsIndex — full lifecycle", () => {
       const apolloHits = idx.search("Apollo");
       expect(apolloHits.length).toBe(1);
       expect(apolloHits[0]?.rel_path).toBe("daily.md");
+
+      // SBS-D2 — the same meta-line device, for the words a compound identifier
+      // is spelled from. The tokenizer splits on `_` but never on case, so the
+      // snake_case name was already reachable by its parts and the camelCase one
+      // was not, though both name the same thing.
+      idx.reindexFile("camel.md", 1000, "Aggregate poolDayData for the window.");
+      idx.reindexFile("snake.md", 1000, "Aggregate liquidity_pool_day for the window.");
+
+      // POSITIVE control: the whole identifier is still findable as written.
+      expect(idx.search("poolDayData").map((hit) => hit.rel_path)).toEqual(["camel.md"]);
+      // POSITIVE control: the snake_case twin still splits, as it always did.
+      expect(idx.search("pool day").map((hit) => hit.rel_path)).toContain("snake.md");
+      // The change: the camelCase note is now reachable by its words too.
+      expect(idx.search("pool day data").map((hit) => hit.rel_path)).toContain("camel.md");
+
+      // NEGATIVE control: ordinary prose has no case boundary to split, so no
+      // synthetic parts are invented for it — the meta-line adds identifier
+      // recall, not a second copy of the body.
+      idx.reindexFile("prose.md", 1000, "Aggregate the window carefully.\n");
+      expect(idx.search("identifier_parts").map((hit) => hit.rel_path)).not.toContain("prose.md");
     } finally {
       await idx.closeAndRelease();
     }

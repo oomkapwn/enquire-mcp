@@ -93,6 +93,13 @@ const MAX_FTS_LINK_OCCURRENCES = 4096;
 const MAX_FTS_LINK_TARGETS = 256;
 const MAX_FTS_LINK_TARGET_BYTES = 1024;
 const MAX_FTS_LINK_BYTES = 32 * 1024;
+// Identifier parts are bounded like every other synthetic metadata blob: a
+// generated file full of compound names must not be able to grow one chunk's
+// indexed text without limit.
+const MAX_FTS_IDENTIFIER_OCCURRENCES = 8192;
+const MAX_FTS_IDENTIFIER_PARTS = 512;
+const MAX_FTS_IDENTIFIER_PART_BYTES = 64;
+const MAX_FTS_IDENTIFIER_BYTES = 16 * 1024;
 const MAX_FTS_TAG_OCCURRENCES = 1024;
 const MAX_FTS_TAGS = 128;
 const MAX_FTS_TAG_BYTES = 256;
@@ -163,6 +170,50 @@ export function extractAliases(frontmatter: Record<string, unknown> | undefined 
  * stripped (the note's canonical Obsidian identity). Populates the weighted
  * FTS5 `title` column. (v3.11.6-rc.6.)
  */
+/**
+ * Split the compound identifiers in `text` into the words they are spelled from.
+ *
+ * The FTS5 tokenizer breaks on underscores but never on case, so
+ * `liquidity_pool_day` is indexed as three findable words while `poolDayData`
+ * stays one opaque token. A reader who asks for "pool day data" reaches the
+ * first note and not the second, even though both name the same thing — and the
+ * words are right there in the identifier.
+ *
+ * Only compound spellings are split. An ordinary lowercase word has no internal
+ * boundary to find, so nothing is emitted for it: the output is additional
+ * recall for identifiers, not a second copy of the prose.
+ *
+ * Parts shorter than two characters are dropped — a lone `s` or `x` from a name
+ * like `xPos` is noise in an inverted index, and matching it would surface every
+ * note containing any such fragment.
+ *
+ * @param text - Note text to scan.
+ * @returns Deduplicated lowercase parts, in first-seen order.
+ * @example
+ * ```ts
+ * splitIdentifierTokens("poolDayData and volumeUSD");
+ * // ["pool", "day", "data", "volume", "usd"]
+ * ```
+ */
+export function splitIdentifierTokens(text: string): string[] {
+  const seen = new Set<string>();
+  const parts: string[] = [];
+  // Only CASE boundaries are worth emitting. The tokenizer already splits on
+  // `_`, `-` and `.`, so a snake_case or dotted name is findable by its parts
+  // without help; repeating them here would add nothing but IDF noise.
+  for (const match of text.matchAll(/[\p{L}\p{N}]+/gu)) {
+    const segments = match[0].split(/(?<=\p{Ll})(?=\p{Lu})/gu);
+    if (segments.length < 2) continue;
+    for (const segment of segments) {
+      const part = segment.toLowerCase();
+      if (part.length < 2 || seen.has(part)) continue;
+      seen.add(part);
+      parts.push(part);
+    }
+  }
+  return parts;
+}
+
 export function deriveFtsTitle(relPath: string): string {
   const title = path.basename(relPath).replace(/\.md$/i, "");
   return title.length > MAX_FTS_TITLE_LEN ? title.slice(0, MAX_FTS_TITLE_LEN) : title;
@@ -179,6 +230,13 @@ export function deriveFtsTitle(relPath: string): string {
 // title/alias match outranks a body-only mention. title/aliases are stored
 // ONLY on chunk 0 of each note (not every chunk) to avoid one note's
 // title-match flooding the BM25 candidate set. Schema bump auto-rebuilds.
+// v7 (SBS-D2) enriches `content` on chunk 0 with an `[identifier_parts: …]`
+// meta-line: the words a compound identifier is spelled from. The tokenizer
+// splits on `_`/`-`/`.` but never on case, so `poolDayData` was one opaque
+// token no reader could reach by the words it is made of. The schema SHAPE is
+// unchanged — only the indexed text is richer — but the bump is still required,
+// because an index built before it silently lacks the recall and would answer
+// differently from a fresh one. Schema bump auto-rebuilds.
 // v6 (v3.12.0-rc.18) added the INDEXED `scope_tokens` column (col 3).
 // Collision-free encoded path tokens let FTS5 prune replacement
 // deletes and folder-scoped searches inside its inverted index instead of
@@ -2302,6 +2360,13 @@ export class FtsIndex {
       maxItemBytes: MAX_FTS_LINK_TARGET_BYTES,
       maxTotalBytes: MAX_FTS_LINK_BYTES
     });
+    const admittedIdentifierParts = admitFtsMetadata(splitIdentifierTokens(content), {
+      label: "identifierParts",
+      maxOccurrences: MAX_FTS_IDENTIFIER_OCCURRENCES,
+      maxUnique: MAX_FTS_IDENTIFIER_PARTS,
+      maxItemBytes: MAX_FTS_IDENTIFIER_PART_BYTES,
+      maxTotalBytes: MAX_FTS_IDENTIFIER_BYTES
+    });
     const admittedTags = admitFtsMetadata(tags, {
       label: "tags",
       maxOccurrences: MAX_FTS_TAG_OCCURRENCES,
@@ -2338,7 +2403,17 @@ export class FtsIndex {
         const breadcrumbPrefix = c.breadcrumb ? `[section: ${c.breadcrumb}]\n` : "";
         const linksSuffix =
           i === 0 && admittedLinkTargets.length ? `\n[wikilink_targets: ${admittedLinkTargets.join(", ")}]` : "";
-        const enriched = `${breadcrumbPrefix}${c.text}${linksSuffix}`;
+        // v7 — the words a compound identifier is spelled from, on chunk 0 only,
+        // for the same reason the title lives there: one note's identifiers must
+        // not score all of its chunks and crowd other notes out of the candidate
+        // set. They ride in `content` at weight 1 rather than in a column of
+        // their own, so an identifier-part match is ordinary body-strength
+        // evidence — weaker than a title match, which is what it is.
+        const identifierSuffix =
+          i === 0 && admittedIdentifierParts.length
+            ? `\n[identifier_parts: ${admittedIdentifierParts.join(", ")}]`
+            : "";
+        const enriched = `${breadcrumbPrefix}${c.text}${linksSuffix}${identifierSuffix}`;
         // v3.11.6-rc.6 re-sweep fix: store title/aliases ONLY on chunk 0, not
         // every chunk. Repeating them per-chunk made a title/alias-matching query
         // score ALL of a note's chunks high (10×/5× weight) — a single large note

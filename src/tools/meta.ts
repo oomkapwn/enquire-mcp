@@ -759,6 +759,14 @@ export const MAX_QUESTION_PATTERN_LEN = 200;
  *   residual the rc.36 re-sweep surfaced).
  */
 export const MAX_QUESTION_SCAN_MS = 5000;
+/**
+ * v4 CL-B1a — hard ceiling on WORKER STARTUP, kept separate from the matching
+ * budget. Spawning a thread is not matching, and charging it to the ReDoS
+ * budget rejected legitimate patterns on large vaults purely from per-batch
+ * process overhead. A worker that never reaches `online` is an infrastructure
+ * failure, not catastrophic backtracking, and says so.
+ */
+export const MAX_QUESTION_WORKER_SPAWN_MS = 10_000;
 
 /**
  * Closed resource envelope for one {@link getOpenQuestions} execution.
@@ -830,7 +838,12 @@ export interface OpenQuestionExecutionOptions {
   /** Optional limits; every supplied value must be no larger than production. */
   limits?: Partial<OpenQuestionAdmissionLimits>;
   /** Optional batch matcher used by bounded unit tests. */
-  matchBatch?: (pattern: string, lines: readonly string[], budgetMs: number) => Promise<{ idx: number; q: string }[]>;
+  matchBatch?: (
+    pattern: string,
+    lines: readonly string[],
+    budgetMs: number,
+    onMatchingMs?: (ms: number) => void
+  ) => Promise<{ idx: number; q: string }[]>;
 }
 
 /**
@@ -1582,12 +1595,21 @@ export function isCatastrophicRegex(src: string): boolean {
  * server — it's rejected fail-closed when the budget elapses. An invalid pattern rejects
  * with a clear error. This is the HARD ReDoS sink-bound; the static guard is a cheap
  * pre-filter in front of it.
+ *
+ * `budgetMs` bounds MATCHING ONLY. The clock starts when the worker reaches
+ * `online`, and worker startup is bounded separately by
+ * {@link MAX_QUESTION_WORKER_SPAWN_MS} with its own distinct error — a hang and
+ * a slow pattern are different failures and must not be reported as one.
+ * `onMatchingMs`, when supplied, receives the worker's OWN measured matching
+ * duration so a caller accumulating a cross-batch budget charges matching
+ * rather than thread overhead (v4 CL-B1a).
  * @internal v3.10.0-rc.39 — closes the static-detector residual the rc.36 re-sweep found.
  */
 export function matchLinesBounded(
   pattern: string,
   lines: readonly string[],
-  budgetMs: number
+  budgetMs: number,
+  onMatchingMs?: (ms: number) => void
 ): Promise<{ idx: number; q: string }[]> {
   if (typeof pattern !== "string") throw new TypeError("pattern must be a string");
   if (!Array.isArray(lines) || lines.some((line) => typeof line !== "string")) {
@@ -1600,35 +1622,62 @@ export function matchLinesBounded(
     const worker = new Worker(
       "const{parentPort,workerData}=require('node:worker_threads');" +
         "try{const re=new RegExp(workerData.pattern,'i');const L=workerData.lines;const out=[];" +
+        "const t0=Date.now();" +
         "for(let i=0;i<L.length;i++){const m=re.exec(L[i]);if(m&&m[1]!=null)out.push({idx:i,q:m[1]});}" +
-        "parentPort.postMessage({ok:true,out});}catch(e){parentPort.postMessage({ok:false,err:String((e&&e.message)||e)});}",
+        "parentPort.postMessage({ok:true,out,ms:Date.now()-t0});}" +
+        "catch(e){parentPort.postMessage({ok:false,err:String((e&&e.message)||e)});}",
       { eval: true, workerData: { pattern, lines } }
     );
     let settled = false;
+    let matchingTimer: ReturnType<typeof setTimeout> | undefined;
     const settle = (fn: () => void) => {
       if (settled) return;
       settled = true;
-      clearTimeout(timer);
+      clearTimeout(spawnTimer);
+      if (matchingTimer !== undefined) clearTimeout(matchingTimer);
       // Join termination before resolving/rejecting so sequential batches apply
       // real worker backpressure instead of briefly overlapping worker teardown.
       void worker.terminate().then(fn, fn);
     };
-    const timer = setTimeout(
+    // Startup and matching are bounded SEPARATELY. A worker that never reaches
+    // `online` has hung, which is not catastrophic backtracking; reporting it as
+    // ReDoS would send the next reader hunting a pattern bug that does not exist.
+    const spawnTimer = setTimeout(
       () =>
         settle(() =>
           reject(
             new Error(
-              `obsidian_open_questions: pattern rejected — matching exceeded the ${budgetMs}ms safe budget ` +
-                "(likely catastrophic backtracking / ReDoS). Simplify the pattern or omit it to use the safe default."
+              `obsidian_open_questions: regex worker did not start within ${MAX_QUESTION_WORKER_SPAWN_MS}ms ` +
+                "(worker-thread startup failure, NOT a pattern problem)."
             )
           )
         ),
-      budgetMs
+      MAX_QUESTION_WORKER_SPAWN_MS
     );
-    worker.on("message", (msg: { ok: boolean; out?: { idx: number; q: string }[]; err?: string }) =>
+    worker.on("online", () => {
+      if (settled) return;
+      clearTimeout(spawnTimer);
+      matchingTimer = setTimeout(
+        () =>
+          settle(() =>
+            reject(
+              new Error(
+                `obsidian_open_questions: pattern rejected — matching exceeded the ${budgetMs}ms safe budget ` +
+                  "(likely catastrophic backtracking / ReDoS). Simplify the pattern or omit it to use the safe default."
+              )
+            )
+          ),
+        budgetMs
+      );
+    });
+    worker.on("message", (msg: { ok: boolean; out?: { idx: number; q: string }[]; err?: string; ms?: number }) =>
       settle(() => {
-        if (msg.ok) resolve(msg.out ?? []);
-        else reject(new Error(`obsidian_open_questions: invalid pattern — ${msg.err ?? "could not compile"}`));
+        if (msg.ok) {
+          if (onMatchingMs !== undefined && Number.isFinite(msg.ms)) onMatchingMs(Math.max(0, msg.ms ?? 0));
+          resolve(msg.out ?? []);
+        } else {
+          reject(new Error(`obsidian_open_questions: invalid pattern — ${msg.err ?? "could not compile"}`));
+        }
       })
     );
     worker.on("error", (e) => settle(() => reject(e instanceof Error ? e : new Error(String(e)))));
@@ -1950,6 +1999,14 @@ export async function getOpenQuestions(
   // Remaining matching budget is charged only around matchBatch. Starting a
   // wall-clock deadline before the uncached walk would reject a legitimate
   // pattern as ReDoS after a slow note read.
+  //
+  // v4 CL-B1a — and only the MATCHING half of matchBatch is charged. Each batch
+  // spawns and joins a worker thread; billing that fixed overhead to a ReDoS
+  // budget meant a large vault could exhaust the budget without any pattern
+  // being slow, rejecting a legitimate pattern with a "catastrophic
+  // backtracking" message that named the wrong cause. The worker reports its
+  // own matching time; wall time is only the fallback when a caller-injected
+  // matcher does not report one.
   let matchingRemainingMs = args.pattern === undefined ? 0 : scanBudgetMs;
   const heap: RankedOpenQuestion[] = [];
   let retainedResultBytes = 0;
@@ -1993,8 +2050,16 @@ export async function getOpenQuestions(
     if (matchingRemainingMs < 1) throw matchingTimeout();
     const batchLines = batch.map((candidate) => candidate.text);
     const matchingStartedMs = Date.now();
-    const rawMatches = await matchBatch(args.pattern, batchLines, Math.min(scanBudgetMs, matchingRemainingMs));
-    matchingRemainingMs -= Date.now() - matchingStartedMs;
+    let reportedMatchingMs: number | undefined;
+    const rawMatches = await matchBatch(
+      args.pattern,
+      batchLines,
+      Math.min(scanBudgetMs, matchingRemainingMs),
+      (ms) => {
+        reportedMatchingMs = ms;
+      }
+    );
+    matchingRemainingMs -= reportedMatchingMs ?? Date.now() - matchingStartedMs;
     for (const match of validateOpenQuestionMatches(rawMatches, batch.length)) {
       const candidate = batch[match.idx];
       if (!candidate) throw new Error("obsidian_open_questions: regex worker returned an invalid match index");

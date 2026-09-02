@@ -1714,6 +1714,11 @@ describe("FtsIndex — full lifecycle", () => {
 
   it("clears the index when tokenize mode changes (rebuild required)", async () => {
     if (!canRunFts5) return;
+    // Built by joining rather than by rewriting `dbFile`: a raw `.replace` here
+    // would be an unclassified transform in a file whose every such call is
+    // reviewed, and the path is clearer stated than derived.
+    const ruUnicodeFile = path.join(dbDir, "ru-unicode.fts5.db");
+    const ruTrigramFile = path.join(dbDir, "ru-trigram.fts5.db");
     // Positive sibling for the malformed-shadow control above: canonical
     // engine-owned shadow SQL/xinfo remains eligible for a config rebuild.
     const idx1 = new FtsIndex({ file: dbFile, vaultRoot: "/tmp/v", tokenize: "unicode61" });
@@ -1726,6 +1731,45 @@ describe("FtsIndex — full lifecycle", () => {
     await idx2.open();
     expect(idx2.totalFiles()).toBe(0);
     await idx2.closeAndRelease();
+
+    // ── SBS-R2: what the two tokenizers actually do for an inflected language ──
+    // Russian inflects the ending, so a question and a note rarely spell a word
+    // the same way. Measuring this matters because "switch to trigram for
+    // Russian" is the obvious move, and the measurement says something more
+    // specific than that.
+    const ruUnicode = new FtsIndex({ file: ruUnicodeFile, vaultRoot: "/tmp/ru", tokenize: "unicode61" });
+    const ruTrigram = new FtsIndex({ file: ruTrigramFile, vaultRoot: "/tmp/ru", tokenize: "trigram" });
+    await ruUnicode.open();
+    await ruTrigram.open();
+    try {
+      const note = "Сессия сканирования завершена.";
+      ruUnicode.reindexFile("ru.md", 1000, note);
+      ruTrigram.reindexFile("ru.md", 1000, note);
+
+      // POSITIVE control: both modes index the text and find its exact wording.
+      expect(ruUnicode.search("сканирования").length).toBe(1);
+      expect(ruTrigram.search("сканирования").length).toBe(1);
+
+      // NEGATIVE control: neither invents a match for an absent word.
+      expect(ruUnicode.search("развёртывание")).toEqual([]);
+      expect(ruTrigram.search("развёртывание")).toEqual([]);
+
+      // The finding. `unicode61` compares whole tokens, so a different ending is
+      // a different word and the note is unreachable. `trigram` matches
+      // substrings, so the shared STEM reaches it.
+      expect(ruUnicode.search("сканирован")).toEqual([]);
+      expect(ruTrigram.search("сканирован").length).toBe(1);
+
+      // And the limit of that answer: trigram is substring matching, not
+      // morphology. A different full form is not a substring of the indexed one,
+      // so trigram misses it too — switching tokenizer alone does not make an
+      // inflected query find an inflected note.
+      expect(ruUnicode.search("сканирование")).toEqual([]);
+      expect(ruTrigram.search("сканирование")).toEqual([]);
+    } finally {
+      await ruUnicode.closeAndRelease();
+      await ruTrigram.closeAndRelease();
+    }
   });
 
   it("appends a wikilink_targets meta-line so out-link recall hits", async () => {

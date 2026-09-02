@@ -308,7 +308,7 @@ const EXPECTED_REPOSITORY_MUTATION_HELPER_CALL_ENTRIES = [
     "fts-persistence-coordination.test.ts",
     { count: 1, sha256: "713c5e208f8b73dbe4423916973e77f95b6de5ecdf50ddf6ddd4d3778925c71d" }
   ],
-  ["fts5.test.ts", { count: 5, sha256: "be662228a553da37b716611c7cc83e4a9d05b3532c77db61397e2d8db6ead21f" }],
+  ["fts5.test.ts", { count: 5, sha256: "cc930d4753085be3b1f7b08189f6eceaaf24701247158334cbe20d53c1edbe9b" }],
   ["http-transport.test.ts", { count: 1, sha256: "4a199f3e843d763b7dcd9c1ea40088b3d91ca045b7c7ef6b44cec38fda3cbe5c" }],
   [
     "hnsw-sync-critical-section.test.ts",
@@ -1013,8 +1013,8 @@ const EXPECTED_REVIEWED_ORDINARY_OWNER_SHA256_ENTRIES = [
     "f6ba8edabb8d41b9fbc08254ada72afc4de06a322da94f97a9cb9986e010501e"
   ],
   ["embedding index extension mapping", "9b30b5965abe1f6de24f5b0de8392a92859489f735556e39c5f83bac285d87d1"],
-  ["FTS route slug normalization", "4c85c74d066bfaf4b0177ad8da61b867bc62ae819b9e5b98becb13d8fbf80028"],
-  ["FTS shadow schema fixture extension", "4126dfbeab9070f30db8b4c1ff125d53bd417558b83755adff0511b63c4a4242"],
+  ["FTS route slug normalization", "c0dbf81c1721fcca167ef89d58fbbacc2bd748eb461f970ede635f23445c4c92"],
+  ["FTS shadow schema fixture extension", "ea6460f219e5f51def5327e29b0e7a59c7034db48d7d980f7db452d5088305dd"],
   [
     "watcher existence-guard whitespace normalization",
     "2e02b86949da126f4b7df90da07e0f01b4a1f40628ae8223f6e401ee10d7af24"

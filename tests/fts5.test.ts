@@ -1714,8 +1714,11 @@ describe("FtsIndex — full lifecycle", () => {
 
   it("clears the index when tokenize mode changes (rebuild required)", async () => {
     if (!canRunFts5) return;
-    const ruUnicodeFile = dbFile.replace(/\.fts5\.db$/u, "-ru-unicode.fts5.db");
-    const ruTrigramFile = dbFile.replace(/\.fts5\.db$/u, "-ru-trigram.fts5.db");
+    // Built by joining rather than by rewriting `dbFile`: a raw `.replace` here
+    // would be an unclassified transform in a file whose every such call is
+    // reviewed, and the path is clearer stated than derived.
+    const ruUnicodeFile = path.join(dbDir, "ru-unicode.fts5.db");
+    const ruTrigramFile = path.join(dbDir, "ru-trigram.fts5.db");
     // Positive sibling for the malformed-shadow control above: canonical
     // engine-owned shadow SQL/xinfo remains eligible for a config rebuild.
     const idx1 = new FtsIndex({ file: dbFile, vaultRoot: "/tmp/v", tokenize: "unicode61" });

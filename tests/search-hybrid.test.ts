@@ -20,7 +20,8 @@ import {
   frontmatterMatches,
   MAX_FANOUT_QUERIES,
   pruneExcludedHits,
-  searchHybridMulti
+  searchHybridMulti,
+  semanticSearch
 } from "../src/tools/search.js";
 import { Vault } from "../src/vault.js";
 import {
@@ -665,6 +666,66 @@ describe("searchHybrid — BM25 + TF-IDF fusion path", () => {
     expect(result.matches.length).toBeGreaterThan(0);
     // Top hit must be from Auth/, not Cooking/.
     expect(result.matches[0]?.path.startsWith("Auth/")).toBe(true);
+
+    // ── SBS-R0 characterization: why a multi-word question can return nothing ──
+    // These phases PIN today's behavior so a later recall fix has something to
+    // move. They build their own vaults so the shared fixture above — whose
+    // rankings other tests assert — is untouched.
+    const probeRoot = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-sbs-r0-"));
+    const probeVault = new Vault(probeRoot);
+    await probeVault.ensureExists();
+    await fs.writeFile(path.join(probeRoot, "One.md"), "The carbonara is finished.\n");
+    await fs.writeFile(path.join(probeRoot, "Two.md"), "The sourdough is proofing.\n");
+    await fs.writeFile(path.join(probeRoot, "Three.md"), "The issuer signs it.\n");
+    // A camelCase identifier and its snake_case twin, to separate tokenizer
+    // behavior from ranking behavior.
+    await fs.writeFile(path.join(probeRoot, "Camel.md"), "Aggregate poolDayData for the window.\n");
+    await fs.writeFile(path.join(probeRoot, "Snake.md"), "Aggregate liquidity_pool_day for the window.\n");
+    const probeIdx = new FtsIndex({ file: defaultIndexFile(probeRoot), vaultRoot: probeRoot });
+    await probeIdx.open();
+    try {
+      for (const entry of await probeVault.listMarkdown()) {
+        const note = await probeVault.readNote(entry.absPath, entry.mtimeMs);
+        probeIdx.reindexFile(entry.relPath, entry.mtimeMs, note.content, [], note.parsed.tags);
+      }
+
+      // Phase A — FTS5 joins terms with an implicit AND, and a chunk is the unit
+      // that has to satisfy it. Three words that each exist in the vault, but
+      // never together in one note, match nothing.
+      // POSITIVE control: each word alone is indexed and findable.
+      for (const word of ["carbonara", "sourdough", "issuer"]) {
+        expect(probeIdx.search(word, { limit: 10 }).length).toBeGreaterThan(0);
+      }
+      // NEGATIVE control: the probe does not report matches that do not exist.
+      expect(probeIdx.search("zzzabsentzzz", { limit: 10 })).toEqual([]);
+      // Characterization: the conjunction of three present words is empty.
+      expect(probeIdx.search("carbonara sourdough issuer", { limit: 10 })).toEqual([]);
+
+      // Phase B — TF-IDF has no such conjunction rule, so the same question is
+      // answerable by the signal that runs unconditionally beside BM25. This is
+      // the asymmetry a recall fix can exploit; whether the default 0.05 cosine
+      // floor then hides these hits on long documents is a separate measurement.
+      const unfloored = await semanticSearch(probeVault, {
+        query: "carbonara sourdough issuer",
+        min_score: 0,
+        limit: 10
+      });
+      expect(unfloored.matches.length).toBeGreaterThan(0);
+
+      // Phase C — the tokenizer splits on underscores but never on case, so a
+      // camelCase identifier stays one opaque token and cannot be reached by
+      // the words it is spelled from.
+      // POSITIVE control: the whole token IS indexed and findable.
+      expect(probeIdx.search("pooldaydata", { limit: 10 }).map((hit) => hit.rel_path)).toEqual(["Camel.md"]);
+      // POSITIVE control: the snake_case twin DOES split into its parts.
+      expect(probeIdx.search("pool day", { limit: 10 }).map((hit) => hit.rel_path)).toEqual(["Snake.md"]);
+      // Characterization: spelling the camelCase identifier as words finds
+      // only the snake_case note — never the camelCase one.
+      expect(probeIdx.search("pool day data", { limit: 10 }).map((hit) => hit.rel_path)).not.toContain("Camel.md");
+    } finally {
+      await probeIdx.closeAndRelease();
+      await fs.rm(probeRoot, { recursive: true, force: true });
+    }
   });
 
   it("hits ranked in BOTH signals score higher than single-signal hits (fusion working)", async () => {

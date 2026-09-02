@@ -32,9 +32,6 @@
     },
     {
       "id": "script.mcpb-consumer"
-    },
-    {
-      "id": "script.protocol-conformance"
     }
   ],
   "sourceChanges": [
@@ -102,6 +99,17 @@
       "witness": {
         "from": "sha256:0fe9ff724a126501f65788b3f729f5fb943a215c7650091350e601bc58be299f",
         "to": "sha256:38c08b2792b482b3d5546c1a8d809865df2a2b1ebd67e48eed5e0abaee01ec85"
+      }
+    },
+    {
+      "id": "script.protocol-conformance",
+      "allowedChanges": [
+        "/contentSha256"
+      ],
+      "reason": "reviewed source bytes changed while catalogue identity stayed fixed",
+      "witness": {
+        "from": "sha256:f33f3e4013e6d985c624b9190ede92f62245a37a84f56e27cc96c9e46e3863ae",
+        "to": "sha256:0a1797a7bb72e1b04558db1493fc804ae374bb14fcf67341d6cc817c2495912e"
       }
     },
     {

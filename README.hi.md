@@ -99,7 +99,7 @@ enquire-mcp serve --vault ~/Documents/Obsidian\ Vault
 
 ### समीक्षा योग्य डेस्कटॉप बंडल चाहिए? MCPB Basic
 
-[GitHub Release `v4.0.0-rc.7`](https://github.com/oomkapwn/enquire-mcp/releases/tag/v4.0.0-rc.7) में `enquire-mcp-basic-4.0.0-rc.7.mcpb` उसके checksum, inventory, SBOM, notices और provenance के साथ उपलब्ध है। बंडल में server JavaScript और सामान्य dependencies हैं; संगत MCPB host को Node.js 22.13 या नया संस्करण देना होगा।
+[GitHub Release `v4.0.0-rc.7`](https://github.com/oomkapwn/enquire-mcp/releases/tag/v4.0.0-rc.3) में `enquire-mcp-basic-4.0.0-rc.3.mcpb` उसके checksum, inventory, SBOM, notices और provenance के साथ उपलब्ध है। बंडल में server JavaScript और सामान्य dependencies हैं; संगत MCPB host को Node.js 22.13 या नया संस्करण देना होगा।
 
 Basic में ठीक **13 read-only tools** और **0 prompts** हैं: कोई write, persistent index, model, PDF/OCR या watcher नहीं। वास्तविक desktop GUI, signing, directory approval और catalog की maintainer validation अभी बाकी है। serve करते समय enquire कोई outbound call शुरू नहीं करता, लेकिन मांगा गया note text जुड़े MCP client तक जाता है और उसकी privacy terms के अधीन होता है।
 
@@ -108,7 +108,7 @@ Basic में ठीक **13 read-only tools** और **0 prompts** हैं:
 **पूरी हाइब्रिड शक्ति चाहिए?** हाइब्रिड प्रीफ़्लाइट पूरा करें, फिर सर्व करें:
 
 ```bash
-npm install -g @oomkapwn/enquire-mcp@4.0.0-rc.7      # exact prerelease package
+npm install -g @oomkapwn/enquire-mcp@4.0.0-rc.3      # exact prerelease package
 enquire-mcp --version
 # recommended: preview first, then explicitly apply the same package-coherent plan
 enquire-mcp first-run --tier hybrid --client claude-desktop --vault <path>

@@ -1,0 +1,5 @@
+{
+  "version": "4.0.0-rc.3",
+  "tag": "v4.0.0-rc.3",
+  "note": "The newest version that actually exists as a published npm release AND a GitHub Release. Public acquisition strings in README*/QUICKSTART are pinned to THIS, not to package.json version, because the tracked version is routinely ahead of anything a user can install. Update it only when a publication actually succeeds."
+}

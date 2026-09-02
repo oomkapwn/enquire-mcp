@@ -102,7 +102,7 @@ enquire-mcp serve --vault ~/Documents/Obsidian\ Vault
 
 ### Нужен проверяемый desktop-бандл? MCPB Basic
 
-В [GitHub Release `v4.0.0-rc.7`](https://github.com/oomkapwn/enquire-mcp/releases/tag/v4.0.0-rc.7) доступен `enquire-mcp-basic-4.0.0-rc.7.mcpb` вместе с checksum, инвентарём, SBOM, notices и provenance. Бандл включает JavaScript-код сервера и обычные зависимости; совместимый MCPB-хост должен предоставить Node.js 22.13 или новее.
+В [GitHub Release `v4.0.0-rc.7`](https://github.com/oomkapwn/enquire-mcp/releases/tag/v4.0.0-rc.3) доступен `enquire-mcp-basic-4.0.0-rc.3.mcpb` вместе с checksum, инвентарём, SBOM, notices и provenance. Бандл включает JavaScript-код сервера и обычные зависимости; совместимый MCPB-хост должен предоставить Node.js 22.13 или новее.
 
 Basic фиксирован на **13 инструментах только для чтения** и **0 промптах**: без записи, persistent-индексов, моделей, PDF/OCR и watcher. Реальный desktop GUI, подпись, выбор директории и допуск в каталог ещё требуют проверки владельцем. enquire не делает исходящих вызовов при работе, но запрошенный текст заметок передаётся подключённому MCP-клиенту и далее регулируется его условиями приватности.
 
@@ -111,7 +111,7 @@ Basic фиксирован на **13 инструментах только дл�
 **Нужна вся мощь гибридного поиска?** Выполните гибридный preflight, затем запускайте сервер:
 
 ```bash
-npm install -g @oomkapwn/enquire-mcp@4.0.0-rc.7      # exact prerelease package
+npm install -g @oomkapwn/enquire-mcp@4.0.0-rc.3      # exact prerelease package
 enquire-mcp --version
 # recommended: preview first, then explicitly apply the same package-coherent plan
 enquire-mcp first-run --tier hybrid --client claude-desktop --vault <path>

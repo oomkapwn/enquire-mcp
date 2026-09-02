@@ -3492,17 +3492,70 @@ export type NegativeMissingSubpath = typeof import("@oomkapwn/enquire-mcp/fts5-m
       if (!markdown.includes(`enquire-mcp-basic-${version}.mcpb`)) problems.push("asset filename drift");
       return problems;
     };
-    expect(mcpbVersionProblems(readme, packageVersion)).toEqual([]);
-    expect(mcpbVersionProblems(quickstart, packageVersion)).toEqual([]);
-    // rc.7 extra-phase: acquisition docs must not advertise any of the three
-    // tagged-but-unpublished predecessors. The existing arity-6 NEGATIVE
-    // below still binds the live package.json version.
-    expect(readme).not.toContain("/releases/tag/v4.0.0-rc.4");
-    expect(quickstart).not.toContain("/releases/tag/v4.0.0-rc.4");
-    expect(readme).not.toContain("/releases/tag/v4.0.0-rc.5");
-    expect(quickstart).not.toContain("/releases/tag/v4.0.0-rc.5");
-    expect(readme).not.toContain("/releases/tag/v4.0.0-rc.6");
-    expect(quickstart).not.toContain("/releases/tag/v4.0.0-rc.6");
+    // Acquisition strings are pinned to the PUBLISHED artifact, never to the
+    // tracked version. `package.json.version` is routinely ahead of anything a
+    // user can install — it was `4.0.0-rc.7` while the newest real release was
+    // `4.0.0-rc.3` — so pinning the docs to it made this gate REQUIRE a
+    // `/releases/tag/v4.0.0-rc.7` link that 404s and an
+    // `npm install @4.0.0-rc.7` that returns ETARGET. The gate was green
+    // *because* the front door was broken. `.github/published-acquisition.json`
+    // is the single source of truth and moves only when a publication actually
+    // succeeds (BACKLOG §1.CL CL-DOCS).
+    const publishedAcquisition = JSON.parse(await read(".github/published-acquisition.json")) as {
+      version: string;
+      tag: string;
+    };
+    expect(publishedAcquisition.tag).toBe(`v${publishedAcquisition.version}`);
+    expect(mcpbVersionProblems(readme, publishedAcquisition.version)).toEqual([]);
+    expect(mcpbVersionProblems(quickstart, publishedAcquisition.version)).toEqual([]);
+    // Acquisition docs must advertise NOTHING but the published version. This
+    // generalizes the old explicit rc.4/rc.5/rc.6 list: any release-tag link
+    // whose version differs from the published one is drift, including the
+    // tracked version itself while it is unpublished.
+    const advertisedTags = (markdown: string): string[] => [
+      ...new Set(
+        [...markdown.matchAll(/\/releases\/tag\/v(\d+\.\d+\.\d+(?:-[\w.]+)?)/gu)].map((match) => match[1] ?? "")
+      )
+    ];
+    expect(advertisedTags(readme)).toEqual([publishedAcquisition.version]);
+    expect(advertisedTags(quickstart)).toEqual([publishedAcquisition.version]);
+    // Same rule for the MCPB asset filename. STABILITY.md carries the asset name
+    // without a release-tag link, which is exactly how its `4.0.0-rc.7.mcpb`
+    // reference — an asset no release has ever published — survived the old gate.
+    const advertisedAssets = (markdown: string): string[] => [
+      ...new Set(
+        [...markdown.matchAll(/enquire-mcp-basic-(\d+\.\d+\.\d+(?:-[\w.]+)?)\.mcpb/gu)].map((m) => m[1] ?? "")
+      )
+    ];
+    for (const [label, text] of [
+      ["README.md", readme],
+      ["docs/QUICKSTART.md", quickstart],
+      ["STABILITY.md", await read("STABILITY.md")]
+    ] as const) {
+      expect(advertisedAssets(text), `${label} advertises an unpublished MCPB asset`).toEqual([
+        publishedAcquisition.version
+      ]);
+    }
+    // NEGATIVE control uses a sentinel, not `packageVersion`: once a publication
+    // succeeds the two legitimately coincide, and a control keyed to the tracked
+    // version would then fail on a CORRECT state.
+    expect(
+      advertisedAssets("The `enquire-mcp-basic-0.0.0-unpublished.mcpb` asset is the current build")
+    ).not.toEqual([publishedAcquisition.version]);
+    // NEGATIVE control: advertising a second, unpublished version alongside the
+    // published one must fail. That was exactly the shipped state before this
+    // change — README pointed at rc.7 — and the old gate passed it.
+    expect(
+      advertisedTags(`see /releases/tag/v${publishedAcquisition.version} and /releases/tag/v0.0.0-unpublished`)
+    ).not.toEqual([publishedAcquisition.version]);
+    // The live relationship the gate actually defends: while the tracked version
+    // is ahead of the published one, no acquisition surface may name it.
+    if (packageVersion !== publishedAcquisition.version) {
+      for (const text of [readme, quickstart, await read("STABILITY.md")]) {
+        expect(advertisedTags(text)).not.toContain(packageVersion);
+        expect(advertisedAssets(text)).not.toContain(packageVersion);
+      }
+    }
     const hnswSource = await read("src/hnsw.ts");
     const currentHnswFormat = /const HNSW_META_FORMAT_VERSION = (\d+);/u.exec(hnswSource)?.[1];
     expect(currentHnswFormat).toBe("4");
@@ -3528,7 +3581,12 @@ export type NegativeMissingSubpath = typeof import("@oomkapwn/enquire-mcp/fts5-m
     for (const surface of ["STABILITY.md", "SECURITY.md", "docs/api.md", "llms.txt", "llms-ctx.txt"] as const) {
       expect(hnswFormatProblems(await read(surface), currentHnswFormat ?? "missing"), surface).toEqual([]);
     }
-    expect(mcpbVersionProblems(replaceAllExactly(readme, packageVersion, "0.0.0-stale", 6), packageVersion)).toEqual([
+    expect(
+      mcpbVersionProblems(
+        replaceAllExactly(readme, publishedAcquisition.version, "0.0.0-stale", 6),
+        publishedAcquisition.version
+      )
+    ).toEqual([
       "release tag drift",
       "asset filename drift"
     ]);

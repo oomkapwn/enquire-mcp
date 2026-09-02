@@ -34,7 +34,7 @@ import { releaseMutationVersionedTransitionAuditProblems } from "./release-mutat
 
 const repoRoot = path.resolve(__dirname, "..");
 const RELEASE_MUTATION_IDENTITY_FIXTURE_SHA256 = "8205d24e6d42dd4cb8986368611514131abe701434beb30150e33ea08f4b1288";
-const RELEASE_MUTATION_TRANSITION_FIXTURE_SHA256 = "242e24b646ccd36bd6eeee93fdb9caf2f2513e97f97fcd1da5d53c7ccd1a5792";
+const RELEASE_MUTATION_TRANSITION_FIXTURE_SHA256 = "99cc60149f220417a15c71d8b6bb2b8bf3868b91653f4641dc99d8c3fa439f76";
 const releaseMutationIdentityFixturePath = path.join(repoRoot, "tests/fixtures/release-mutation-identity.v2.json");
 const releaseMutationTransitionFixturePath = path.join(repoRoot, "tests/fixtures/release-mutation-transition.v3.json");
 const releaseIntegritySourcePath = path.join(repoRoot, "tests/release-integrity.test.ts");
@@ -322,7 +322,7 @@ const EXPECTED_REPOSITORY_MUTATION_HELPER_CALL_ENTRIES = [
     "k1-class-invariant.test.ts",
     { count: 102, sha256: "07ecdcd22c8c3af935e14623d446bc5c94d5da161b976e89602ebbeb28aafbb5" }
   ],
-  ["jsonld.test.ts", { count: 11, sha256: "ec02eb24004f2c975daa1b3a668451217e2884cec7cf301e33f91f8bce98d05b" }],
+  ["jsonld.test.ts", { count: 11, sha256: "3595b905b156414aca69c02ca6e4ca1968b256095b233348842cdc9dbba749e4" }],
   [
     "meta-invariant-coverage.test.ts",
     { count: 246, sha256: "928e32acc64eb78ce84015a48d8a3356a6de1a0cc0455ee55e07587457a09937" }
@@ -339,7 +339,7 @@ const EXPECTED_REPOSITORY_MUTATION_HELPER_CALL_ENTRIES = [
   ],
   [
     "release-mutation-transition.test.ts",
-    { count: 10, sha256: "45eeace981fdf3839dd86814a71563581c4eb377cfe916c4dab62d2d1a69f628" }
+    { count: 10, sha256: "a183637965651cb2d49ab630f50deef22d54b826420b82908dbcc7cf03bd0211" }
   ],
   [
     "resource-bound-invariant.test.ts",
@@ -359,7 +359,7 @@ const EXPECTED_REPOSITORY_MUTATION_HELPER_CALL_ENTRIES = [
   ],
   [
     "tool-input-admission.test.ts",
-    { count: 1, sha256: "341ceb2e14508a125c2565c64fd389b688c5ba54b1372b16c0fc4cabb30b5512" }
+    { count: 1, sha256: "2e71bb8b1cddaad1f217d2f56689bc1a392f23e07cb1d9653bd464bcdb34b855" }
   ],
   [
     "watcher-startup-order.test.ts",

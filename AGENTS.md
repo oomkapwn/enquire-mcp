@@ -31,7 +31,7 @@ src/
 ├── tool-registry.ts    — tool registration manifest
 ├── tool-manifest.ts    — tool metadata (names, schemas, readOnlyHint)
 ├── prompts.ts          — 19 MCP prompts
-├── tools/              — 46 tool implementations (read, write, search, media, meta)
+├── tools/              — 47 tool implementations (read, write, search, media, meta)
 ├── vault.ts            — Obsidian vault filesystem layer + privacy filter
 ├── fts5.ts             — SQLite FTS5 BM25 index
 ├── embed-db.ts         — embedding storage (int8-quantized BLOBs)

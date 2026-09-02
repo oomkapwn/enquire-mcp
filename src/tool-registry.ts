@@ -53,7 +53,8 @@ import {
   searchText,
   semanticSearch,
   staleNotes,
-  validateNoteProposal
+  validateNoteProposal,
+  vaultShape
 } from "./tools/index.js";
 import type { Vault } from "./vault.js";
 import { runSerializedWrite, type WriteCancellationMode, type WriteRequestTracker } from "./write-lifecycle.js";
@@ -403,6 +404,27 @@ export function registerReadTools(
       })
     },
     async (args) => textResult(await listTags(vault, args))
+  );
+
+  server.registerTool(
+    "obsidian_vault_shape",
+    {
+      title: "Vault shape",
+      description:
+        "List the frontmatter keys that exist in this vault, how many notes carry each, the value shapes observed (string / number / boolean / list / map / null), and short example values. Every other frontmatter tool needs the key as an argument, which only helps someone who already knows the vault — call this first to find out what there is to ask about. Enumeration, not ranking: exhaustive within its scan bounds, and it refuses rather than returning a partial inventory. Honors --exclude-glob / --read-paths. Read-only.",
+      annotations: { ...READ_ONLY, title: "Vault shape" },
+      inputSchema: z.strictObject({
+        folder: z.string().optional().describe("Restrict to a subfolder"),
+        min_count: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe("Drop keys used in fewer than this many notes (default 1)"),
+        limit: z.number().int().positive().max(2000).optional().describe("Max results (default 200)")
+      })
+    },
+    async (args) => textResult(await vaultShape(vault, args))
   );
 
   server.registerTool(

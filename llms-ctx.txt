@@ -53,7 +53,7 @@ For client-neutral prompt-host and direct-tool variants of this loop, use the
 - Evaluate: `eval`, `eval-compare`, retrieval benchmarks, per-signal scores, failure buckets, and machine-readable artifacts.
 - Operate: era-aware stdio and strict modern MCP `2026-07-28` HTTP plus supported legacy HTTP from one v4 registration factory; malformed modern claims never downgrade. Watcher-driven incremental indexing, package-coherent setup, tier-aware doctor, cache pruning, and offline-enforced runtime model loading remain unchanged.
 
-The registered surface is 46 tools (34 always-on read + 4 opt-in + 7 gated writes + 1 feedback) plus 19 MCP prompts. See the [canonical tool catalog](https://github.com/oomkapwn/enquire-mcp/blob/main/docs/api.md) for exact schemas and gates.
+The registered surface is 47 tools (35 always-on read + 4 opt-in + 7 gated writes + 1 feedback) plus 19 MCP prompts. See the [canonical tool catalog](https://github.com/oomkapwn/enquire-mcp/blob/main/docs/api.md) for exact schemas and gates.
 
 ## Retrieval contract
 

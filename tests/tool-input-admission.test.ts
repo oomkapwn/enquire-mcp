@@ -31,12 +31,12 @@ describe("tool input authority admission", () => {
     const extractedStrictCount =
       admissionSource.match(/export const RENAME_NOTE_INPUT_SCHEMA\s*=\s*z\.strictObject\(\{/gu)?.length ?? 0;
     const strictCount = inlineStrictCount + extractedStrictCount;
-    expect(strictCount).toBe(46);
+    expect(strictCount).toBe(47);
     expect(registrySource).toContain("inputSchema: RENAME_NOTE_INPUT_SCHEMA");
     expect(registrySource).not.toMatch(/inputSchema:\s*z\.object\(\{/u);
     expect(admissionSource).not.toMatch(/RENAME_NOTE_INPUT_SCHEMA\s*=\s*z\.object\(\{/u);
 
-    const mutant = replaceExactly(registrySource, "inputSchema: z.strictObject({", "inputSchema: z.object({", 45);
+    const mutant = replaceExactly(registrySource, "inputSchema: z.strictObject({", "inputSchema: z.object({", 46);
     expect(mutant).toMatch(/inputSchema:\s*z\.object\(\{/u);
   });
 

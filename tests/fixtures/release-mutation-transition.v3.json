@@ -32,9 +32,6 @@
     },
     {
       "id": "script.mcpb-consumer"
-    },
-    {
-      "id": "script.protocol-conformance"
     }
   ],
   "sourceChanges": [
@@ -46,7 +43,7 @@
       "reason": "reviewed source bytes changed while catalogue identity stayed fixed",
       "witness": {
         "from": "sha256:5b0eff418ec0c12fb950512904762ca5afc9c71c8c09968325c2c08fddbf94de",
-        "to": "sha256:42396b62c0934c48b3e270a82a8af3ad49c812db944963cb89131f9ea3afc7b2"
+        "to": "sha256:b1b39ba26647111415d6bf0afeced67f2b213f81d090b920c59366592464442a"
       }
     },
     {
@@ -90,7 +87,7 @@
       "reason": "reviewed source bytes changed while catalogue identity stayed fixed",
       "witness": {
         "from": "sha256:21a5263ce68c6bb3055324205f1c514309f93e52d16bf6f971730ad4b170a591",
-        "to": "sha256:5d1852678e63c2b83b6bbbd364724af59b969d318d256ab5ad71056cf388598b"
+        "to": "sha256:0a3d52831c4e879a12d8c0ae498000f3e8a3c3e22eb13f9ba9d2ad9221d88c1b"
       }
     },
     {
@@ -101,7 +98,18 @@
       "reason": "reviewed source bytes changed while catalogue identity stayed fixed",
       "witness": {
         "from": "sha256:0fe9ff724a126501f65788b3f729f5fb943a215c7650091350e601bc58be299f",
-        "to": "sha256:127e93e79ec46bd92e0668c4ef7b154f39a41e2d2be4bf68455634bc85c6a7b2"
+        "to": "sha256:38c08b2792b482b3d5546c1a8d809865df2a2b1ebd67e48eed5e0abaee01ec85"
+      }
+    },
+    {
+      "id": "script.protocol-conformance",
+      "allowedChanges": [
+        "/contentSha256"
+      ],
+      "reason": "reviewed source bytes changed while catalogue identity stayed fixed",
+      "witness": {
+        "from": "sha256:f33f3e4013e6d985c624b9190ede92f62245a37a84f56e27cc96c9e46e3863ae",
+        "to": "sha256:0a1797a7bb72e1b04558db1493fc804ae374bb14fcf67341d6cc817c2495912e"
       }
     },
     {
@@ -189,7 +197,7 @@
       "reason": "reviewed source bytes changed while catalogue identity stayed fixed",
       "witness": {
         "from": "sha256:ccccb48bf5cf1d24ae9c64d4bb8eac7b7ded90fcbb7453dbb72b3dea981e12ea",
-        "to": "sha256:22175f86fc789426071d33180cf3a80a087d43760b985a67c74d2734209c76ce"
+        "to": "sha256:eb6a5f6f5e767bf1f70c6592f5d2b63e09a4b3a32a5c1374506d2edbb1651bb4"
       }
     },
     {

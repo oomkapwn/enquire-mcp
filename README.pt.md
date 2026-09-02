@@ -53,7 +53,7 @@ Seu vault do Obsidian se torna **memória de longo prazo persistente e consultá
 > 3. **Zero chamadas de rede de saída iniciadas pelo enquire durante `serve`.** Os modelos são armazenados em cache local após um download explícito e único do HuggingFace. O conteúdo só é devolvido ao cliente MCP conectado; o tratamento de dados por esse cliente ou túnel é a sua própria fronteira de confiança.
 > 4. **Recuperação consciente da atualidade.** Cada resultado informa quão antiga é a nota; o reranqueamento por recência opcional permite que um agente prefira conhecimento recente e sinalize fatos desatualizados para reverificação — a fronteira consciente do esquecimento, construída sobre o `mtime` que seus arquivos já têm.
 
-**46 ferramentas · 19 prompts MCP · 2270+ testes unitários · 50+ idiomas · v3.11.x estável · vinculado a semver · MIT · proveniência de build no npm (SLSA L2).**
+**47 ferramentas · 19 prompts MCP · 2270+ testes unitários · 50+ idiomas · v3.11.x estável · vinculado a semver · MIT · proveniência de build no npm (SLSA L2).**
 
 ---
 
@@ -253,9 +253,9 @@ O `obsidian_search` detecta automaticamente os sinais disponíveis e degrada de 
 
 ---
 
-## 🛠️ Todas as 46 ferramentas
+## 🛠️ Todas as 47 ferramentas
 
-46 ferramentas no total: 34 de leitura sempre ativas (incl. a `obsidian_search` guarda-chuva) + 4 de leitura opcionais + 7 escritas restritas + 1 de feedback em ciclo fechado. Referência completa: **[docs/api.md](./docs/api.md)**.
+47 ferramentas no total: 35 de leitura sempre ativas (incl. a `obsidian_search` guarda-chuva) + 4 de leitura opcionais + 7 escritas restritas + 1 de feedback em ciclo fechado. Referência completa: **[docs/api.md](./docs/api.md)**.
 
 | Categoria | Ferramentas |
 |---|---|

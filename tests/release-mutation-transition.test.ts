@@ -362,8 +362,8 @@ describe("release mutation schema-v3 transition authority", () => {
       "script.npm-artifact"
     ]);
     expect(RELEASE_MUTATION_V3_NEW_SOURCES.some((entry) => historicalSourceIds.has(entry.id))).toBe(false);
-    expect(RELEASE_MUTATION_V3_CHANGED_SOURCES).toHaveLength(16);
-    expect(RELEASE_MUTATION_V3_UNCHANGED_SOURCES).toHaveLength(11);
+    expect(RELEASE_MUTATION_V3_CHANGED_SOURCES).toHaveLength(17);
+    expect(RELEASE_MUTATION_V3_UNCHANGED_SOURCES).toHaveLength(10);
     expect(
       new Set([
         ...RELEASE_MUTATION_V3_UNCHANGED_SOURCES,

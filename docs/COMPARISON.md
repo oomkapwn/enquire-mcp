@@ -15,7 +15,7 @@ LIST/TABLE queries, and execute supported Obsidian Base filters.
 [Install with one command](../README.md#-quick-start) ·
 [See the retrieval evidence](./benchmarks.md) ·
 [Read the security model](../SECURITY.md) ·
-[Browse all 46 tools](./api.md)
+[Browse all 47 tools](./api.md)
 
 ---
 
@@ -91,7 +91,7 @@ the same outcome?
 | **Per-signal scores + stage-by-stage explanations** | ✅ | ✕ | ✕ | ✕ |
 | **Available-signal fallback + quarantine on uncertain semantic state** | ✅ | ✕ | ✕ | ✕ |
 | **Read-only default + explicit write gate + privacy filters** | ✅ | ✕ | ✕ | ✕ |
-| **46 tools + 19 MCP prompts + semver-bound MCP contract** | ✅ | ✕ | ✕ | ✕ |
+| **47 tools + 19 MCP prompts + semver-bound MCP contract** | ✅ | ✕ | ✕ | ✕ |
 | **2270 tests + 13 release gates + signed npm provenance** | ✅ | ✕ | ✕ | ✕ |
 
 **Legend:** `✅` means the complete row is built in. `✕` means the complete
@@ -154,7 +154,7 @@ These numbers are derived from the current repository and guarded by CI:
 
 | Proof | Current public surface |
 |---|---|
-| Tool count | **46** |
+| Tool count | **47** |
 | MCP prompt count | **19** |
 | Test count (public) | **2270** |
 | Release-required CI gates | **13** |

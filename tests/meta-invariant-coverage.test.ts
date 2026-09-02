@@ -339,7 +339,7 @@ const EXPECTED_REPOSITORY_MUTATION_HELPER_CALL_ENTRIES = [
   ],
   [
     "release-mutation-transition.test.ts",
-    { count: 10, sha256: "45eeace981fdf3839dd86814a71563581c4eb377cfe916c4dab62d2d1a69f628" }
+    { count: 10, sha256: "a183637965651cb2d49ab630f50deef22d54b826420b82908dbcc7cf03bd0211" }
   ],
   [
     "resource-bound-invariant.test.ts",

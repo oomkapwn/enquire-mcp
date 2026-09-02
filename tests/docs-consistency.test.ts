@@ -120,14 +120,22 @@ function baseQueryApiContractProblems(source: string): string[] {
   if (section.length === 0) problems.push("missing obsidian_query_base section");
   if (
     !section.includes(
-      "{ base_path, view: string | null, total_matched: number, truncated: boolean, matches: Array<{ path, title, matched_on: Record<string, unknown> }>, unevaluated_predicates: string[] }"
+      "{ base_path, view: string | null, total_matched: number, total_matched_exact: boolean, skipped_note_count: number, skipped_notes: string[], truncated: boolean, matches: Array<{ path, title, matched_on: Record<string, unknown> }>, unevaluated_predicates: string[] }"
     )
   ) {
     problems.push("stale BaseQueryResult return shape");
   }
   if (section.includes("frontmatter_subset")) problems.push("removed frontmatter_subset field remains");
-  if (!/whole query rejects instead of returning a partial `BaseQueryResult` or `total_matched`/u.test(section)) {
-    problems.push("missing exact-total rejection contract");
+  // CL-B1b: the contract changed shape, not strictness. An incomplete WALK still
+  // rejects; a single unadmittable NOTE is skipped and reported. Both halves are
+  // pinned, because dropping either one is the drift that matters: losing the
+  // walk rejection re-admits a silently partial count, and losing the skip
+  // disclosure re-admits a `total_matched` that lies by omission.
+  if (!/incomplete bounded vault walk still rejects outright/u.test(section)) {
+    problems.push("missing incomplete-walk rejection contract");
+  }
+  if (!/clears `total_matched_exact`, which makes `total_matched` a lower bound/u.test(section)) {
+    problems.push("missing skipped-note inexactness contract");
   }
   return problems;
 }
@@ -1972,8 +1980,17 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
     ).toEqual([
       "stale BaseQueryResult return shape",
       "removed frontmatter_subset field remains",
-      "missing exact-total rejection contract"
+      "missing incomplete-walk rejection contract",
+      "missing skipped-note inexactness contract"
     ]);
+    // NEGATIVE control for the CL-B1b split specifically: a section that keeps
+    // the walk rejection but drops the skipped-note disclosure — i.e. exactly
+    // the pre-CL-B1b prose left behind after a partial edit — must still fail.
+    expect(
+      baseQueryApiContractProblems(
+        "## `obsidian_query_base`\n\nAn incomplete bounded vault walk still rejects outright.\n\n**Returns:** `{ base_path, view: string | null, total_matched: number, total_matched_exact: boolean, skipped_note_count: number, skipped_notes: string[], truncated: boolean, matches: Array<{ path, title, matched_on: Record<string, unknown> }>, unevaluated_predicates: string[] }`.\n\n## `next`"
+      )
+    ).toEqual(["missing skipped-note inexactness contract"]);
     expect(api).toContain("skipped_pdf_candidates: string[]");
     expect(api).toContain("never parsed as Markdown");
     expect(api).toContain("preview it with `dry_run=true`");

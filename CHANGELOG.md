@@ -46,7 +46,7 @@ All notable changes to this project will be documented here. The format follows 
 >
 > **Method note:** Reconciled the exact GitHub state, PR #565 merge boundary, candidate and exact-main checks, open pull requests, tags, Releases, CodeQL, and Pages before editing. The detailed working queue and release/operator constraints remain in the private maintainer handoff rather than being duplicated into public documentation. Under D-45 no local package-manager, build, lint, test, coverage, audit, or benchmark workload was used.
 
-- **One current route replaces contradictory next steps.** Read-only AH-4 sibling verification comes first; only an ALLOW permits one re-triaged product card, while distribution remains explicitly paused.
+- **One current route replaces contradictory next steps.** Read-only AH-4 sibling verification came first and returned ALLOW; the same pass re-audited the rc.7 line and produced one bounded product PR for two integrity regressions it found. Only after that lands does re-triage permit one card, and distribution remains explicitly paused throughout.
 
 ## [4.0.0-rc.6] — 2026-08-30
 

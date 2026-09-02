@@ -2051,14 +2051,9 @@ export async function getOpenQuestions(
     const batchLines = batch.map((candidate) => candidate.text);
     const matchingStartedMs = Date.now();
     let reportedMatchingMs: number | undefined;
-    const rawMatches = await matchBatch(
-      args.pattern,
-      batchLines,
-      Math.min(scanBudgetMs, matchingRemainingMs),
-      (ms) => {
-        reportedMatchingMs = ms;
-      }
-    );
+    const rawMatches = await matchBatch(args.pattern, batchLines, Math.min(scanBudgetMs, matchingRemainingMs), (ms) => {
+      reportedMatchingMs = ms;
+    });
     matchingRemainingMs -= reportedMatchingMs ?? Date.now() - matchingStartedMs;
     for (const match of validateOpenQuestionMatches(rawMatches, batch.length)) {
       const candidate = batch[match.idx];

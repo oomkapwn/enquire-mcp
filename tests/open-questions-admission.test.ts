@@ -131,6 +131,87 @@ describe("getOpenQuestions bounded producer admission", () => {
     } finally {
       read.mockRestore();
     }
+
+    // ── AUD-1: the time that is NOT matching still has an aggregate ceiling ──
+    // Keeping worker startup out of the ReDoS budget was right — it rejected
+    // legitimate patterns on large vaults for a reason that had nothing to do
+    // with the pattern. But it left the request with no aggregate clock at all:
+    // the startup bound is per WORKER, and a vault with many batches multiplies
+    // it. A matcher that burns wall time while reporting no matching time is
+    // exactly that shape.
+    const burnWallReportNoMatching = async (
+      pattern: string,
+      lines: readonly string[],
+      _budgetMs: number,
+      onMatchingMs?: (ms: number) => void
+    ): Promise<{ idx: number; q: string }[]> => {
+      const until = Date.now() + 5;
+      while (Date.now() < until) {
+        /* occupy wall time the way thread startup does */
+      }
+      onMatchingMs?.(0);
+      const regex = new RegExp(pattern, "i");
+      return lines.flatMap((line, idx) => {
+        const match = regex.exec(line);
+        return match?.[1] === undefined ? [] : [{ idx, q: match[1] }];
+      });
+    };
+
+    await expect(
+      getOpenQuestions(
+        vault,
+        { pattern: "^Q: (.+)$", scanBudgetMs: 1000 },
+        {
+          limits: { maxWorkerBatchCandidates: 1, maxWorkerBatchUtf8Bytes: 32, maxWorkerOverheadMs: 1 },
+          matchBatch: burnWallReportNoMatching
+        }
+      )
+    ).rejects.toThrow(/aggregate budget for one request/);
+
+    // The two failures stay distinct. Reporting scan cost as catastrophic
+    // backtracking is what sends the next reader hunting a pattern bug that does
+    // not exist, so the message is asserted, not just the rejection.
+    const scanCostError = await getOpenQuestions(
+      vault,
+      { pattern: "^Q: (.+)$", scanBudgetMs: 1000 },
+      {
+        limits: { maxWorkerBatchCandidates: 1, maxWorkerBatchUtf8Bytes: 32, maxWorkerOverheadMs: 1 },
+        matchBatch: burnWallReportNoMatching
+      }
+    ).catch((error: unknown) => (error instanceof Error ? error.message : String(error)));
+    expect(scanCostError).toContain("scan-cost limit");
+    expect(scanCostError).not.toContain("catastrophic backtracking");
+
+    // NEGATIVE control: a matcher that reports its wall time AS matching charges
+    // the ReDoS budget instead and never touches the overhead ceiling, so the
+    // same tiny overhead budget does not trip.
+    const reportAllAsMatching = async (
+      pattern: string,
+      lines: readonly string[],
+      _budgetMs: number,
+      onMatchingMs?: (ms: number) => void
+    ): Promise<{ idx: number; q: string }[]> => {
+      const started = Date.now();
+      const until = started + 5;
+      while (Date.now() < until) {
+        /* same cost, attributed differently */
+      }
+      onMatchingMs?.(Date.now() - started);
+      const regex = new RegExp(pattern, "i");
+      return lines.flatMap((line, idx) => {
+        const match = regex.exec(line);
+        return match?.[1] === undefined ? [] : [{ idx, q: match[1] }];
+      });
+    };
+    const attributed = await getOpenQuestions(
+      vault,
+      { pattern: "^Q: (.+)$", scanBudgetMs: 1000 },
+      {
+        limits: { maxWorkerBatchCandidates: 1, maxWorkerBatchUtf8Bytes: 32, maxWorkerOverheadMs: 1 },
+        matchBatch: reportAllAsMatching
+      }
+    );
+    expect(attributed.map((question) => question.question)).toEqual(["one", "two", "three", "four", "five"]);
   });
 
   it("rejects an invalid batch result instead of trusting an amplified worker payload", async () => {

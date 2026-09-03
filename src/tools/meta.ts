@@ -802,6 +802,18 @@ export interface OpenQuestionAdmissionLimits {
   maxWorkerBatchUtf8Bytes: number;
   /** Maximum serialized UTF-8 bytes retained in the exact top-K result heap. */
   maxResultUtf8Bytes: number;
+  /**
+   * Maximum aggregate wall time, across the whole request, spent on regex-worker
+   * overhead — thread startup and teardown — as opposed to matching.
+   *
+   * v4 AUD-1. Charging that overhead to the ReDoS budget was wrong (it rejected
+   * legitimate patterns on large vaults for a reason that had nothing to do with
+   * the pattern), but simply not charging it left the request with NO aggregate
+   * ceiling at all: the per-worker startup bound is per worker, and a vault with
+   * many batches multiplies it. This is the aggregate the matching budget stopped
+   * being.
+   */
+  maxWorkerOverheadMs: number;
 }
 
 /**
@@ -824,7 +836,8 @@ export const DEFAULT_OPEN_QUESTION_ADMISSION_LIMITS: Readonly<OpenQuestionAdmiss
   maxCandidateUtf8Bytes: 256 * 1024 * 1024,
   maxWorkerBatchCandidates: 1024,
   maxWorkerBatchUtf8Bytes: 2 * 1024 * 1024,
-  maxResultUtf8Bytes: 8 * 1024 * 1024
+  maxResultUtf8Bytes: 8 * 1024 * 1024,
+  maxWorkerOverheadMs: 30_000
 });
 
 /**
@@ -1734,6 +1747,11 @@ function normalizeOpenQuestionLimits(
       overrides?.maxResultUtf8Bytes,
       d.maxResultUtf8Bytes,
       "maxResultUtf8Bytes"
+    ),
+    maxWorkerOverheadMs: narrowOpenQuestionLimit(
+      overrides?.maxWorkerOverheadMs,
+      d.maxWorkerOverheadMs,
+      "maxWorkerOverheadMs"
     )
   };
 }
@@ -2008,6 +2026,7 @@ export async function getOpenQuestions(
   // own matching time; wall time is only the fallback when a caller-injected
   // matcher does not report one.
   let matchingRemainingMs = args.pattern === undefined ? 0 : scanBudgetMs;
+  let overheadRemainingMs = limits.maxWorkerOverheadMs;
   const heap: RankedOpenQuestion[] = [];
   let retainedResultBytes = 0;
   let sequence = 0;
@@ -2045,6 +2064,13 @@ export async function getOpenQuestions(
         "(likely catastrophic backtracking / ReDoS). Simplify the pattern or omit it to use the safe default."
     );
 
+  const overheadExhausted = (): Error =>
+    new Error(
+      `obsidian_open_questions: scan abandoned — regex-worker startup and teardown exceeded the ` +
+        `${limits.maxWorkerOverheadMs}ms aggregate budget for one request. This is a scan-cost limit, ` +
+        "NOT a pattern problem: narrow the search with `folder`, or omit `pattern` to use the safe default."
+    );
+
   const flushCandidateBatch = async (): Promise<void> => {
     if (batch.length === 0 || args.pattern === undefined) return;
     if (matchingRemainingMs < 1) throw matchingTimeout();
@@ -2054,7 +2080,17 @@ export async function getOpenQuestions(
     const rawMatches = await matchBatch(args.pattern, batchLines, Math.min(scanBudgetMs, matchingRemainingMs), (ms) => {
       reportedMatchingMs = ms;
     });
-    matchingRemainingMs -= reportedMatchingMs ?? Date.now() - matchingStartedMs;
+    const wallMs = Date.now() - matchingStartedMs;
+    matchingRemainingMs -= reportedMatchingMs ?? wallMs;
+    // AUD-1 — the time that was NOT matching still has to be bounded somewhere.
+    // Keeping it out of the ReDoS budget was right; leaving it unbounded was not,
+    // because the per-worker startup limit is per worker and a vault with many
+    // batches multiplies it. The two failures stay distinct: this one says the
+    // scan cost too much, not that the pattern is catastrophic.
+    if (reportedMatchingMs !== undefined) {
+      overheadRemainingMs -= Math.max(0, wallMs - reportedMatchingMs);
+      if (overheadRemainingMs < 0) throw overheadExhausted();
+    }
     for (const match of validateOpenQuestionMatches(rawMatches, batch.length)) {
       const candidate = batch[match.idx];
       if (!candidate) throw new Error("obsidian_open_questions: regex worker returned an invalid match index");

@@ -240,7 +240,14 @@ describe("matchLinesBounded — hard ReDoS sink-bound (v3.10.0-rc.39)", () => {
     // catastrophic backtracking.
     expect(reported).toBeTypeOf("number");
     expect(reported).toBeGreaterThanOrEqual(0);
+    // `wallMs` is taken after the await resolves, so it already contains startup
+    // and teardown; comparing against it only shows the reported number is not
+    // the LARGEST possible one. The property that matters is absolute: matching
+    // three trivial lines is single-digit milliseconds, while spawning and
+    // joining a thread is not, so a duration that still tracked wall time cannot
+    // satisfy this bound on any machine slow enough to matter.
     expect(reported ?? Number.POSITIVE_INFINITY).toBeLessThan(Math.max(wallMs, 1));
+    expect(reported ?? Number.POSITIVE_INFINITY).toBeLessThan(50);
   });
 
   it("REJECTS within the budget a pattern isCatastrophicRegex MISSES (the rc.36 residual)", async () => {

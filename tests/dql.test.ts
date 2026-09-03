@@ -328,19 +328,34 @@ describe("listTags", () => {
     const priority = shape.find((entry) => entry.key === "priority");
     expect(priority?.types).toEqual(["number"]);
     expect(priority?.count).toBe(2);
-    // NEGATIVE control: a key nothing declares is absent rather than reported empty.
-    expect(shape.find((entry) => entry.key === "zzz_absent_key")).toBeUndefined();
+    // The map is built only from keys that occur, so asserting an invented key is
+    // absent cannot fail. What CAN fail is the folding contract: `Status` and
+    // `status` are distinct YAML keys and must be reported as one, counted once
+    // for the note that carries them.
+    expect(shape.map((entry) => entry.key)).toEqual(shape.map((entry) => entry.key.toLowerCase()));
+    expect(shape.filter((entry) => entry.key === "status")).toHaveLength(1);
 
-    // min_count filters the same way it does for tags.
+    // `min_count` is INCLUSIVE. `every(count >= 2)` holds for an exclusive filter
+    // too, so it is the retained key that discriminates: priority occurs in
+    // exactly two notes and must survive a threshold of two.
     const frequent = await vaultShape(v, { min_count: 2 });
     expect(frequent.every((entry) => entry.count >= 2)).toBe(true);
+    expect(frequent.map((entry) => entry.key)).toContain("priority");
+    expect(await vaultShape(v, { min_count: 3 }).then((r) => r.map((e) => e.key))).not.toContain("priority");
 
     // The walk refuses rather than reporting a prefix — an inventory that
     // silently omits keys cannot be told apart from one that found them all.
+    // The fake supplies ENTRIES so `reads === 0` proves the guard ran: with an
+    // empty listing the counter would stay at zero whether the guard existed or
+    // not, and the control would pass on a build that had lost it.
     let reads = 0;
     const truncated = {
       ensureExists: async () => undefined,
-      listFilesByExtensionsBounded: async () => ({ entries: [], visitedEntries: 4, complete: false }),
+      listFilesByExtensionsBounded: async () => ({
+        entries: [{ absPath: "/x/a.md", relPath: "a.md", basename: "a.md", mtimeMs: 1, size: 1 }],
+        visitedEntries: 4,
+        complete: false
+      }),
       readNoteUncached: async () => {
         reads += 1;
         throw new Error("unreachable");

@@ -638,7 +638,9 @@ describe("release mutation schema-v3 transition authority", () => {
     expect(auditReleaseMutationTransition(historical, drifted, authority).problems).toEqual(
       expect.arrayContaining([
         expect.stringMatching(/source change source\.changed deep diff must equal its exact allowlist/),
-        "source change source.changed current witness mismatch"
+        expect.stringMatching(
+          /^source change source\.changed current witness mismatch; recorded sha256:[0-9a-f]{64}, observed sha256:[0-9a-f]{64}$/
+        )
       ])
     );
   });

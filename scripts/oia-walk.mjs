@@ -1587,14 +1587,10 @@ for (const docFile of DOCS_FILES_TO_SCAN) {
           "NPM-COMMAND-INVENTORY",
           rel,
           blocks.get(jobId)?.line ?? 1,
-          // Name the computed digest, not just the fact of drift. Reviewing an
-          // intentional workflow edit means repinning this value, and a message
-          // that withholds it turns one CI round into one round per pin.
-          `${identity}: reviewed ${expectedNpmCommandDigests.get(identity) ?? "(absent)"}, computed ${digest} — ` +
-            npmCommands
-              .map(({ run }) => run)
-              .join(" || ")
-              .slice(0, 200),
+          npmCommands
+            .map(({ run }) => run)
+            .join(" || ")
+            .slice(0, 240),
           "Every literal npm-bearing workflow command is an exact reviewed entry; add no raw install, alias, wrapper, alternate helper path or unreviewed npm command."
         );
       }

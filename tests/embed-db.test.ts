@@ -2758,9 +2758,13 @@ describe("EmbedDb", () => {
     // oversized authority cell; it never selects the full hostile value.
     await expectRefusalToPreserve(/ownership could not be verified/);
 
-    // POSITIVE controls: genuine v1-v3 EmbedDb signatures with the exact
-    // root are supported legacy provenance. v1 still rebuilds (no `kind`
-    // column). v2/v3 already match the current vector table and keep rows.
+    // POSITIVE controls: genuine v1-v3 EmbedDb signatures with the exact root
+    // are supported legacy provenance, and ALL THREE rebuild. Schemas 2 and 3
+    // predate the q8 inference pin, so their vectors came from a different
+    // model space and cannot be kept — which is what the loop below asserts.
+    // The claim that v2/v3 "keep rows" was left here when the assertion was
+    // corrected, and a comment that contradicts the assertion under it is worse
+    // than no comment: it is the version a reader believes.
     for (const legacyVersion of [1, 2, 3]) {
       const legacyFile = path.join(dir, `legacy-v${legacyVersion}.embed.db`);
       const legacy = new Database(legacyFile);

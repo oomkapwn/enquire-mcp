@@ -719,9 +719,15 @@ describe("searchHybrid — BM25 + TF-IDF fusion path", () => {
       expect(probeIdx.search("pooldaydata", { limit: 10 }).map((hit) => hit.rel_path)).toEqual(["Camel.md"]);
       // POSITIVE control: the snake_case twin DOES split into its parts.
       expect(probeIdx.search("pool day", { limit: 10 }).map((hit) => hit.rel_path)).toEqual(["Snake.md"]);
-      // Characterization: spelling the camelCase identifier as words finds
-      // only the snake_case note — never the camelCase one.
-      expect(probeIdx.search("pool day data", { limit: 10 }).map((hit) => hit.rel_path)).not.toContain("Camel.md");
+      // Characterization: the full spelling reaches NEITHER note, and the two
+      // reasons are different. `Camel.md` is unreachable because the tokenizer
+      // never splits on case; `Snake.md` is unreachable because it has no `data`
+      // token and FTS5 joins the terms with an implicit AND. Asserting the empty
+      // result states both — an earlier `not.toContain("Camel.md")` here was
+      // satisfied by the emptiness alone and said nothing about case splitting.
+      // The discriminating assertion is the `pool day` one above: if camelCase
+      // split, `Camel.md` would appear there too.
+      expect(probeIdx.search("pool day data", { limit: 10 })).toEqual([]);
     } finally {
       await probeIdx.closeAndRelease();
       await fs.rm(probeRoot, { recursive: true, force: true });

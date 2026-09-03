@@ -53,6 +53,19 @@ const CAPPED: Record<string, { capToken: string; why: string }> = {
   }
 };
 
+// BOUNDED — scanners whose discovery is bounded AND which refuse an incomplete
+// prefix rather than silently returning a truncated answer. Stronger than EXEMPT:
+// EXEMPT asserts nothing about the body, this asserts both halves of the contract.
+// A bounded walk WITHOUT the refusal is the dangerous shape — it looks capped and
+// answers "these are all your frontmatter keys" from whatever prefix it reached.
+const BOUNDED: Record<string, string> = {
+  vaultShape: "frontmatter-key census; a truncated walk would under-report keys as absent.",
+  listTags: "tag frequencies; a truncated walk would under-report counts as real.",
+  frontmatterSearch: "must scan all frontmatter; a truncated walk would report false absence.",
+  runDql: "whole-vault query; a truncated walk would silently drop matching rows.",
+  getOpenQuestions: "whole-vault question scan, additionally bounded by MAX_QUESTION_SCAN_MS."
+};
+
 // EXEMPT — inherent single-pass O(N) scanners. Capping any of these would
 // silently corrupt an exhaustive/aggregation result, so a cap is the WRONG fix.
 // Memory is bounded by output size or distinct keys, never by an N×N structure.
@@ -63,8 +76,6 @@ const EXEMPT: Record<string, string> = {
   getBacklinks: "exhaustive enumeration — must visit every note to list ALL backlinks; capping drops real backlinks.",
   getUnresolvedWikilinks: "exhaustive — must check every note's links; capping would miss broken links.",
   getOutboundLinks: "reads the file LIST + only the target note's own links; not an N-note readNote loop.",
-  listTags: "aggregation — tag frequencies over the whole vault; Map keyed by DISTINCT tags, not note count.",
-  frontmatterSearch: "must scan all frontmatter to find matches; capping drops results.",
   getVaultStats: "whole-vault aggregation by definition; capping yields wrong stats.",
   lintWiki: "exhaustive vault lint; must visit every note (output already supports a limit param).",
   paperAudit: "exhaustive audit over the whole vault.",
@@ -101,8 +112,20 @@ function discoverScanners(src: string): string[] {
       /for\s+await\b/.test(body) ||
       /\.map\(\s*async\b/.test(body) ||
       /Promise\.all\(/.test(body);
-    const discoversVault = /\.listMarkdown\(/.test(body) || /listExactScanEntries\(/.test(body);
-    if (discoversVault && /\.readNote\(/.test(body) && iterates) {
+    // The inventory + read calls this matches must track what production actually
+    // calls. Scanners have since migrated to `listFilesByExtensionsBounded(` (bounded
+    // discovery that reports completeness) and `readNoteUncached(`; matching only the
+    // legacy `listMarkdown` / `readNote` names hid FIVE live scanners from the
+    // completeness gate below — including `runDql`, whose whole FILE was added to
+    // SCANNER_SOURCES in rc.18 to close exactly this gap. Adding the file made the
+    // suite green without ever discovering the function: the fix moved the list while
+    // the detector's own vocabulary was what had drifted.
+    const discoversVault =
+      /\.listMarkdown\(/.test(body) ||
+      /listExactScanEntries\(/.test(body) ||
+      /listFilesByExtensionsBounded\(/.test(body);
+    const readsNotes = /\.readNote\(/.test(body) || /readNoteUncached\(/.test(body);
+    if (discoversVault && readsNotes && iterates) {
       out.push(m[1] as string);
     }
   }
@@ -118,13 +141,14 @@ function allDiscoveredScanners(): string[] {
 }
 
 describe("resource-bound completeness invariant (rc.36, R-5/AS#5 class)", () => {
-  it("every whole-vault scanner is classified CAP or EXEMPT (no unclassified scanner)", () => {
-    const classified = new Set([...Object.keys(CAPPED), ...Object.keys(EXEMPT)]);
+  it("every whole-vault scanner is classified CAP, BOUNDED or EXEMPT (no unclassified scanner)", () => {
+    const classified = new Set([...Object.keys(CAPPED), ...Object.keys(BOUNDED), ...Object.keys(EXEMPT)]);
     const unclassified = allDiscoveredScanners().filter((n) => !classified.has(n));
     expect(
       unclassified,
       `Unclassified always-on whole-vault scanner(s): ${unclassified.join(", ")}. ` +
-        "Add each to CAPPED (use bounded, complete discovery for a vault-sized graph/pairwise structure) " +
+        "Add each to CAPPED (bounded, complete discovery for a vault-sized graph/pairwise structure), " +
+        "BOUNDED (bounded discovery that refuses an incomplete prefix) " +
         "or EXEMPT (with a reason — it's inherent single-pass O(N) where capping breaks correctness)."
     ).toEqual([]);
   });
@@ -136,6 +160,16 @@ describe("resource-bound completeness invariant (rc.36, R-5/AS#5 class)", () => 
       for (const [fn, { capToken }] of Object.entries(CAPPED)) {
         const body = functionBody(src, fn);
         if (body && !body.includes(capToken)) offenders.push(`${fn} (${f}) lost its cap token "${capToken}"`);
+      }
+      // BOUNDED needs BOTH halves. A bounded walk that drops the refusal still looks
+      // capped while answering from whatever prefix it reached — the failure mode is a
+      // confident wrong answer, not an error, so the refusal is the load-bearing half.
+      for (const fn of Object.keys(BOUNDED)) {
+        const body = functionBody(src, fn);
+        if (!body) continue;
+        if (!body.includes("listFilesByExtensionsBounded("))
+          offenders.push(`${fn} (${f}) no longer bounds its inventory`);
+        if (!/listing\.complete/.test(body)) offenders.push(`${fn} (${f}) no longer refuses an incomplete inventory`);
       }
     }
     expect(offenders, offenders.join("; ")).toEqual([]);
@@ -265,8 +299,8 @@ describe("resource-bound completeness invariant (rc.36, R-5/AS#5 class)", () => 
 
   it("every CAPPED tool is actually discovered as a scanner (didn't silently stop scanning)", () => {
     const discovered = new Set(allDiscoveredScanners());
-    const missing = Object.keys(CAPPED).filter((n) => !discovered.has(n));
-    expect(missing, `CAPPED tools no longer detected as whole-vault scanners: ${missing.join(", ")}`).toEqual([]);
+    const missing = [...Object.keys(CAPPED), ...Object.keys(BOUNDED)].filter((n) => !discovered.has(n));
+    expect(missing, `classified tools no longer detected as whole-vault scanners: ${missing.join(", ")}`).toEqual([]);
   });
 
   it("legacy materialize-then-cap helper is absent from production", () => {
@@ -295,7 +329,7 @@ describe("resource-bound completeness invariant (rc.36, R-5/AS#5 class)", () => 
     expect(found).toContain("brandNewNeighborTool");
     // …and it is NOT in the classified set, so the completeness assertion above
     // would fail until a human classifies it.
-    const classified = new Set([...Object.keys(CAPPED), ...Object.keys(EXEMPT)]);
+    const classified = new Set([...Object.keys(CAPPED), ...Object.keys(BOUNDED), ...Object.keys(EXEMPT)]);
     expect(classified.has("brandNewNeighborTool")).toBe(false);
   });
 
@@ -317,6 +351,27 @@ describe("resource-bound completeness invariant (rc.36, R-5/AS#5 class)", () => 
       ""
     ].join("\n");
     expect(discoverScanners(fakeSrc)).toContain("parallelFanoutTool");
+
+    // Same requirement, current vocabulary: a scanner written the way production
+    // writes them today (listFilesByExtensionsBounded + readNoteUncached) must also be
+    // discovered. Until this assertion existed the detector matched only the legacy
+    // names, so FIVE live scanners were invisible while every assertion in this file
+    // stayed green — the gate kept reporting on a set it had quietly stopped seeing.
+    const modernSrc = [
+      "export async function modernShapedTool(vault) {",
+      '  const listing = await vault.listFilesByExtensionsBounded([".md"], 10, 40);',
+      "  for (const e of listing.entries) {",
+      "    const { parsed } = await vault.readNoteUncached(e.absPath, e.mtimeMs);",
+      "    void parsed;",
+      "  }",
+      "}",
+      ""
+    ].join("\n");
+    expect(discoverScanners(modernSrc)).toContain("modernShapedTool");
+    // …and the legacy-only predicate this file shipped with would NOT have found it.
+    // Pin that, so the finding survives as a fact rather than as a comment.
+    expect(/\.listMarkdown\(|listExactScanEntries\(/.test(modernSrc)).toBe(false);
+    expect(/\.readNote\(/.test(modernSrc)).toBe(false);
   });
 
   // NEGATIVE control: the cap-token check must FLAG a capped function that drops

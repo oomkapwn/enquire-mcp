@@ -966,6 +966,12 @@ export async function listTags(
   for (const e of listing.entries) {
     const { parsed } = await vault.readNoteUncached(e.absPath, e.mtimeMs);
     const fmSet = new Set(extractFrontmatterTagsLower(parsed.frontmatter));
+    // `count` is notes, not spellings. collectTags dedupes case-SENSITIVELY, so one
+    // note writing `tags: [Reading]` and `#reading` in its body arrives here as two
+    // entries that fold to one key — without this guard that note is counted twice,
+    // and `frontmatter_count`/`inline_count` can both be incremented for it. Same
+    // shape as the per-note guard vaultShape carries.
+    const countedInThisNote = new Set<string>();
     for (const t of parsed.tags) {
       const key = foldTag(t); // v3.11.0-rc.9 (L-TAG-1) — NFC+case fold so accented tag forms count as one
       let slot = counts.get(key);
@@ -980,9 +986,12 @@ export async function listTags(
         tagKeyUtf8Bytes += keyBytes;
         slot = { count: 0, fm: 0, inline: 0 };
       }
-      slot.count += 1;
-      if (fmSet.has(key)) slot.fm += 1;
-      else slot.inline += 1;
+      if (!countedInThisNote.has(key)) {
+        countedInThisNote.add(key);
+        slot.count += 1;
+        if (fmSet.has(key)) slot.fm += 1;
+        else slot.inline += 1;
+      }
       counts.set(key, slot);
     }
   }
@@ -1160,7 +1169,19 @@ export async function vaultShape(
     out.push({ key, count: slot.count, types: [...slot.types].sort(), examples: slot.examples });
   }
   out.sort((a, b) => b.count - a.count || a.key.localeCompare(b.key));
-  return out.slice(0, limit);
+  // The tool is sold as an inventory: "exhaustive within its scan bounds, and it
+  // refuses rather than returning a partial inventory". Slicing here breaks that
+  // silently, and in the worst direction — the sort is by descending count, so what
+  // a prefix drops is exactly the rare keys someone calls this tool to discover.
+  // The caller then cannot tell "no note uses that key" from "it fell off the end".
+  // Refuse, and say which knob widens the answer, matching every other guard here.
+  if (out.length > limit) {
+    throw new RangeError(
+      `vaultShape found ${out.length} distinct frontmatter keys, more than the ${limit}-key result cap. ` +
+        "Raise `limit` (max 2000), narrow `folder`, or raise `min_count` to drop rare keys deliberately."
+    );
+  }
+  return out;
 }
 
 // ─── obsidian_chat_thread (v2.2.0 — note-tethered AI conversations) ─────────

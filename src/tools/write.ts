@@ -1579,6 +1579,16 @@ export async function resolveTarget(
       const abs = vault.resolveInside(candidate);
       try {
         const stat = await vault.stat(abs);
+        // A directory stats successfully, and the bare candidate is tried first, so a
+        // folder `X` used to shadow the folder note `X.md` entirely: the second
+        // candidate was never reached and every caller got a FileEntry naming the
+        // directory. Read tools then returned an empty result for a note that exists.
+        // Skipping a non-file here lets `${path}.md` be tried, which is the whole
+        // point of having two candidates.
+        if (!stat.isFile) {
+          lastErr = new Error(`Not a file: ${candidate}`);
+          continue;
+        }
         return {
           absPath: abs,
           relPath: vault.toRel(abs),

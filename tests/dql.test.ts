@@ -308,6 +308,20 @@ describe("listTags", () => {
     expect(projectTag?.count).toBe(2);
     expect(projectTag?.frontmatter_count).toBe(2);
     expect(tags.find((t) => t.tag === "idea")?.count).toBe(1);
+
+    // `count` is notes, not spellings. collectTags dedupes case-SENSITIVELY, so one
+    // note carrying `tags: [Reading]` AND `#reading` arrives as two entries that fold
+    // to one key. Its own vault, because adding this note to the shared fixture would
+    // move every count asserted above.
+    const caseRoot = await fs.mkdtemp(path.join(os.tmpdir(), "obsidian-mcp-tagcase-"));
+    try {
+      await fs.writeFile(path.join(caseRoot, "n.md"), "---\ntags: [Reading]\n---\nAlso #reading here.\n");
+      const folded = (await listTags(new Vault(caseRoot), {})).find((tag) => tag.tag === "reading");
+      expect(folded?.count).toBe(1);
+      expect((folded?.frontmatter_count ?? 0) + (folded?.inline_count ?? 0)).toBe(1);
+    } finally {
+      await fs.rm(caseRoot, { recursive: true, force: true });
+    }
   });
 
   it("respects min_count", async () => {
@@ -328,12 +342,19 @@ describe("listTags", () => {
     const priority = shape.find((entry) => entry.key === "priority");
     expect(priority?.types).toEqual(["number"]);
     expect(priority?.count).toBe(2);
-    // The map is built only from keys that occur, so asserting an invented key is
-    // absent cannot fail. What CAN fail is the folding contract: `Status` and
-    // `status` are distinct YAML keys and must be reported as one, counted once
-    // for the note that carries them.
-    expect(shape.map((entry) => entry.key)).toEqual(shape.map((entry) => entry.key.toLowerCase()));
-    expect(shape.filter((entry) => entry.key === "status")).toHaveLength(1);
+    // The folding contract needs a fixture that can VIOLATE it: no note here writes
+    // an uppercase key, so "every reported key is lowercase" held for the same reason
+    // the invented-key check it replaced did — nothing could have made it fail. A
+    // vault whose one note carries both `Status` and `status` discriminates.
+    const foldRoot = await fs.mkdtemp(path.join(os.tmpdir(), "obsidian-mcp-keycase-"));
+    try {
+      await fs.writeFile(path.join(foldRoot, "n.md"), "---\nStatus: open\nstatus: open\n---\nBody.\n");
+      const folded = await vaultShape(new Vault(foldRoot), {});
+      expect(folded.map((entry) => entry.key)).toEqual(["status"]);
+      expect(folded[0]?.count).toBe(1);
+    } finally {
+      await fs.rm(foldRoot, { recursive: true, force: true });
+    }
 
     // `min_count` is INCLUSIVE. `every(count >= 2)` holds for an exclusive filter
     // too, so it is the retained key that discriminates: priority occurs in
@@ -363,6 +384,14 @@ describe("listTags", () => {
     } as unknown as Vault;
     await expect(vaultShape(truncated, {})).rejects.toThrow(/inventory is incomplete/);
     expect(reads).toBe(0);
+
+    // Same contract at the OTHER end. The tool is sold as exhaustive and the sort is
+    // by descending count, so a silent `slice` drops precisely the rare keys someone
+    // calls it to discover. `limit` at the key count returns everything; one below it
+    // must refuse rather than hand back a prefix that reads as the whole inventory.
+    const all = await vaultShape(v, {});
+    expect(await vaultShape(v, { limit: all.length })).toHaveLength(all.length);
+    await expect(vaultShape(v, { limit: all.length - 1 })).rejects.toThrow(/more than the .*-key result cap/);
   });
 
   it("admits the exact distinct-tag/key-byte boundary and rejects one less", async () => {
@@ -377,9 +406,15 @@ describe("listTags", () => {
 
   it("refuses an incomplete bounded inventory before reading any note", async () => {
     let reads = 0;
+    // Supplies an ENTRY, so `reads === 0` proves the guard ran ahead of the read loop.
+    // With an empty listing the counter stays at zero whether the guard exists or not.
     const fake = {
       ensureExists: async () => undefined,
-      listFilesByExtensionsBounded: async () => ({ entries: [], visitedEntries: 4, complete: false }),
+      listFilesByExtensionsBounded: async () => ({
+        entries: [{ absPath: "/x/a.md", relPath: "a.md", basename: "a.md", mtimeMs: 1, size: 1 }],
+        visitedEntries: 4,
+        complete: false
+      }),
       readNoteUncached: async () => {
         reads += 1;
         throw new Error("unreachable");

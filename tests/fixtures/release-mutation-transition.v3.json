@@ -76,7 +76,7 @@
       "reason": "reviewed source bytes changed while catalogue identity stayed fixed",
       "witness": {
         "from": "sha256:7f2f2986eb158994ec66c45e70d85d62545b1f5803797287bcd735cda9be2abd",
-        "to": "sha256:cb33777f41907abcf2fc925ba12ecf1085f5136d672a56be490293823544a474"
+        "to": "sha256:3868f044514107d8b8fa90baa950b969a79039fadffa3f1cc12cc8a9d2e6125d"
       }
     },
     {
@@ -87,7 +87,7 @@
       "reason": "reviewed source bytes changed while catalogue identity stayed fixed",
       "witness": {
         "from": "sha256:21a5263ce68c6bb3055324205f1c514309f93e52d16bf6f971730ad4b170a591",
-        "to": "sha256:2437addac848c0ce4f24f69d24171d17136c3989a8b1722d6e9418b5b581dc04"
+        "to": "sha256:4bcff8239cc7d7ff2710bd70b69e6fe090b3a67ede11d3912144f1919b3e22be"
       }
     },
     {
@@ -197,7 +197,7 @@
       "reason": "reviewed source bytes changed while catalogue identity stayed fixed",
       "witness": {
         "from": "sha256:ccccb48bf5cf1d24ae9c64d4bb8eac7b7ded90fcbb7453dbb72b3dea981e12ea",
-        "to": "sha256:1575af8baeca8ed236d9764b8b47e505163b03cfa7a51f0200939c3e762d3729"
+        "to": "sha256:fbacef5a2b473c963e8396f5423848380f4f5258e2f1855bd001ea63c686c8d1"
       }
     },
     {

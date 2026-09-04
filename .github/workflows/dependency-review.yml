@@ -35,4 +35,10 @@ jobs:
           fail-on-severity: moderate
           comment-summary-in-pr: on-failure
           # The repository is MIT; runtime dependencies must be compatible with it.
-          allow-licenses: MIT, ISC, BSD-2-Clause, BSD-3-Clause, Apache-2.0, 0BSD, CC0-1.0, Unlicense, BlueOak-1.0.0, Python-2.0
+          # LGPL-3.0-or-later is here for ONE reason: sharp's prebuilt libvips
+          # binaries (@img/sharp-libvips-*), a devDependency that renders the social
+          # preview in CI and never ships in the npm package. The action cannot scope
+          # a licence rule to dev-only packages, so the allowlist carries it; the
+          # runtime graph is separately held to MIT-compatible terms by check:audit's
+          # published-consumer pass.
+          allow-licenses: MIT, ISC, BSD-2-Clause, BSD-3-Clause, Apache-2.0, 0BSD, CC0-1.0, Unlicense, BlueOak-1.0.0, Python-2.0, LGPL-3.0-or-later

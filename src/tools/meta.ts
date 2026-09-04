@@ -83,6 +83,23 @@ export interface ValidateProposalResult {
 const MAX_VALIDATE_CONTENT_CODE_UNITS = 1_000_000;
 const MAX_VALIDATE_WIKILINKS = 10_000;
 const MAX_VALIDATE_SUGGESTION_COMPARISONS = 50_000;
+/** Longest broken target that still earns did-you-mean ranking.
+ *
+ *  The comparison budget above counts candidate x target PAIRS as if each pair were
+ *  O(1). Each pair actually costs O(|target|), because the scoring chain runs
+ *  `includes` against the target itself — and nothing capped a SINGLE target, only
+ *  the whole submitted body (1 MB) and the number of links. So one 1 MB target bought
+ *  a full-megabyte scan per candidate: measured at 8 s of blocked event loop on a
+ *  50,000-note vault, from one call to an always-on read-only tool, which is a remote
+ *  stall for every other client on the same server.
+ *
+ *  Dividing the budget by the target count made concentration OPTIMAL for an
+ *  attacker: k targets of size 1MB/k cost 50_000 x 1MB / k, maximised at k = 1.
+ *
+ *  A cap is the honest fix rather than a smaller budget, because a target this long
+ *  cannot be a plausible note name — the longest filename any filesystem here accepts
+ *  is 255 bytes. The link is still reported as broken; only the typo hint is skipped. */
+const MAX_VALIDATE_SUGGESTION_TARGET_CODE_UNITS = 1024;
 
 interface ValidationSuggestionBatch {
   byTarget: Map<string, string[]>;
@@ -132,6 +149,11 @@ function validationSuggestions(entries: readonly FileEntry[], targets: readonly 
 
   for (const target of uniqueTargets) {
     const lower = foldName(target.replace(/\.md$/iu, ""));
+    // Bound the per-pair cost, not just the pair count. See the constant's note.
+    if (lower.length > MAX_VALIDATE_SUGGESTION_TARGET_CODE_UNITS) {
+      byTarget.set(target, []);
+      continue;
+    }
     const top: Array<{ path: string; score: number; order: number }> = [];
     for (let index = 0; index < candidatesPerTarget; index++) {
       const candidate = candidates[index];

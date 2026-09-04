@@ -61,7 +61,7 @@ export const SPLIT_CONTRACT_SHA256 = Object.freeze({
   verifySteps: "43f0861dc7347b86d3ce0fee770405f5d8d4c14633aa3b4aed08be39e459f916",
   handoffAssembly: "f49b2c2d0606904e119a3efc624d218cc7069aa5d72edfbee06d16495dc136b0",
   handoffDownload: "ee5b5d8684995ee24286368da80bf58180077b310571173ef5b42fc1020d1569",
-  npmPublishRun: "2b379d7eb1c8eb855d7c9f4fc6852f44f6a70cb6f6b64540f555ca7c3f21db08",
+  npmPublishRun: "06bc8ccfdd3a34e4c13a189b767eacda6db0c698ad027fd1577d2dfde9008483",
   npmPublishEnv: "e2bbe5914d5e745436e45e8e80b1a2cc174dd7892e2dd37a277b0d9cb022c30e",
   npmProvenanceRun: "40d0777f017b01c6863c0ac9c1a4ec010d50edb55dfb391a68aab87d941d0766",
   npmProvenanceEnv: "b8375b64405b385f2356f12a8b69f0520c44cde60febebd89983f09064509967",

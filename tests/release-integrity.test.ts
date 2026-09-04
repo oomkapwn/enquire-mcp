@@ -4268,7 +4268,10 @@ async function assertNpmCiWorkflowContract(): Promise<void> {
     writeFileSync(windowsExec, "");
     writeFileSync(windowsCli, "");
     const windowsSpec = npmCiProcessSpec(windowsExec, "win32");
-    expect(windowsSpec).toEqual({ command: windowsExec, args: [realpathSync(windowsCli), "ci", "--no-audit", "--no-fund"] });
+    expect(windowsSpec).toEqual({
+      command: windowsExec,
+      args: [realpathSync(windowsCli), "ci", "--no-audit", "--no-fund"]
+    });
     expect(JSON.stringify(windowsSpec)).not.toMatch(/npm\.cmd|cmd\.exe/iu);
 
     const missingRuntime = join(npmSpecScratch.path, "missing-runtime");
@@ -4293,7 +4296,10 @@ async function assertNpmCiWorkflowContract(): Promise<void> {
   const cleanAttempt = runNpmCiAttempt({
     platform: "linux",
     runtime: {
-      processSpec: () => ({ command: process.execPath, args: ["/fixed/npm-cli.js", "ci", "--no-audit", "--no-fund"] }),
+      processSpec: () => ({
+        command: process.execPath,
+        args: ["/fixed/npm-cli.js", "ci", "--no-audit", "--no-fund"]
+      }),
       spawn: (command: string, args: string[], options: Record<string, unknown>) => {
         spawnCalls.push({ command, args, options });
         queueMicrotask(() => childListeners.get("exit")?.(0, null));
@@ -4366,7 +4372,10 @@ async function assertNpmCiWorkflowContract(): Promise<void> {
       }
     };
   };
-  const fixedNpmCiSpec = () => ({ command: process.execPath, args: ["/fixed/npm-cli.js", "ci", "--no-audit", "--no-fund"] });
+  const fixedNpmCiSpec = () => ({
+    command: process.execPath,
+    args: ["/fixed/npm-cli.js", "ci", "--no-audit", "--no-fund"]
+  });
 
   const beforeDeadlineClock = createNpmCiClock(Number.POSITIVE_INFINITY);
   const beforeDeadlineChild = createNpmCiChild(20_000);

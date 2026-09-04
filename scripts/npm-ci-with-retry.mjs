@@ -21,7 +21,7 @@ import { isEntrypoint } from "./lib/entrypoint.mjs";
  * NPM_CI_RETRY_POLICY.retryDelayMs === 15_000;
  */
 export const NPM_CI_RETRY_POLICY = Object.freeze({
-  attempts: 5,
+  attempts: 3,
   attemptTimeoutMs: 60_000,
   windowsAttempts: 1,
   windowsAttemptTimeoutMs: 180_000,

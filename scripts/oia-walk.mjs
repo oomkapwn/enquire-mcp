@@ -1236,7 +1236,7 @@ for (const docFile of DOCS_FILES_TO_SCAN) {
   const auditCommand = "/usr/bin/timeout --kill-after=10s 300s npm run check:audit";
   const auditStepName = "Audit source and published-consumer dependency graphs";
   const helperRel = "scripts/npm-ci-with-retry.mjs";
-  const helperSha256 = "307250346bff2d074f3ece3d0b8affc2cc7a8c9ece014c72067e4700cbf56b6f";
+  const helperSha256 = "e2984fee26d261069446231feedbe7776ce3343e4c8dacde666cb77ab72e4298";
   const entrypointRel = "scripts/lib/entrypoint.mjs";
   const entrypointSha256 = "31e3b1af3bf48c88149b20cd71fa948e492e8e0db45551ae7271a01c36d37b1b";
   const matrixScriptShell = `\${{ matrix.script_shell }}`;
@@ -1248,7 +1248,7 @@ for (const docFile of DOCS_FILES_TO_SCAN) {
     [
       "ci.yml",
       new Map([
-        ["lint", 10],
+        ["lint", 5],
         ["test", 20],
         ["test-windows", 20],
         ["test-macos", 20],
@@ -1512,13 +1512,13 @@ for (const docFile of DOCS_FILES_TO_SCAN) {
             windowsAttempts * (windowsAttemptTimeoutMs + killGraceMs) + (windowsAttempts - 1) * retryDelayMs
           );
     if (
-      attempts !== 5 ||
+      attempts !== 3 ||
       attemptTimeoutMs !== 60_000 ||
       windowsAttempts !== 1 ||
       windowsAttemptTimeoutMs !== 180_000 ||
       killGraceMs !== 10_000 ||
       retryDelayMs !== 15_000 ||
-      configuredMaximumMs !== 410_000 ||
+      configuredMaximumMs !== 240_000 ||
       createHash("sha256").update(helperSource, "utf8").digest("hex") !== helperSha256
     ) {
       record(

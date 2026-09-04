@@ -16,7 +16,7 @@ concurrency:
 jobs:
   lint:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Verify trusted Vitest bootstrap
@@ -30,7 +30,7 @@ jobs:
         run: |
           set -u
           manifest=.github/trusted-vitest-bootstrap.sha256
-          expected_manifest_sha=ad574b34f834d384044c2b8aa3dd5751078158cde26dae6581df9ba4aaa9ebbb
+          expected_manifest_sha=258458add956a1844433277dc55d9e63887101fbc58370c6cff5898496f4a6fa
           expected_path_sha=5581eea048d9360a3fff43c79e1d55d40492a082ee468ee74c3738f60c2f82f9
           workflow=.github/workflows/ci.yml
           [[ -d .github && ! -L .github ]]
@@ -362,11 +362,16 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/transition"
-          node scripts/generate-release-mutation-transition.mjs --authority-current \
-            > "$RUNNER_TEMP/transition/release-mutation-transition.v3.json"
+          # Projection first: it is pure observation and always builds. The authority
+          # can legitimately REFUSE (an unplanned source change, a mutation needle that
+          # no longer matches) — that refusal is the finding, and the projection it
+          # was computed from must still reach the reviewer.
           node scripts/generate-release-mutation-transition.mjs --projection-current \
             > "$RUNNER_TEMP/transition/projection-current.json"
+          node scripts/generate-release-mutation-transition.mjs --authority-current \
+            > "$RUNNER_TEMP/transition/release-mutation-transition.v3.json"
       - name: Export remotely generated transition authority
+        if: ${{ always() && steps.transition_authority.outcome != 'skipped' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: emitted-release-mutation-transition

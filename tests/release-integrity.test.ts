@@ -84,7 +84,7 @@ import {
 
 const SPLIT_FIXTURE_SHA256 = "84b08b80080df0fe7067994b35bd61c38ae8101fc08ea5b761fb0db0c4b8050e";
 const SPLIT_PROJECTION_SHA256 = "8019d27e27d687f181bb9cd4a6c6f37a22e3141401df85428936f71e7044c650";
-const NPM_CI_CONTRACT_FIXTURE_SHA256 = "1535d994f1f51f9c0ed6897e12c66f7100d07a18ebbc22d86540ec1d16d66512";
+const NPM_CI_CONTRACT_FIXTURE_SHA256 = "053185a6b53f2d236fbe5b8e636bf077e351caa0001c502a3421664816d7cdd9";
 
 interface WorkflowJob {
   id: number;
@@ -3855,13 +3855,13 @@ function npmCiHelperNumericPolicyProblems(source: string): string[] {
           attempts * (attemptTimeoutMs + killGraceMs) + (attempts - 1) * retryDelayMs,
           windowsAttempts * (windowsAttemptTimeoutMs + killGraceMs) + (windowsAttempts - 1) * retryDelayMs
         );
-  return attempts === 5 &&
+  return attempts === 3 &&
     attemptTimeoutMs === 60_000 &&
     windowsAttempts === 1 &&
     windowsAttemptTimeoutMs === 180_000 &&
     killGraceMs === 10_000 &&
     retryDelayMs === 15_000 &&
-    configuredMaximumMs === 410_000
+    configuredMaximumMs === 240_000
     ? []
     : [NPM_CI_HELPER_POLICY_PROBLEM];
 }
@@ -4186,7 +4186,7 @@ async function assertNpmCiWorkflowContract(): Promise<void> {
         (NPM_CI_RETRY_POLICY.windowsAttemptTimeoutMs + NPM_CI_RETRY_POLICY.killGraceMs) +
         (NPM_CI_RETRY_POLICY.windowsAttempts - 1) * NPM_CI_RETRY_POLICY.retryDelayMs
     )
-  ).toBe(410_000);
+  ).toBe(240_000);
   expect(
     NPM_CI_RETRY_POLICY.windowsAttempts *
       (NPM_CI_RETRY_POLICY.windowsAttemptTimeoutMs + NPM_CI_RETRY_POLICY.killGraceMs)

@@ -4258,7 +4258,7 @@ async function assertNpmCiWorkflowContract(): Promise<void> {
     writeFileSync(posixCli, "");
     expect(npmCiProcessSpec(posixExec, "darwin")).toEqual({
       command: posixExec,
-      args: [realpathSync(posixCli), "ci"]
+      args: [realpathSync(posixCli), "ci", "--no-audit", "--no-fund"]
     });
 
     const windowsRuntime = join(npmSpecScratch.path, "windows-runtime");
@@ -4268,7 +4268,7 @@ async function assertNpmCiWorkflowContract(): Promise<void> {
     writeFileSync(windowsExec, "");
     writeFileSync(windowsCli, "");
     const windowsSpec = npmCiProcessSpec(windowsExec, "win32");
-    expect(windowsSpec).toEqual({ command: windowsExec, args: [realpathSync(windowsCli), "ci"] });
+    expect(windowsSpec).toEqual({ command: windowsExec, args: [realpathSync(windowsCli), "ci", "--no-audit", "--no-fund"] });
     expect(JSON.stringify(windowsSpec)).not.toMatch(/npm\.cmd|cmd\.exe/iu);
 
     const missingRuntime = join(npmSpecScratch.path, "missing-runtime");
@@ -4293,7 +4293,7 @@ async function assertNpmCiWorkflowContract(): Promise<void> {
   const cleanAttempt = runNpmCiAttempt({
     platform: "linux",
     runtime: {
-      processSpec: () => ({ command: process.execPath, args: ["/fixed/npm-cli.js", "ci"] }),
+      processSpec: () => ({ command: process.execPath, args: ["/fixed/npm-cli.js", "ci", "--no-audit", "--no-fund"] }),
       spawn: (command: string, args: string[], options: Record<string, unknown>) => {
         spawnCalls.push({ command, args, options });
         queueMicrotask(() => childListeners.get("exit")?.(0, null));
@@ -4311,7 +4311,7 @@ async function assertNpmCiWorkflowContract(): Promise<void> {
   await expect(cleanAttempt).resolves.toMatchObject({ ok: true, timedOut: false, code: 0, signal: null });
   expect(spawnCalls).toHaveLength(1);
   expect(spawnCalls[0]?.command).toBe(process.execPath);
-  expect(spawnCalls[0]?.args).toEqual(["/fixed/npm-cli.js", "ci"]);
+  expect(spawnCalls[0]?.args).toEqual(["/fixed/npm-cli.js", "ci", "--no-audit", "--no-fund"]);
   expect(spawnCalls[0]?.options).toMatchObject({
     detached: true,
     shell: false,
@@ -4366,7 +4366,7 @@ async function assertNpmCiWorkflowContract(): Promise<void> {
       }
     };
   };
-  const fixedNpmCiSpec = () => ({ command: process.execPath, args: ["/fixed/npm-cli.js", "ci"] });
+  const fixedNpmCiSpec = () => ({ command: process.execPath, args: ["/fixed/npm-cli.js", "ci", "--no-audit", "--no-fund"] });
 
   const beforeDeadlineClock = createNpmCiClock(Number.POSITIVE_INFINITY);
   const beforeDeadlineChild = createNpmCiChild(20_000);

@@ -391,11 +391,20 @@ function validateSourceTransitions(
           `allowed ${canonical(allowed)}, found ${canonical(observed)}`
       );
     }
+    // Report the observed witness, not just the fact of a mismatch. Registering a
+    // reviewed source change means writing this exact value into the fixture, and a
+    // message that withholds it makes CI a one-pin-per-round discovery loop.
     if (change.witness.from !== projectionWitness(oldProjection)) {
-      problems.push(`source change ${change.id} historical witness mismatch`);
+      problems.push(
+        `source change ${change.id} historical witness mismatch; ` +
+          `recorded ${change.witness.from}, observed ${projectionWitness(oldProjection)}`
+      );
     }
     if (change.witness.to !== projectionWitness(currentProjection)) {
-      problems.push(`source change ${change.id} current witness mismatch`);
+      problems.push(
+        `source change ${change.id} current witness mismatch; ` +
+          `recorded ${change.witness.to}, observed ${projectionWitness(currentProjection)}`
+      );
     }
   }
 

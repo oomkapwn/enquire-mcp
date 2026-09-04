@@ -1381,7 +1381,7 @@ for (const docFile of DOCS_FILES_TO_SCAN) {
     ["dist-tag-cleanup.yml#cleanup", "b1dcb901eb22fd286c299b8e3ee1ac9f21cb529665be150c9a476b5a305e4ce0"],
     ["publish-docs.yml#build", "476bc2a8aea0d3def4c805b616058ba0c4aea7f9d940e73a5d9da4b5b977cfba"],
     ["release.yml#verify", "d99c2e59a073a1f2ef5f670be90ab5662c2b45c2800b215e9259d9d6e1353496"],
-    ["release.yml#npm_publish", "f3d3b74973f767d496b6bc00c58e33f9cacd0449fd5fa89eb0b925e3eb553afb"],
+    ["release.yml#npm_publish", "2486876be9061db2f8004e4923042784ea13f2a7de780861a50d6959ab651a8d"],
     ["release.yml#github_release", "108ecb3285e85905af15541a079ba1877e7713da88bb51e3c0f8f00f30aa5dec"],
     ["release.yml#mcp_registry", "d70a7be8dfcff2a2e062a88235709adc0186487cda56100c9e33f3ec423f385a"]
   ]);
@@ -1587,10 +1587,14 @@ for (const docFile of DOCS_FILES_TO_SCAN) {
           "NPM-COMMAND-INVENTORY",
           rel,
           blocks.get(jobId)?.line ?? 1,
-          npmCommands
+          // The command text stays first and unchanged (a fixture asserts on it); the
+          // computed digest follows, because reviewing an intentional workflow edit
+          // means repinning this value, and a message that withholds it turns one CI
+          // round into one round per pin.
+          `${npmCommands
             .map(({ run }) => run)
             .join(" || ")
-            .slice(0, 240),
+            .slice(0, 240)} — reviewed ${expectedNpmCommandDigests.get(identity) ?? "(absent)"}, computed ${digest}`,
           "Every literal npm-bearing workflow command is an exact reviewed entry; add no raw install, alias, wrapper, alternate helper path or unreviewed npm command."
         );
       }

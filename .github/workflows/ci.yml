@@ -30,7 +30,7 @@ jobs:
         run: |
           set -u
           manifest=.github/trusted-vitest-bootstrap.sha256
-          expected_manifest_sha=13579ad37c6dbd6af6aea3d2520adc15d7573baf5651d1847b449185e54a08ed
+          expected_manifest_sha=ad574b34f834d384044c2b8aa3dd5751078158cde26dae6581df9ba4aaa9ebbb
           expected_path_sha=5581eea048d9360a3fff43c79e1d55d40492a082ee468ee74c3738f60c2f82f9
           workflow=.github/workflows/ci.yml
           [[ -d .github && ! -L .github ]]
@@ -352,6 +352,28 @@ jobs:
       - name: Require committed MCP schema inventory
         id: schema_inventory_diff
         run: git diff --exit-code -- tests/fixtures/mcp-schema-inventory.v1.json
+      # D-45 remote-only validation, same shape as the schema inventory above: the
+      # release-mutation transition authority needs vite, so it cannot be produced on a
+      # maintainer workstation. Emit it here on every run, together with the current
+      # projection map (the input the witnesses are hashed from), so registering a
+      # reviewed source change is one download and one commit — not a guess.
+      - name: Emit release-mutation transition authority and projection
+        id: transition_authority
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/transition"
+          node scripts/generate-release-mutation-transition.mjs --authority-current \
+            > "$RUNNER_TEMP/transition/release-mutation-transition.v3.json"
+          node scripts/generate-release-mutation-transition.mjs --projection-current \
+            > "$RUNNER_TEMP/transition/projection-current.json"
+      - name: Export remotely generated transition authority
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: emitted-release-mutation-transition
+          path: ${{ runner.temp }}/transition/
+          if-no-files-found: error
+          retention-days: 3
+          compression-level: 0
       # The SVG carries exact proof counts used in the README/social card.
       # Regenerate the committed PNG remotely and fail on byte drift so the
       # binary asset cannot silently lag its reviewable source.

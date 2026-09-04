@@ -57,7 +57,7 @@ export function npmCiProcessSpec(execPath = process.execPath, platform = process
     try {
       const npmCli = realpathSync(candidate);
       if (statSync(npmCli).isFile()) {
-        return { command: execPath, args: [npmCli, "ci"] };
+        return { command: execPath, args: [npmCli, "ci", "--no-audit", "--no-fund"] };
       }
     } catch {
       // Try the next layout. Absence is not authority to fall back to PATH.

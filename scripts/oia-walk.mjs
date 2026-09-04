@@ -1236,7 +1236,7 @@ for (const docFile of DOCS_FILES_TO_SCAN) {
   const auditCommand = "/usr/bin/timeout --kill-after=10s 300s npm run check:audit";
   const auditStepName = "Audit source and published-consumer dependency graphs";
   const helperRel = "scripts/npm-ci-with-retry.mjs";
-  const helperSha256 = "97e1ea18490e4cd2d334b0fdc75831e6de32718fe614d6ed32737b797d840797";
+  const helperSha256 = "e2984fee26d261069446231feedbe7776ce3343e4c8dacde666cb77ab72e4298";
   const entrypointRel = "scripts/lib/entrypoint.mjs";
   const entrypointSha256 = "31e3b1af3bf48c88149b20cd71fa948e492e8e0db45551ae7271a01c36d37b1b";
   const matrixScriptShell = `\${{ matrix.script_shell }}`;

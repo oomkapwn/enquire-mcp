@@ -8,7 +8,7 @@ export const NPM_CI_INSTALL_STEP_NAME = "Install deps (npm ci with retry)";
 export const NPM_CI_AUDIT_COMMAND = "/usr/bin/timeout --kill-after=10s 300s npm run check:audit";
 
 /** Reviewed byte identity of the bounded npm-ci helper source. */
-export const NPM_CI_HELPER_SOURCE_SHA256 = "97e1ea18490e4cd2d334b0fdc75831e6de32718fe614d6ed32737b797d840797";
+export const NPM_CI_HELPER_SOURCE_SHA256 = "e2984fee26d261069446231feedbe7776ce3343e4c8dacde666cb77ab72e4298";
 
 /** Reviewed byte identity of the shared entrypoint guard. */
 export const NPM_CI_ENTRYPOINT_SOURCE_SHA256 = "31e3b1af3bf48c88149b20cd71fa948e492e8e0db45551ae7271a01c36d37b1b";

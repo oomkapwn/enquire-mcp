@@ -21,7 +21,7 @@ import { isEntrypoint } from "./lib/entrypoint.mjs";
  * NPM_CI_RETRY_POLICY.retryDelayMs === 15_000;
  */
 export const NPM_CI_RETRY_POLICY = Object.freeze({
-  attempts: 3,
+  attempts: 5,
   attemptTimeoutMs: 60_000,
   windowsAttempts: 1,
   windowsAttemptTimeoutMs: 180_000,
@@ -57,7 +57,7 @@ export function npmCiProcessSpec(execPath = process.execPath, platform = process
     try {
       const npmCli = realpathSync(candidate);
       if (statSync(npmCli).isFile()) {
-        return { command: execPath, args: [npmCli, "ci"] };
+        return { command: execPath, args: [npmCli, "ci", "--no-audit", "--no-fund"] };
       }
     } catch {
       // Try the next layout. Absence is not authority to fall back to PATH.

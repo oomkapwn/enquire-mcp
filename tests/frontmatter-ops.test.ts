@@ -222,9 +222,15 @@ describe("frontmatter_search", () => {
 
   it("refuses an incomplete bounded inventory before reading any note", async () => {
     let reads = 0;
+    // Supplies an ENTRY, so `reads === 0` proves the guard ran ahead of the read loop.
+    // With an empty listing the counter stays at zero whether the guard exists or not.
     const fake = {
       ensureExists: async () => undefined,
-      listFilesByExtensionsBounded: async () => ({ entries: [], visitedEntries: 7, complete: false }),
+      listFilesByExtensionsBounded: async () => ({
+        entries: [{ absPath: "/x/a.md", relPath: "a.md", basename: "a.md", mtimeMs: 1, size: 1 }],
+        visitedEntries: 7,
+        complete: false
+      }),
       readNote: async () => {
         reads += 1;
         throw new Error("unreachable");

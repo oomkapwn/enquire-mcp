@@ -288,6 +288,22 @@ describe("getBacklinks", () => {
     expect(out.map((h) => h.title)).toEqual(["Gamma"]);
     expect(out[0].count).toBe(1);
     expect(out[0].link_kind).toBe("wikilink");
+
+    // A folder note lives beside a folder of the same name, which is the ordinary
+    // Obsidian layout. `path` resolution tries the bare candidate first, and a
+    // directory stats successfully, so the folder used to shadow `Projects.md`
+    // entirely — the `.md` candidate was never tried and the answer was silently
+    // empty for a note that exists and is linked.
+    const folderRoot = await fs.mkdtemp(path.join(os.tmpdir(), "obsidian-mcp-foldernote-"));
+    try {
+      await fs.mkdir(path.join(folderRoot, "Projects"), { recursive: true });
+      await fs.writeFile(path.join(folderRoot, "Projects.md"), "The folder note.\n");
+      await fs.writeFile(path.join(folderRoot, "Ref.md"), "See [[Projects]].\n");
+      const byBarePath = await getBacklinks(new Vault(folderRoot), { path: "Projects" });
+      expect(byBarePath.map((h) => h.title)).toEqual(["Ref"]);
+    } finally {
+      await fs.rm(folderRoot, { recursive: true, force: true });
+    }
   });
 
   it("finds embed-style backlinks too", async () => {

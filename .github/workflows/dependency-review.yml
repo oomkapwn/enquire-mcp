@@ -1,0 +1,38 @@
+name: Dependency review
+
+# Blocks a pull request that introduces a dependency with a known advisory or a
+# licence outside the allowlist, using the dependency graph diff between base and
+# head. This is a gate on what a PR ADDS; the scoped `check:audit` in CI keeps
+# covering what the resolved tree already CONTAINS. Same threshold as that gate.
+#
+# SHA-pinned per OIA Check 9.
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  review:
+    name: Dependency review
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      # Lets the action post its findings as a PR comment.
+      pull-requests: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Review dependency changes
+        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          fail-on-severity: moderate
+          comment-summary-in-pr: on-failure
+          # The repository is MIT; runtime dependencies must be compatible with it.
+          allow-licenses: MIT, ISC, BSD-2-Clause, BSD-3-Clause, Apache-2.0, 0BSD, CC0-1.0, Unlicense, BlueOak-1.0.0, Python-2.0

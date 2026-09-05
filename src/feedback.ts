@@ -20,6 +20,7 @@ import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { performance } from "node:perf_hooks";
+import { removeArtifact } from "./erasure-receipt.js";
 import {
   acquirePersistenceFamilyLease,
   acquirePersistenceFamilyLeaseInScopes,
@@ -28,7 +29,12 @@ import {
 } from "./persistence-coordination.js";
 import { PersistenceLeaseConflictError, revalidatePersistenceLeaseScope } from "./persistence-lease.js";
 import { assertFeedbackFilePath } from "./persistence-path.js";
-import { publishSensitiveArtifact, readSensitiveArtifactText } from "./sensitive-artifact.js";
+import {
+  preflightSensitiveArtifactTemps,
+  publishSensitiveArtifact,
+  readSensitiveArtifactText,
+  removeSensitiveArtifactTemps
+} from "./sensitive-artifact.js";
 
 /** Per-note usefulness tally. `lastMarked` is an ISO-8601 timestamp (or "" if a
  *  loaded legacy/partial entry lacked one). */
@@ -459,6 +465,84 @@ export class FeedbackStore {
    *
    * @returns A promise that settles after the exact lifetime markers are gone.
    */
+  /**
+   * Erase this vault's feedback sidecar and any generated sibling.
+   *
+   * `clear-cache` deliberately excludes the `.feedback.json` subclass — the
+   * sidecar is USER-recorded state, not derived data, so clearing a parse cache
+   * must not discard it — and `prune` only reaches stems OTHER than the one
+   * kept. Without this the marks a user made for their ACTIVE vault could not
+   * be removed by any command, which is the right-to-erasure gap the AH-5
+   * post-merge re-sweep named. Follows the receipt rule in
+   * `src/erasure-receipt.ts`: only `ENOENT` is idempotent success, any other
+   * failure names the artifact, and a removal is believed only once the entry
+   * is re-statted absent.
+   *
+   * BOUNDED: this removes the current generation. A `serve` running with
+   * `--feedback-weight > 0` republishes the sidecar on the next recorded mark,
+   * so stop the server first when the intent is permanent erasure.
+   *
+   * @param file - Exact `<hash>.feedback.json` path to erase.
+   * @returns `true` when the sidecar or a generated sibling was removed.
+   * @throws If the path is outside the feedback namespace, a present leaf is
+   *   not a regular file or symlink, or a removal cannot be completed.
+   * @example
+   * await FeedbackStore.clearOnDisk(defaultFeedbackFile(vault.root));
+   */
+  static async clearOnDisk(file: string): Promise<boolean> {
+    assertFeedbackFilePath(file);
+    // Exclusive family role, like every other eraser: a `serve` holding the
+    // publisher role must not commit a new generation between the preflight
+    // and the unlink.
+    const eraser = await acquirePersistenceFamilyLease({
+      targetPath: file,
+      familyKey: FEEDBACK_PERSISTENCE_FAMILY,
+      role: "eraser",
+      gateTimeoutMs: 2_000,
+      gatePollMs: FEEDBACK_PUBLISH_POLL_MS
+    });
+    let operationError: unknown;
+    let removed = false;
+    try {
+      const canonicalFile = path.join(eraser.scopes.family.canonicalParent, eraser.scopes.family.targetName);
+      // Validate generated siblings BEFORE deleting anything, so a malformed
+      // one fails closed instead of turning erasure into a partial delete.
+      await preflightSensitiveArtifactTemps(canonicalFile);
+      let entry: import("node:fs").Stats | null = null;
+      try {
+        entry = await fs.lstat(canonicalFile);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException)?.code !== "ENOENT") {
+          throw new Error(`Unable to inspect feedback store artifact before clearing: ${path.basename(file)}`, {
+            cause: err
+          });
+        }
+      }
+      if (entry !== null && !entry.isFile() && !entry.isSymbolicLink()) {
+        throw new Error(`Refusing to clear an unsafe feedback store artifact: ${path.basename(file)}`);
+      }
+      removed = await removeArtifact(canonicalFile, "feedback store artifact");
+      removed = (await removeSensitiveArtifactTemps(canonicalFile)) > 0 || removed;
+    } catch (error) {
+      operationError = error;
+    }
+    let releaseError: unknown;
+    try {
+      await eraser.release();
+    } catch (error) {
+      releaseError = error;
+    }
+    if (operationError !== undefined && releaseError !== undefined) {
+      throw new AggregateError(
+        [operationError, releaseError],
+        "Feedback clear failed and eraser release was incomplete"
+      );
+    }
+    if (operationError !== undefined) throw operationError;
+    if (releaseError !== undefined) throw releaseError;
+    return removed;
+  }
+
   close(): Promise<void> {
     if (this.closePromise !== undefined) return this.closePromise;
     this.lifecycle = "closing";

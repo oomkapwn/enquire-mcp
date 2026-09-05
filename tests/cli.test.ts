@@ -332,6 +332,7 @@ describe("CLI subcommands E2E (against built dist/)", () => {
     expect(out).toContain("serve");
     expect(out).toContain("clear-cache");
     expect(out).toContain("clear-index");
+    expect(out).toContain("clear-feedback"); // AH-5c — the ACTIVE vault's feedback eraser
     expect(out).toContain("index");
     expect(out).toContain("configure"); // v3.11.6-rc.4 activation command
     expect(out).toContain("first-run"); // v3.12.0-rc.2 preview/apply orchestrator

@@ -133,6 +133,13 @@ export const PERSISTENT_CACHE_HELP = "Persist parsed-note cache to disk so cold 
  * `--cache-file` flag help (v3.8.0-rc.11 M-1 defensive lift). Identical
  * between serve, serve-http, and other subcommands pre-rc.11.
  */
+export const FEEDBACK_FILE_HELP =
+  "Override the closed-loop feedback sidecar location (must end exactly in the case-sensitive .feedback.json suffix)";
+
+/**
+ * `--cache-file` flag help. Shared so every subcommand that accepts the flag
+ * describes it identically (v3.8.0-rc.11 M-1).
+ */
 export const CACHE_FILE_HELP =
   "Override the persistent-cache file location (must end exactly in the case-sensitive .json suffix and not the reserved .feedback.json or .hnsw.meta.json subclasses)";
 

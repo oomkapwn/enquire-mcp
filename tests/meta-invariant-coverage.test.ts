@@ -34,7 +34,7 @@ import { releaseMutationVersionedTransitionAuditProblems } from "./release-mutat
 
 const repoRoot = path.resolve(__dirname, "..");
 const RELEASE_MUTATION_IDENTITY_FIXTURE_SHA256 = "8205d24e6d42dd4cb8986368611514131abe701434beb30150e33ea08f4b1288";
-const RELEASE_MUTATION_TRANSITION_FIXTURE_SHA256 = "585bdb3360bcdd8a460abc3ba57f8511edbba8fe12c84bdf947fa6f99790af98";
+const RELEASE_MUTATION_TRANSITION_FIXTURE_SHA256 = "ed357593dee782a0a17494b3132cbfea4257f025320346f5aa1f28bd6b40f60a";
 const releaseMutationIdentityFixturePath = path.join(repoRoot, "tests/fixtures/release-mutation-identity.v2.json");
 const releaseMutationTransitionFixturePath = path.join(repoRoot, "tests/fixtures/release-mutation-transition.v3.json");
 const releaseIntegritySourcePath = path.join(repoRoot, "tests/release-integrity.test.ts");
@@ -279,7 +279,7 @@ const EXPECTED_REPOSITORY_MUTATION_HELPER_CALL_ENTRIES = [
       sha256: "250b3ffb66b7722983d6160bca5706e2849bbc900ed5ae52418c5d85a5955747"
     }
   ],
-  ["cli-parity.test.ts", { count: 6, sha256: "a9ef3b468d6be29d93af888dd9df1289fc17bf0a0fa96d660d9378071ced0117" }],
+  ["cli-parity.test.ts", { count: 6, sha256: "5b349c27f85149d25d497e65ba9d40319cde20ceb1bb81f349cecbaf4d27b90b" }],
   [
     "docker-glama-invariant.test.ts",
     { count: 1, sha256: "5aaae89a44328f99d976c3d582430e10fb7653a328fb503ce74b960cd74b565f" }
@@ -294,7 +294,7 @@ const EXPECTED_REPOSITORY_MUTATION_HELPER_CALL_ENTRIES = [
   ],
   [
     "erasure-invariant.test.ts",
-    { count: 105, sha256: "c3615365636384eb257dfdb1ded27bafdabf8712a576d2d98879e6e67f84df37" }
+    { count: 105, sha256: "ad6f743d9c99231d7895ad1fae9c71b20450d8e71bdd5164caab08b86b10d9a2" }
   ],
   [
     "embeddings-offline.test.ts",
@@ -316,7 +316,7 @@ const EXPECTED_REPOSITORY_MUTATION_HELPER_CALL_ENTRIES = [
   ],
   [
     "k1-ast-invariant.test.ts",
-    { count: 4, sha256: "d44cd6e0a3153356aa68ed92fe1ab4cf7322f129e2968da7ec1c83c0b7363292" }
+    { count: 4, sha256: "f15ac5d7343c2cc3e6e4557240226950eb7b85a88ee66c29428eca429f0c8bb6" }
   ],
   [
     "k1-class-invariant.test.ts",
@@ -986,18 +986,18 @@ const EXPECTED_REVIEWED_ORDINARY_OWNER_SHA256_ENTRIES = [
   ["GitHub environment-token redaction", "d8ab2f87a80b4c0cbe4af8bf3e0f59391219109390fb4f6bcac01b23d41cda65"],
   ["GitHub authorization-header redaction", "d8ab2f87a80b4c0cbe4af8bf3e0f59391219109390fb4f6bcac01b23d41cda65"],
   ["GitHub diagnostic whitespace compaction", "d8ab2f87a80b4c0cbe4af8bf3e0f59391219109390fb4f6bcac01b23d41cda65"],
-  ["erasure source-path separator normalization", "851cf48b95b65e1ca34c1ee28ec0a559318947ab3b7f38bad4a08453b2b600ef"],
-  ["SQLite positive-shape label normalization", "8cd749d3f37477e0b137173caaf3d713d9c2f6ed1af9a12e5d71d486318284c7"],
-  ["SQLite suffix label normalization", "58e97e1e7ab1256926369696ae379ba208b1630834a6477dab71c94c0b68bce2"],
-  ["sensitive-reader kind label normalization", "9a848bd1b46336998059cacbcf8d9a564e8254c433e13d39f84f79d982d50c17"],
-  ["sensitive-reader growth label normalization", "eff19c303571dc1ba9a7678568daa5104a2cc401eeaa0e5e55413fc8bfe8c8ed"],
-  ["publisher kind label normalization", "8a4fc482841f114ef2a8a593e8ef792301a7014c6554d39312fbbd76d45707f8"],
-  ["hardlink route label normalization", "dbbd01a772c73e3108112cabeec5412e749761b71fb44066187aab5847ef461b"],
+  ["erasure source-path separator normalization", "b66339aa09acced9ee8e086774568abb381c454df87474bd11aa413a6f0df7d3"],
+  ["SQLite positive-shape label normalization", "4abe75661534f350cad72c810bc6a9982a7cc963aaa89c01a3b941e2a0a101bc"],
+  ["SQLite suffix label normalization", "56013fe509231412956e9e50371f5ad5edbedbae65dccf14041e1ace9849d747"],
+  ["sensitive-reader kind label normalization", "59654a5093b7e0ce523544c3602b870a9da41f1271bcabcbcc2bc0efe831d08d"],
+  ["sensitive-reader growth label normalization", "78f0a5462868a3e54cc79c6e629d4a1865103920bed9b661c6b72afb0a0778ea"],
+  ["publisher kind label normalization", "bf72d0eb8803fa44461068cd7c7714a3e2a350e96a54e777901e3c3bba81eea5"],
+  ["hardlink route label normalization", "31083b42746279dc8443e1342733441bd2a35cfbafd01d5f126019834f0e51e6"],
   ["K-1 statement semicolon normalization", "9bb382eb2d071464957b3c6cec271cb2a843dfeeabd9225c92e4497597d839ef"],
   ["K-1 block-comment stripping", "693d87a3a5e80b88156a062d2935aa3e9e278aad769fd947ec897caffcbb4fdc"],
   ["K-1 line-comment stripping", "693d87a3a5e80b88156a062d2935aa3e9e278aad769fd947ec897caffcbb4fdc"],
-  ["K-1 module-extension normalization", "118ca9a1d06d5130b63981711ca9e7d45b9945b45ae1e4350d7adf2ae4ee1774"],
-  ["K-1 source-path separator normalization", "62475010589e6e11d69a60eb08325b18c094eeb38a5f7052ee6a0d9534ca4c68"],
+  ["K-1 module-extension normalization", "e6fc6591097ffdb0c7fe4774b0beb9e4775b03b794a4c07cabc3ef48bbdb9c4c"],
+  ["K-1 source-path separator normalization", "abf5e33e07b11a1cd4bf30dc7cf6374865426b74f7fae8eeef3972911deba45a"],
   ["line-terminator block-comment stripping", "61bbbea7aac48eafa3a24d78998eb49e81a6e7911953f3c25ead27692923a80d"],
   ["line-terminator line-comment stripping", "61bbbea7aac48eafa3a24d78998eb49e81a6e7911953f3c25ead27692923a80d"],
   ["ReDoS source-path separator normalization", "1b31e3478ce12f357ad0de08f669cdd462aef1c92b5e40ea2b7252bf483dc9bd"],

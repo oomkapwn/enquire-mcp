@@ -224,7 +224,13 @@ describe("CLI parity — serve and serve-http shared-flag help text equality (v3
 
 describe("CLI privacy admission — every direct content Vault command forwards the same policy", () => {
   const REQUIRED_PRIVACY_COMMANDS = new Set(["query", "index", "build-embeddings", "setup", "eval"]);
-  const NON_CONTENT_VAULT_COMMANDS = new Set(["clear-cache", "clear-index", "prune", "clear-embeddings"]);
+  const NON_CONTENT_VAULT_COMMANDS = new Set([
+    "clear-cache",
+    "clear-feedback",
+    "clear-index",
+    "prune",
+    "clear-embeddings"
+  ]);
 
   function commandBlocks(cliSrc: string): Map<string, string> {
     const matches = [...cliSrc.matchAll(/\.command\("([a-z][a-z0-9-]*)"/g)];

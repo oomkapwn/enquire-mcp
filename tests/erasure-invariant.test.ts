@@ -301,6 +301,18 @@ const ERASURE_MANIFEST = [
       { file: "src/vault.ts", member: "clearDiskCacheOnce" },
       { file: "src/cache-prune.ts", member: "executeCachePrune" }
     ]
+  },
+  {
+    family: "closed-loop feedback sidecar (vault root + note-path keys)",
+    file: "src/feedback.ts",
+    eraser: "clearOnDisk",
+    requiredTokens: [
+      "assertFeedbackFilePath(file)",
+      'role: "eraser"',
+      "preflightSensitiveArtifactTemps(canonicalFile)",
+      "removeSensitiveArtifactTemps(canonicalFile)"
+    ],
+    receiptMembers: [{ file: "src/feedback.ts", member: "clearOnDisk" }]
   }
 ] as const;
 

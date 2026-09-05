@@ -31,7 +31,6 @@ import {
   WATCH_HELP
 } from "./cli-help.js";
 import { assertEmbedDbRecoveryOwnership, discoverEmbedDbConfig, EmbedDb } from "./embed-db.js";
-import { defaultFeedbackFile, FeedbackStore } from "./feedback.js";
 import {
   embedConfigurationNeedsReplacement,
   loadValidatedEmbedder,
@@ -50,6 +49,7 @@ import {
   resolveTransformersCacheDir,
   setEmbeddingsOffline
 } from "./embeddings.js";
+import { defaultFeedbackFile, FeedbackStore } from "./feedback.js";
 import { buildFirstRunPlan, executeFirstRunPlan, type FirstRunStep, renderFirstRunStep } from "./first-run.js";
 import {
   assertTokenizeMode,

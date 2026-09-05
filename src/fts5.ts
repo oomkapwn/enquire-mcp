@@ -705,9 +705,7 @@ const FTS_CHUNK_PARTS_INSERT_SQL =
   "INSERT INTO chunk_parts (content, parts, scope_tokens, rel_path, chunk_index, line_start, line_end, tags, kind) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)";
 
 function ftsChunkPartsCreateSql(tokenizeArg: string): string {
-  const declared = FTS_CHUNK_PARTS_COLUMNS.map((name, index) => (index < 3 ? name : `${name} UNINDEXED`)).join(
-    ",\n  "
-  );
+  const declared = FTS_CHUNK_PARTS_COLUMNS.map((name, index) => (index < 3 ? name : `${name} UNINDEXED`)).join(",\n  ");
   return `CREATE VIRTUAL TABLE IF NOT EXISTS chunk_parts USING fts5(
   ${declared},
   tokenize='${tokenizeArg}'

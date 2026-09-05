@@ -694,9 +694,9 @@ async function inspectFtsSnapshot(file: string): Promise<SnapshotResult<FtsSnaps
     if (invalidKinds?.count !== 0) throw new Error("source_state contains invalid kind values");
     if (Number(meta.schema_version) >= 7) {
       // v7 (SBS-D2') — the sibling identifier-parts table is part of the contract.
-      const parts = db
-        .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='chunk_parts'")
-        .get() as { sql?: unknown } | undefined;
+      const parts = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='chunk_parts'").get() as
+        | { sql?: unknown }
+        | undefined;
       if (typeof parts?.sql !== "string" || !/\bCREATE\s+VIRTUAL\s+TABLE\b[\s\S]*\bUSING\s+fts5\b/i.test(parts.sql)) {
         throw new Error("chunk_parts is not an FTS5 virtual table");
       }

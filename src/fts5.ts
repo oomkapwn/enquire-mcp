@@ -36,6 +36,21 @@ import { iterateContentLines } from "./structure.js";
 import { MAX_INDEX_SYNC_FILES, MAX_INDEX_SYNC_VISITED_ENTRIES, type Vault } from "./vault.js";
 import { stripTrailingSlashes } from "./wildcard-match.js";
 
+/**
+ * AH-5 — an erasure receipt is only truthful when the entry is gone. Re-stat
+ * after a successful unlink; anything but ENOENT (still present, or a parent
+ * that cannot be inspected any more) is a visible failure naming the artifact.
+ */
+async function assertArtifactAbsent(target: string, label: string): Promise<void> {
+  try {
+    await fs.lstat(target);
+  } catch (err) {
+    if (errnoCode(err) === "ENOENT") return;
+    throw new Error(`Unable to confirm removal of ${label}: ${path.basename(target)}`, { cause: err });
+  }
+  throw new Error(`${label} still present after removal: ${path.basename(target)}`);
+}
+
 function errnoCode(err: unknown): string | undefined {
   if (typeof err !== "object" || err === null || !("code" in err)) return undefined;
   const code = (err as { code?: unknown }).code;
@@ -1298,23 +1313,31 @@ export class FtsIndex {
           entry = await fs.lstat(target);
         } catch (err) {
           if (errnoCode(err) === "ENOENT") continue;
-          throw new Error("Unable to inspect FTS index artifacts before clearing", { cause: err });
+          throw new Error(`Unable to inspect FTS index artifacts before clearing: ${path.basename(target)}`, {
+            cause: err
+          });
         }
         if (!entry.isFile() && !entry.isSymbolicLink()) {
-          throw new Error("Refusing to clear an unsafe FTS index artifact");
+          throw new Error(`Refusing to clear an unsafe FTS index artifact: ${path.basename(target)}`);
         }
       }
       await this.revalidateEraser(eraser.scopes);
       for (const target of targets) {
         await this.revalidateEraser(eraser.scopes);
+        // AH-5 — erasure truth. Only ENOENT is idempotent success; every other
+        // failure names the exact artifact, and a removal is believed only once
+        // the entry is re-statted absent, so the CLI receipt never says
+        // "removed" for a file that is still there.
         try {
           await fs.unlink(target);
           removed = true;
         } catch (err) {
           if (errnoCode(err) !== "ENOENT") {
-            throw new Error("Unable to remove FTS index artifact", { cause: err });
+            throw new Error(`Unable to remove FTS index artifact: ${path.basename(target)}`, { cause: err });
           }
+          continue;
         }
+        await assertArtifactAbsent(target, "FTS index artifact");
       }
       await this.revalidateEraser(eraser.scopes);
     } catch (error) {

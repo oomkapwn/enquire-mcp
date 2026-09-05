@@ -34,7 +34,7 @@ import { releaseMutationVersionedTransitionAuditProblems } from "./release-mutat
 
 const repoRoot = path.resolve(__dirname, "..");
 const RELEASE_MUTATION_IDENTITY_FIXTURE_SHA256 = "8205d24e6d42dd4cb8986368611514131abe701434beb30150e33ea08f4b1288";
-const RELEASE_MUTATION_TRANSITION_FIXTURE_SHA256 = "e54b31bd207f9cc23f69ceaa421e3141319fe04249ef3a3e84d7ab1213682ce4";
+const RELEASE_MUTATION_TRANSITION_FIXTURE_SHA256 = "585bdb3360bcdd8a460abc3ba57f8511edbba8fe12c84bdf947fa6f99790af98";
 const releaseMutationIdentityFixturePath = path.join(repoRoot, "tests/fixtures/release-mutation-identity.v2.json");
 const releaseMutationTransitionFixturePath = path.join(repoRoot, "tests/fixtures/release-mutation-transition.v3.json");
 const releaseIntegritySourcePath = path.join(repoRoot, "tests/release-integrity.test.ts");
@@ -308,7 +308,7 @@ const EXPECTED_REPOSITORY_MUTATION_HELPER_CALL_ENTRIES = [
     "fts-persistence-coordination.test.ts",
     { count: 1, sha256: "713c5e208f8b73dbe4423916973e77f95b6de5ecdf50ddf6ddd4d3778925c71d" }
   ],
-  ["fts5.test.ts", { count: 5, sha256: "65da474dfeafeaf712a8f8f0eeb473be45fbc4fdf3c04a4331e61213688e112c" }],
+  ["fts5.test.ts", { count: 5, sha256: "5fb6ac0fcc8b41b84892ec19cea293f318cb963f424fca8243950b49620acc60" }],
   ["http-transport.test.ts", { count: 1, sha256: "4a199f3e843d763b7dcd9c1ea40088b3d91ca045b7c7ef6b44cec38fda3cbe5c" }],
   [
     "hnsw-sync-critical-section.test.ts",
@@ -1005,16 +1005,16 @@ const EXPECTED_REVIEWED_ORDINARY_OWNER_SHA256_ENTRIES = [
   ["ReDoS catastrophic control transform", "99358421ccbe92052218efb7bcf19e31029854d36548144c4a1ac4d68ec5540b"],
   [
     "Embed synchronous admission label normalization",
-    "5fa57cb72127d04836993c1aef085fe5fcef7711c26c19d31eb7e29413a14c43"
+    "65738e9c64b19cc053a600e58fa7da9cdb8a82d9165584c951abd6913a524da5"
   ],
-  ["Embed sidecar route label normalization", "551f82b8dc6391f8bfac8071489b9335dc5ff41caec2ce95a2ba6d5b3a98c3c2"],
+  ["Embed sidecar route label normalization", "316e14d33eec19c95840ea3c54d82c4773416625a364df491761a9c6f85e41dc"],
   [
     "Embed malformed-generation value normalization",
-    "9732de69cabfbd9387cdee9ffe7c04e78c19a55530c1a2fb7a50b9a007fda2ad"
+    "2dc77bab72a06575b3646c365f81d95192f7e2755b268637e608195b43674824"
   ],
   ["embedding index extension mapping", "9b30b5965abe1f6de24f5b0de8392a92859489f735556e39c5f83bac285d87d1"],
-  ["FTS route slug normalization", "c983a6fb014e42e0b6618c81df1d6b635d5906e9c655adb9a3d6e351a25dceb7"],
-  ["FTS shadow schema fixture extension", "16dc280b61d9f328205357b767ef7f0491d21422dbe38c47e0802ace85cf8115"],
+  ["FTS route slug normalization", "5636dbbe01d8e480d5514eb9af2304e2c5cefd244e8e7c851f91c469aeb9eabd"],
+  ["FTS shadow schema fixture extension", "07c77304f19911d94ebc84891c4aaed5d88af24fe3d149221b3af20b37cf244b"],
   [
     "watcher existence-guard whitespace normalization",
     "2e02b86949da126f4b7df90da07e0f01b4a1f40628ae8223f6e401ee10d7af24"

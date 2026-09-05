@@ -15,7 +15,7 @@
 [![CI](https://github.com/oomkapwn/enquire-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/oomkapwn/enquire-mcp/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/@oomkapwn/enquire-mcp.svg?label=npm&color=cb3837)](https://www.npmjs.com/package/@oomkapwn/enquire-mcp)
 [![downloads](https://img.shields.io/npm/dm/@oomkapwn/enquire-mcp.svg?color=cb3837)](https://www.npmjs.com/package/@oomkapwn/enquire-mcp)
-[![tests](https://img.shields.io/badge/tests-2270%20contracts-brightgreen.svg)](#️-confiance)
+[![tests](https://img.shields.io/badge/tests-2272%20contracts-brightgreen.svg)](#️-confiance)
 [![stable](https://img.shields.io/badge/v3.11.x-stable-brightgreen.svg)](./STABILITY.md)
 [![build provenance](https://img.shields.io/badge/build_provenance-SLSA_L2-blue.svg)](https://slsa.dev/spec/v1.0/levels#build-l2)
 [![MCP](https://img.shields.io/badge/MCP-2026--07--28-8A2BE2.svg)](https://modelcontextprotocol.io/)
@@ -53,7 +53,7 @@ Votre coffre Obsidian devient une **mémoire à long terme persistante et interr
 > 3. **Aucun appel réseau sortant initié par enquire pendant `serve`.** Les modèles sont mis en cache localement après un téléchargement explicite et unique depuis HuggingFace. Le contenu est renvoyé uniquement au client MCP connecté ; le traitement des données par ce client ou tunnel constitue sa propre frontière de confiance.
 > 4. **Rappel conscient de la fraîcheur.** Chaque résultat indique l'âge de la note ; le reclassement par récence optionnel permet à un agent de préférer le savoir frais et de signaler les faits périmés à revérifier — la frontière consciente de l'oubli, bâtie sur le `mtime` que vos fichiers possèdent déjà.
 
-**47 outils · 19 prompts MCP · 2270+ tests unitaires · 50+ langues · v3.11.x stable · lié au semver · MIT · provenance de build npm (SLSA L2).**
+**47 outils · 19 prompts MCP · 2272+ tests unitaires · 50+ langues · v3.11.x stable · lié au semver · MIT · provenance de build npm (SLSA L2).**
 
 ---
 
@@ -72,7 +72,7 @@ Votre coffre Obsidian devient une **mémoire à long terme persistante et interr
 | **Toute la surface de connaissance Obsidian** | ✅ Markdown, wikilinks, frontmatter, Canvas, Bases, PDF et OCR |
 | **Récupération agentique pour les questions difficiles** | ✅ HyDE, décomposition en sous-questions, context packs, GraphRAG-light et 19 prompts MCP |
 | **Passage à l'échelle sans perdre le contrôle** | ✅ Mises à jour HNSW en direct, persistance, refill adaptatif et quantification int8 |
-| **Confiance en production** | ✅ Lecture seule par défaut, filtres de confidentialité, HTTP authentifié, contrats semver, 2270 tests, 13 gates de publication et provenance SLSA L2 |
+| **Confiance en production** | ✅ Lecture seule par défaut, filtres de confidentialité, HTTP authentifié, contrats semver, 2272 tests, 13 gates de publication et provenance SLSA L2 |
 
 **Un coffre. Tous les agents. La pile complète. Aucun verrouillage cloud.**
 
@@ -283,7 +283,7 @@ Plus 3 ressources MCP (`obsidian://vault/info`, `obsidian://note/{path}`, `obsid
 | **Transport HTTP** | Auth bearer (SHA-256 à temps constant + `timingSafeEqual`), limite de débit par token, CORS strict |
 | **Frontmatter** | `js-yaml@5` `load` (schéma cœur YAML 1.2, sûr par défaut) — aucune exécution de code |
 | **Fichiers de cache + index** | Enquire réapplique au mieux `0600` aux fichiers sensibles lorsque les modes POSIX fonctionnent ; un parent créé par Enquire démarre en `0700`, tandis qu’un parent existant/personnalisé reste géré par l’opérateur |
-| **2270 tests unitaires · 13 contrôles CI requis pour la release · les 13 actuellement protégés** | Posture de publication vérifiée ; le détail opérationnel est fixé ci-dessous. |
+| **2272 tests unitaires · 13 contrôles CI requis pour la release · les 13 actuellement protégés** | Posture de publication vérifiée ; le détail opérationnel est fixé ci-dessous. |
 | **CI** | `release.yml` énumère directement **13 gates de release**, tous exécutés sur chaque PR : `lint`, `test (22)`, `test (24)`, `smoke`, `audit`, `coverage`, `version-consistency`, `docs`, `oia`, `protocol-conformance`, `package-consumer`, `mcpb-basic` et `docker`. Le job Windows hostile-filesystem épinglé `test-windows` est un check-run nommé supplémentaire, imposé transitivement comme prérequis bloquant de `smoke`. La protection de branche impose désormais les **13** (snapshot vérifié en direct le 2026-08-21). `test-macos` est le seul job indicatif avec `continue-on-error`. Le gate `docker` construit l'image et exécute des probes bornés du CLI et de l'introspection MCP ; CodeQL exécute deux analyses séparées non protégées via le [default setup de GitHub](https://docs.github.com/code-security/code-scanning/automatically-scanning-your-code-for-vulnerabilities-and-errors/configuring-default-setup-for-code-scanning). Avant npm publish, `release.yml` revérifie les 13 gates qu'il énumère directement sur le SHA taggé. |
 | **Couverture** | Lignes ≥86 % · instructions ≥82 % · fonctions ≥75 % · branches ≥74 % (sous garde) |
 | **Publications** | npm + release GitHub par tag · semver · **provenance de build signée** (npm + Sigstore, SLSA Build L2 ; générateur L3 sur la feuille de route) |
@@ -324,7 +324,7 @@ Canal : `npm install @oomkapwn/enquire-mcp` → dernière version stable (`@late
 ```bash
 git clone https://github.com/oomkapwn/enquire-mcp.git
 cd enquire-mcp && npm install
-npm test       # suite complète (2270 tests)
+npm test       # suite complète (2272 tests)
 npm run lint   # zéro avertissement
 npm run build  # tsc → dist/
 ```

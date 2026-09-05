@@ -1598,7 +1598,18 @@ export class EmbedDb {
               // error leaves a derived-data sidecar behind.
               throw new Error(`Unable to remove embedding-index artifact: ${path.basename(p)}`, { cause: err });
             }
+            continue;
           }
+          // AH-5 — a removal is believed only once the entry is re-statted absent.
+          try {
+            await fs.lstat(p);
+          } catch (err) {
+            if (errnoCode(err) === "ENOENT") continue;
+            throw new Error(`Unable to confirm removal of embedding-index artifact: ${path.basename(p)}`, {
+              cause: err
+            });
+          }
+          throw new Error(`Embedding-index artifact still present after removal: ${path.basename(p)}`);
         }
         await this.revalidatePersistenceScopes();
         removed = (await clearHnswPersistedArtifactsWithEraser(hnswBase, eraserCapability)) || removed;

@@ -480,7 +480,7 @@ describe("FtsIndex — exact namespace admission and bounded erasure", () => {
     await expect(fs.lstat(journal)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it.each(["inspection", "deletion"] as const)("reports a non-ENOENT %s failure", async (phase) => {
+  it.each(["inspection", "deletion", "receipt"] as const)("reports a non-ENOENT %s failure", async (phase) => {
     const wal = `${dbFile}-wal`;
     const shm = `${dbFile}-shm`;
     const journal = `${dbFile}-journal`;
@@ -504,14 +504,33 @@ describe("FtsIndex — exact namespace admission and bounded erasure", () => {
       } finally {
         spy.mockRestore();
       }
-    } else {
+    } else if (phase === "deletion") {
       const realUnlink = fs.unlink.bind(fs);
       const spy = vi.spyOn(fs, "unlink").mockImplementation(async (candidate) => {
         if (String(candidate) === canonicalDbFile) throw denied;
         return realUnlink(candidate);
       });
       try {
-        await expect(idx.clearOnDisk()).rejects.toThrow("Unable to remove FTS index artifact");
+        // AH-5 — the failure names the exact artifact that survived.
+        await expect(idx.clearOnDisk()).rejects.toThrow(
+          `Unable to remove FTS index artifact: ${path.basename(dbFile)}`
+        );
+      } finally {
+        spy.mockRestore();
+      }
+    } else {
+      // AH-5 — a filesystem that reports unlink success while the entry
+      // survives must not produce a "removed" receipt: the removal is
+      // re-statted and the surviving artifact is named.
+      const realUnlink = fs.unlink.bind(fs);
+      const spy = vi.spyOn(fs, "unlink").mockImplementation(async (candidate) => {
+        if (String(candidate) === canonicalDbFile) return;
+        return realUnlink(candidate);
+      });
+      try {
+        await expect(idx.clearOnDisk()).rejects.toThrow(
+          `FTS index artifact still present after removal: ${path.basename(dbFile)}`
+        );
       } finally {
         spy.mockRestore();
       }

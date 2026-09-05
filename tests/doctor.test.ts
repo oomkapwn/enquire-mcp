@@ -1165,8 +1165,7 @@ describe("runDoctor — strict source-state preservation", () => {
         // to PRAGMA table_info.
         slug: "parts-extra-option",
         chunkParts:
-          `content, parts, scope_tokens, ${partsReceipts}, ` +
-          "tokenize='unicode61 remove_diacritics 2', columnsize=0",
+          `content, parts, scope_tokens, ${partsReceipts}, ` + "tokenize='unicode61 remove_diacritics 2', columnsize=0",
         expected: "chunk_parts has unsupported FTS5 option(s): columnsize"
       },
       {

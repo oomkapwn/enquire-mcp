@@ -22,7 +22,7 @@ Notes for AI coding agents (Cursor, Claude Code, Codex, Aider, Devin, etc.) work
 
 ```
 src/
-├── cli.ts              — commander.js CLI (subcommands: serve, serve-http, first-run, setup, configure, install-model, build-embeddings, index, doctor, eval, eval-compare, install-ocr-lang, gen-token, clear-cache, clear-index, clear-embeddings, query, prune)
+├── cli.ts              — commander.js CLI (subcommands: serve, serve-http, first-run, setup, configure, install-model, build-embeddings, index, doctor, eval, eval-compare, install-ocr-lang, gen-token, clear-cache, clear-feedback, clear-index, clear-embeddings, query, prune)
 ├── cli-help.ts         — shared CLI help-text constants (drift-prevention; see "Help text rule" below)
 ├── first-run.ts        — deterministic preview/apply onboarding plan + stop/resume executor
 ├── server.ts           — MCP server bootstrap + dependency wiring

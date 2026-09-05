@@ -261,7 +261,22 @@ describe("FeedbackStore (v3.11.0 closed-loop feedback)", () => {
     expect(path.basename(fb).slice(0, 12)).toBe(path.basename(idx).slice(0, 12));
   });
 
-  it("prune erases the feedback sidecar of OTHER vaults (right-to-erasure) — incl. its .tmp", () => {
+  it("clear-feedback erases THIS vault's sidecar; prune only reaches OTHER vaults (right-to-erasure)", async () => {
+    // The ACTIVE vault's marks were erasable by no command before AH-5c:
+    // `clear-cache` excludes this subclass (user-recorded state, not derived
+    // data) and prune, asserted below, only ever selects OTHER stems.
+    const activeFile = path.join(dir, "active.feedback.json");
+    const store = await FeedbackStore.open(activeFile, "/vault");
+    await store.record(["a.md"], true, new Date(0).toISOString());
+    await store.close();
+    await expect(fs.stat(activeFile)).resolves.toBeTruthy();
+    await expect(FeedbackStore.clearOnDisk(activeFile)).resolves.toBe(true);
+    await expect(fs.lstat(activeFile)).rejects.toMatchObject({ code: "ENOENT" });
+    // Idempotent: a second clear reports nothing removed rather than throwing.
+    await expect(FeedbackStore.clearOnDisk(activeFile)).resolves.toBe(false);
+    // A path outside the feedback namespace is refused, never erased.
+    await expect(FeedbackStore.clearOnDisk(path.join(dir, "notes.json"))).rejects.toThrow();
+
     const KEEP = "aaaaaaaaaaaa";
     const OTHER = "bbbbbbbbbbbb";
     const removable = planCachePrune(

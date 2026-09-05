@@ -18,6 +18,7 @@ import {
   ENABLE_WRITE_HELP,
   ENABLED_TOOLS_HELP,
   EXCLUDE_GLOB_HELP,
+  FEEDBACK_FILE_HELP,
   INDEX_FILE_HELP,
   MAX_FILE_BYTES_HELP,
   NO_HNSW_PERSIST_HELP,
@@ -30,6 +31,7 @@ import {
   WATCH_HELP
 } from "./cli-help.js";
 import { assertEmbedDbRecoveryOwnership, discoverEmbedDbConfig, EmbedDb } from "./embed-db.js";
+import { defaultFeedbackFile, FeedbackStore } from "./feedback.js";
 import {
   embedConfigurationNeedsReplacement,
   loadValidatedEmbedder,
@@ -580,6 +582,29 @@ export async function main(invocation?: ConfigInput["invocation"]): Promise<void
         }
       } finally {
         await vault.closePersistence();
+      }
+    });
+
+  program
+    .command("clear-feedback")
+    .description(
+      "Delete the closed-loop feedback sidecar (`<hash>.feedback.json` + any generated sibling) for a given vault. " +
+        "`clear-cache` deliberately leaves it alone — the marks are USER-recorded state, not derived data — and " +
+        "`prune` only reaches other vaults' stems, so this is the command that erases the ACTIVE vault's feedback. " +
+        "A `serve` running with `--feedback-weight > 0` republishes the sidecar on the next recorded mark; stop it " +
+        "first when the intent is permanent erasure."
+    )
+    .requiredOption("--vault <path>", "Vault whose feedback sidecar to delete")
+    .option("--feedback-file <path>", FEEDBACK_FILE_HELP)
+    .action(async (opts: { vault: string; feedbackFile?: string }) => {
+      const vault = new Vault(opts.vault);
+      await vault.ensureExists();
+      const file = opts.feedbackFile ?? defaultFeedbackFile(vault.root);
+      const removed = await FeedbackStore.clearOnDisk(file);
+      if (removed) {
+        process.stdout.write(`enquire: removed feedback file at ${file}\n`);
+      } else {
+        process.stdout.write(`enquire: no feedback file at ${file}\n`);
       }
     });
 

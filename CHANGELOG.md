@@ -4,6 +4,14 @@ All notable changes to this project will be documented here. The format follows 
 
 ## [4.0.0-rc.7] — 2026-08-31
 
+### `clear-feedback` erases the active vault's marks (AH-5c)
+
+> **TL;DR:** **The closed-loop feedback sidecar of the vault you are USING is now erasable by a command.**
+>
+> **Bounded claim.** Before this, `clear-cache` deliberately excluded the `.feedback.json` subclass — the marks are user-recorded state, not derived data — and `prune` reaches only routing stems OTHER than the one kept, so the active vault's sidecar could be removed by no command. `enquire-mcp clear-feedback --vault <path>` takes the exclusive family lease, preflights any generated sibling before deleting anything, and follows the shared erasure-receipt rule. It removes the CURRENT generation: a `serve` running with `--feedback-weight > 0` republishes on its next recorded mark, so stop it first when the intent is permanent erasure. Nothing about the opt-in default changes — with `--feedback-weight` unset no sidecar is ever created.
+>
+> **Method note:** the AH-5 post-merge re-sweep surfaced the gap; SECURITY.md's own right-to-erasure wording was checked and found accurate about `prune`, so this is a missing capability rather than a corrected claim. The erasure manifest gains the feedback family, so its eraser is now held to the same suffix-coverage and receipt-truth assertions as every other. Behavioural coverage folded into the registration that already owned this file's erasure surface: a recorded mark is erased, a second clear is idempotent, and a path outside the feedback namespace is refused rather than erased.
+
 ### Every erasure receipt answers to one rule, in one place (AH-5b)
 
 > **TL;DR:** **AH-5's rule now covers the erasers that were delegated one line below it — the HNSW family, staged generations, the watcher guard, the parse cache and `prune` — and a receipt-path function that removes without it fails CI.**

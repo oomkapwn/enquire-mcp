@@ -549,6 +549,8 @@ describe("searchHybrid (v2.0 beta — RRF over available signals)", () => {
     }
   });
 
+  const noEmbedCtx = () => ({ ftsIndex: null, embedFile: path.join(root, "nonexistent.embed.db") });
+
   it("respects min_signals filter (consensus search)", async () => {
     const v = new Vault(root);
     // With only TF-IDF available, requiring min_signals=2 returns nothing.
@@ -558,6 +560,54 @@ describe("searchHybrid (v2.0 beta — RRF over available signals)", () => {
       { ftsIndex: null, embedFile: path.join(root, "nonexistent.embed.db") }
     );
     expect(result.matches.length).toBe(0);
+    // SBS-D1' — the recall fallback is decided on this FINAL response, after
+    // min_signals: the strict pass was empty and no ranker errored, so a relaxed
+    // pass ran and says so. It is still empty here (min_signals still applies),
+    // which is the honest answer: the flag reports that the pass ran, not that
+    // it found something.
+    expect(result.recall_fallback).toEqual({ applied: true, tfidf_min_score: 0.01 });
+    // A ranker error is NOT emptiness: a caught capacity failure reads as an empty
+    // list, and retrying it would double the walk for a request already failing.
+    const errored = await searchHybrid(
+      v,
+      { query: "OAuth", limit: 5, min_signals: 2 },
+      { ftsIndex: null, embedFile: path.join(root, "nonexistent.embed.db"), watcherHealth: { semanticUsable: false } }
+    );
+    expect(errored.signal_errors?.embeddings).toMatch(/quarantined/i);
+    expect(errored.recall_fallback).toBeUndefined();
+    // A non-empty strict response is returned as-is: byte-identical to an
+    // explicitly strict call, and never flagged.
+    const auto = await searchHybrid(v, { query: "OAuth", limit: 5 }, noEmbedCtx());
+    const strict = await searchHybrid(v, { query: "OAuth", limit: 5 }, noEmbedCtx(), "strict");
+    expect(auto.matches.length).toBeGreaterThan(0);
+    expect(auto.recall_fallback).toBeUndefined();
+    expect(JSON.stringify(auto)).toBe(JSON.stringify(strict));
+    // The relaxed floor recovers a long note whose single mention of the query
+    // term sits below the strict 0.05 cosine floor but above 0.01. The note is
+    // written into its own vault so the shared fixture's rankings stay untouched.
+    const longRoot = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-recall-floor-"));
+    try {
+      const filler = Array.from({ length: 1600 }, (_, i) => `filler${i}`).join(" ");
+      await fs.writeFile(path.join(longRoot, "Long.md"), `# Long\n\n${filler} zephyrquark ${filler}\n`);
+      await fs.writeFile(path.join(longRoot, "Other.md"), "# Other\n\nnothing relevant here\n");
+      const lv = new Vault(longRoot);
+      const strictOnly = await searchHybrid(
+        lv,
+        { query: "zephyrquark", limit: 5 },
+        { ftsIndex: null, embedFile: path.join(longRoot, "nonexistent.embed.db") },
+        "strict"
+      );
+      const recovered = await searchHybrid(
+        lv,
+        { query: "zephyrquark", limit: 5 },
+        { ftsIndex: null, embedFile: path.join(longRoot, "nonexistent.embed.db") }
+      );
+      expect(strictOnly.matches).toEqual([]);
+      expect(recovered.matches.map((m) => m.path)).toEqual(["Long.md"]);
+      expect(recovered.recall_fallback).toEqual({ applied: true, tfidf_min_score: 0.01 });
+    } finally {
+      await fs.rm(longRoot, { recursive: true, force: true });
+    }
   });
 
   it("respects folder filter end-to-end", async () => {
@@ -1515,6 +1565,28 @@ describe("searchHybridMulti — multi-query fan-out (v3.11.6-rc.7 C-4)", () => {
     const multi = await searchHybridMulti(v, { queries: ["OAuth JWT tokens"], limit: 5 }, noEmbed());
     const single = await searchHybrid(v, { query: "OAuth JWT tokens", limit: 5 }, noEmbed());
     expect(multi.matches[0]?.path).toBe(single.matches[0]?.path);
+
+    // SBS-D1' — the recall decision belongs AFTER the outer fusion, and every
+    // phrasing runs strict. An empty phrasing beside a successful one contributes
+    // no ranks, so the fused order is identical to the fan-out without it and the
+    // response is never flagged. Relaxing per phrasing (the closed #575 design)
+    // would have let the empty one come back with low-floor hits and reorder a
+    // search that was never empty.
+    const withEmptyPhrasing = await searchHybridMulti(
+      v,
+      { queries: ["OAuth JWT tokens", "zzzzquuxnomatch"], limit: 5 },
+      noEmbed()
+    );
+    expect(withEmptyPhrasing.matches.map((m) => m.path)).toEqual(multi.matches.map((m) => m.path));
+    expect(withEmptyPhrasing.recall_fallback).toBeUndefined();
+    // Only when the OUTER fused result is empty does the fan-out run again
+    // relaxed, and then it says so.
+    const allEmpty = await searchHybridMulti(
+      v,
+      { queries: ["zzzzquuxnomatch", "yyyyquuxnomatch"], limit: 5 },
+      noEmbed()
+    );
+    expect(allEmpty.recall_fallback).toEqual({ applied: true, tfidf_min_score: 0.01 });
   });
 
   it("dedupes a note that appears in multiple phrasings (one entry, fused score)", async () => {

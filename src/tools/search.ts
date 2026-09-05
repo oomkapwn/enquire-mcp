@@ -2067,6 +2067,23 @@ async function openHybridEmbedReceiptReader(
  * surfaces failed-but-attempted rankers so an empty `matches[]` can be
  * distinguished from "all rankers crashed".
  */
+/** Strict TF-IDF floor: what a normal hybrid search prunes weak matches at. */
+export const HYBRID_TFIDF_FLOOR = 0.05;
+/** Recall-fallback floor. Deliberately NOT 0: `min_score: 0` admits the entire
+ *  corpus over `fanOutK`, which re-reads and hashes every admitted note — about
+ *  2.2 GiB of work for one authenticated fan-out request. A lower floor recovers
+ *  the near-miss matches without turning an empty result into a vault scan. */
+export const HYBRID_TFIDF_RECALL_FLOOR = 0.01;
+
+/** How `searchHybrid` treats an empty strict result.
+ *  - `auto` (default): run strict; if the RESPONSE is empty and no ranker
+ *    errored, run once more at the recall floor.
+ *  - `strict`: never relax. `searchHybridMulti` passes this for every phrasing,
+ *    because relaxing per phrasing lets a previously-empty phrasing reorder an
+ *    already-successful search — the decision belongs after the outer fusion.
+ *  - `relaxed`: the second pass itself. Terminal: it never recurses. */
+export type HybridRecallMode = "auto" | "strict" | "relaxed";
+
 export interface SearchHybridResponse {
   /** Echo of the input query. */
   query: string;
@@ -2083,6 +2100,10 @@ export interface SearchHybridResponse {
    *  surfaces here as a string so agents can reason about reliability.
    *  v2.9.0 added `reranker` for cross-encoder failure surfacing. */
   signal_errors?: { bm25?: string; tfidf?: string; embeddings?: string; reranker?: string };
+  /** Present ONLY when the strict pass returned nothing and a recall pass ran.
+   *  A caller must be able to tell a strict hit from a relaxed one: these
+   *  matches cleared a lower TF-IDF floor than a normal search applies. */
+  recall_fallback?: { applied: true; tfidf_min_score: number };
   /** v3.10.0-rc.13 — reranker outcome, present ONLY when a cross-encoder was
    *  requested (`--enable-reranker` / `ctx.reranker`). `{applied:true, pairs:N}`
    *  when it re-scored N candidates; `{applied:false, reason}` when requested but
@@ -2592,6 +2613,30 @@ export function frontmatterMatches(
 
 export async function searchHybrid(
   vault: Vault,
+  args: Parameters<typeof searchHybridPass>[1],
+  ctx: Parameters<typeof searchHybridPass>[2],
+  recall: HybridRecallMode = "auto"
+): Promise<SearchHybridResponse> {
+  const strictResponse = await searchHybridPass(vault, args, ctx, recall === "relaxed" ? "relaxed" : "strict");
+  // Recall fallback. The condition is the FINAL response of a complete pass —
+  // after `min_signals`, `filter_frontmatter`, the terminal privacy filter and
+  // current-generation receipt admission — so a search that found candidates
+  // and then correctly rejected every one of them is still empty here and still
+  // deserves the second pass. Each pass ends with its own terminal admission,
+  // which is why the decision lives in this wrapper and not after that
+  // admission inside the pass.
+  //
+  // Only when NO ranker errored. A caught capacity failure surfaces as an empty
+  // ranker, indistinguishable from "nothing matched" at this point; retrying on
+  // it would double the walk for a request that is already failing.
+  if (recall === "auto" && strictResponse.matches.length === 0 && strictResponse.signal_errors === undefined) {
+    return searchHybridPass(vault, args, ctx, "relaxed");
+  }
+  return strictResponse;
+}
+
+async function searchHybridPass(
+  vault: Vault,
   args: {
     query: string;
     folder?: string;
@@ -2693,7 +2738,8 @@ export async function searchHybrid(
      * helped" signal is the final tie-break. `scores` is keyed by relPath.
      */
     feedback?: { weight: number; scores: ReadonlyMap<string, number> };
-  }
+  },
+  recall: "strict" | "relaxed"
 ): Promise<SearchHybridResponse> {
   if (ctx.embedFile !== null) assertEmbedDbFilePath(ctx.embedFile);
   await vault.ensureExists();
@@ -2853,7 +2899,7 @@ export async function searchHybrid(
       query: args.query,
       folder: args.folder,
       limit: fanOutK,
-      min_score: 0.05
+      min_score: recall === "relaxed" ? HYBRID_TFIDF_RECALL_FLOOR : HYBRID_TFIDF_FLOOR
     });
     tfidfRanked = tfidf.matches.map((m, i) => ({
       id: m.path,
@@ -3582,6 +3628,7 @@ export async function searchHybrid(
           reason: (signalErrors as { reranker?: string }).reranker ?? "no candidates to rerank"
         };
   }
+  if (recall === "relaxed") response.recall_fallback = { applied: true, tfidf_min_score: HYBRID_TFIDF_RECALL_FLOOR };
   return response;
 }
 
@@ -3656,7 +3703,24 @@ type SearchHybridCtx = Parameters<typeof searchHybrid>[2];
 export async function searchHybridMulti(
   vault: Vault,
   args: SearchHybridArgs & { queries: string[] },
-  ctx: SearchHybridCtx
+  ctx: SearchHybridCtx,
+  recall: HybridRecallMode = "auto"
+): Promise<SearchHybridResponse> {
+  const strictResponse = await searchHybridMultiPass(vault, args, ctx, recall === "relaxed" ? "relaxed" : "strict");
+  // Same rule as the single-query path, applied to the OUTER fused and admitted
+  // response: every phrasing ran strict, so relaxing here cannot reorder a
+  // search that already succeeded — it can only answer one that was empty.
+  if (recall === "auto" && strictResponse.matches.length === 0 && strictResponse.signal_errors === undefined) {
+    return searchHybridMultiPass(vault, args, ctx, "relaxed");
+  }
+  return strictResponse;
+}
+
+async function searchHybridMultiPass(
+  vault: Vault,
+  args: SearchHybridArgs & { queries: string[] },
+  ctx: SearchHybridCtx,
+  recall: "strict" | "relaxed"
 ): Promise<SearchHybridResponse> {
   if (ctx.embedFile !== null) assertEmbedDbFilePath(ctx.embedFile);
   const { reciprocalRankFusion, toRanked, RRF_K } = await import("../rrf.js");
@@ -3671,8 +3735,13 @@ export async function searchHybridMulti(
   // rc.15 (audit H-1) — bounded concurrency (was `Promise.all` = all 9 at once).
   // The shared TF-IDF corpus still builds ONCE via the buildTfidfIndex single-
   // flight; this additionally caps how many full pipelines run simultaneously.
+  // Every phrasing runs at ONE floor, chosen here. A phrasing must never decide
+  // for itself: relaxing one that came back empty would let it contribute ranks
+  // to an outer fusion that already succeeded on the others, reordering a search
+  // that was never empty. The fallback decision belongs after the outer fusion.
+  const perQueryRecall: HybridRecallMode = recall === "relaxed" ? "relaxed" : "strict";
   const perQuery = await mapWithConcurrency(queries, MAX_FANOUT_CONCURRENCY, (q) =>
-    searchHybrid(vault, { ...rest, query: q, limit: perQueryLimit }, ctx)
+    searchHybrid(vault, { ...rest, query: q, limit: perQueryLimit }, ctx, perQueryRecall)
   );
 
   // Keep, per path, the best-scoring hit object across sub-queries for display
@@ -3743,6 +3812,9 @@ export async function searchHybridMulti(
     signals_used: [...signalsUsed],
     ...(Object.keys(signalErrors).length > 0 ? { signal_errors: signalErrors } : {}),
     ...(reranked !== undefined ? { reranked } : {}),
+    ...(recall === "relaxed"
+      ? { recall_fallback: { applied: true as const, tfidf_min_score: HYBRID_TFIDF_RECALL_FLOOR } }
+      : {}),
     total_candidates: bestHit.size,
     matches: currentMatches
   };

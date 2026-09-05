@@ -213,7 +213,11 @@ describe("getOpenQuestions bounded producer admission", () => {
       vault,
       { pattern: "^Q: (.+)$", scanBudgetMs: 1000 },
       {
-        limits: { maxWorkerBatchCandidates: 1, maxWorkerBatchUtf8Bytes: 32, maxWorkerOverheadMs: 1 },
+        // 250 ms, not 1 ms: the overhead this control must NOT trip is wall time the
+        // matcher did not attribute — which includes promise scheduling on the runner,
+        // routinely >1 ms on macOS CI. The POSITIVE control above burns 5 ms and
+        // reports none, so it still trips a 1 ms ceiling; discrimination is intact.
+        limits: { maxWorkerBatchCandidates: 1, maxWorkerBatchUtf8Bytes: 32, maxWorkerOverheadMs: 250 },
         matchBatch: reportAllAsMatching
       }
     );

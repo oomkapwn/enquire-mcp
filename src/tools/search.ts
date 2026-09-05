@@ -2613,6 +2613,30 @@ export function frontmatterMatches(
 
 export async function searchHybrid(
   vault: Vault,
+  args: Parameters<typeof searchHybridPass>[1],
+  ctx: Parameters<typeof searchHybridPass>[2],
+  recall: HybridRecallMode = "auto"
+): Promise<SearchHybridResponse> {
+  const strictResponse = await searchHybridPass(vault, args, ctx, recall === "relaxed" ? "relaxed" : "strict");
+  // Recall fallback. The condition is the FINAL response of a complete pass —
+  // after `min_signals`, `filter_frontmatter`, the terminal privacy filter and
+  // current-generation receipt admission — so a search that found candidates
+  // and then correctly rejected every one of them is still empty here and still
+  // deserves the second pass. Each pass ends with its own terminal admission,
+  // which is why the decision lives in this wrapper and not after that
+  // admission inside the pass.
+  //
+  // Only when NO ranker errored. A caught capacity failure surfaces as an empty
+  // ranker, indistinguishable from "nothing matched" at this point; retrying on
+  // it would double the walk for a request that is already failing.
+  if (recall === "auto" && strictResponse.matches.length === 0 && strictResponse.signal_errors === undefined) {
+    return searchHybridPass(vault, args, ctx, "relaxed");
+  }
+  return strictResponse;
+}
+
+async function searchHybridPass(
+  vault: Vault,
   args: {
     query: string;
     folder?: string;
@@ -2715,7 +2739,7 @@ export async function searchHybrid(
      */
     feedback?: { weight: number; scores: ReadonlyMap<string, number> };
   },
-  recall: HybridRecallMode = "auto"
+  recall: "strict" | "relaxed"
 ): Promise<SearchHybridResponse> {
   if (ctx.embedFile !== null) assertEmbedDbFilePath(ctx.embedFile);
   await vault.ensureExists();
@@ -3605,19 +3629,6 @@ export async function searchHybrid(
         };
   }
   if (recall === "relaxed") response.recall_fallback = { applied: true, tfidf_min_score: HYBRID_TFIDF_RECALL_FLOOR };
-
-  // Recall fallback. The condition is the FINAL response, not an intermediate
-  // candidate pool: `min_signals`, `filter_frontmatter`, the terminal privacy
-  // filter and current-generation receipt admission all run first, so a search
-  // that found candidates and then correctly rejected every one of them is
-  // still empty here and still deserves the second pass.
-  //
-  // Only when NO ranker errored. A caught capacity failure surfaces as an empty
-  // ranker, which is indistinguishable from "nothing matched" at this point;
-  // retrying on it would double the walk for a request that is already failing.
-  if (recall === "auto" && response.matches.length === 0 && Object.keys(signalErrors).length === 0) {
-    return await searchHybrid(vault, args, ctx, "relaxed");
-  }
   return response;
 }
 
@@ -3694,6 +3705,22 @@ export async function searchHybridMulti(
   args: SearchHybridArgs & { queries: string[] },
   ctx: SearchHybridCtx,
   recall: HybridRecallMode = "auto"
+): Promise<SearchHybridResponse> {
+  const strictResponse = await searchHybridMultiPass(vault, args, ctx, recall === "relaxed" ? "relaxed" : "strict");
+  // Same rule as the single-query path, applied to the OUTER fused and admitted
+  // response: every phrasing ran strict, so relaxing here cannot reorder a
+  // search that already succeeded — it can only answer one that was empty.
+  if (recall === "auto" && strictResponse.matches.length === 0 && strictResponse.signal_errors === undefined) {
+    return searchHybridMultiPass(vault, args, ctx, "relaxed");
+  }
+  return strictResponse;
+}
+
+async function searchHybridMultiPass(
+  vault: Vault,
+  args: SearchHybridArgs & { queries: string[] },
+  ctx: SearchHybridCtx,
+  recall: "strict" | "relaxed"
 ): Promise<SearchHybridResponse> {
   if (ctx.embedFile !== null) assertEmbedDbFilePath(ctx.embedFile);
   const { reciprocalRankFusion, toRanked, RRF_K } = await import("../rrf.js");
@@ -3776,12 +3803,6 @@ export async function searchHybridMulti(
     currentMatches = await filterCurrentHybridHits(vault, matches, ctx.ftsIndex, embedReceiptReader);
   } finally {
     embedReceiptReader?.close();
-  }
-
-  // Same rule as the single-query path, applied to the OUTER response: relax
-  // only once the fused, admitted result is empty and no ranker errored.
-  if (recall === "auto" && currentMatches.length === 0 && Object.keys(signalErrors).length === 0) {
-    return await searchHybridMulti(vault, args, ctx, "relaxed");
   }
 
   return {

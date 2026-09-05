@@ -931,16 +931,21 @@ describe("searchHybrid — BM25 + TF-IDF fusion path", () => {
             { ftsIndex: idx, embedFile: path.join(ftsRoot, "nonexistent.embed.db") }
           );
           expect(replaced).toBe(true);
-          // The guarantee under test is that the STALE generation never leaks. The
-          // strict pass drops the raced hit at terminal admission and comes back
-          // empty — which is exactly the condition the recall fallback (SBS-D1')
-          // acts on, so a second, relaxed pass may now return the note from its
-          // CURRENT generation. That is the fresh answer, not the leak: the note may
-          // appear only when a fallback ran, and never with the old content.
-          if (raced.recall_fallback === undefined) {
-            expect(raced.matches.every((match) => match.path !== relPath)).toBe(true);
+          // The guarantee under test is that the retained BM25 generation never
+          // leaks. The strict pass drops the raced hit at terminal admission and
+          // comes back empty — exactly the condition the recall fallback (SBS-D1')
+          // acts on — so a relaxed pass may return the note through TF-IDF, which
+          // reads the live file. In this fixture only the INDEX moved; the file on
+          // disk still carries the secret, so a TF-IDF snippet quoting it is the
+          // live text, not the leak. What may never happen: the note surfacing
+          // without a fallback, or BM25 contributing to it at all.
+          const racedHits = raced.matches.filter((match) => match.path === relPath);
+          if (raced.recall_fallback === undefined) expect(racedHits).toEqual([]);
+          for (const hit of racedHits) {
+            expect(raced.recall_fallback).toBeDefined();
+            expect(hit.per_signal.bm25).toBeUndefined();
+            expect(hit.per_signal.tfidf).toBeDefined();
           }
-          expect(raced.matches.every((match) => !match.snippet.includes("late_receipt_secret"))).toBe(true);
         } finally {
           v.readNote = originalReadNote;
         }

@@ -294,7 +294,7 @@ const EXPECTED_REPOSITORY_MUTATION_HELPER_CALL_ENTRIES = [
   ],
   [
     "erasure-invariant.test.ts",
-    { count: 105, sha256: "c3615365636384eb257dfdb1ded27bafdabf8712a576d2d98879e6e67f84df37" }
+    { count: 105, sha256: "ad6f743d9c99231d7895ad1fae9c71b20450d8e71bdd5164caab08b86b10d9a2" }
   ],
   [
     "embeddings-offline.test.ts",

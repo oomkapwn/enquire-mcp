@@ -35,6 +35,10 @@ running.
 - **Local data at rest.** Depending on enabled options, enquire can store a
   parsed-note cache, a content-bearing FTS5 index, an embedding database,
   HNSW sidecars, and an opt-in feedback file in the local cache directory.
+  Since FTS schema v7 that index holds a SECOND copy of the chunk text for
+  every chunk containing a compound identifier, in its `chunk_parts` table;
+  both copies live inside the same `.fts5.db` file that `clear-index` removes
+  whole, so the erasure surface is unchanged.
   An incomplete cancelled rename can also preserve exact pre-rename file bytes
   inside the vault under `.enquire-rollback/<random-namespace>/`.
   The detailed sections below document their contents, permissions, and threat

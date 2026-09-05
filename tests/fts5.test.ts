@@ -3167,6 +3167,43 @@ describe("FTS5 alias + title columns (v3.11.6-rc.6 C-3)", () => {
         ]);
         expect(splitIdentifierParts("cafe\u0301Latte")).toEqual(["café", "latte"]);
         expect(splitIdentifierParts("plain words only_here")).toEqual([]);
+
+        // DOCUMENTED LIMIT (C3 re-sweep). FTS5 matches per ROW, and rc.6 stores
+        // title/aliases on chunk 0 only, so a query pairing a title-only word
+        // with a word that lives in a LATER chunk matches nothing — in either
+        // pass. v7 does not change this: chunk_parts carries the chunk's
+        // content copy and its identifier parts, never the note's title. This
+        // is a pre-existing property of note-level attributes, not a v7
+        // regression: the same query returned nothing before the parts table
+        // existed. Closing it in general would need title on EVERY parts row,
+        // which relocates the rc.6 candidate-set flooding into the score-0
+        // tail — so the limit is documented rather than traded for that.
+        const spacer = Array.from({ length: 400 }, (_, i) => `filler${i}`).join(" ");
+        idx.reindexFile(
+          "Ribosome.md",
+          1000,
+          `translation overview
+
+${spacer}
+
+call buildPeptideChain here`,
+          [],
+          [],
+          "Ribosome",
+          []
+        );
+        // POSITIVE: the title word alone finds it.
+        expect(idx.search("Ribosome").map((hit) => hit.rel_path)).toContain("Ribosome.md");
+        // POSITIVE: the identifier's parts alone find it, through the v7 pass.
+        expect(idx.search("peptide chain").map((hit) => hit.rel_path)).toContain("Ribosome.md");
+        // POSITIVE — the discriminating control: the title word ANDed with a
+        // word that IS in chunk 0's own content DOES match. Without this the
+        // empty assertion below would pass for any reason at all, including a
+        // broken fixture or a non-AND parser.
+        expect(idx.search("Ribosome translation").map((hit) => hit.rel_path)).toContain("Ribosome.md");
+        // THE LIMIT: title word + a word only reachable as a later chunk's
+        // identifier part. No single row holds both.
+        expect(idx.search("Ribosome peptide")).toEqual([]);
       } finally {
         await idx.closeAndRelease();
       }

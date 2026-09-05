@@ -105,12 +105,12 @@ function sameHnswRowManifest(
  * A quarantine-marker write failure is logged per sink without a broad route
  * latch; a fail-stop policy for that residual needs explicit authorization.
  *
- * `semanticUsable` is latched false by (1) live pending-event queue overflow
- * (`LiveWatcherAdmissionLimitError`) when a watcher exists, and (2) startup
- * embedding-integrity refusal on the server-owned health object — which is
- * `watcher.searchHealth` when `--watch` is on, or a fallback object when it
- * is not. Bare restart recovers (1). (2) is a durable snapshot mismatch:
- * repair or rebuild the embedding index, then restart.
+ * `semanticUsable` is latched false by exactly one cause: live pending-event
+ * queue overflow (`LiveWatcherAdmissionLimitError`) when a watcher exists.
+ * Dropped events mean the in-memory route may diverge from disk, so the whole
+ * semantic route is refused for this process. The on-disk index is intact; a
+ * bare restart recovers. The startup embedding-integrity latch that used to be
+ * cause (2) was removed with the per-path quarantine (PR #525).
  */
 export interface WatcherSearchHealth {
   semanticUsable: boolean;

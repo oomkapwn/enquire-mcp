@@ -1451,11 +1451,13 @@ function watcherSemanticRouteIsQuarantined(health?: Readonly<{ semanticUsable: b
 }
 
 const SEMANTIC_ROUTE_QUARANTINED =
-  "Embedding search is quarantined for this server generation. Restart recovers a watcher backlog overflow; a durable embedding-integrity refusal needs the embedding index repaired or rebuilt, then a restart.";
+  "Embedding search is quarantined for this server generation: the live watcher's event queue overflowed, so " +
+  "the in-memory semantic route may no longer match disk. The on-disk embedding index is intact — restart the " +
+  "server; no rebuild is needed.";
 
 /**
- * Refuse every embedding-search route while the watched index is quarantined
- * after an incomplete startup activation.
+ * Refuse every embedding-search route while the on-disk watcher activation
+ * guard is still armed (an interrupted startup left the interlock in place).
  *
  * @param embedFile - Prepared embedding database path.
  * @param vaultRoot - Canonical vault root that must own any present database.
@@ -2667,8 +2669,8 @@ export async function searchHybrid(
     hnsw?: HnswSearchContext | null;
     /**
      * Semantic-route health for this prepared server generation. False
-     * `semanticUsable` is a live watcher backlog overflow or a startup
-     * embedding-integrity refusal (the latter can fire without `--watch`).
+     * `semanticUsable` has exactly one cause since the per-path quarantine
+     * landed: a live watcher event-queue overflow (`LiveWatcherAdmissionLimitError`).
      * Hybrid search then degrades to its coherent lexical signals.
      */
     watcherHealth?: Readonly<{ semanticUsable: boolean }>;

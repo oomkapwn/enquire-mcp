@@ -193,6 +193,10 @@ describe("searchHybrid (v2.0 beta — RRF over available signals)", () => {
     );
     expect(availabilityQuarantined.signals_used).toEqual(["tfidf"]);
     expect(availabilityQuarantined.signal_errors?.embeddings).toMatch(/quarantined for this server generation/i);
+    // The only remaining cause is a watcher backlog; the message must not send an
+    // operator to rebuild an index that is intact (the deleted startup latch's advice).
+    expect(availabilityQuarantined.signal_errors?.embeddings).toMatch(/restart the server; no rebuild is needed/i);
+    expect(availabilityQuarantined.signal_errors?.embeddings).not.toMatch(/repaired or rebuilt/i);
     await expect(
       embeddingsSearch(v, { query: "OAuth JWT tokens", limit: 5 }, missingEmbedFile, undefined, {
         semanticUsable: false

@@ -2300,10 +2300,10 @@ export class FtsIndex {
               OR typeof(kind) <> 'text'
               OR kind NOT IN ('md', 'pdf')
            UNION
-           -- v7 — every `chunk_parts` row must MIRROR an existing chunk: same
+           -- v7 -- every chunk_parts row must MIRROR an existing chunk: same
            -- path, kind, index, content copy, scope token, line range and tags.
            -- Stated as a set difference, not a join: both FTS5 tables are
-           -- unindexed on these columns, so `LEFT JOIN ... ON rel_path` is a
+           -- unindexed on these columns, so LEFT JOIN ... ON rel_path is a
            -- nested scan (measured 142 s at 20k x 20k rows); EXCEPT sorts each
            -- side once and merges (0.07 s on the same data).
            SELECT rel_path
@@ -2317,15 +2317,15 @@ export class FtsIndex {
              WHERE kind = ?
            )
            UNION
-           -- `parts` has no counterpart in `chunks`, so its own shape is
-           -- checked directly: a row that earns no parts must not exist.
+           -- parts has no counterpart in chunks, so its own shape is checked
+           -- directly: a row that earns no parts must not exist.
            SELECT rel_path
            FROM chunk_parts
            WHERE kind = ? AND (typeof(parts) <> 'text' OR length(parts) = 0)
            UNION
            -- Unscoped, like every sibling table: a row whose kind is neither
-           -- 'md' nor 'pdf' belongs to no audit view, so a kind-scoped arm
-           -- alone would let it hide from both.
+           -- md nor pdf belongs to no audit view, so a kind-scoped arm alone
+           -- would let it hide from both.
            SELECT rel_path
            FROM chunk_parts
            WHERE typeof(kind) <> 'text' OR kind NOT IN ('md', 'pdf')

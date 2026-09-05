@@ -1421,16 +1421,13 @@ describe("CLI subcommands E2E (against built dist/)", () => {
       }
     }
     try {
-      const res = spawnSync(
-        process.execPath,
-        [distEntry, "clear-index", "--vault", vault, "--index-file", indexFile],
-        { encoding: "utf8", timeout: 20000 }
-      );
+      const res = spawnSync(process.execPath, [distEntry, "clear-index", "--vault", vault, "--index-file", indexFile], {
+        encoding: "utf8",
+        timeout: 20000
+      });
       expect(res.status).not.toBe(0);
       expect(res.stdout ?? "").not.toContain("removed fts5 index");
-      expect(`${res.stdout ?? ""}${res.stderr ?? ""}`).toMatch(
-        /Unable to remove FTS index artifact: denied\.fts5\.db/
-      );
+      expect(`${res.stdout ?? ""}${res.stderr ?? ""}`).toMatch(/Unable to remove FTS index artifact: denied\.fts5\.db/);
       await expect(fs.lstat(indexFile)).resolves.toBeTruthy();
     } finally {
       await fs.chmod(indexDir, 0o700);

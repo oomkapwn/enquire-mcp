@@ -962,6 +962,12 @@ describe("FtsIndex — full lifecycle", () => {
       "SELECT * FROM chunks_content ORDER BY id",
       "SELECT * FROM chunks_docsize ORDER BY id",
       "SELECT * FROM chunks_config ORDER BY k",
+      "SELECT rowid, * FROM chunk_parts ORDER BY rowid",
+      "SELECT * FROM chunk_parts_data ORDER BY id",
+      "SELECT * FROM chunk_parts_idx ORDER BY segid, term, pgno",
+      "SELECT * FROM chunk_parts_content ORDER BY id",
+      "SELECT * FROM chunk_parts_docsize ORDER BY id",
+      "SELECT * FROM chunk_parts_config ORDER BY k",
       "SELECT * FROM source_state ORDER BY rel_path",
       "SELECT * FROM source_quarantine ORDER BY rel_path, kind",
       "SELECT * FROM source_revision ORDER BY rel_path, kind"
@@ -1687,6 +1693,12 @@ describe("FtsIndex — full lifecycle", () => {
         "SELECT * FROM chunks_content ORDER BY id",
         "SELECT * FROM chunks_docsize ORDER BY id",
         "SELECT * FROM chunks_config ORDER BY k",
+        "SELECT rowid, * FROM chunk_parts ORDER BY rowid",
+        "SELECT * FROM chunk_parts_data ORDER BY id",
+        "SELECT * FROM chunk_parts_idx ORDER BY segid, term, pgno",
+        "SELECT * FROM chunk_parts_content ORDER BY id",
+        "SELECT * FROM chunk_parts_docsize ORDER BY id",
+        "SELECT * FROM chunk_parts_config ORDER BY k",
         "SELECT * FROM source_state ORDER BY rel_path",
         "SELECT * FROM source_quarantine ORDER BY rel_path, kind",
         "SELECT * FROM source_revision ORDER BY rel_path, kind"
@@ -2423,7 +2435,6 @@ describe("FtsIndex — PDF chunks (v2.8.0)", () => {
       "content",
       ...(version >= 5 ? ["title", "aliases"] : []),
       ...(version >= 6 ? ["scope_tokens"] : []),
-      ...(version >= 7 ? ["identifier_parts"] : []),
       "rel_path UNINDEXED",
       "chunk_index UNINDEXED",
       "line_start UNINDEXED",
@@ -2938,13 +2949,14 @@ describe("FTS5 alias + title columns (v3.11.6-rc.6 C-3)", () => {
         expect(idx.search("poolDayData").map((hit) => hit.rel_path)).toEqual(["camel.md"]);
         expect(idx.search("pool day").map((hit) => hit.rel_path)).toContain("snake.md");
         expect(idx.search("pool day data").map((hit) => hit.rel_path)).toContain("camel.md");
-        // Weight 0: the column changes what is FOUND, never how it RANKS. Two
-        // notes whose bodies tokenize identically (one opaque lowercase token vs
-        // one camelCase identifier — same term count, same length) score
-        // identically for a query spelled from that identifier's parts: the
-        // parts land in the weight-0 column, so `ident.md` matches `daily` and
-        // `report` there too, and it must not move. The #577 placement in
-        // `content` moved such a candidate from rank 1 to 51.
+        // Found, not ranked: the sibling table changes what is FOUND, never
+        // how `chunks` RANKS. Two notes whose bodies tokenize identically (one
+        // opaque lowercase token vs one camelCase identifier — same term count,
+        // same row length) score identically for a query spelled from that
+        // identifier's parts. A weight-0 COLUMN failed this on CI (1.03 vs
+        // 1.16): bm25() normalises by the whole row's length, so the parts
+        // lengthened `ident.md`. The #577 placement in `content` moved such a
+        // candidate from rank 1 to 51 for the same reason.
         idx.reindexFile("plain.md", 1000, "Aggregate the daily window for the pool report. fetchdailyreport");
         idx.reindexFile("ident.md", 1000, "Aggregate the daily window for the pool report. fetchDailyReport");
         const byPath = new Map(idx.search("daily window report").map((hit) => [hit.rel_path, hit.score]));

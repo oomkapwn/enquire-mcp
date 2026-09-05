@@ -718,7 +718,7 @@ describe("searchHybrid — BM25 + TF-IDF fusion path", () => {
 
       // Phase C — the tokenizer splits on underscores but never on case, so a
       // camelCase identifier is one opaque token in `content`. Since FTS schema
-      // v7 (SBS-D2') its parts live in the weight-0 `identifier_parts` column,
+      // v7 (SBS-D2') its parts live in the sibling `chunk_parts` table,
       // so the words it is spelled from now reach it — found, but ranked by
       // nothing: a parts-only match contributes zero and sorts after any note
       // that carries the words in `content`.

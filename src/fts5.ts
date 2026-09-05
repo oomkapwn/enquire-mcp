@@ -51,12 +51,14 @@ function errnoCode(err: unknown): string | undefined {
 const BM25_WEIGHT_CONTENT = 1.0;
 const BM25_WEIGHT_TITLE = 10.0;
 const BM25_WEIGHT_ALIASES = 5.0;
-// v7 (SBS-D2') — `identifier_parts` is matched but never scored: a compound
-// identifier becomes reachable by the words it is spelled from without the
-// column changing any rank for queries that use no such words. Weight 0 is the
-// whole point; it is why the parts live in a column of their own and not in
-// `content`, where BM25's length normalisation would move ranks for everyone.
-const BM25_WEIGHT_IDENTIFIER_PARTS = 0.0;
+// v7 (SBS-D2') — the words a compound identifier is spelled from live in the
+// sibling FTS5 table `chunk_parts`, NOT in a column of `chunks`. FTS5's bm25()
+// normalises term frequency by the length of the WHOLE row, so even a weight-0
+// column lengthens every identifier-bearing row and moves its rank for every
+// query (the #577 class again; CI measured 1.03 vs 1.16 for twins whose bodies
+// tokenize identically). A table of its own leaves `chunks` scoring
+// byte-identical to v6; parts matches are found, never ranked — see
+// `searchWithReceipts`.
 const MAX_SOURCE_REVISION = Number.MAX_SAFE_INTEGER;
 const MAX_SOURCE_RECEIPT_BATCH = 512;
 const FTS_PERSISTENCE_FAMILY = "fts5-v1";
@@ -149,7 +151,7 @@ const MAX_FTS_IDENTIFIER_PARTS_PER_CHUNK = 256;
 const MAX_FTS_IDENTIFIER_PART_CODE_POINTS = 64;
 
 /**
- * The words a compound identifier is spelled from, for the v7 `identifier_parts`
+ * The words a compound identifier is spelled from, for the v7 `chunk_parts`
  * column. Case boundaries only: the tokenizer already splits `_`, `-` and `.`,
  * so `pool_day_data` is reachable by its parts without help; `poolDayData` was
  * one opaque token no reader could reach by the words it is made of.
@@ -673,7 +675,6 @@ const FTS_CHUNK_COLUMNS_BY_SCHEMA = new Map<number, readonly string[]>([
       "title",
       "aliases",
       "scope_tokens",
-      "identifier_parts",
       "rel_path",
       "chunk_index",
       "line_start",
@@ -684,6 +685,35 @@ const FTS_CHUNK_COLUMNS_BY_SCHEMA = new Map<number, readonly string[]>([
     ]
   ]
 ]);
+// v7 — the sibling identifier-parts table. `content` is repeated for the chunks
+// that carry an identifier so a query mixing body words with identifier words
+// still has one row to AND against; `parts` is the split; `scope_tokens` keeps
+// folder scoping and the indexed per-path delete identical to `chunks`.
+const FTS_CHUNK_PARTS_COLUMNS = [
+  "content",
+  "parts",
+  "scope_tokens",
+  "rel_path",
+  "chunk_index",
+  "line_start",
+  "line_end",
+  "tags",
+  "kind"
+] as const;
+const FTS_CHUNK_PARTS_MIN_SCHEMA = 7;
+const FTS_CHUNK_PARTS_INSERT_SQL =
+  "INSERT INTO chunk_parts (content, parts, scope_tokens, rel_path, chunk_index, line_start, line_end, tags, kind) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)";
+
+function ftsChunkPartsCreateSql(tokenizeArg: string): string {
+  const declared = FTS_CHUNK_PARTS_COLUMNS.map((name, index) => (index < 3 ? name : `${name} UNINDEXED`)).join(
+    ",\n  "
+  );
+  return `CREATE VIRTUAL TABLE IF NOT EXISTS chunk_parts USING fts5(
+  ${declared},
+  tokenize='${tokenizeArg}'
+)`;
+}
+
 const FTS_SOURCE_REVISION_TRIGGER_NAMES = [
   "source_state_revision_insert",
   "source_state_revision_update",
@@ -700,6 +730,12 @@ const FTS_ADMISSION_OBJECT_TYPES = new Map<string, string>([
   ["chunks_content", "table"],
   ["chunks_docsize", "table"],
   ["chunks_config", "table"],
+  ["chunk_parts", "table"],
+  ["chunk_parts_data", "table"],
+  ["chunk_parts_idx", "table"],
+  ["chunk_parts_content", "table"],
+  ["chunk_parts_docsize", "table"],
+  ["chunk_parts_config", "table"],
   ["source_state", "table"],
   ["source_quarantine", "table"],
   ["source_revision", "table"],
@@ -887,7 +923,10 @@ function hasExactFtsShadowSql(actualSql: string, expectedSql: string): boolean {
   );
 }
 
-function ftsShadowAdmissionTables(contentColumnCount: number): ReadonlyArray<{
+function ftsShadowAdmissionTables(
+  contentColumnCount: number,
+  table = "chunks"
+): ReadonlyArray<{
   columns: readonly ExpectedSqliteXColumn[];
   name: string;
   sql: string;
@@ -903,28 +942,28 @@ function ftsShadowAdmissionTables(contentColumnCount: number): ReadonlyArray<{
   const contentColumns = Array.from({ length: contentColumnCount }, (_, index) => `c${index}`);
   return [
     {
-      name: "chunks_data",
-      sql: "CREATE TABLE chunks_data(id INTEGER PRIMARY KEY, block BLOB)",
+      name: `${table}_data`,
+      sql: `CREATE TABLE ${table}_data(id INTEGER PRIMARY KEY, block BLOB)`,
       columns: [column("id", "INTEGER", 0, 1), column("block", "BLOB", 0, 0)]
     },
     {
-      name: "chunks_idx",
-      sql: "CREATE TABLE chunks_idx(segid, term, pgno, PRIMARY KEY(segid, term)) WITHOUT ROWID",
+      name: `${table}_idx`,
+      sql: `CREATE TABLE ${table}_idx(segid, term, pgno, PRIMARY KEY(segid, term)) WITHOUT ROWID`,
       columns: [column("segid", "", 1, 1), column("term", "", 1, 2), column("pgno", "", 0, 0)]
     },
     {
-      name: "chunks_content",
-      sql: `CREATE TABLE chunks_content(id INTEGER PRIMARY KEY${contentColumns.map((name) => `, ${name}`).join("")})`,
+      name: `${table}_content`,
+      sql: `CREATE TABLE ${table}_content(id INTEGER PRIMARY KEY${contentColumns.map((name) => `, ${name}`).join("")})`,
       columns: [column("id", "INTEGER", 0, 1), ...contentColumns.map((name) => column(name, "", 0, 0))]
     },
     {
-      name: "chunks_docsize",
-      sql: "CREATE TABLE chunks_docsize(id INTEGER PRIMARY KEY, sz BLOB)",
+      name: `${table}_docsize`,
+      sql: `CREATE TABLE ${table}_docsize(id INTEGER PRIMARY KEY, sz BLOB)`,
       columns: [column("id", "INTEGER", 0, 1), column("sz", "BLOB", 0, 0)]
     },
     {
-      name: "chunks_config",
-      sql: "CREATE TABLE chunks_config(k PRIMARY KEY, v) WITHOUT ROWID",
+      name: `${table}_config`,
+      sql: `CREATE TABLE ${table}_config(k PRIMARY KEY, v) WITHOUT ROWID`,
       columns: [column("k", "", 1, 1), column("v", "", 0, 0)]
     }
   ];
@@ -1439,6 +1478,7 @@ export class FtsIndex {
         // the `tags` column). DROP IF EXISTS handles a fresh DB too.
         db.exec(`
           DROP TABLE IF EXISTS chunks;
+          DROP TABLE IF EXISTS chunk_parts;
           DROP TABLE IF EXISTS source_state;
           DROP TABLE IF EXISTS source_quarantine;
           DROP TABLE IF EXISTS source_revision;
@@ -1469,7 +1509,6 @@ export class FtsIndex {
           title,
           aliases,
           scope_tokens,
-          identifier_parts,
           rel_path UNINDEXED,
           chunk_index UNINDEXED,
           line_start UNINDEXED,
@@ -1479,6 +1518,7 @@ export class FtsIndex {
           kind UNINDEXED,
           tokenize='${tokenizeArg}'
         );
+        ${ftsChunkPartsCreateSql(tokenizeArg)};
         ${FTS_SOURCE_STATE_CURRENT_CREATE_SQL};
         ${FTS_SOURCE_QUARANTINE_CREATE_SQL};
         ${FTS_SOURCE_REVISION_CREATE_SQL};
@@ -1763,6 +1803,28 @@ export class FtsIndex {
       });
     } catch {
       throw new Error("Refusing to open a populated SQLite database without valid FTS ownership metadata");
+    }
+    if (numericVersion >= FTS_CHUNK_PARTS_MIN_SCHEMA) {
+      // v7 — the sibling identifier-parts table is admitted with the same
+      // exactness as `chunks`: declared DDL and every FTS5 shadow table.
+      const chunkPartsSql = objects.get("chunk_parts")?.sql;
+      if (
+        typeof chunkPartsSql !== "string" ||
+        normalizeFtsAdmissionSql(chunkPartsSql) !== normalizeFtsAdmissionSql(ftsChunkPartsCreateSql(declaredTokenizer))
+      ) {
+        throw new Error("Refusing to open an FTS index whose physical tokenizer or schema contradicts metadata");
+      }
+      try {
+        for (const shadow of ftsShadowAdmissionTables(FTS_CHUNK_PARTS_COLUMNS.length, "chunk_parts")) {
+          const actualSql = objects.get(shadow.name)?.sql;
+          if (typeof actualSql !== "string") throw new Error("missing FTS shadow table");
+          if (readExactFtsShadowTable(db, actualSql, shadow.sql, shadow.name, shadow.columns) === null) {
+            throw new Error("invalid FTS shadow table");
+          }
+        }
+      } catch {
+        throw new Error("Refusing to open a populated SQLite database without valid FTS ownership metadata");
+      }
     }
     let chunkColumns: SqliteColumnInfo[];
     let sourceStateColumns: SqliteColumnInfo[];
@@ -2286,7 +2348,7 @@ export class FtsIndex {
     }
     for (const row of db
       .prepare(
-        `SELECT content, title, aliases, scope_tokens, identifier_parts, rel_path, chunk_index,
+        `SELECT content, title, aliases, scope_tokens, rel_path, chunk_index,
                 line_start, line_end, tags, raw_content, kind
          FROM chunks
          WHERE kind = ?
@@ -2336,6 +2398,10 @@ export class FtsIndex {
     const db = this.requireDb();
     const txn = db.transaction(() => {
       db.prepare("DELETE FROM chunks WHERE chunks MATCH ? AND rel_path = ?").run(
+        `scope_tokens : ${ftsPathToken(relPath)}`,
+        relPath
+      );
+      db.prepare("DELETE FROM chunk_parts WHERE chunk_parts MATCH ? AND rel_path = ?").run(
         `scope_tokens : ${ftsPathToken(relPath)}`,
         relPath
       );
@@ -2391,9 +2457,14 @@ export class FtsIndex {
         `scope_tokens : ${ftsPathToken(relPath)}`,
         relPath
       );
-      const insert = db.prepare(
-        "INSERT INTO chunks (content, title, aliases, scope_tokens, identifier_parts, rel_path, chunk_index, line_start, line_end, tags, raw_content, kind) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'md')"
+      db.prepare("DELETE FROM chunk_parts WHERE chunk_parts MATCH ? AND rel_path = ?").run(
+        `scope_tokens : ${ftsPathToken(relPath)}`,
+        relPath
       );
+      const insert = db.prepare(
+        "INSERT INTO chunks (content, title, aliases, scope_tokens, rel_path, chunk_index, line_start, line_end, tags, raw_content, kind) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'md')"
+      );
+      const partsInsert = db.prepare(FTS_CHUNK_PARTS_INSERT_SQL);
       // `tags` is a comma-delimited list so the filter LIKE pattern can wrap it
       // with leading/trailing commas for exact-tag matching at query time. It is
       // repeated because filtering is row-local, but admission above bounds the
@@ -2419,16 +2490,11 @@ export class FtsIndex {
         // notes' body chunks. One title-boosted chunk per note surfaces the note
         // for a title/alias match (best-chunk-per-note collapse picks it) without
         // the saturation, and also removes the per-chunk IDF dilution + storage cost.
-        // v7 (SBS-D2') — the words each compound identifier in THIS chunk is
-        // spelled from, attributed to the chunk they came from so a hit cites
-        // the section that carries the identifier, not chunk 0. Bounded inside
-        // the splitter by truncation, never by refusing the note.
         insert.run(
           enriched,
           i === 0 ? title : "",
           i === 0 ? aliasesSerialized : "",
           scopeTokens,
-          splitIdentifierParts(c.text).join(" "),
           relPath,
           i,
           c.lineStart,
@@ -2436,6 +2502,25 @@ export class FtsIndex {
           tagsSerialized,
           c.text
         );
+        // v7 (SBS-D2') — the words each compound identifier in THIS chunk is
+        // spelled from go to the sibling `chunk_parts` table, attributed to
+        // this chunk so a hit cites the section that carries the identifier.
+        // Only identifier-bearing chunks get a row; the splitter bounds the
+        // parts by truncation, never by refusing the note.
+        const parts = splitIdentifierParts(c.text);
+        if (parts.length > 0) {
+          partsInsert.run(
+            enriched,
+            parts.join(" "),
+            scopeTokens,
+            relPath,
+            i,
+            c.lineStart,
+            c.lineEnd,
+            tagsSerialized,
+            "md"
+          );
+        }
       });
       db.prepare(
         `INSERT INTO source_state (rel_path, mtime_ms, n_chunks, kind, indexed_at)
@@ -2483,15 +2568,25 @@ export class FtsIndex {
         `scope_tokens : ${ftsPathToken(relPath)}`,
         relPath
       );
-      const insert = db.prepare(
-        "INSERT INTO chunks (content, title, aliases, scope_tokens, identifier_parts, rel_path, chunk_index, line_start, line_end, tags, raw_content, kind) VALUES (?, ?, '', ?, '', ?, ?, ?, ?, '', ?, 'pdf')"
+      db.prepare("DELETE FROM chunk_parts WHERE chunk_parts MATCH ? AND rel_path = ?").run(
+        `scope_tokens : ${ftsPathToken(relPath)}`,
+        relPath
       );
+      const insert = db.prepare(
+        "INSERT INTO chunks (content, title, aliases, scope_tokens, rel_path, chunk_index, line_start, line_end, tags, raw_content, kind) VALUES (?, ?, '', ?, ?, ?, ?, ?, '', ?, 'pdf')"
+      );
+      const partsInsert = db.prepare(FTS_CHUNK_PARTS_INSERT_SQL);
       chunks.forEach((c, i) => {
         // No wikilink/tag enrichment for PDFs (they don't have either). The
         // page marker is already in c.text so it shows up in snippets.
         // rc.6 re-sweep: title on chunk 0 only (see reindexFile) to avoid the
         // per-chunk title-match candidate-set saturation.
         insert.run(c.text, i === 0 ? pdfTitle : "", scopeTokens, relPath, i, c.lineStart, c.lineEnd, c.text);
+        // v7 (SBS-D2') — see reindexFile: identifier parts of this chunk.
+        const parts = splitIdentifierParts(c.text);
+        if (parts.length > 0) {
+          partsInsert.run(c.text, parts.join(" "), scopeTokens, relPath, i, c.lineStart, c.lineEnd, "", "pdf");
+        }
       });
       db.prepare(
         `INSERT INTO source_state (rel_path, mtime_ms, n_chunks, kind, indexed_at)
@@ -2572,10 +2667,11 @@ export class FtsIndex {
     const limit = opts.limit ?? 25;
     const safe = safeFts5Query(rawQuery);
     if (!safe) return [];
-    let matchQuery = `{content title aliases identifier_parts} : (${safe})`;
-    const where: string[] = [
-      "chunks MATCH ?",
-      "chunks.kind IN ('md', 'pdf')",
+    // Every filter is written once against a `{t}` placeholder so the v7
+    // `chunk_parts` pass below runs under exactly the admission `chunks` gets.
+    const whereTemplates: string[] = [
+      "{t} MATCH ?",
+      "{t}.kind IN ('md', 'pdf')",
       "typeof(source_state.mtime_ms) IN ('integer', 'real')",
       `source_state.mtime_ms BETWEEN -${MAX_SOURCE_REVISION} AND ${MAX_SOURCE_REVISION}`,
       "typeof(source_revision.revision) = 'integer'",
@@ -2583,11 +2679,13 @@ export class FtsIndex {
       `NOT EXISTS (
         SELECT 1
         FROM source_quarantine AS quarantined
-        WHERE quarantined.rel_path = chunks.rel_path
-          AND quarantined.kind = chunks.kind
+        WHERE quarantined.rel_path = {t}.rel_path
+          AND quarantined.kind = {t}.kind
       )`
     ];
-    const params: unknown[] = [matchQuery];
+    const filterParams: unknown[] = [];
+    const scoped = (base: string): string =>
+      opts.folder ? `(${base}) AND scope_tokens : ${ftsFolderToken(opts.folder)}` : base;
     if (opts.folder) {
       // Prefix-equality via substr — avoids GLOB pattern semantics so folder
       // names containing `*`, `?`, `[`, `]` (rare but possible in Obsidian)
@@ -2597,18 +2695,8 @@ export class FtsIndex {
       // bearer-reachable `folder` arg (measured a multi-second V8 hang). The prior
       // "$ anchor ⇒ O(n)" note was wrong — it held only for all-slash input.
       const prefix = `${stripTrailingSlashes(opts.folder)}/`;
-      // rc.43 M1 — let SQLite compute the prefix length via length() (which counts
-      // CHARACTERS, exactly like substr's 3rd arg). Binding JS `prefix.length` (UTF-16
-      // code UNITS) diverged for any folder name with an astral-plane char (emoji): e.g.
-      // "📚Books/" has JS length 8 but occupies 7 code points, so substr(rel_path,1,8)
-      // over-read by one and matched ZERO rows. Bind the prefix string twice instead.
-      // v6: intersect the content query with an indexed ancestor-folder token.
-      // The residual rel_path predicate preserves exact path semantics; the
-      // token makes FTS5 visit only the requested subtree's term hits.
-      matchQuery = `(${matchQuery}) AND scope_tokens : ${ftsFolderToken(opts.folder)}`;
-      params[0] = matchQuery;
-      where.push("substr(chunks.rel_path, 1, length(?)) = ?");
-      params.push(prefix, prefix);
+      whereTemplates.push("substr({t}.rel_path, 1, length(?)) = ?");
+      filterParams.push(prefix, prefix);
     }
     if (opts.tag) {
       // Exact-tag membership inside the comma-separated `tags` column —
@@ -2621,35 +2709,14 @@ export class FtsIndex {
       // wildcard; `%` was even worse — `tag: "%"` matched every chunk.
       // ESCAPE clause uses backslash, matching SQLite's standard form.
       const literalTag = opts.tag.replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_");
-      where.push("(',' || chunks.tags || ',') LIKE ? ESCAPE '\\'");
-      params.push(`%,${literalTag},%`);
+      whereTemplates.push("(',' || {t}.tags || ',') LIKE ? ESCAPE '\\'");
+      filterParams.push(`%,${literalTag},%`);
     }
-    const join = `JOIN source_state
-                    ON chunks.rel_path = source_state.rel_path
-                   AND chunks.kind = source_state.kind
-                  JOIN source_revision
-                    ON chunks.rel_path = source_revision.rel_path
-                   AND chunks.kind = source_revision.kind`;
     if (opts.sinceMtimeMs !== undefined) {
-      where.push("source_state.mtime_ms >= ?");
-      params.push(opts.sinceMtimeMs);
+      whereTemplates.push("source_state.mtime_ms >= ?");
+      filterParams.push(opts.sinceMtimeMs);
     }
-    const sql = `
-      SELECT chunks.rel_path AS rel_path, chunks.chunk_index AS chunk_index,
-             chunks.line_start AS line_start, chunks.line_end AS line_end,
-             chunks.kind AS kind,
-             source_state.mtime_ms AS indexed_mtime_ms,
-             source_revision.revision AS indexed_revision,
-             snippet(chunks, 0, '«', '»', '…', 25) AS snippet,
-             bm25(chunks, ${BM25_WEIGHT_CONTENT}, ${BM25_WEIGHT_TITLE}, ${BM25_WEIGHT_ALIASES}, ${BM25_WEIGHT_SCOPE}, ${BM25_WEIGHT_IDENTIFIER_PARTS}) AS score
-      FROM chunks
-      ${join}
-      WHERE ${where.join(" AND ")}
-      ORDER BY score
-      LIMIT ?
-    `;
-    params.push(limit);
-    const rows = db.prepare(sql).all<{
+    type ReceiptRow = {
       rel_path: string;
       chunk_index: number;
       line_start: number;
@@ -2659,8 +2726,27 @@ export class FtsIndex {
       indexed_revision: number;
       snippet: string;
       score: number;
-    }>(...params);
-    return rows.map((r) => ({
+    };
+    const selectFor = (t: string, score: string): string => `
+      SELECT ${t}.rel_path AS rel_path, ${t}.chunk_index AS chunk_index,
+             ${t}.line_start AS line_start, ${t}.line_end AS line_end,
+             ${t}.kind AS kind,
+             source_state.mtime_ms AS indexed_mtime_ms,
+             source_revision.revision AS indexed_revision,
+             snippet(${t}, 0, '«', '»', '…', 25) AS snippet,
+             ${score} AS score
+      FROM ${t}
+      JOIN source_state
+        ON ${t}.rel_path = source_state.rel_path
+       AND ${t}.kind = source_state.kind
+      JOIN source_revision
+        ON ${t}.rel_path = source_revision.rel_path
+       AND ${t}.kind = source_revision.kind
+      WHERE ${whereTemplates.map((clause) => clause.split("{t}").join(t)).join(" AND ")}
+      ORDER BY score
+      LIMIT ?
+    `;
+    const toHit = (r: ReceiptRow, score: number): FtsReceiptSearchHit => ({
       rel_path: r.rel_path,
       chunk_index: r.chunk_index,
       line_start: r.line_start,
@@ -2672,8 +2758,37 @@ export class FtsIndex {
       indexed_mtime_ms: r.indexed_mtime_ms,
       indexed_revision: r.indexed_revision,
       snippet: r.snippet,
-      score: -r.score // BM25 is negative; flip so higher = better for callers
-    }));
+      score
+    });
+    const rows = db
+      .prepare(
+        selectFor(
+          "chunks",
+          `bm25(chunks, ${BM25_WEIGHT_CONTENT}, ${BM25_WEIGHT_TITLE}, ${BM25_WEIGHT_ALIASES}, ${BM25_WEIGHT_SCOPE})`
+        )
+      )
+      .all<ReceiptRow>(scoped(`{content title aliases} : (${safe})`), ...filterParams, limit);
+    // BM25 is negative; flip so higher = better for callers.
+    const hits = rows.map((r) => toHit(r, -r.score));
+    if (hits.length >= limit) return hits;
+    // v7 (SBS-D2') — found, not ranked. A chunk reachable only through the
+    // words its identifiers are spelled from is appended after every ranked
+    // `chunks` hit with score 0, so the pass changes what is FOUND and never
+    // how anything above it RANKS. `bm25(chunk_parts)` only makes the order of
+    // the appended tail deterministic. A chunk the ranked pass already returned
+    // is skipped; the tail may therefore under-fill the limit.
+    const seen = new Set(hits.map((hit) => `${hit.rel_path}\u0000${hit.chunk_index}`));
+    const partsRows = db
+      .prepare(selectFor("chunk_parts", "bm25(chunk_parts)"))
+      .all<ReceiptRow>(scoped(`{content parts} : (${safe})`), ...filterParams, limit);
+    for (const r of partsRows) {
+      if (hits.length >= limit) break;
+      const key = `${r.rel_path}\u0000${r.chunk_index}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      hits.push(toHit(r, 0));
+    }
+    return hits;
   }
 
   /**

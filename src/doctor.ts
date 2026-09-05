@@ -591,7 +591,7 @@ function requireFtsDefinition(sql: string, tokenizeMode: unknown): void {
     throw new Error("tokenize_mode metadata is missing or invalid");
   }
   const normalized = sql.replace(/["`[\]]/g, "").replace(/\s+/g, " ");
-  if (!/\(\s*content\s*,\s*title\s*,\s*aliases\s*,\s*scope_tokens\s*,/i.test(normalized)) {
+  if (!/\(\s*content\s*,\s*title\s*,\s*aliases\s*,\s*scope_tokens\s*,\s*identifier_parts\s*,/i.test(normalized)) {
     throw new Error("chunks indexed-column order is incompatible");
   }
   for (const column of ["rel_path", "chunk_index", "line_start", "line_end", "tags", "raw_content", "kind"]) {
@@ -670,6 +670,7 @@ async function inspectFtsSnapshot(file: string): Promise<SnapshotResult<FtsSnaps
       "title",
       "aliases",
       "scope_tokens",
+      "identifier_parts",
       "rel_path",
       "chunk_index",
       "line_start",

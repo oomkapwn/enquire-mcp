@@ -7,13 +7,13 @@ import {
   deriveFtsTitle,
   discoverFtsIndexConfig,
   extractAliases,
-  splitIdentifierParts,
-  FtsIndex,
   ftsFolderToken,
+  FtsIndex,
   ftsPathToken,
   ftsScopeTokens,
   peekFtsMetaSafe,
   safeFts5Query,
+  splitIdentifierParts,
   syncFtsIndex,
   type TokenizeMode
 } from "../src/fts5.js";
@@ -2939,10 +2939,13 @@ describe("FTS5 alias + title columns (v3.11.6-rc.6 C-3)", () => {
         expect(idx.search("pool day").map((hit) => hit.rel_path)).toContain("snake.md");
         expect(idx.search("pool day data").map((hit) => hit.rel_path)).toContain("camel.md");
         // Weight 0: the column changes what is FOUND, never how it RANKS. Two
-        // notes with the same body words, one carrying an identifier, score
-        // identically for a query that uses no identifier parts — the #577
-        // placement in `content` moved a candidate from rank 1 to 51 here.
-        idx.reindexFile("plain.md", 1000, "Aggregate the daily window for the pool report.");
+        // notes whose bodies tokenize identically (one opaque lowercase token vs
+        // one camelCase identifier — same term count, same length) score
+        // identically for a query spelled from that identifier's parts: the
+        // parts land in the weight-0 column, so `ident.md` matches `daily` and
+        // `report` there too, and it must not move. The #577 placement in
+        // `content` moved such a candidate from rank 1 to 51.
+        idx.reindexFile("plain.md", 1000, "Aggregate the daily window for the pool report. fetchdailyreport");
         idx.reindexFile("ident.md", 1000, "Aggregate the daily window for the pool report. fetchDailyReport");
         const byPath = new Map(idx.search("daily window report").map((hit) => [hit.rel_path, hit.score]));
         expect(byPath.get("plain.md")).toBe(byPath.get("ident.md"));

@@ -4,6 +4,16 @@ All notable changes to this project will be documented here. The format follows 
 
 ## [4.0.0-rc.7] — 2026-08-31
 
+### Every erasure receipt answers to one rule, in one place (AH-5b)
+
+> **TL;DR:** **AH-5's rule now covers the erasers that were delegated one line below it — the HNSW family, staged generations, the watcher guard, the parse cache and `prune` — and a receipt-path function that removes without it fails CI.**
+>
+> **Bounded claim.** `src/erasure-receipt.ts` is the single implementation: only `ENOENT` is idempotent success, every other failure names the artifact by BASENAME (an erasure error can reach an MCP client, and the absolute path must not), and a removal is believed only once the entry is re-statted absent. This closes receipt truth, not atomicity: a failure still leaves earlier removals done, loudly. `Vault` keeps its own root-sanitising IO wrappers and confirms through them, so its receipt is pinned by token rather than by the raw-sink detector.
+>
+> **Corrects a false claim.** The AH-5 entry below states that the persistent-cache, HNSW-generation, staged-temp and watcher-guard erasers "already followed this rule". They did not — every one of them set `removed = true` immediately after `fs.unlink`, feeding the same boolean AH-5 had just made trustworthy for the SQLite families. The post-merge re-sweep of AH-5 found it; the statement was wrong when written.
+>
+> **Method note:** mandatory post-merge re-sweep of AH-5 (6 lenses × 3 skeptics, 87 agents; 23 confirmed findings deduplicating to this class plus the docs corrections). The structural close extends the erasure manifest with a per-family `receiptMembers` list, asserted inside the existing registrations: each named function's body must contain no raw `fs.unlink`/`fs.rmdir`/`fs.rm`. Negative controls pin the detector on the exact pre-fix shape, on a directory removal, on the shared-leaf form, and on a commented-out sink.
+
 ### The v7 search contract says what the parts pass does and does not promise
 
 > **TL;DR:** **A score of exactly `0` marks a hit found only through the identifier-parts pass, a parts-only snippet carries no `«»` markers, and the one query shape the pass cannot reach is documented rather than papered over.**
@@ -24,7 +34,7 @@ All notable changes to this project will be documented here. The format follows 
 
 > **TL;DR:** **`clear-index` and `clear-embeddings` can no longer print a “removed” receipt for a file that is still on disk, and a failed removal names the exact artifact.**
 >
-> **Bounded claim.** Only `ENOENT` is idempotent success. Permission, type, busy and any other inspection or unlink failure is a visible error carrying the artifact’s basename; a successful `unlink` is believed only once the entry is re-statted absent. The persistent-cache, HNSW-generation, staged-temp and watcher-guard erasers already followed this rule and are unchanged.
+> **Bounded claim.** Only `ENOENT` is idempotent success. Permission, type, busy and any other inspection or unlink failure is a visible error carrying the artifact’s basename; a successful `unlink` is believed only once the entry is re-statted absent. The persistent-cache, HNSW-generation, staged-temp and watcher-guard erasers are unchanged by this entry — see the AH-5b entry above, which corrects the claim originally made here that they already followed the rule, and brings them under it.
 >
 > **Method note:** BACKLOG **AH-5**. Controls: injected non-`ENOENT` unlink failure on the FTS main file and a “successful” unlink that leaves the WAL in place both reject with the named artifact and leave every sentinel byte intact; a mode-0500 index directory makes the compiled `clear-index` exit non-zero with no receipt on stdout; a missing file still returns the idempotent “no fts5 index files” path.
 

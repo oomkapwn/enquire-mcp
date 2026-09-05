@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import { promises as fs, constants as fsConstants } from "node:fs";
+import { removeArtifact, removeArtifactDirectory } from "./erasure-receipt.js";
 import * as path from "node:path";
 
 const TOKEN_BYTES = 24;
@@ -443,12 +444,14 @@ export async function removeSensitiveArtifactTempEntry(entryPath: string): Promi
   const inspected = await inspectSensitiveArtifactTempEntry(entryPath);
   if (!inspected) return false;
   if (inspected.generated.kind === "tmp") {
-    await fs.unlink(entryPath);
+    await removeArtifact(entryPath, "generated temporary artifact");
     return true;
   }
   await removeInspectedEmptyEmbedLeaseNamespace(entryPath, inspected.leaseScopeDirectories);
-  for (const child of orderedStagedChildrenForRemoval(inspected)) await fs.unlink(path.join(entryPath, child));
-  await fs.rmdir(entryPath);
+  for (const child of orderedStagedChildrenForRemoval(inspected)) {
+    await removeArtifact(path.join(entryPath, child), "staged generation member");
+  }
+  await removeArtifactDirectory(entryPath, "staged generation directory");
   return true;
 }
 

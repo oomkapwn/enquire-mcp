@@ -986,13 +986,13 @@ const EXPECTED_REVIEWED_ORDINARY_OWNER_SHA256_ENTRIES = [
   ["GitHub environment-token redaction", "d8ab2f87a80b4c0cbe4af8bf3e0f59391219109390fb4f6bcac01b23d41cda65"],
   ["GitHub authorization-header redaction", "d8ab2f87a80b4c0cbe4af8bf3e0f59391219109390fb4f6bcac01b23d41cda65"],
   ["GitHub diagnostic whitespace compaction", "d8ab2f87a80b4c0cbe4af8bf3e0f59391219109390fb4f6bcac01b23d41cda65"],
-  ["erasure source-path separator normalization", "04ffd632f663d469e7eed90a35790073c422c58ffeec1ddbde2409f3a2c56f46"],
-  ["SQLite positive-shape label normalization", "09a46a07c3b1dbf7a9bd84f05d445a665bdbfbc65a2a19c2215ad53957e69f84"],
-  ["SQLite suffix label normalization", "12a6cec320d4e156c5f696d4c5a86654f1e69b24c23b7f91d93a2f033810f637"],
-  ["sensitive-reader kind label normalization", "6ec8abdb9f452fb9f6410a5b56a075c842ea120510a9f589c45b2a5df6e075d6"],
-  ["sensitive-reader growth label normalization", "c370cb610800d11331ed2bf5d875646eaefeabc7aa2552ab82c2a83e34ff8b3d"],
-  ["publisher kind label normalization", "b6150d5505863137def2c129c515cd4d919c5ebdc539426e61c9762a545a718c"],
-  ["hardlink route label normalization", "08a10a651414f0ea82679e9bff6dff2f7eabd364fd7d0cb494ab7a934bd16248"],
+  ["erasure source-path separator normalization", "851cf48b95b65e1ca34c1ee28ec0a559318947ab3b7f38bad4a08453b2b600ef"],
+  ["SQLite positive-shape label normalization", "8cd749d3f37477e0b137173caaf3d713d9c2f6ed1af9a12e5d71d486318284c7"],
+  ["SQLite suffix label normalization", "58e97e1e7ab1256926369696ae379ba208b1630834a6477dab71c94c0b68bce2"],
+  ["sensitive-reader kind label normalization", "9a848bd1b46336998059cacbcf8d9a564e8254c433e13d39f84f79d982d50c17"],
+  ["sensitive-reader growth label normalization", "eff19c303571dc1ba9a7678568daa5104a2cc401eeaa0e5e55413fc8bfe8c8ed"],
+  ["publisher kind label normalization", "8a4fc482841f114ef2a8a593e8ef792301a7014c6554d39312fbbd76d45707f8"],
+  ["hardlink route label normalization", "dbbd01a772c73e3108112cabeec5412e749761b71fb44066187aab5847ef461b"],
   ["K-1 statement semicolon normalization", "9bb382eb2d071464957b3c6cec271cb2a843dfeeabd9225c92e4497597d839ef"],
   ["K-1 block-comment stripping", "693d87a3a5e80b88156a062d2935aa3e9e278aad769fd947ec897caffcbb4fdc"],
   ["K-1 line-comment stripping", "693d87a3a5e80b88156a062d2935aa3e9e278aad769fd947ec897caffcbb4fdc"],
@@ -1005,12 +1005,12 @@ const EXPECTED_REVIEWED_ORDINARY_OWNER_SHA256_ENTRIES = [
   ["ReDoS catastrophic control transform", "99358421ccbe92052218efb7bcf19e31029854d36548144c4a1ac4d68ec5540b"],
   [
     "Embed synchronous admission label normalization",
-    "65738e9c64b19cc053a600e58fa7da9cdb8a82d9165584c951abd6913a524da5"
+    "067b0f3da66ba515ca37cd8f74e253d9fddf0f3919a67c52a361eea06b29ccbf"
   ],
-  ["Embed sidecar route label normalization", "316e14d33eec19c95840ea3c54d82c4773416625a364df491761a9c6f85e41dc"],
+  ["Embed sidecar route label normalization", "f4871baa256234b783529193cddc1c701b234648022d789f35e29b8ff2ffc87c"],
   [
     "Embed malformed-generation value normalization",
-    "2dc77bab72a06575b3646c365f81d95192f7e2755b268637e608195b43674824"
+    "d2d4751061087305b4b125064d6330b3a4e9ff28f618c93d06ed5a9e42438bd4"
   ],
   ["embedding index extension mapping", "9b30b5965abe1f6de24f5b0de8392a92859489f735556e39c5f83bac285d87d1"],
   ["FTS route slug normalization", "a0491c850ebdbcb11a602903586303c7ad0c9ad445936741e4a4b13b7d822391"],

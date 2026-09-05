@@ -21,6 +21,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
+import { removeArtifact } from "./erasure-receipt.js";
 import { clearHnswPersistedArtifactsWithEraser, preflightHnswPersistedArtifacts } from "./hnsw.js";
 import { optionalDepDetail } from "./optional-dep.js";
 import {
@@ -1589,27 +1590,10 @@ export class EmbedDb {
         }
         await this.revalidatePersistenceScopes();
         for (const p of targets) {
-          try {
-            await fs.unlink(p);
-            removed = true;
-          } catch (err) {
-            if (errnoCode(err) !== "ENOENT") {
-              // Recovery must never report success while a permission/type/race
-              // error leaves a derived-data sidecar behind.
-              throw new Error(`Unable to remove embedding-index artifact: ${path.basename(p)}`, { cause: err });
-            }
-            continue;
-          }
-          // AH-5 — a removal is believed only once the entry is re-statted absent.
-          try {
-            await fs.lstat(p);
-          } catch (err) {
-            if (errnoCode(err) === "ENOENT") continue;
-            throw new Error(`Unable to confirm removal of embedding-index artifact: ${path.basename(p)}`, {
-              cause: err
-            });
-          }
-          throw new Error(`Embedding-index artifact still present after removal: ${path.basename(p)}`);
+          // Recovery must never report success while a permission/type/race
+          // error leaves a derived-data sidecar behind, and a removal is
+          // believed only once the entry is re-statted absent.
+          removed = (await removeArtifact(p, "embedding-index artifact")) || removed;
         }
         await this.revalidatePersistenceScopes();
         removed = (await clearHnswPersistedArtifactsWithEraser(hnswBase, eraserCapability)) || removed;

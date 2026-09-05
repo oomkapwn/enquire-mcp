@@ -13,6 +13,7 @@ import {
   ftsScopeTokens,
   peekFtsMetaSafe,
   safeFts5Query,
+  splitIdentifierParts,
   syncFtsIndex,
   type TokenizeMode
 } from "../src/fts5.js";
@@ -961,6 +962,12 @@ describe("FtsIndex — full lifecycle", () => {
       "SELECT * FROM chunks_content ORDER BY id",
       "SELECT * FROM chunks_docsize ORDER BY id",
       "SELECT * FROM chunks_config ORDER BY k",
+      "SELECT rowid, * FROM chunk_parts ORDER BY rowid",
+      "SELECT * FROM chunk_parts_data ORDER BY id",
+      "SELECT * FROM chunk_parts_idx ORDER BY segid, term, pgno",
+      "SELECT * FROM chunk_parts_content ORDER BY id",
+      "SELECT * FROM chunk_parts_docsize ORDER BY id",
+      "SELECT * FROM chunk_parts_config ORDER BY k",
       "SELECT * FROM source_state ORDER BY rel_path",
       "SELECT * FROM source_quarantine ORDER BY rel_path, kind",
       "SELECT * FROM source_revision ORDER BY rel_path, kind"
@@ -1686,6 +1693,12 @@ describe("FtsIndex — full lifecycle", () => {
         "SELECT * FROM chunks_content ORDER BY id",
         "SELECT * FROM chunks_docsize ORDER BY id",
         "SELECT * FROM chunks_config ORDER BY k",
+        "SELECT rowid, * FROM chunk_parts ORDER BY rowid",
+        "SELECT * FROM chunk_parts_data ORDER BY id",
+        "SELECT * FROM chunk_parts_idx ORDER BY segid, term, pgno",
+        "SELECT * FROM chunk_parts_content ORDER BY id",
+        "SELECT * FROM chunk_parts_docsize ORDER BY id",
+        "SELECT * FROM chunk_parts_config ORDER BY k",
         "SELECT * FROM source_state ORDER BY rel_path",
         "SELECT * FROM source_quarantine ORDER BY rel_path, kind",
         "SELECT * FROM source_revision ORDER BY rel_path, kind"
@@ -2421,6 +2434,7 @@ describe("FtsIndex — PDF chunks (v2.8.0)", () => {
     const chunkColumnsFor = (version: number): string[] => [
       "content",
       ...(version >= 5 ? ["title", "aliases"] : []),
+      ...(version >= 6 ? ["scope_tokens"] : []),
       "rel_path UNINDEXED",
       "chunk_index UNINDEXED",
       "line_start UNINDEXED",
@@ -2926,6 +2940,50 @@ describe("FTS5 alias + title columns (v3.11.6-rc.6 C-3)", () => {
         expect(hits.length).toBeGreaterThanOrEqual(2);
         // The title-match note ranks first thanks to the 10× title weight.
         expect(hits[0]?.rel_path).toBe("Mitochondria.md");
+
+        // SBS-D2' (v7) — a compound identifier is reachable by the words it is
+        // spelled from, through a column of its own. The tokenizer already splits
+        // `_`, so the snake_case twin always was; the camelCase one was not.
+        idx.reindexFile("camel.md", 1000, "Aggregate poolDayData for the window.");
+        idx.reindexFile("snake.md", 1000, "Aggregate liquidity_pool_day for the window.");
+        expect(idx.search("poolDayData").map((hit) => hit.rel_path)).toEqual(["camel.md"]);
+        expect(idx.search("pool day").map((hit) => hit.rel_path)).toContain("snake.md");
+        expect(idx.search("pool day data").map((hit) => hit.rel_path)).toContain("camel.md");
+        // Found, not ranked: the sibling table changes what is FOUND, never
+        // how `chunks` RANKS. Two notes whose bodies tokenize identically (one
+        // opaque lowercase token vs one camelCase identifier — same term count,
+        // same row length) score identically for a query spelled from that
+        // identifier's parts. A weight-0 COLUMN failed this on CI (1.03 vs
+        // 1.16): bm25() normalises by the whole row's length, so the parts
+        // lengthened `ident.md`. The #577 placement in `content` moved such a
+        // candidate from rank 1 to 51 for the same reason.
+        idx.reindexFile("plain.md", 1000, "Aggregate the daily window for the pool report. fetchdailyreport");
+        idx.reindexFile("ident.md", 1000, "Aggregate the daily window for the pool report. fetchDailyReport");
+        const byPath = new Map(idx.search("daily window report").map((hit) => [hit.rel_path, hit.score]));
+        expect(byPath.get("plain.md")).toBe(byPath.get("ident.md"));
+        // Attribution: parts belong to the chunk that carries the identifier,
+        // so the hit cites that section — not chunk 0.
+        const filler = Array.from({ length: 400 }, (_, i) => `word${i}`).join(" ");
+        idx.reindexFile("deep.md", 1000, `# Top\n\n${filler}\n\n## Later\n\ncalls rebuildSearchGraph here\n`);
+        const deep = idx.search("rebuild search graph").find((hit) => hit.rel_path === "deep.md");
+        expect(deep?.chunk_index).toBeGreaterThan(0);
+        // Bounded by truncation, never by refusal: a note with more identifiers
+        // than the per-chunk cap still indexes and is still findable by its body.
+        const flood = Array.from({ length: 600 }, (_, i) => `fooBar${i}Baz`).join(" ");
+        idx.reindexFile("flood.md", 1000, `unmistakableBodyMarker ${flood}`);
+        expect(idx.search("unmistakableBodyMarker").map((hit) => hit.rel_path)).toEqual(["flood.md"]);
+        // The splitter's boundaries, pinned: upper-case runs, digit edges, NFC,
+        // and single words emitting nothing.
+        expect(splitIdentifierParts("call parseHTTPResponse(sha256Hash)")).toEqual([
+          "parse",
+          "http",
+          "response",
+          "sha",
+          "256",
+          "hash"
+        ]);
+        expect(splitIdentifierParts("cafe\u0301Latte")).toEqual(["café", "latte"]);
+        expect(splitIdentifierParts("plain words only_here")).toEqual([]);
       } finally {
         await idx.closeAndRelease();
       }

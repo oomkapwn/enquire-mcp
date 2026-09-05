@@ -767,21 +767,20 @@ describe("searchHybrid — BM25 + TF-IDF fusion path", () => {
       expect(unfloored.matches.length).toBeGreaterThan(0);
 
       // Phase C — the tokenizer splits on underscores but never on case, so a
-      // camelCase identifier stays one opaque token and cannot be reached by
-      // the words it is spelled from.
+      // camelCase identifier is one opaque token in `content`. Since FTS schema
+      // v7 (SBS-D2') its parts live in the sibling `chunk_parts` table,
+      // so the words it is spelled from now reach it — found, but ranked by
+      // nothing: a parts-only match contributes zero and sorts after any note
+      // that carries the words in `content`.
       // POSITIVE control: the whole token IS indexed and findable.
       expect(probeIdx.search("pooldaydata", { limit: 10 }).map((hit) => hit.rel_path)).toEqual(["Camel.md"]);
-      // POSITIVE control: the snake_case twin DOES split into its parts.
-      expect(probeIdx.search("pool day", { limit: 10 }).map((hit) => hit.rel_path)).toEqual(["Snake.md"]);
-      // Characterization: the full spelling reaches NEITHER note, and the two
-      // reasons are different. `Camel.md` is unreachable because the tokenizer
-      // never splits on case; `Snake.md` is unreachable because it has no `data`
-      // token and FTS5 joins the terms with an implicit AND. Asserting the empty
-      // result states both — an earlier `not.toContain("Camel.md")` here was
-      // satisfied by the emptiness alone and said nothing about case splitting.
-      // The discriminating assertion is the `pool day` one above: if camelCase
-      // split, `Camel.md` would appear there too.
-      expect(probeIdx.search("pool day data", { limit: 10 })).toEqual([]);
+      // The discriminating assertion: `Snake.md` has the words in `content`
+      // (the tokenizer splits `_`); `Camel.md` is reached only through its
+      // parts and therefore comes second. Before v7 this was `["Snake.md"]`.
+      expect(probeIdx.search("pool day", { limit: 10 }).map((hit) => hit.rel_path)).toEqual(["Snake.md", "Camel.md"]);
+      // The full spelling reaches ONLY the camelCase note: `Snake.md` has no
+      // `data` token and FTS5 joins the terms with an implicit AND.
+      expect(probeIdx.search("pool day data", { limit: 10 }).map((hit) => hit.rel_path)).toEqual(["Camel.md"]);
     } finally {
       await probeIdx.closeAndRelease();
       await fs.rm(probeRoot, { recursive: true, force: true });

@@ -645,6 +645,24 @@ describe("validateNoteProposal — anti-slop write linter (v0.12)", () => {
     expect(noHintWarning).toBeDefined();
     expect(Object.hasOwn(noHintWarning ?? {}, "suggestion")).toBe(false);
     expect(() => textResult(result)).not.toThrow();
+
+    // The did-you-mean budget counts candidate x target PAIRS, but each pair costs
+    // O(|target|): every candidate is searched inside the target. A single target of
+    // ~1 MB therefore bought a full-megabyte scan per candidate — 8 s of blocked
+    // event loop on a 50k-note vault, from one call to an always-on read-only tool.
+    // A target longer than any filesystem allows cannot be a note name, so it earns
+    // no hint; it is still reported broken. A short near-miss right next to it keeps
+    // its hint, which is what makes this assertion about the CAP and not about
+    // suggestions being absent for some other reason.
+    const hugeTarget = `Alph${"a".repeat(2_000)}`;
+    const capped = await validateNoteProposal(v, {
+      path: "Inbox/y.md",
+      content: `[[${hugeTarget}]] and [[Alph]].\n`
+    });
+    const huge = capped.wikilinks.find((w) => w.target === hugeTarget);
+    expect(huge?.status).toBe("broken");
+    expect(huge?.suggestions).toEqual([]);
+    expect(capped.wikilinks.find((w) => w.target === "Alph")?.suggestions.length ?? 0).toBeGreaterThan(0);
   });
 
   it("folds suggestion candidates once and shares one budget across distinct broken targets", async () => {

@@ -1756,6 +1756,33 @@ describe("EmbedDb", () => {
     expect(await db.clearOnDisk()).toBe(false);
   });
 
+  it("clearOnDisk refuses a false receipt when an artifact survives its unlink (AH-5)", async () => {
+    const file = path.join(dir, "survivor.embed.db");
+    const wal = `${file}-wal`;
+    await fs.writeFile(file, "MAIN_SENTINEL");
+    await fs.writeFile(wal, "WAL_SENTINEL");
+    const db = new EmbedDb({ file, vaultRoot: "/v", modelAlias: "multilingual", dim: 4 });
+    const canonicalWal = path.join(await fs.realpath(dir), path.basename(wal));
+    const realUnlink = fs.unlink.bind(fs);
+    // The WAL "unlink" succeeds without removing anything: the removal must be
+    // re-statted and the surviving artifact named, never reported as cleared.
+    const spy = vi.spyOn(fs, "unlink").mockImplementation(async (candidate) => {
+      if (String(candidate) === canonicalWal) return;
+      return realUnlink(candidate);
+    });
+    try {
+      await expect(db.clearOnDisk()).rejects.toThrow(
+        `Embedding-index artifact still present after removal: ${path.basename(wal)}`
+      );
+    } finally {
+      spy.mockRestore();
+    }
+    expect(await fs.readFile(wal, "utf8")).toBe("WAL_SENTINEL");
+    // NEGATIVE control of the control: with the real unlink the same family clears.
+    await expect(db.clearOnDisk()).resolves.toBe(true);
+    await expect(fs.lstat(wal)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it.each(["rollback-journal directory"])(
     "clearOnDisk preflights the complete SQLite family before an unsafe %s",
     async () => {

@@ -1396,6 +1396,47 @@ describe("CLI subcommands E2E (against built dist/)", () => {
     }
   });
 
+  it("`enquire-mcp clear-index` exits non-zero without a receipt when an artifact survives (AH-5)", async (ctx) => {
+    if (!distExists()) return ctx.skip();
+    if (!canRunFts5) return ctx.skip();
+    if (process.platform === "win32") return ctx.skip("POSIX directory write-mode control");
+    const indexDir = path.join(tmpdir, "clear-index-denied");
+    await fs.mkdir(indexDir, { recursive: true });
+    const indexFile = path.join(indexDir, "denied.fts5.db");
+    execFileSync(process.execPath, [distEntry, "index", "--vault", vault, "--index-file", indexFile], {
+      encoding: "utf8"
+    });
+    await fs.chmod(indexDir, 0o500);
+    const capabilityProbe = path.join(indexDir, "write-capability-probe");
+    try {
+      await fs.writeFile(capabilityProbe, "probe", { flag: "wx" });
+      await fs.unlink(capabilityProbe);
+      await fs.chmod(indexDir, 0o700);
+      return ctx.skip("filesystem identity can still write through a mode-0500 directory");
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "EACCES" && code !== "EPERM") {
+        await fs.chmod(indexDir, 0o700);
+        throw error;
+      }
+    }
+    try {
+      const res = spawnSync(
+        process.execPath,
+        [distEntry, "clear-index", "--vault", vault, "--index-file", indexFile],
+        { encoding: "utf8", timeout: 20000 }
+      );
+      expect(res.status).not.toBe(0);
+      expect(res.stdout ?? "").not.toContain("removed fts5 index");
+      expect(`${res.stdout ?? ""}${res.stderr ?? ""}`).toMatch(
+        /Unable to remove FTS index artifact: denied\.fts5\.db/
+      );
+      await expect(fs.lstat(indexFile)).resolves.toBeTruthy();
+    } finally {
+      await fs.chmod(indexDir, 0o700);
+    }
+  });
+
   it("`enquire-mcp clear-index` removes db + WAL/SHM/rollback journal after a build", async (ctx) => {
     if (!distExists()) return ctx.skip();
     if (!canRunFts5) return ctx.skip();

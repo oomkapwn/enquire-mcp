@@ -4,6 +4,14 @@ All notable changes to this project will be documented here. The format follows 
 
 ## [4.0.0-rc.7] — 2026-08-31
 
+### The v7 search contract says what the parts pass does and does not promise
+
+> **TL;DR:** **A score of exactly `0` marks a hit found only through the identifier-parts pass, a parts-only snippet carries no `«»` markers, and the one query shape the pass cannot reach is documented rather than papered over.**
+>
+> **Bounded claim.** Documentation and one folded contract test; no retrieval behaviour changes. The unreachable shape is a title-only word ANDed with a word that exists only as a later chunk's identifier part: FTS5 matches per row and note titles are stored on chunk 0 only, so no single row holds both. It is a pre-existing property of note-level attributes — the same query returned nothing before the parts table existed — and closing it in general would require the title on every parts row, which relocates the candidate-set flooding that storing titles per chunk caused in the first place.
+>
+> **Method note:** C3 re-sweep tail. The contract test ships the control that gives the empty result meaning: the same title word ANDed with a word that IS in chunk 0's own content must be FOUND, so the assertion cannot pass on a broken fixture or a non-AND parser. SECURITY.md now states that the FTS index holds a second copy of the chunk text for identifier-bearing chunks, inside the same file `clear-index` removes whole. Also recorded: v6's weight-0 `scope_tokens` column is not a counter-example to keeping parts out of `chunks` — it lengthens every row by exactly one token, so it shifts BM25's length normalisation uniformly, while identifier parts vary from 0 to 256 per chunk.
+
 ### The v7 identifier-parts table is covered by the integrity, admission and diagnostic contracts
 
 > **TL;DR:** **`chunk_parts` is now audited, fingerprinted, admitted and diagnosed like the searchable state it is, and a database below schema 7 that carries the reserved v7 names is refused instead of having them reclaimed.**

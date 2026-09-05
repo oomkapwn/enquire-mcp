@@ -74,6 +74,12 @@ const BM25_WEIGHT_ALIASES = 5.0;
 // tokenize identically). A table of its own leaves `chunks` scoring
 // byte-identical to v6; parts matches are found, never ranked — see
 // `searchWithReceipts`.
+//
+// v6's `scope_tokens` is not a counter-example. It is also weight 0 and also
+// lengthens the row, but by exactly one token on EVERY row, so it shifts the
+// length normalisation uniformly and no note moves relative to another.
+// Identifier parts vary from 0 to 256 per chunk, which is what makes them
+// differential — the property that decides the column-versus-table question.
 const MAX_SOURCE_REVISION = Number.MAX_SAFE_INTEGER;
 const MAX_SOURCE_RECEIPT_BATCH = 512;
 const FTS_PERSISTENCE_FAMILY = "fts5-v1";
@@ -465,10 +471,27 @@ export interface FtsSearchHit {
   line_start: number;
   /** 1-based ending line in the source (inclusive). */
   line_end: number;
-  /** Excerpt with matched tokens wrapped in `«»` and `…` truncation markers. */
+  /**
+   * Excerpt with matched tokens wrapped in `«»` and `…` truncation markers.
+   *
+   * v7 caveat — the markers are present only when the query term occurs in the
+   * excerpted text. A hit reached through the identifier-parts pass is
+   * excerpted from that chunk's content COPY while the term that matched lives
+   * in the `parts` column, so such a snippet is a plain excerpt with no `«»`.
+   * Verified against SQLite: `snippet()` marks nothing when the match is in an
+   * unexcerpted column.
+   */
   snippet: string;
-  /** Flipped BM25 score — higher = better (the underlying FTS5 score is
-   *  negative; we negate so callers can sort descending). */
+  /**
+   * Flipped BM25 score — higher = better (the underlying FTS5 score is
+   * negative; we negate so callers can sort descending).
+   *
+   * v7 — exactly `0` is a SENTINEL, not a measurement: it marks a hit found
+   * only through the identifier-parts pass ("found, not ranked"). Those hits
+   * are appended after every ranked hit, so ordering by score keeps them last;
+   * do not read a 0 as "BM25 scored this at zero", and do not filter on
+   * `score > 0` unless dropping parts-only recall is intended.
+   */
   score: number;
   /** v2.8.0 — content-source kind. Defaults to "md" for backward compat. */
   kind: ChunkKind;
@@ -2752,7 +2775,11 @@ export class FtsIndex {
    * @param opts.sinceMtimeMs - Recency filter — only return chunks from
    *   files modified at or after this mtime.
    * @returns Provenance-bound, non-quarantined hits sorted by descending
-   *   score. Each hit carries the `source_state` mtime and monotonic revision
+   *   score. The ranked `chunks` pass runs first and is scored exactly as it
+   *   was before v7; only if it under-fills `limit` is a second pass over the
+   *   sibling `chunk_parts` table appended, with score `0` — those hits are
+   *   FOUND by the words an identifier is spelled from, never RANKED by them.
+   *   Each hit carries the `source_state` mtime and monotonic revision
    *   committed with its indexed bytes; callers that own a live {@link Vault}
    *   must compare both before exposing persisted text. Empty array if no
    *   usable query tokens or no matches.

@@ -88,9 +88,13 @@ describe("getOpenQuestions bounded producer admission", () => {
       { pattern: "^Q: (.+)$", scanBudgetMs: 1000 },
       {
         limits: { maxWorkerBatchCandidates: 2, maxWorkerBatchUtf8Bytes: 32 },
-        matchBatch: async (pattern, lines, budgetMs) => {
+        matchBatch: async (pattern, lines, budgetMs, onMatchingMs) => {
           batches.push([...lines]);
           budgets.push(budgetMs);
+          // Report real matching cost. A fake that reports nothing leaves the
+          // remaining budget untouched, so the "non-increasing" assertion below
+          // held for a CONSTANT sequence — true with or without a shared deadline.
+          onMatchingMs?.(10);
           const regex = new RegExp(pattern, "i");
           return lines.flatMap((line, idx) => {
             const match = regex.exec(line);
@@ -102,8 +106,10 @@ describe("getOpenQuestions bounded producer admission", () => {
 
     expect(batches.map((batch) => batch.length)).toEqual([2, 2, 1]);
     expect(batches.flat()).toEqual(["Q: one", "Q: two", "Q: three", "Q: four", "Q: five"]);
-    expect(budgets.every((budget) => budget > 0 && budget <= 1000)).toBe(true);
-    expect(budgets.every((budget, index) => index === 0 || budget <= (budgets[index - 1] ?? 0))).toBe(true);
+    // ONE deadline for the request, charged by what each batch reports: three
+    // batches at 10 ms each must leave exactly 1000 → 990 → 980. A per-batch reset
+    // would show 1000 three times and fail here.
+    expect(budgets).toEqual([1000, 990, 980]);
     expect(out.map((question) => question.question)).toEqual(["one", "two", "three", "four", "five"]);
 
     const originalRead = vault.readNoteUncached.bind(vault);

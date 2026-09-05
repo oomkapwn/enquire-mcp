@@ -4,7 +4,7 @@
 // coordinate implementation modules but are not a public package subpath.
 
 /** Current on-disk FTS5 schema version. */
-export const FTS_SCHEMA_VERSION = 6;
+export const FTS_SCHEMA_VERSION = 7;
 
 /** Current on-disk embedding database schema version. */
 export const EMBED_DB_SCHEMA_VERSION = 5;

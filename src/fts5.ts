@@ -51,6 +51,12 @@ function errnoCode(err: unknown): string | undefined {
 const BM25_WEIGHT_CONTENT = 1.0;
 const BM25_WEIGHT_TITLE = 10.0;
 const BM25_WEIGHT_ALIASES = 5.0;
+// v7 (SBS-D2') — `identifier_parts` is matched but never scored: a compound
+// identifier becomes reachable by the words it is spelled from without the
+// column changing any rank for queries that use no such words. Weight 0 is the
+// whole point; it is why the parts live in a column of their own and not in
+// `content`, where BM25's length normalisation would move ranks for everyone.
+const BM25_WEIGHT_IDENTIFIER_PARTS = 0.0;
 const MAX_SOURCE_REVISION = Number.MAX_SAFE_INTEGER;
 const MAX_SOURCE_RECEIPT_BATCH = 512;
 const FTS_PERSISTENCE_FAMILY = "fts5-v1";
@@ -133,6 +139,54 @@ function admitFtsMetadata(
     totalBytes += bytes;
   }
   return admitted;
+}
+
+/** Upper bounds applied INSIDE the splitter, by truncation. A note with more
+ *  identifiers than this still indexes — it simply stops earning parts. The
+ *  first attempt (closed #577) routed parts through the throwing metadata
+ *  admission, and 513 identifiers made a valid note vanish from the index. */
+const MAX_FTS_IDENTIFIER_PARTS_PER_CHUNK = 256;
+const MAX_FTS_IDENTIFIER_PART_CODE_POINTS = 64;
+
+/**
+ * The words a compound identifier is spelled from, for the v7 `identifier_parts`
+ * column. Case boundaries only: the tokenizer already splits `_`, `-` and `.`,
+ * so `pool_day_data` is reachable by its parts without help; `poolDayData` was
+ * one opaque token no reader could reach by the words it is made of.
+ *
+ * Boundaries: lower→Upper (`poolDay` → pool, day), an upper-case RUN followed by
+ * a capitalised word (`parseHTTPResponse` → parse, http, response), and letter↔
+ * digit (`sha256Hash` → sha, 256, hash). Input is NFC-normalised first so a
+ * decomposed accent cannot split a letter from its mark, and lengths count code
+ * points, not UTF-16 units. Only identifiers that split into two or more
+ * segments emit parts; single words are already tokens.
+ *
+ * @param text - Chunk text to scan.
+ * @returns Lower-cased, de-duplicated parts; at most 256 per chunk, each at
+ *   most 64 code points — truncated, never refused.
+ * @example
+ * splitIdentifierParts("call parseHTTPResponse(sha256Hash)");
+ * // ["parse", "http", "response", "sha", "256", "hash"]
+ */
+export function splitIdentifierParts(text: string): string[] {
+  const seen = new Set<string>();
+  const parts: string[] = [];
+  const normalized = text.normalize("NFC");
+  for (const match of normalized.matchAll(/[\p{L}\p{N}]+/gu)) {
+    const segments = match[0]
+      .split(/(?<=\p{Ll})(?=\p{Lu})|(?<=\p{Lu})(?=\p{Lu}\p{Ll})|(?<=\p{L})(?=\p{N})|(?<=\p{N})(?=\p{L})/gu)
+      .filter((segment) => segment.length > 0);
+    if (segments.length < 2) continue;
+    for (const segment of segments) {
+      const part = segment.toLowerCase();
+      const codePoints = [...part];
+      if (codePoints.length < 2 || codePoints.length > MAX_FTS_IDENTIFIER_PART_CODE_POINTS || seen.has(part)) continue;
+      seen.add(part);
+      parts.push(part);
+      if (parts.length >= MAX_FTS_IDENTIFIER_PARTS_PER_CHUNK) return parts;
+    }
+  }
+  return parts;
 }
 
 export function extractAliases(frontmatter: Record<string, unknown> | undefined | null): string[] {
@@ -611,6 +665,23 @@ const FTS_CHUNK_COLUMNS_BY_SCHEMA = new Map<number, readonly string[]>([
       "raw_content",
       "kind"
     ]
+  ],
+  [
+    7,
+    [
+      "content",
+      "title",
+      "aliases",
+      "scope_tokens",
+      "identifier_parts",
+      "rel_path",
+      "chunk_index",
+      "line_start",
+      "line_end",
+      "tags",
+      "raw_content",
+      "kind"
+    ]
   ]
 ]);
 const FTS_SOURCE_REVISION_TRIGGER_NAMES = [
@@ -672,7 +743,8 @@ const FTS_SOURCE_STATE_CREATE_SQL_BY_SCHEMA = new Map<number, string>([
   [3, FTS_SOURCE_STATE_LEGACY_CREATE_SQL],
   [4, FTS_SOURCE_STATE_CURRENT_CREATE_SQL],
   [5, FTS_SOURCE_STATE_CURRENT_CREATE_SQL],
-  [6, FTS_SOURCE_STATE_CURRENT_CREATE_SQL]
+  [6, FTS_SOURCE_STATE_CURRENT_CREATE_SQL],
+  [7, FTS_SOURCE_STATE_CURRENT_CREATE_SQL]
 ]);
 const FTS_SOURCE_QUARANTINE_COLUMNS: readonly ExpectedSqliteColumn[] = [
   { name: "rel_path", type: "TEXT", notnull: 1, dflt_value: null, pk: 1 },
@@ -1397,6 +1469,7 @@ export class FtsIndex {
           title,
           aliases,
           scope_tokens,
+          identifier_parts,
           rel_path UNINDEXED,
           chunk_index UNINDEXED,
           line_start UNINDEXED,
@@ -2213,7 +2286,7 @@ export class FtsIndex {
     }
     for (const row of db
       .prepare(
-        `SELECT content, title, aliases, scope_tokens, rel_path, chunk_index,
+        `SELECT content, title, aliases, scope_tokens, identifier_parts, rel_path, chunk_index,
                 line_start, line_end, tags, raw_content, kind
          FROM chunks
          WHERE kind = ?
@@ -2319,7 +2392,7 @@ export class FtsIndex {
         relPath
       );
       const insert = db.prepare(
-        "INSERT INTO chunks (content, title, aliases, scope_tokens, rel_path, chunk_index, line_start, line_end, tags, raw_content, kind) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'md')"
+        "INSERT INTO chunks (content, title, aliases, scope_tokens, identifier_parts, rel_path, chunk_index, line_start, line_end, tags, raw_content, kind) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'md')"
       );
       // `tags` is a comma-delimited list so the filter LIKE pattern can wrap it
       // with leading/trailing commas for exact-tag matching at query time. It is
@@ -2346,11 +2419,16 @@ export class FtsIndex {
         // notes' body chunks. One title-boosted chunk per note surfaces the note
         // for a title/alias match (best-chunk-per-note collapse picks it) without
         // the saturation, and also removes the per-chunk IDF dilution + storage cost.
+        // v7 (SBS-D2') — the words each compound identifier in THIS chunk is
+        // spelled from, attributed to the chunk they came from so a hit cites
+        // the section that carries the identifier, not chunk 0. Bounded inside
+        // the splitter by truncation, never by refusing the note.
         insert.run(
           enriched,
           i === 0 ? title : "",
           i === 0 ? aliasesSerialized : "",
           scopeTokens,
+          splitIdentifierParts(c.text).join(" "),
           relPath,
           i,
           c.lineStart,
@@ -2406,7 +2484,7 @@ export class FtsIndex {
         relPath
       );
       const insert = db.prepare(
-        "INSERT INTO chunks (content, title, aliases, scope_tokens, rel_path, chunk_index, line_start, line_end, tags, raw_content, kind) VALUES (?, ?, '', ?, ?, ?, ?, ?, '', ?, 'pdf')"
+        "INSERT INTO chunks (content, title, aliases, scope_tokens, identifier_parts, rel_path, chunk_index, line_start, line_end, tags, raw_content, kind) VALUES (?, ?, '', ?, '', ?, ?, ?, ?, '', ?, 'pdf')"
       );
       chunks.forEach((c, i) => {
         // No wikilink/tag enrichment for PDFs (they don't have either). The
@@ -2494,7 +2572,7 @@ export class FtsIndex {
     const limit = opts.limit ?? 25;
     const safe = safeFts5Query(rawQuery);
     if (!safe) return [];
-    let matchQuery = `{content title aliases} : (${safe})`;
+    let matchQuery = `{content title aliases identifier_parts} : (${safe})`;
     const where: string[] = [
       "chunks MATCH ?",
       "chunks.kind IN ('md', 'pdf')",
@@ -2563,7 +2641,7 @@ export class FtsIndex {
              source_state.mtime_ms AS indexed_mtime_ms,
              source_revision.revision AS indexed_revision,
              snippet(chunks, 0, '«', '»', '…', 25) AS snippet,
-             bm25(chunks, ${BM25_WEIGHT_CONTENT}, ${BM25_WEIGHT_TITLE}, ${BM25_WEIGHT_ALIASES}, ${BM25_WEIGHT_SCOPE}) AS score
+             bm25(chunks, ${BM25_WEIGHT_CONTENT}, ${BM25_WEIGHT_TITLE}, ${BM25_WEIGHT_ALIASES}, ${BM25_WEIGHT_SCOPE}, ${BM25_WEIGHT_IDENTIFIER_PARTS}) AS score
       FROM chunks
       ${join}
       WHERE ${where.join(" AND ")}

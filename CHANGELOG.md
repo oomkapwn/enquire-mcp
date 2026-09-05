@@ -34,6 +34,10 @@ All notable changes to this project will be documented here. The format follows 
 - **Staging cleanup is bounded and fail-closed.** Only the exact SQLite main/sidecars and a released empty lease namespace are removable; `clear-embeddings` erases those released generations, while a foreign child or retained marker refuses the whole clear before the live family changes and preserves the private stage for exact operator recovery.
 - **A committed rename cannot masquerade as an uncommitted failure.** One transient lease-release fault is retried immediately and returns success only after the exact debt clears. A persistent ownership failure is reported explicitly as committed and non-retryable while retaining exact cleanup debt; an unclassified terminal cleanup failure is also labeled committed and non-retryable without claiming a recoverable debt owner.
 
+### Persistence format
+
+- FTS5 schema **v7**: a new indexed `identifier_parts` column carries the words each compound identifier in a chunk is spelled from (camelCase, upper-case runs, digit edges; NFC; bounded by truncation). It is matched at BM25 weight **0**, so `poolDayData` becomes reachable by "pool day data" without any rank moving for queries that use no identifier parts. An existing persistent index rebuilds once on first open; both schema admission maps admit v7.
+
 ### Tests (2270)
 
 **2228 → 2270 source tests.** Forty-two new causal contracts cover the audit closures and staged embedding replacement above; table-driven phases additionally exercise rollback, authority ordering, fail-fast sync operations, clear/replacement interlocks, and promotion refusal without inflating the declared `it()` count.

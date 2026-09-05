@@ -931,7 +931,15 @@ describe("searchHybrid — BM25 + TF-IDF fusion path", () => {
             { ftsIndex: idx, embedFile: path.join(ftsRoot, "nonexistent.embed.db") }
           );
           expect(replaced).toBe(true);
-          expect(raced.matches.every((match) => match.path !== relPath)).toBe(true);
+          // The guarantee under test is that the STALE generation never leaks. The
+          // strict pass drops the raced hit at terminal admission and comes back
+          // empty — which is exactly the condition the recall fallback (SBS-D1')
+          // acts on, so a second, relaxed pass may now return the note from its
+          // CURRENT generation. That is the fresh answer, not the leak: the note may
+          // appear only when a fallback ran, and never with the old content.
+          if (raced.recall_fallback === undefined) {
+            expect(raced.matches.every((match) => match.path !== relPath)).toBe(true);
+          }
           expect(raced.matches.every((match) => !match.snippet.includes("late_receipt_secret"))).toBe(true);
         } finally {
           v.readNote = originalReadNote;

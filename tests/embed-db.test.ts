@@ -1772,7 +1772,7 @@ describe("EmbedDb", () => {
     });
     try {
       await expect(db.clearOnDisk()).rejects.toThrow(
-        `Embedding-index artifact still present after removal: ${path.basename(wal)}`
+        `embedding-index artifact still present after removal: ${path.basename(wal)}`
       );
     } finally {
       spy.mockRestore();

@@ -1,5 +1,6 @@
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
+import { removeArtifact } from "./erasure-receipt.js";
 import { planCachePruneOnDisk } from "./fts5.js";
 import { acquirePersistenceNamespaceEraser } from "./persistence-coordination.js";
 import { PersistenceLeaseIntegrityError, revalidatePersistenceLeaseScope } from "./persistence-lease.js";
@@ -111,10 +112,10 @@ export async function executeCachePrune(cacheDir: string, keepHash: string): Pro
           const removedGenerated = await removeSensitiveArtifactTempEntry(target);
           if (!removedGenerated) throw new Error("artifact changed after prune preflight");
         } else {
-          await fs.unlink(target);
+          await removeArtifact(target, "preflighted cache artifact");
         }
       } catch (error) {
-        throw new Error("Unable to remove a preflighted cache artifact", { cause: error });
+        throw new Error(`Unable to remove a preflighted cache artifact: ${name}`, { cause: error });
       }
       await revalidatePersistenceLeaseScope(eraser.scope);
       removed += 1;

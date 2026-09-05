@@ -1040,10 +1040,18 @@ export class Vault {
     for (const target of [file, `${file}.tmp`]) {
       try {
         await this.unlinkSafe(target);
-        removed = true;
       } catch (err) {
         if (!(isErrnoException(err) && err.code === "ENOENT")) throw err;
+        continue;
       }
+      // The parse cache holds full note bodies, so its receipt is the one that
+      // must not lie: believe the removal only once the entry is re-statted
+      // absent. `lstatIfExistsSafe` keeps the vault root out of any error the
+      // way every other Vault sink does.
+      if ((await this.lstatIfExistsSafe(target)) !== null) {
+        throw new Error(`Persistent-cache artifact still present after removal: ${path.basename(target)}`);
+      }
+      removed = true;
     }
     removed = (await removeSensitiveArtifactTemps(file)) > 0 || removed;
     return removed;

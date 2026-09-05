@@ -47,6 +47,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
 import type { EmbedReceiptSearchHit, EmbedSearchHit } from "./embed-db.js";
+import { removeArtifact } from "./erasure-receipt.js";
 import { importOptionalDependency, optionalDepDetail } from "./optional-dep.js";
 import {
   acquirePersistenceFamilyLease,
@@ -1666,12 +1667,7 @@ async function clearHnswPersistedArtifactsUnchecked(file: string): Promise<boole
       removed = (await removeSensitiveArtifactTempEntry(entry.entryPath)) || removed;
       continue;
     }
-    try {
-      await fs.unlink(entry.entryPath);
-      removed = true;
-    } catch (err) {
-      if (errnoCode(err) !== "ENOENT") throw err;
-    }
+    removed = (await removeArtifact(entry.entryPath, "HNSW artifact")) || removed;
   }
   return removed;
 }

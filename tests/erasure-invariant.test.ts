@@ -254,13 +254,20 @@ const ERASURE_MANIFEST = [
         member: "expectedHnswBasename",
         requiredTokens: ["isHnswGenerationBasename("]
       }
+    ],
+    receiptMembers: [
+      { file: "src/embed-db.ts", member: "clearOnDisk" },
+      { file: "src/hnsw.ts", member: "clearHnswPersistedArtifactsUnchecked" },
+      { file: "src/sensitive-artifact.ts", member: "removeSensitiveArtifactTempEntry" },
+      { file: "src/watcher-activation-guard.ts", member: "clearWatcherActivationGuard" }
     ]
   },
   {
     family: "FTS5 index + SQLite WAL/SHM/rollback-journal sidecars",
     file: "src/fts5.ts",
     eraser: "clearOnDisk",
-    requiredTokens: ["-wal", "-shm", "-journal"]
+    requiredTokens: ["-wal", "-shm", "-journal"],
+    receiptMembers: [{ file: "src/fts5.ts", member: "clearOnDisk" }]
   },
   {
     family: "parse cache + atomic-write temp (full note bodies)",
@@ -280,11 +287,41 @@ const ERASURE_MANIFEST = [
       {
         file: "src/vault.ts",
         member: "clearDiskCacheOnce",
-        requiredTokens: [".tmp", "preflightSensitiveArtifactTemps(file)", "removeSensitiveArtifactTemps(file)"]
+        requiredTokens: [
+          ".tmp",
+          "preflightSensitiveArtifactTemps(file)",
+          "removeSensitiveArtifactTemps(file)",
+          // Vault removes through its own root-sanitising wrapper, so the raw-sink
+          // detector cannot see it; pin the confirm by token instead.
+          "still present after removal"
+        ]
       }
+    ],
+    receiptMembers: [
+      { file: "src/vault.ts", member: "clearDiskCacheOnce" },
+      { file: "src/cache-prune.ts", member: "executeCachePrune" }
     ]
   }
 ] as const;
+
+// ── AH-5b (post-merge re-sweep): RECEIPT TRUTH. Above proves an eraser reaches
+// every suffix of its family. This proves it does not LIE about having done so.
+// AH-5 gave the two SQLite loops the rule — only ENOENT is idempotent success,
+// every other failure names the artifact, and an unlink is believed only once
+// the entry is re-statted absent — and the re-sweep found the erasers delegated
+// one line below still setting `removed = true` straight after `fs.unlink`,
+// feeding the SAME receipt. `src/erasure-receipt.ts` is now the single
+// implementation, so a receipt-path function must not call the raw sinks at
+// all. Pure detector, negative-controlled below. ──
+const RAW_ERASURE_SINK = /\bfs\.(?:unlink|rmdir|rm)\s*\(/;
+
+/** Pure: the raw removal sinks a receipt-path function must not call directly. */
+function rawErasureSinks(body: string): string[] {
+  return body
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => !line.startsWith("//") && !line.startsWith("*") && RAW_ERASURE_SINK.test(line));
+}
 
 /** Slice a 2-space-indented class method body: from `async <name>(` through its
  *  own closing `\n  }` (deeper-indented nested closers like `\n    }` don't
@@ -4952,6 +4989,19 @@ describe("erasure-completeness invariant (rc.36, P-2 class)", () => {
             `${route.file}#${route.member} is missing a delegated family token`
           ).toEqual([]);
         }
+        // Receipt truth: every function whose removals feed this family's
+        // "removed" boolean must route through `src/erasure-receipt.ts`, never
+        // a raw fs sink — otherwise the receipt can claim an artifact was
+        // erased while it is still on disk.
+        for (const receipt of "receiptMembers" in m ? m.receiptMembers : []) {
+          const receiptSource = readFileSync(path.join(repoRoot, receipt.file), "utf8");
+          const receiptBodies = runtimeMemberBodies(receiptSource, receipt.file, receipt.member);
+          expect(receiptBodies, `${receipt.file}#${receipt.member} must resolve exactly once`).toHaveLength(1);
+          expect(
+            rawErasureSinks(receiptBodies[0] ?? ""),
+            `${receipt.file}#${receipt.member} removes without the shared erasure receipt`
+          ).toEqual([]);
+        }
       });
     }
 
@@ -4962,6 +5012,14 @@ describe("erasure-completeness invariant (rc.36, P-2 class)", () => {
       const missing = missingErasureTokens(buggy, ["-wal", "-shm", ".hnsw", ".bin", ".meta.json"]);
       expect(missing).toContain(".meta.json"); // the rc.34 P-2 leak suffix
       expect(missing).toContain("-shm");
+
+      // NEGATIVE control for receipt truth: the pre-AH-5b shape — believing an
+      // unlink without confirming it — must be flagged, and the shared-leaf
+      // form must not be. A commented-out sink must not count either.
+      expect(rawErasureSinks("await fs.unlink(entry);\nremoved = true;")).toHaveLength(1);
+      expect(rawErasureSinks("await fs.rmdir(guardPath);")).toHaveLength(1);
+      expect(rawErasureSinks('removed = await removeArtifact(entry, "HNSW artifact");')).toEqual([]);
+      expect(rawErasureSinks("// await fs.unlink(entry);")).toEqual([]);
     });
 
     // NEGATIVE control: extractMethod must isolate the method body (so a token in

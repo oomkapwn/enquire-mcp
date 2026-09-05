@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { promises as fs, constants as fsConstants } from "node:fs";
 import * as path from "node:path";
+import { removeArtifact, removeArtifactDirectory } from "./erasure-receipt.js";
 import { assertEmbedDbFilePath } from "./persistence-path.js";
 
 const ACTIVATION_GUARD_VERSION = 1;
@@ -248,12 +249,12 @@ export async function clearWatcherActivationGuard(embedDbFile: string): Promise<
   const { guardPath, childName } = recovery;
 
   if (childName) {
-    await fs.unlink(path.join(guardPath, childName));
+    await removeArtifact(path.join(guardPath, childName), "watcher activation guard entry");
     await syncDirectory(guardPath);
   }
 
   try {
-    await fs.rmdir(guardPath);
+    await removeArtifactDirectory(guardPath, "watcher activation guard directory");
   } catch (err) {
     throw new Error("Unable to remove watcher activation guard directory during recovery", { cause: err });
   }

@@ -1152,9 +1152,22 @@ describe("runDoctor — strict source-state preservation", () => {
         expected: "chunk_parts.rel_path must be UNINDEXED"
       },
       {
+        // Owned by requireTableColumns, which compares PRAGMA names in order
+        // and fires before the declaration rules below — recorded here so the
+        // ordering between the two gates is stated rather than assumed.
         slug: "parts-reordered",
         chunkParts: `parts, content, scope_tokens, ${partsReceipts}, tokenize='unicode61 remove_diacritics 2'`,
-        expected: "chunk_parts indexed-column order is incompatible"
+        expected: "chunk_parts column order is incompatible"
+      },
+      {
+        // Only the declaration rules can see this one: the column NAMES and
+        // their order are exactly right, and an extra FTS5 option is invisible
+        // to PRAGMA table_info.
+        slug: "parts-extra-option",
+        chunkParts:
+          `content, parts, scope_tokens, ${partsReceipts}, ` +
+          "tokenize='unicode61 remove_diacritics 2', columnsize=0",
+        expected: "chunk_parts has unsupported FTS5 option(s): columnsize"
       },
       {
         slug: "parts-well-formed",

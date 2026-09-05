@@ -2409,9 +2409,7 @@ describe("FtsIndex — PDF chunks (v2.8.0)", () => {
       expectMismatches(0, 0);
       raw.prepare("UPDATE chunk_parts SET content = 'diverged copy' WHERE rel_path = 'parts.md'").run();
       expectMismatches(1, 0);
-      raw
-        .prepare("UPDATE chunk_parts SET content = 'call fetchDailyReport once' WHERE rel_path = 'parts.md'")
-        .run();
+      raw.prepare("UPDATE chunk_parts SET content = 'call fetchDailyReport once' WHERE rel_path = 'parts.md'").run();
       expectMismatches(0, 0);
       raw.prepare("UPDATE chunk_parts SET line_end = 99 WHERE rel_path = 'parts.md'").run();
       expectMismatches(1, 0);

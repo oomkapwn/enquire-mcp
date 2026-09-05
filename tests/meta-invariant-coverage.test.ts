@@ -279,7 +279,7 @@ const EXPECTED_REPOSITORY_MUTATION_HELPER_CALL_ENTRIES = [
       sha256: "250b3ffb66b7722983d6160bca5706e2849bbc900ed5ae52418c5d85a5955747"
     }
   ],
-  ["cli-parity.test.ts", { count: 6, sha256: "a9ef3b468d6be29d93af888dd9df1289fc17bf0a0fa96d660d9378071ced0117" }],
+  ["cli-parity.test.ts", { count: 6, sha256: "5b349c27f85149d25d497e65ba9d40319cde20ceb1bb81f349cecbaf4d27b90b" }],
   [
     "docker-glama-invariant.test.ts",
     { count: 1, sha256: "5aaae89a44328f99d976c3d582430e10fb7653a328fb503ce74b960cd74b565f" }

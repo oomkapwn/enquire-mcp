@@ -46,8 +46,8 @@
 import { createHash, randomBytes } from "node:crypto";
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
-import { removeArtifact } from "./erasure-receipt.js";
 import type { EmbedReceiptSearchHit, EmbedSearchHit } from "./embed-db.js";
+import { removeArtifact } from "./erasure-receipt.js";
 import { importOptionalDependency, optionalDepDetail } from "./optional-dep.js";
 import {
   acquirePersistenceFamilyLease,

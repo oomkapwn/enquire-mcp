@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { promises as fs, constants as fsConstants } from "node:fs";
-import { removeArtifact, removeArtifactDirectory } from "./erasure-receipt.js";
 import * as path from "node:path";
+import { removeArtifact, removeArtifactDirectory } from "./erasure-receipt.js";
 
 const TOKEN_BYTES = 24;
 const TOKEN_HEX_LENGTH = TOKEN_BYTES * 2;

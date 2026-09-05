@@ -586,33 +586,58 @@ function requireAutoincrementPrimaryKey(db: SnapshotDb, table: string, column: s
   }
 }
 
-function requireFtsDefinition(sql: string, tokenizeMode: unknown): void {
+/**
+ * Validate one FTS5 virtual table's declaration against the layout Enquire
+ * writes: an exact indexed-column prefix in order, every receipt column
+ * UNINDEXED, the tokenizer the metadata claims, and no other FTS5 option.
+ *
+ * The expected layout is spelled out by the caller rather than imported from
+ * `src/fts5.ts`: doctor is an INDEPENDENT reader, and a shared producer would
+ * make a stale definition agree with itself.
+ */
+function requireFtsDefinition(
+  table: string,
+  sql: string,
+  tokenizeMode: unknown,
+  indexedColumns: readonly string[],
+  unindexedColumns: readonly string[]
+): void {
   if (tokenizeMode !== "unicode61" && tokenizeMode !== "trigram") {
     throw new Error("tokenize_mode metadata is missing or invalid");
   }
   const normalized = sql.replace(/["`[\]]/g, "").replace(/\s+/g, " ");
-  if (!/\(\s*content\s*,\s*title\s*,\s*aliases\s*,\s*scope_tokens\s*,/i.test(normalized)) {
-    throw new Error("chunks indexed-column order is incompatible");
+  const indexedOrder = new RegExp(`\\(\\s*${indexedColumns.join("\\s*,\\s*")}\\s*,`, "i");
+  if (!indexedOrder.test(normalized)) {
+    throw new Error(`${table} indexed-column order is incompatible`);
   }
-  for (const column of ["rel_path", "chunk_index", "line_start", "line_end", "tags", "raw_content", "kind"]) {
+  for (const column of unindexedColumns) {
     const declaration = new RegExp(`(?:\\(|,)\\s*${column}\\s+UNINDEXED(?:\\s*,|\\s*\\))`, "i");
-    if (!declaration.test(normalized)) throw new Error(`chunks.${column} must be UNINDEXED`);
+    if (!declaration.test(normalized)) throw new Error(`${table}.${column} must be UNINDEXED`);
   }
   const tokenizer = tokenizeMode === "trigram" ? "trigram" : "unicode61 remove_diacritics 2";
   const escapedTokenizer = tokenizer.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   if (!new RegExp(`\\btokenize\\s*=\\s*['"]${escapedTokenizer}['"]`, "i").test(normalized)) {
-    throw new Error(`chunks tokenizer does not match tokenize_mode=${tokenizeMode}`);
+    throw new Error(`${table} tokenizer does not match tokenize_mode=${tokenizeMode}`);
   }
   const options = [...normalized.matchAll(/\b([A-Za-z_][A-Za-z0-9_]*)\s*=/g)].map(
     (match) => match[1]?.toLowerCase() ?? ""
   );
   const unsupported = options.filter((option) => option !== "tokenize");
   if (unsupported.length > 0) {
-    throw new Error(`chunks has unsupported FTS5 option(s): ${[...new Set(unsupported)].join(", ")}`);
+    throw new Error(`${table} has unsupported FTS5 option(s): ${[...new Set(unsupported)].join(", ")}`);
   }
   if (options.filter((option) => option === "tokenize").length !== 1) {
-    throw new Error("chunks must declare exactly one tokenize option");
+    throw new Error(`${table} must declare exactly one tokenize option`);
   }
+}
+
+/** The exact decimal schema stamp, or null when the metadata is absent or not
+ *  a canonical integer — a malformed stamp is reported by the version check,
+ *  never silently treated as "old enough to skip a contract". */
+function exactSchemaStamp(raw: unknown): number | null {
+  if (typeof raw !== "string" || !/^(?:0|[1-9][0-9]*)$/.test(raw)) return null;
+  const value = Number(raw);
+  return Number.isSafeInteger(value) ? value : null;
 }
 
 function readIndexColumns(db: SnapshotDb, index: string): string[] {
@@ -678,7 +703,13 @@ async function inspectFtsSnapshot(file: string): Promise<SnapshotResult<FtsSnaps
       "raw_content",
       "kind"
     ]);
-    requireFtsDefinition(table.sql, meta.tokenize_mode);
+    requireFtsDefinition(
+      "chunks",
+      table.sql,
+      meta.tokenize_mode,
+      ["content", "title", "aliases", "scope_tokens"],
+      ["rel_path", "chunk_index", "line_start", "line_end", "tags", "raw_content", "kind"]
+    );
     requireTableColumns(db, "source_state", ["rel_path", "mtime_ms", "n_chunks", "kind", "indexed_at"]);
     requireColumnContract(db, "source_state", {
       rel_path: { type: "TEXT", pk: true },
@@ -692,25 +723,27 @@ async function inspectFtsSnapshot(file: string): Promise<SnapshotResult<FtsSnaps
       .prepare("SELECT COUNT(*) AS count FROM source_state WHERE kind IS NULL OR kind NOT IN ('md', 'pdf')")
       .get() as { count?: unknown } | undefined;
     if (invalidKinds?.count !== 0) throw new Error("source_state contains invalid kind values");
-    if (Number(meta.schema_version) >= 7) {
-      // v7 (SBS-D2') — the sibling identifier-parts table is part of the contract.
+    const stamp = exactSchemaStamp(meta.schema_version);
+    if (stamp !== null && stamp >= 7) {
+      // v7 (SBS-D2') — the sibling identifier-parts table is part of the
+      // contract, and held to the same declaration rules as `chunks`: an
+      // index whose chunk_parts contradicts its metadata is refused at open,
+      // so doctor must not report it healthy.
       const parts = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='chunk_parts'").get() as
         | { sql?: unknown }
         | undefined;
       if (typeof parts?.sql !== "string" || !/\bCREATE\s+VIRTUAL\s+TABLE\b[\s\S]*\bUSING\s+fts5\b/i.test(parts.sql)) {
         throw new Error("chunk_parts is not an FTS5 virtual table");
       }
-      requireTableColumns(db, "chunk_parts", [
-        "content",
-        "parts",
-        "scope_tokens",
-        "rel_path",
-        "chunk_index",
-        "line_start",
-        "line_end",
-        "tags",
-        "kind"
-      ]);
+      const chunkPartsUnindexed = ["rel_path", "chunk_index", "line_start", "line_end", "tags", "kind"];
+      requireTableColumns(db, "chunk_parts", ["content", "parts", "scope_tokens", ...chunkPartsUnindexed]);
+      requireFtsDefinition(
+        "chunk_parts",
+        parts.sql,
+        meta.tokenize_mode,
+        ["content", "parts", "scope_tokens"],
+        chunkPartsUnindexed
+      );
     }
     return {
       ...(meta.schema_version !== undefined ? { schemaVersion: meta.schema_version } : {}),

@@ -716,6 +716,15 @@ const FTS_CHUNK_PARTS_COLUMNS = [
   "kind"
 ] as const;
 const FTS_CHUNK_PARTS_MIN_SCHEMA = 7;
+/** FTS5's own shadow tables for `chunk_parts`, by name. Admission types them,
+ *  and below schema 7 their mere presence refuses the database. */
+const FTS_CHUNK_PARTS_SHADOW_NAMES = [
+  "chunk_parts_data",
+  "chunk_parts_idx",
+  "chunk_parts_content",
+  "chunk_parts_docsize",
+  "chunk_parts_config"
+] as const;
 const FTS_CHUNK_PARTS_INSERT_SQL =
   "INSERT INTO chunk_parts (content, parts, scope_tokens, rel_path, chunk_index, line_start, line_end, tags, kind) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)";
 
@@ -744,11 +753,7 @@ const FTS_ADMISSION_OBJECT_TYPES = new Map<string, string>([
   ["chunks_docsize", "table"],
   ["chunks_config", "table"],
   ["chunk_parts", "table"],
-  ["chunk_parts_data", "table"],
-  ["chunk_parts_idx", "table"],
-  ["chunk_parts_content", "table"],
-  ["chunk_parts_docsize", "table"],
-  ["chunk_parts_config", "table"],
+  ...FTS_CHUNK_PARTS_SHADOW_NAMES.map((name) => [name, "table"] as const),
   ["source_state", "table"],
   ["source_quarantine", "table"],
   ["source_revision", "table"],
@@ -1825,7 +1830,18 @@ export class FtsIndex {
     } catch {
       throw new Error("Refusing to open a populated SQLite database without valid FTS ownership metadata");
     }
-    if (numericVersion >= FTS_CHUNK_PARTS_MIN_SCHEMA) {
+    if (numericVersion < FTS_CHUNK_PARTS_MIN_SCHEMA) {
+      // The v7 family is reserved but only EXPLICABLE from schema 7 onward. On
+      // an older database its exact declaration is never proved, so the names
+      // must not be silently reclaimed: the rebuild below would DROP an object
+      // this admission never established was ours and then report success,
+      // against the ownership posture every other object in the inventory is
+      // held to (SECURITY.md — "refusal preserves the logical SQLite schema
+      // and committed cells"). Refuse instead; `clear-index` is the remedy.
+      if (["chunk_parts", ...FTS_CHUNK_PARTS_SHADOW_NAMES].some((name) => objects.has(name))) {
+        throw new Error("Refusing to open a populated SQLite database without valid FTS ownership metadata");
+      }
+    } else {
       // v7 — the sibling identifier-parts table is admitted with the same
       // exactness as `chunks`: declared DDL and every FTS5 shadow table.
       const chunkPartsSql = objects.get("chunk_parts")?.sql;
@@ -2283,6 +2299,36 @@ export class FtsIndex {
               ))
               OR typeof(kind) <> 'text'
               OR kind NOT IN ('md', 'pdf')
+           UNION
+           -- v7 — every `chunk_parts` row must MIRROR an existing chunk: same
+           -- path, kind, index, content copy, scope token, line range and tags.
+           -- Stated as a set difference, not a join: both FTS5 tables are
+           -- unindexed on these columns, so `LEFT JOIN ... ON rel_path` is a
+           -- nested scan (measured 142 s at 20k x 20k rows); EXCEPT sorts each
+           -- side once and merges (0.07 s on the same data).
+           SELECT rel_path
+           FROM (
+             SELECT rel_path, kind, chunk_index, content, scope_tokens, line_start, line_end, tags
+             FROM chunk_parts
+             WHERE kind = ?
+             EXCEPT
+             SELECT rel_path, kind, chunk_index, content, scope_tokens, line_start, line_end, tags
+             FROM chunks
+             WHERE kind = ?
+           )
+           UNION
+           -- `parts` has no counterpart in `chunks`, so its own shape is
+           -- checked directly: a row that earns no parts must not exist.
+           SELECT rel_path
+           FROM chunk_parts
+           WHERE kind = ? AND (typeof(parts) <> 'text' OR length(parts) = 0)
+           UNION
+           -- Unscoped, like every sibling table: a row whose kind is neither
+           -- 'md' nor 'pdf' belongs to no audit view, so a kind-scoped arm
+           -- alone would let it hide from both.
+           SELECT rel_path
+           FROM chunk_parts
+           WHERE typeof(kind) <> 'text' OR kind NOT IN ('md', 'pdf')
          )
          SELECT
            (SELECT COUNT(*) FROM declared) AS declared_files,
@@ -2291,7 +2337,7 @@ export class FtsIndex {
            COALESCE((SELECT SUM(actual_count) FROM actual), 0) AS indexed_chunks,
            (SELECT COUNT(*) FROM mismatched) AS mismatched_files`
       )
-      .get<FtsKindAudit>(kind, kind, kind, kind, kind);
+      .get<FtsKindAudit>(kind, kind, kind, kind, kind, kind, kind, kind);
     return (
       row ?? {
         declared_files: 0,
@@ -2309,9 +2355,13 @@ export class FtsIndex {
    *
    * The manifest is intended for before/after integrity checks in strict
    * evidence runs. It includes source mtimes, monotonic revision tombstones,
-   * timestamps, every stored searchable/metadata column, and durable
-   * quarantine markers, so an in-place mutation that keeps aggregate counts
-   * unchanged still changes the digest.
+   * timestamps, every stored searchable/metadata column of BOTH searchable
+   * tables — `chunks` and the v7 sibling `chunk_parts`, whose rows decide what
+   * a search finds — and durable quarantine markers, so an in-place mutation
+   * that keeps aggregate counts unchanged still changes the digest.
+   *
+   * Generation `v3` added the `chunk_parts` rows; a digest taken before v7 is
+   * not comparable with one taken after it.
    *
    * @param kind - Content-source kind to fingerprint.
    * @returns Lowercase SHA-256 digest of the ordered physical rows.
@@ -2320,7 +2370,7 @@ export class FtsIndex {
     if (!isChunkKind(kind)) throw new Error(`Unsupported FTS source kind: ${String(kind)}`);
     const db = this.requireDb();
     const hash = createHash("sha256");
-    hash.update("enquire-fts-kind-manifest-v2;");
+    hash.update("enquire-fts-kind-manifest-v3;");
     for (const row of db
       .prepare(
         `SELECT rel_path, mtime_ms, n_chunks, kind, indexed_at
@@ -2399,6 +2449,38 @@ export class FtsIndex {
       updateManifestValue(hash, row.line_end);
       updateManifestValue(hash, row.tags);
       updateManifestValue(hash, row.raw_content);
+      updateManifestValue(hash, row.kind);
+    }
+    // v7 — the sibling identifier-parts rows are searchable state: they decide
+    // what a query FINDS, so a mutation of `parts` changes results. Hashing
+    // them here is what makes the manifest's coverage claim true after v7.
+    for (const row of db
+      .prepare(
+        `SELECT content, parts, scope_tokens, rel_path, chunk_index, line_start, line_end, tags, kind
+         FROM chunk_parts
+         WHERE kind = ?
+         ORDER BY rel_path, chunk_index, rowid`
+      )
+      .iterate<{
+        content: string;
+        parts: string;
+        scope_tokens: string;
+        rel_path: string;
+        chunk_index: number;
+        line_start: number;
+        line_end: number;
+        tags: string;
+        kind: string;
+      }>(kind)) {
+      hash.update("parts;");
+      updateManifestValue(hash, row.content);
+      updateManifestValue(hash, row.parts);
+      updateManifestValue(hash, row.scope_tokens);
+      updateManifestValue(hash, row.rel_path);
+      updateManifestValue(hash, row.chunk_index);
+      updateManifestValue(hash, row.line_start);
+      updateManifestValue(hash, row.line_end);
+      updateManifestValue(hash, row.tags);
       updateManifestValue(hash, row.kind);
     }
     return hash.digest("hex");

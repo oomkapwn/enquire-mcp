@@ -4,6 +4,14 @@ All notable changes to this project will be documented here. The format follows 
 
 ## [4.0.0-rc.7] — 2026-08-31
 
+### The v7 identifier-parts table is covered by the integrity, admission and diagnostic contracts
+
+> **TL;DR:** **`chunk_parts` is now audited, fingerprinted, admitted and diagnosed like the searchable state it is, and a database below schema 7 that carries the reserved v7 names is refused instead of having them reclaimed.**
+>
+> **Bounded claim.** The audit proves every parts row MIRRORS an existing chunk (path, kind, index, content copy, scope token, line range, tags) and carries non-empty parts; it cannot recompute the identifier split, so a tampered `parts` value is caught by the manifest, not the audit. The manifest generation moves to `v3`: a digest taken before this change is not comparable with one taken after it. Doctor gains the same declaration rules it already applied to `chunks` — an independent reader, deliberately not sharing a producer with `src/fts5.ts`.
+>
+> **Method note:** C3 re-sweep of PR #597 (0 CRIT/HIGH/MED; 16 LOW + 13 INFO). The audit comparison is written as a set difference rather than a join because both tables are FTS5 virtual tables with no index on the compared columns: the join form measured 142 s at 20k x 20k rows against 0.07 s for `EXCEPT`, and a test pins the shape. Controls: a diverged content copy, an empty `parts`, a wrong line range and an orphan parts row each raise `mismatched_files`; a same-shape `parts` mutation moves the manifest while leaving the audit clean; a stray plain `chunk_parts` and a stray plain `chunk_parts_data` on a schema-6 database are each refused with every cell unchanged (the rebuild would otherwise DROP an object admission never proved was ours and then report success); a parts row whose kind is neither `md` nor `pdf` is seen by BOTH audits, not hidden from each; a real index whose `chunk_parts` was rebuilt under the other tokenizer is refused without touching a cell; and doctor's four malformed chunk_parts fixtures ship beside a well-formed control.
+
 ### Erasure receipts are re-statted and name the surviving artifact (AH-5)
 
 > **TL;DR:** **`clear-index` and `clear-embeddings` can no longer print a “removed” receipt for a file that is still on disk, and a failed removal names the exact artifact.**

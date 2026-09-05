@@ -1124,6 +1124,87 @@ describe("runDoctor — strict source-state preservation", () => {
       expect(await snapshotDir(dir)).toEqual(candidateBefore);
     }
 
+    // v7 (SBS-D2') — the sibling identifier-parts table is held to the same
+    // declaration rules as `chunks`. Runtime admission refuses an index whose
+    // chunk_parts contradicts its metadata and serve degrades to TF-IDF, so a
+    // doctor that only counted its column names would send an operator
+    // looking in the wrong place. The last row is the control that proves the
+    // others fail for their stated reason and not merely because the fixture
+    // is hand-built.
+    const validChunks =
+      "content, title, aliases, scope_tokens, rel_path UNINDEXED, chunk_index UNINDEXED, " +
+      "line_start UNINDEXED, line_end UNINDEXED, tags UNINDEXED, raw_content UNINDEXED, kind UNINDEXED";
+    const partsReceipts =
+      "rel_path UNINDEXED, chunk_index UNINDEXED, line_start UNINDEXED, line_end UNINDEXED, " +
+      "tags UNINDEXED, kind UNINDEXED";
+    for (const { slug, chunkParts, expected } of [
+      { slug: "parts-absent", chunkParts: null, expected: "chunk_parts is not an FTS5 virtual table" },
+      {
+        slug: "parts-tokenizer",
+        chunkParts: `content, parts, scope_tokens, ${partsReceipts}, tokenize='trigram'`,
+        expected: "chunk_parts tokenizer does not match tokenize_mode=unicode61"
+      },
+      {
+        slug: "parts-indexed-receipt",
+        chunkParts:
+          "content, parts, scope_tokens, rel_path, chunk_index UNINDEXED, line_start UNINDEXED, " +
+          "line_end UNINDEXED, tags UNINDEXED, kind UNINDEXED, tokenize='unicode61 remove_diacritics 2'",
+        expected: "chunk_parts.rel_path must be UNINDEXED"
+      },
+      {
+        // Owned by requireTableColumns, which compares PRAGMA names in order
+        // and fires before the declaration rules below — recorded here so the
+        // ordering between the two gates is stated rather than assumed.
+        slug: "parts-reordered",
+        chunkParts: `parts, content, scope_tokens, ${partsReceipts}, tokenize='unicode61 remove_diacritics 2'`,
+        expected: "chunk_parts column order is incompatible"
+      },
+      {
+        // Only the declaration rules can see this one: the column NAMES and
+        // their order are exactly right, and an extra FTS5 option is invisible
+        // to PRAGMA table_info.
+        slug: "parts-extra-option",
+        chunkParts:
+          `content, parts, scope_tokens, ${partsReceipts}, ` + "tokenize='unicode61 remove_diacritics 2', columnsize=0",
+        expected: "chunk_parts has unsupported FTS5 option(s): columnsize"
+      },
+      {
+        slug: "parts-well-formed",
+        chunkParts: `content, parts, scope_tokens, ${partsReceipts}, tokenize='unicode61 remove_diacritics 2'`,
+        expected: null
+      }
+    ] as const) {
+      const partsFile = path.join(dir, `${slug}.fts5.db`);
+      const partsDb = new Database(partsFile);
+      partsDb.exec(`
+        CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        CREATE VIRTUAL TABLE chunks USING fts5(${validChunks}, tokenize='unicode61 remove_diacritics 2');
+        ${chunkParts === null ? "" : `CREATE VIRTUAL TABLE chunk_parts USING fts5(${chunkParts});`}
+        CREATE TABLE source_state (
+          rel_path TEXT PRIMARY KEY,
+          mtime_ms INTEGER NOT NULL,
+          n_chunks INTEGER NOT NULL,
+          kind TEXT NOT NULL DEFAULT 'md',
+          indexed_at TEXT NOT NULL
+        );
+      `);
+      const partsInsert = partsDb.prepare("INSERT INTO meta (key, value) VALUES (?, ?)");
+      partsInsert.run("schema_version", String(FTS_SCHEMA_VERSION));
+      partsInsert.run("vault_root", await fs.realpath(root));
+      partsInsert.run("tokenize_mode", "unicode61");
+      partsDb.close();
+      const partsBefore = await snapshotDir(dir);
+      const partsResult = await diagnose({
+        tier: "basic",
+        indexFile: partsFile,
+        embedFile: path.join(dir, "missing.embed.db")
+      });
+      const partsDetail = partsResult.checks.find((check) => check.id === "index:fts5")?.detail ?? "";
+      if (expected === null) expect(partsDetail, slug).not.toContain("chunk_parts");
+      else expect(partsDetail, slug).toContain(expected);
+      expect(await snapshotDir(dir)).toEqual(partsBefore);
+    }
+
     const compositeFile = path.join(dir, "composite-source-pk.fts5.db");
     const composite = new Database(compositeFile);
     composite.exec(`

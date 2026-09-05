@@ -910,12 +910,26 @@ describe("FtsIndex — full lifecycle", () => {
       expect(idx.search("to-be-deleted-marker").length).toBe(0);
       expect(idx.totalFiles()).toBe(0);
       expect(idx.totalChunks()).toBe(0);
+
+      // v7 — a dropped file must leave no identifier-parts row behind. The
+      // sibling table holds a COPY of the chunk text, so a stale row would
+      // resurface the deleted note as a score-0 tail hit. `daily`/`report`
+      // are reachable ONLY through the parts split (unicode61 keeps
+      // `fetchDailyReport` as one token), so this asserts the parts pass.
+      idx.reindexFile("y.md", 1000, "call fetchDailyReport in the pipeline");
+      expect(idx.search("daily report").map((hit) => hit.rel_path)).toEqual(["y.md"]);
+      idx.dropFile("y.md");
+      expect(idx.search("daily report")).toEqual([]);
       // Class invariant for rc.18: every chunk replacement/removal path must
       // enter through the indexed scope token. A bare rel_path DELETE scans
       // the growing FTS virtual table and made a 22k-note fresh build O(N²).
       const source = await fs.readFile(path.resolve("src/fts5.ts"), "utf8");
       expect(source).not.toContain("DELETE FROM chunks WHERE rel_path = ?");
       expect(source.match(/DELETE FROM chunks WHERE chunks MATCH \? AND rel_path = \?/g)).toHaveLength(3);
+      // The v7 sibling table is the same class: `rel_path` is UNINDEXED there
+      // too, so a bare rel_path DELETE would reintroduce the O(N²) scan.
+      expect(source).not.toContain("DELETE FROM chunk_parts WHERE rel_path = ?");
+      expect(source.match(/DELETE FROM chunk_parts WHERE chunk_parts MATCH \? AND rel_path = \?/g)).toHaveLength(3);
     } finally {
       await idx.closeAndRelease();
     }
@@ -1200,6 +1214,84 @@ describe("FtsIndex — full lifecycle", () => {
       /physical tokenizer or schema contradicts metadata/
     );
     expect(snapshot(regularSpoofFile, regularSpoofQueries)).toEqual(beforeRegularSpoof);
+
+    // v7 — the sibling identifier-parts table is admitted with the same
+    // exactness as `chunks`. This fixture is a REAL index whose chunk_parts
+    // was rebuilt under the other tokenizer: every object name, the meta rows
+    // and `chunks` itself are untouched, so only the chunk_parts declaration
+    // can reject it. Without that check the index opens and silently searches
+    // a table whose analysis contradicts its own metadata.
+    const partsSpoofFile = path.join(dbDir, "chunk-parts-spoof.fts5.db");
+    const partsSpoofSeed = new FtsIndex({ file: partsSpoofFile, vaultRoot: "/tmp/vault-A" });
+    await partsSpoofSeed.open();
+    partsSpoofSeed.reindexFile("owned.md", 1001, "call fetchDailyReport once");
+    await partsSpoofSeed.closeAndRelease();
+    const partsSpoofRaw = new Database(partsSpoofFile);
+    partsSpoofRaw.exec(`
+      DROP TABLE chunk_parts;
+      CREATE VIRTUAL TABLE chunk_parts USING fts5(
+        content,
+        parts,
+        scope_tokens,
+        rel_path UNINDEXED,
+        chunk_index UNINDEXED,
+        line_start UNINDEXED,
+        line_end UNINDEXED,
+        tags UNINDEXED,
+        kind UNINDEXED,
+        tokenize='trigram'
+      );
+    `);
+    partsSpoofRaw.close();
+    const partsSpoofQueries = [
+      "SELECT * FROM meta ORDER BY key",
+      "SELECT rowid, * FROM chunks ORDER BY rowid",
+      "SELECT rowid, * FROM chunk_parts ORDER BY rowid",
+      "SELECT * FROM source_state ORDER BY rel_path"
+    ];
+    const beforePartsSpoof = snapshot(partsSpoofFile, partsSpoofQueries);
+    await refusePathFree(
+      new FtsIndex({ file: partsSpoofFile, vaultRoot: "/tmp/vault-A" }),
+      [partsSpoofFile, "/tmp/vault-A"],
+      /physical tokenizer or schema contradicts metadata/
+    );
+    expect(snapshot(partsSpoofFile, partsSpoofQueries)).toEqual(beforePartsSpoof);
+
+    // v7 — the reserved sibling family is only explicable from schema 7. On a
+    // legacy database its declaration is never proved, so admission must
+    // REFUSE rather than let the rebuild reclaim the name: dropping an object
+    // ownership never established, and then reporting success, is the one
+    // outcome the cohabiting-payload fixture below exists to forbid.
+    for (const [slug, ddl] of [
+      ["legacy-stray-chunk-parts", "CREATE TABLE chunk_parts (payload BLOB NOT NULL)"],
+      ["legacy-stray-parts-shadow", "CREATE TABLE chunk_parts_data (id INTEGER PRIMARY KEY, block BLOB)"]
+    ] as const) {
+      const strayFile = path.join(dbDir, `${slug}.fts5.db`);
+      const straySeed = new FtsIndex({ file: strayFile, vaultRoot: "/tmp/vault-A" });
+      await straySeed.open();
+      straySeed.reindexFile("owned.md", 1001, "owned-marker");
+      await straySeed.closeAndRelease();
+      const strayRaw = new Database(strayFile);
+      // Stamp the database back to the last schema without the v7 family, so
+      // the rebuild path is what would otherwise run.
+      strayRaw.prepare("UPDATE meta SET value = ? WHERE key = 'schema_version'").run(String(FTS_SCHEMA_VERSION - 1));
+      strayRaw.exec("DROP TABLE chunk_parts;");
+      strayRaw.exec(ddl);
+      strayRaw.close();
+      const strayQueries = [
+        "SELECT type, name, sql FROM sqlite_master WHERE name NOT GLOB 'sqlite_*' ORDER BY type, name",
+        "SELECT * FROM meta ORDER BY key",
+        "SELECT rowid, * FROM chunks ORDER BY rowid",
+        "SELECT * FROM source_state ORDER BY rel_path"
+      ];
+      const beforeStray = snapshot(strayFile, strayQueries);
+      await refusePathFree(
+        new FtsIndex({ file: strayFile, vaultRoot: "/tmp/vault-A" }),
+        [strayFile, "/tmp/vault-A"],
+        /without valid FTS ownership metadata/
+      );
+      expect(snapshot(strayFile, strayQueries), slug).toEqual(beforeStray);
+    }
 
     // Full-inventory class proof: an otherwise valid FTS database that
     // cohabits with an unowned payload table is not safe to mutate. A
@@ -2298,6 +2390,66 @@ describe("FtsIndex — PDF chunks (v2.8.0)", () => {
         .run(ftsScopeTokens("a.md"));
       expectMismatches(0, 0);
 
+      // v7 — the sibling identifier-parts rows are audited and fingerprinted
+      // like any other searchable state. `a.md` carries no compound
+      // identifier, so this section brings its own.
+      audited.reindexFile("parts.md", 3000, "call fetchDailyReport once");
+      expectMismatches(0, 0);
+      expect(raw.prepare("SELECT COUNT(*) AS n FROM chunk_parts WHERE rel_path = 'parts.md'").get()).toEqual({ n: 1 });
+      const manifestBeforeParts = audited.fingerprintKind("md");
+      // The audit cannot recompute the split, but the manifest must still move
+      // on a same-shape mutation of what the index will match against.
+      raw.prepare("UPDATE chunk_parts SET parts = 'tampered' WHERE rel_path = 'parts.md'").run();
+      expect(audited.fingerprintKind("md")).not.toBe(manifestBeforeParts);
+      expectMismatches(0, 0);
+      // What the audit DOES own: a parts row must mirror an existing chunk.
+      raw.prepare("UPDATE chunk_parts SET parts = '' WHERE rel_path = 'parts.md'").run();
+      expectMismatches(1, 0);
+      raw.prepare("UPDATE chunk_parts SET parts = 'fetch daily report' WHERE rel_path = 'parts.md'").run();
+      expectMismatches(0, 0);
+      raw.prepare("UPDATE chunk_parts SET content = 'diverged copy' WHERE rel_path = 'parts.md'").run();
+      expectMismatches(1, 0);
+      raw.prepare("UPDATE chunk_parts SET content = 'call fetchDailyReport once' WHERE rel_path = 'parts.md'").run();
+      expectMismatches(0, 0);
+      raw.prepare("UPDATE chunk_parts SET line_end = 99 WHERE rel_path = 'parts.md'").run();
+      expectMismatches(1, 0);
+      raw.prepare("UPDATE chunk_parts SET line_end = 1 WHERE rel_path = 'parts.md'").run();
+      expectMismatches(0, 0);
+      // A parts row whose kind is neither 'md' nor 'pdf' belongs to no scoped
+      // view, so both audits must see it — the same contract `chunks` has.
+      raw.prepare("UPDATE chunk_parts SET kind = 'bogus' WHERE rel_path = 'parts.md'").run();
+      expectMismatches(1, 1);
+      raw.prepare("UPDATE chunk_parts SET kind = 'md' WHERE rel_path = 'parts.md'").run();
+      expectMismatches(0, 0);
+      // An orphan parts row for a path with no chunk row of its own.
+      raw
+        .prepare(
+          `INSERT INTO chunk_parts
+             (content, parts, scope_tokens, rel_path, chunk_index, line_start, line_end, tags, kind)
+           VALUES ('orphan copy', 'orphan copy', ?, 'orphan-parts.md', 0, 1, 1, '', 'md')`
+        )
+        .run(ftsScopeTokens("orphan-parts.md"));
+      expectMismatches(1, 0);
+      raw.prepare("DELETE FROM chunk_parts WHERE rel_path = 'orphan-parts.md'").run();
+      expectMismatches(0, 0);
+      audited.dropFile("parts.md");
+      expectMismatches(0, 0);
+
+      // Shape guard for the comparison above. `chunks` and `chunk_parts` are
+      // both FTS5 virtual tables with no index on the join columns, so the
+      // natural `LEFT JOIN ... ON rel_path` is a nested scan: measured 142 s at
+      // 20k x 20k rows against 0.07 s for the set-difference form. The audit
+      // reads the whole index in strict evidence mode, so the form is
+      // load-bearing, and `discoverScanners` cannot see an SQL string.
+      const auditSource = await fs.readFile(path.resolve("src/fts5.ts"), "utf8");
+      const auditBody = auditSource.slice(
+        auditSource.indexOf("auditKind(kind: ChunkKind)"),
+        auditSource.indexOf("fingerprintKind(kind: ChunkKind)")
+      );
+      expect(auditBody).not.toBe("");
+      expect(auditBody).toMatch(/EXCEPT/);
+      expect(auditBody).not.toMatch(/JOIN\s+chunk_parts\b/);
+
       const manifestBeforeMutation = audited.fingerprintKind("md");
       raw.prepare("UPDATE chunks SET tags = 'same-shape-mutation' WHERE rel_path = 'a.md' AND chunk_index = 0").run();
       expectMismatches(0, 0);
@@ -2503,6 +2655,18 @@ describe("FtsIndex — PDF chunks (v2.8.0)", () => {
       await rebuilt.open();
       expect(rebuilt.totalChunks(), `v${version} rebuild must discard legacy rows`).toBe(0);
       await rebuilt.closeAndRelease();
+      // The rebuild must materialise the v7 sibling table, not just the
+      // schema stamp: an index whose `chunk_parts` is missing is refused by
+      // the very next open.
+      const rebuiltRaw = new Database(legacyFile, { readonly: true, fileMustExist: true });
+      try {
+        const partsSql = rebuiltRaw.prepare("SELECT sql FROM sqlite_master WHERE name = 'chunk_parts'").get() as
+          | { sql?: string }
+          | undefined;
+        expect(partsSql?.sql, `v${version} rebuild must recreate chunk_parts`).toMatch(/USING\s+fts5/i);
+      } finally {
+        rebuiltRaw.close();
+      }
       expect((await peekFtsMetaSafe(legacyFile))?.schema_version).toBe(String(FTS_SCHEMA_VERSION));
     }
 

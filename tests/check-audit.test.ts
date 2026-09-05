@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 // @ts-expect-error — .mjs script, no types; we exercise the pure exported core.
 import {
   ALLOWLIST,
+  auditAttemptTimeoutPayload,
   CONSUMER_ALLOWLIST,
   consumerAllowlistForVersion,
   invalidAllowlistEntries,
@@ -213,6 +214,18 @@ describe("check-audit scoped gate (rc.50)", () => {
     expect(transientAttempts).toBe(3);
     expect(retrySleeps).toEqual([5, 10]);
     expect(retryWarnings.map((event) => event.diagnostic)).toEqual(["status=503", "status=503"]);
+
+    // A silent hang: execFileSync kills the attempt, there is no stdout. That is a
+    // transient with a NAME, not "no JSON" and not a bare exit 124 from the job.
+    const hang = auditAttemptTimeoutPayload({ killed: true, signal: "SIGKILL", stdout: "" }, 40_000);
+    expect(retryableAuditError(hang)).toMatchObject({ code: "ETIMEDOUT" });
+    expect(() =>
+      validateAuditReportWithRetry(() => hang, { attempts: 2, backoffMs: 1, sleep: () => {}, label: "source" })
+    ).toThrow(/after 2 attempts \(code=ETIMEDOUT \(npm audit produced no output within 40 s/);
+    // NEGATIVE: output present (vulnerabilities make npm exit non-zero) is a report,
+    // and an unrelated failure is not a timeout — both keep the fail-closed path.
+    expect(auditAttemptTimeoutPayload({ status: 1, stdout: '{"auditReportVersion":2}' }, 40_000)).toBeUndefined();
+    expect(auditAttemptTimeoutPayload({ code: "ENOENT", stdout: "" }, 40_000)).toBeUndefined();
     expect(JSON.stringify(retryWarnings)).not.toMatch(/SECRET|registry\.npmjs\.org/);
 
     let exhaustedAttempts = 0;

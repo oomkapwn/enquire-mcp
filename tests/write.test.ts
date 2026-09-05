@@ -398,6 +398,39 @@ describe("createNote", () => {
       statSpy.mockRestore();
     }
 
+    // CL-A4 — a stat failure INSIDE the publication window (destination already
+    // linked, source not yet removed) is a partial commit, and must be reported as
+    // one. It used to escape as a bare error, which the rename orchestrator read as
+    // "nothing published yet" and answered with a rollback receipt for a rename
+    // that had already published. Both paths must still exist afterwards.
+    const windowRoot = await fs.mkdtemp(path.join(os.tmpdir(), "obsidian-mcp-rename-window-"));
+    try {
+      await fs.writeFile(path.join(windowRoot, "WinSource.md"), "window sentinel\n");
+      const windowVault = new Vault(windowRoot, { enableWrite: true });
+      await windowVault.ensureExists();
+      const windowInternals = windowVault as unknown as { statSafe(target: string): Promise<import("node:fs").Stats> };
+      const windowStat = windowInternals.statSafe.bind(windowVault);
+      const windowSpy = vi.spyOn(windowInternals, "statSafe").mockImplementation(async (target: string) => {
+        const t = String(target).replace(/\\/g, "/");
+        const destPresent = await fs.stat(path.join(windowRoot, "WinDest.md")).catch(() => null);
+        // Fail the stat that runs after publication (destination exists) and
+        // before source removal (source still exists).
+        if (t.endsWith("WinSource.md") && destPresent) throw new Error("synthetic in-window stat failure");
+        return windowStat(target);
+      });
+      try {
+        await expect(windowVault.renameFile("WinSource.md", "WinDest.md")).rejects.toThrow(
+          /published by hardlink before source removal failed \(synthetic in-window stat failure\)/
+        );
+        expect(await fs.readFile(path.join(windowRoot, "WinSource.md"), "utf8")).toBe("window sentinel\n");
+        expect(await fs.readFile(path.join(windowRoot, "WinDest.md"), "utf8")).toBe("window sentinel\n");
+      } finally {
+        windowSpy.mockRestore();
+      }
+    } finally {
+      await fs.rm(windowRoot, { recursive: true, force: true });
+    }
+
     // Cleanup
     await fs.rm(raceRoot, { recursive: true, force: true });
   });

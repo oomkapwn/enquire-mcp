@@ -2407,11 +2407,16 @@ export class Vault {
             }
             throw copyErr;
           }
-          publishedStat = await this.statSafe(toAbs);
+          // The destination is published from here on. A failure of EITHER step —
+          // reading the published stat or removing the source — leaves both paths
+          // on disk, and must say so: a bare stat error here used to read as a
+          // pre-publication failure, so the caller "rolled back" a rename that had
+          // in fact already published, and reported the old topology restored.
           try {
+            publishedStat = await this.statSafe(toAbs);
             await this.unlinkSafe(fromAbs);
-          } catch (unlinkError) {
-            throw new RenamePartialCommitError(fromRel, toRelNorm, "copy", unlinkError);
+          } catch (commitError) {
+            throw new RenamePartialCommitError(fromRel, toRelNorm, "copy", commitError);
           }
         } else {
           throw err;
@@ -2425,11 +2430,13 @@ export class Vault {
       // The EXDEV copy path already unlinked; a second unlinkSafe would ENOENT
       // after a completed move (the swallowed fs.unlink.catch used to hide both).
       if (linked) {
-        publishedStat = await this.statSafe(fromAbs);
+        // Same window, same rule: once the hard link exists, a stat failure is a
+        // partial commit, not a reason to pretend nothing was published.
         try {
+          publishedStat = await this.statSafe(fromAbs);
           await this.unlinkSafe(fromAbs);
-        } catch (unlinkError) {
-          throw new RenamePartialCommitError(fromRel, toRelNorm, "hardlink", unlinkError);
+        } catch (commitError) {
+          throw new RenamePartialCommitError(fromRel, toRelNorm, "hardlink", commitError);
         }
       }
     }

@@ -69,6 +69,17 @@ export const CONSUMER_ALLOWLIST = {
 const SEV_RANK = { info: 0, low: 1, moderate: 2, high: 3, critical: 4 };
 const AUDIT_RETRY_ATTEMPTS = 3;
 const AUDIT_RETRY_BACKOFF_MS = 5_000;
+/** Per-attempt wall-clock bound on one `npm audit` call.
+ *
+ *  On 2026-09-03/04 the registry's advisory endpoint accepted connections and
+ *  never answered. `npm audit` has no output until it answers, so the only
+ *  bound was the job's outer `timeout 300s`, which killed the whole gate with a
+ *  bare exit 124 — indistinguishable from a broken audit. With a per-attempt
+ *  bound the hang becomes a recognized transient: it is retried like a 503, and
+ *  when the retries run out the failure names the endpoint. 40 s × 3 attempts
+ *  plus backoff is 135 s per scope; two scopes stay under the outer 300 s. */
+const AUDIT_ATTEMPT_TIMEOUT_MS = 40_000;
+const AUDIT_ATTEMPT_TIMEOUT_SOURCE = "check-audit-attempt-timeout";
 const RETRYABLE_AUDIT_CODES = new Set([
   "E408",
   "E425",
@@ -117,9 +128,44 @@ function auditErrorDiagnostic(value) {
   const fields = auditErrorFields(value);
   if (!fields) return undefined;
   const parts = [fields.code ? `code=${fields.code}` : "", fields.statusCode ? `status=${fields.statusCode}` : ""];
-  const diagnostic = parts.filter(Boolean).join(" ");
+  let diagnostic = parts.filter(Boolean).join(" ");
+  // Only OUR synthetic timeout payload may add prose: registry payloads are
+  // never echoed beyond a validated code/status (they can carry secrets).
+  const error = isRecord(value.error) ? value.error : undefined;
+  if (error?.source === AUDIT_ATTEMPT_TIMEOUT_SOURCE && typeof error.summary === "string") {
+    diagnostic = `${diagnostic || "code=ETIMEDOUT"} (${error.summary})`;
+  }
   if (diagnostic) return diagnostic;
   return Object.hasOwn(value, "error") ? "structured-error" : undefined;
+}
+
+/**
+ * Map an `execFileSync` failure that produced NO output and was killed by the
+ * per-attempt timeout onto a retryable transient payload. Anything that
+ * produced output, or failed for another reason, is not a timeout and returns
+ * `undefined` so the caller keeps its existing fail-closed handling.
+ *
+ * @param {unknown} err - The thrown execFileSync error.
+ * @param {number} timeoutMs - The bound that was applied.
+ * @returns {object|undefined} A payload `retryableAuditError` recognizes.
+ * @example
+ * auditAttemptTimeoutPayload({ killed: true, signal: "SIGKILL", stdout: "" }, 40_000);
+ */
+export function auditAttemptTimeoutPayload(err, timeoutMs) {
+  if (!isRecord(err)) return undefined;
+  const output = typeof err.stdout === "string" ? err.stdout : (err.stdout?.toString?.() ?? "");
+  if (output.trim()) return undefined;
+  const timedOut = err.code === "ETIMEDOUT" || err.killed === true || typeof err.signal === "string";
+  if (!timedOut) return undefined;
+  return {
+    error: {
+      code: "ETIMEDOUT",
+      source: AUDIT_ATTEMPT_TIMEOUT_SOURCE,
+      summary:
+        `npm audit produced no output within ${Math.round(timeoutMs / 1000)} s — ` +
+        "the registry advisory endpoint did not answer"
+    }
+  };
 }
 
 /**
@@ -424,9 +470,14 @@ function readAuditPayload(scopeFlag, cwd) {
     output = runNpm(["audit", scopeFlag, "--json"], {
       cwd,
       encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"]
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: AUDIT_ATTEMPT_TIMEOUT_MS,
+      killSignal: "SIGKILL"
     });
   } catch (err) {
+    // A silent hang killed by the per-attempt bound is a transient, not a report.
+    const timedOut = auditAttemptTimeoutPayload(err, AUDIT_ATTEMPT_TIMEOUT_MS);
+    if (timedOut) return timedOut;
     // npm audit exits non-zero when vulns exist; the JSON is still on stdout.
     output = err?.stdout?.toString() ?? "";
     if (!output.trim()) throw new Error(`npm audit produced no JSON: ${err?.message ?? err}`);

@@ -4,11 +4,11 @@ All notable changes to this project will be documented here. The format follows 
 
 ## [4.0.0-rc.7] — 2026-08-31
 
-### `resources/list` answers a large vault with a page instead of an error (AH-6)
+### `resources/list` answers in bounded pages with an opaque cursor (AH-6)
 
-> **TL;DR:** **A vault past the inventory budget used to get a JSON-RPC error from every `resources/list`; it now gets a bounded page and an opaque continuation cursor.**
+> **TL;DR:** **`resources/list` now answers in bounded pages with an opaque continuation cursor. It does NOT yet fix the vault past the inventory budget — that one still refuses, and the spec violation stays open.**
 >
-> **Why it was a defect, not just a limit.** The specification is explicit: a server that declares the `resources` capability MUST respond to `resources/list` with the set of resources available to the client. Answering with an error is not one of the sanctioned ways to decline — returning an empty set is, throwing is not. The old behaviour therefore failed that MUST for every client of a vault over the file/entry budget.
+> **Corrected before release — what this actually delivers.** The first version of this entry claimed the beyond-budget vault now receives a page. It does not: the page is sliced from `listVaultNoteResources`, which still refuses when the bounded walk cannot complete, so a vault over 10,000 notes (or 100,000 visited entries, or with one unreadable subdirectory) answers every `resources/list` with an error exactly as before. What ships here is the bounded page SIZE, the cursor contract and the raw handler that can carry them — the machinery a real fix needs, for the vaults that never failed. The specification is explicit that a server declaring the `resources` capability MUST respond with the set of available resources, and an error is not a sanctioned way to decline; **that violation remains OPEN** and is tracked as AH-6b (a resumable walk, so a page costs O(page) and no completeness receipt is required). The post-merge re-sweep of this change found the overclaim; the function's own `@throws` had conceded the limit while the summary denied it.
 >
 > **Bounded claim — the protocol's own consistency floor, not more.** The spec states there is no cross-page consistency guarantee and that "if the underlying data changes between page fetches, clients may observe duplicates or gaps"; a client needing a coherent snapshot re-fetches from the beginning without a cursor. This server holds no snapshot and claims nothing stronger: within one unchanged vault the pages partition the listing exactly once in a deterministic order, and a note created or deleted between pages changes what later pages contain. A cursor this server did not mint is refused with `-32602`, which is what the spec asks for an invalid cursor. Page size is server-chosen (the spec forbids clients assuming a fixed one); it is 500 notes here, so an ordinary vault still answers in a single page.
 >

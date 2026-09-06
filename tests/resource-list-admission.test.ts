@@ -83,6 +83,41 @@ describe("resource inventory admission", () => {
       // unmintable, not mistaken for "start from the beginning".
       await expect(pageVaultResources(pagedVault, "")).rejects.toBeInstanceOf(ResourceCursorError);
       expect(decodeResourceCursor(encodeResourceCursor("a/b.md"))).toBe("a/b.md");
+
+      // AH-6b — the page no longer rides on the exhaustive inventory, so a
+      // vault the exhaustive walk REFUSES is still fully enumerable. Proven
+      // against the real refusal rather than a mocked one: the same vault is
+      // asserted to fail listVaultNoteResources and to page to completion.
+      const dense = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-ah6b-"));
+      try {
+        for (let i = 0; i < 40; i += 1) {
+          await fs.mkdir(path.join(dense, `d${String(i).padStart(2, "0")}`));
+          for (let j = 0; j < 30; j += 1) {
+            const dir = path.join(dense, `d${String(i).padStart(2, "0")}`);
+            await fs.writeFile(path.join(dir, `n${String(j).padStart(2, "0")}.md`), "x");
+          }
+        }
+        const denseVault = new Vault(dense);
+        // The exhaustive path refuses this vault under a small budget…
+        await expect(denseVault.listFilesByExtensionsBounded([".md"], 100, 10_000)).resolves.toMatchObject({
+          complete: false
+        });
+        // …while the resumable page walks it to the end, in ascending order.
+        const seen: string[] = [];
+        let cursor: string | undefined;
+        for (let guard = 0; guard < 20; guard += 1) {
+          const p2 = await pageVaultResources(denseVault, cursor);
+          const notes = p2.resources.filter((r) => r.uri.startsWith("obsidian://note/"));
+          seen.push(...notes.map((r) => r.description ?? ""));
+          cursor = p2.nextCursor;
+          if (cursor === undefined) break;
+        }
+        expect(seen).toHaveLength(1200);
+        expect(new Set(seen).size).toBe(1200);
+        expect([...seen]).toEqual([...seen].sort());
+      } finally {
+        await fs.rm(dense, { recursive: true, force: true });
+      }
     } finally {
       await fs.rm(pagedRoot, { recursive: true, force: true });
     }

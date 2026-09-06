@@ -1339,6 +1339,55 @@ export class Vault {
    * @param folder - Optional vault-relative subtree.
    * @returns A bounded listing sorted by vault-relative path and an explicit completeness receipt.
    */
+  /**
+   * One ordered page of admitted notes, resumable after a previous page.
+   *
+   * Complements {@link listFilesByExtensionsBounded}, which answers "the whole
+   * inventory or nothing" and is what every existing caller wants. A PAGE needs
+   * no completeness receipt and no total, so this walk stops as soon as it has
+   * one entry more than the page (that extra entry is the "is there more?"
+   * answer and is not returned), prunes whole subtrees that sort at or below
+   * the resume point, and treats an unreadable directory as skipped rather than
+   * fatal. Cost is therefore proportional to the page, not to the vault — which
+   * is what lets a vault of any size be enumerated at all.
+   *
+   * Ordering is globally ascending `relPath`, achieved by ordering each
+   * directory's own entries with {@link noteWalkOrderKey}; the result is
+   * identical to sorting a complete listing, which a differential test pins.
+   *
+   * Privacy, symlink, restricted-path, containment and depth rules are the same
+   * as the exhaustive walk: an excluded note is filtered before it is counted.
+   *
+   * @param extensions - Lower-case extensions to admit, each beginning with `.`.
+   * @param limit - Maximum entries to return; must be a positive safe integer.
+   * @param after - Exclusive `relPath` resume point, or undefined to start.
+   * @returns The page and whether a further admitted note exists after it.
+   * @throws {TypeError} If `limit` or `extensions` are malformed.
+   * @example
+   * const page = await vault.listNotePage([".md"], 500);
+   * const next = page.hasMore ? await vault.listNotePage([".md"], 500, page.entries.at(-1)?.relPath) : null;
+   */
+  async listNotePage(
+    extensions: readonly string[],
+    limit: number,
+    after?: string
+  ): Promise<NotePageListing> {
+    if (!Number.isSafeInteger(limit) || limit < 1) throw new TypeError("limit must be a positive safe integer");
+    if (extensions.length === 0) throw new TypeError("extensions must contain at least one file extension");
+    const normalizedExtensions = new Set<string>();
+    for (const extension of extensions) {
+      if (typeof extension !== "string" || !/^\.[a-z0-9]+$/iu.test(extension)) {
+        throw new TypeError("each extension must begin with '.' and contain only letters or digits");
+      }
+      normalizedExtensions.add(extension.toLowerCase());
+    }
+    if (!this.ready) await this.ensureExists();
+    const out: FileEntry[] = [];
+    await walkNotePage(this.root, this.root, normalizedExtensions, (rel) => this.isExcluded(rel), after, limit, out);
+    const hasMore = out.length > limit;
+    return { entries: hasMore ? out.slice(0, limit) : out, hasMore };
+  }
+
   async listFilesByExtensionsBounded(
     extensions: readonly string[],
     maxFiles: number,
@@ -3252,6 +3301,114 @@ async function walkBoundedExtensions(
       sourceRevision: fileSourceRevision(stat)
     });
   }
+}
+
+/** One page of a resumable, globally ordered note walk. */
+export interface NotePageListing {
+  /** Admitted regular files, in ascending `relPath` order, at most `limit`. */
+  entries: FileEntry[];
+  /** True when at least one further admitted file exists after the last entry. */
+  hasMore: boolean;
+}
+
+/**
+ * Order two directory entries so a depth-first walk emits globally sorted
+ * relative paths.
+ *
+ * The key is the entry name for a file and the name plus `/` for a directory,
+ * because every path under a directory `d` begins `d/`. Comparing bare names
+ * would be wrong wherever a separator sorts against an ordinary character: `-`
+ * (0x2D) precedes `/` (0x2F), so `a-1.md` must be emitted BEFORE `a/b.md` even
+ * though the directory `a` sorts before the file `a-1.md` by name alone.
+ *
+ * @param name - Directory entry name.
+ * @param isDirectory - Whether the entry is a directory.
+ * @returns The comparison key for that entry.
+ * @example
+ * noteWalkOrderKey("a", true); // "a/"
+ */
+export function noteWalkOrderKey(name: string, isDirectory: boolean): string {
+  return isDirectory ? `${name}/` : name;
+}
+
+/**
+ * Decide whether a subtree can be skipped entirely when resuming after a path.
+ *
+ * Every path under `dirRelPath` begins with `dirRelPath + "/"`. If the resume
+ * point does not lie inside the subtree and sorts at or after that prefix, then
+ * it sorts after every path the subtree could produce, so the whole subtree is
+ * already behind the cursor.
+ *
+ * @param dirRelPath - Vault-relative path of the directory.
+ * @param after - Resume point, or undefined for a walk from the beginning.
+ * @returns True when the subtree contains nothing the caller still needs.
+ * @example
+ * canSkipNoteSubtree("a", "b.md"); // true — every "a/…" sorts before "b.md"
+ */
+export function canSkipNoteSubtree(dirRelPath: string, after: string | undefined): boolean {
+  if (after === undefined) return false;
+  const prefix = `${dirRelPath}/`;
+  return !after.startsWith(prefix) && after >= prefix;
+}
+
+async function walkNotePage(
+  dir: string,
+  root: string,
+  extensions: ReadonlySet<string>,
+  isExcluded: (relPath: string) => boolean,
+  after: string | undefined,
+  limit: number,
+  out: FileEntry[],
+  depth = 0
+): Promise<boolean> {
+  let directory: import("node:fs").Dirent[];
+  try {
+    directory = await fs.readdir(dir, { withFileTypes: true });
+  } catch {
+    // An unreadable directory is skipped, not fatal. A page is a page: unlike
+    // the exhaustive inventory this walk makes no completeness claim, so one
+    // inaccessible subtree must not deny the whole listing.
+    return false;
+  }
+  const ordered = [...directory].sort((left, right) => {
+    const a = noteWalkOrderKey(left.name, left.isDirectory());
+    const b = noteWalkOrderKey(right.name, right.isDirectory());
+    return a < b ? -1 : a > b ? 1 : 0;
+  });
+
+  for (const entry of ordered) {
+    if (out.length > limit) return true;
+    const full = path.join(dir, entry.name);
+    const relPath = vaultRelative(root, full).replace(/\\/g, "/");
+    if (restrictedVaultPathReason(relPath) || entry.isSymbolicLink()) continue;
+    if (entry.isDirectory()) {
+      if (depth >= MAX_WALK_DEPTH) continue;
+      if (canSkipNoteSubtree(relPath, after)) continue;
+      const real = await fs.realpath(full).catch(() => null);
+      if (!real) continue;
+      const rel = path.relative(root, real);
+      if (rel.startsWith("..") || path.isAbsolute(rel)) continue;
+      if (await walkNotePage(real, root, extensions, isExcluded, after, limit, out, depth + 1)) return true;
+      continue;
+    }
+    if (!entry.isFile() || !extensions.has(path.extname(entry.name).toLowerCase())) continue;
+    if (after !== undefined && relPath <= after) continue;
+    // Privacy first: an excluded note is absent before it is counted, so a
+    // page can never be padded out with notes the operator hid.
+    if (isExcluded(relPath)) continue;
+    const stat = await fs.stat(full).catch(() => null);
+    if (!stat?.isFile()) continue;
+    out.push({
+      absPath: full,
+      relPath,
+      basename: entry.name,
+      mtimeMs: stat.mtimeMs,
+      sizeBytes: stat.size,
+      sourceRevision: fileSourceRevision(stat)
+    });
+    if (out.length > limit) return true;
+  }
+  return false;
 }
 
 /**

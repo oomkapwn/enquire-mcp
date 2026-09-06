@@ -161,8 +161,6 @@ export function decodeResourceCursor(cursor: string): string {
  * @returns The page's entries in the SDK's own merged wire shape, plus a
  *   `nextCursor` when more notes remain.
  * @throws {ResourceCursorError} On a cursor this server did not mint.
- * @throws {Error} If the bounded traversal could not complete — the vault
- *   exceeds the file/entry budget, which no page size can fix.
  * @example
  * const first = await pageVaultResources(vault);
  * const second = first.nextCursor ? await pageVaultResources(vault, first.nextCursor) : null;
@@ -171,15 +169,22 @@ export async function pageVaultResources(
   vault: Vault,
   cursor?: string
 ): Promise<{ resources: PagedResourceEntry[]; nextCursor?: string }> {
-  const after = cursor === undefined ? null : decodeResourceCursor(cursor);
-  const notes = await listVaultNoteResources(vault);
-  const start = after === null ? 0 : notes.findIndex((note) => note.description > after);
-  // A cursor whose path sorts after every remaining note yields an empty final
-  // page, which is a legal end state; -1 means exactly that.
-  const from = start === -1 ? notes.length : start;
-  const slice = notes.slice(from, from + RESOURCE_PAGE_LIMIT);
+  const after = cursor === undefined ? undefined : decodeResourceCursor(cursor);
+  // Resumable: the page costs a walk proportional to the PAGE, and needs no
+  // completeness receipt — which is what lets a vault of any size be listed at
+  // all. `listVaultNoteResources` remains the exhaustive path for the note
+  // count in `vaultResourceInfo`, where an exact total genuinely is required.
+  const page = await vault.listNotePage([".md"], RESOURCE_PAGE_LIMIT, after);
+  const slice = page.entries.map(
+    (entry): VaultNoteResource => ({
+      uri: `obsidian://note/${encodeNotePath(entry.relPath)}`,
+      name: entry.basename.replace(/\.md$/i, ""),
+      description: entry.relPath,
+      mimeType: "text/markdown"
+    })
+  );
   const resources: PagedResourceEntry[] = [];
-  if (after === null) {
+  if (after === undefined) {
     // The SDK merges a STATIC entry as `{ uri, name, ...metadata }`.
     resources.push({ uri: VAULT_INFO_RESOURCE.uri, name: VAULT_INFO_RESOURCE.name, ...VAULT_INFO_RESOURCE.metadata });
   }
@@ -189,8 +194,7 @@ export async function pageVaultResources(
     resources.push({ ...VAULT_NOTE_TEMPLATE_METADATA, ...note });
   }
   const last = slice.at(-1);
-  const more = from + slice.length < notes.length;
-  return more && last ? { resources, nextCursor: encodeResourceCursor(last.description) } : { resources };
+  return page.hasMore && last ? { resources, nextCursor: encodeResourceCursor(last.description) } : { resources };
 }
 
 /**
@@ -310,13 +314,10 @@ export async function readChunkResource(
  * first; a later `setRequestHandler` replaces it, while doing this BEFORE
  * registration would make the registration itself throw.
  *
- * SCOPE — this does not yet make a beyond-budget vault answerable. The page is
- * sliced from {@link listVaultNoteResources}, which still refuses an incomplete
- * walk, so the protocol violation for such a vault (a server advertising the
- * `resources` capability MUST answer with the set of available resources, and
- * an error is not a sanctioned way to decline) remains OPEN until the walk
- * itself becomes resumable. What is delivered here is the bounded page size,
- * the cursor contract, and the handler that can carry them.
+ * A vault of ANY size is answerable: the page comes from a resumable walk whose
+ * cost is proportional to the page, so the specification's requirement that a
+ * server advertising the `resources` capability answers with the set of
+ * available resources holds even past the exhaustive inventory's budget.
  *
  * @param server - The MCP server whose method is being replaced.
  * @param vault - Live path/privacy authority for the listing.

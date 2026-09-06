@@ -27,6 +27,7 @@ import { buildInitializeInstructions, resolveInitializeToolProfile } from "./ini
 import { createToolRegistrationAdapter } from "./mcp-registration.js";
 import type { PersistenceFamilyLeaseHandle } from "./persistence-coordination.js";
 import { registerPrompts } from "./prompts.js";
+import { registerPagedResourceList } from "./resource-admission.js";
 import { parseFeedbackConfig, parseRecencyConfig } from "./retrieval-opts.js";
 import {
   createPreparedServerCleanupOwner,
@@ -1206,6 +1207,7 @@ export async function prepareServerDeps(opts: ServeOptions): Promise<ServerDeps>
  *   programmatic consumers may omit it.
  * @returns A freshly registered MCP server.
  */
+
 export function buildMcpServer(deps: ServerDeps, opts: ServeOptions, writeTracker?: WriteRequestTracker): McpServer {
   assertServeOptionsRuntime(opts);
   if (
@@ -1367,6 +1369,7 @@ export function buildMcpServer(deps: ServerDeps, opts: ServeOptions, writeTracke
   if (deps.ftsIndex && opts.diagnosticSearchTools) registerFtsTools(server, deps.ftsIndex, deps.vault);
   registerResources(server, deps.vault);
   if (deps.ftsIndex) registerChunkResource(server, deps.ftsIndex, deps.vault);
+  registerPagedResourceList(server, deps.vault);
   if (opts.prompts !== false) registerPrompts(server);
 
   // v2.0.0-beta.1: warn on unknown names AFTER all tools are registered.

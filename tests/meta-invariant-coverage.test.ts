@@ -34,7 +34,7 @@ import { releaseMutationVersionedTransitionAuditProblems } from "./release-mutat
 
 const repoRoot = path.resolve(__dirname, "..");
 const RELEASE_MUTATION_IDENTITY_FIXTURE_SHA256 = "8205d24e6d42dd4cb8986368611514131abe701434beb30150e33ea08f4b1288";
-const RELEASE_MUTATION_TRANSITION_FIXTURE_SHA256 = "ed357593dee782a0a17494b3132cbfea4257f025320346f5aa1f28bd6b40f60a";
+const RELEASE_MUTATION_TRANSITION_FIXTURE_SHA256 = "09e46282c4596a4b92578b9086683173216d3e3e835f044ec83302b4ed575a28";
 const releaseMutationIdentityFixturePath = path.join(repoRoot, "tests/fixtures/release-mutation-identity.v2.json");
 const releaseMutationTransitionFixturePath = path.join(repoRoot, "tests/fixtures/release-mutation-transition.v3.json");
 const releaseIntegritySourcePath = path.join(repoRoot, "tests/release-integrity.test.ts");
@@ -316,7 +316,7 @@ const EXPECTED_REPOSITORY_MUTATION_HELPER_CALL_ENTRIES = [
   ],
   [
     "k1-ast-invariant.test.ts",
-    { count: 4, sha256: "f15ac5d7343c2cc3e6e4557240226950eb7b85a88ee66c29428eca429f0c8bb6" }
+    { count: 4, sha256: "c7d3902e64f8c3869466febfd13cb051e30cd2da4b9246814c542fa0dde7e8b0" }
   ],
   [
     "k1-class-invariant.test.ts",
@@ -347,7 +347,7 @@ const EXPECTED_REPOSITORY_MUTATION_HELPER_CALL_ENTRIES = [
   ],
   [
     "resource-list-admission.test.ts",
-    { count: 1, sha256: "cfcd83f72055e3b8b8f16124045a540024faa84554365eb1c0b23ec1c77ab84a" }
+    { count: 1, sha256: "fe4ae8b35895321640c61af5248f0e00b776b6af5ff0dc5991bf2e32283e4a53" }
   ],
   [
     "sink-parity-invariant.test.ts",
@@ -996,8 +996,8 @@ const EXPECTED_REVIEWED_ORDINARY_OWNER_SHA256_ENTRIES = [
   ["K-1 statement semicolon normalization", "9bb382eb2d071464957b3c6cec271cb2a843dfeeabd9225c92e4497597d839ef"],
   ["K-1 block-comment stripping", "693d87a3a5e80b88156a062d2935aa3e9e278aad769fd947ec897caffcbb4fdc"],
   ["K-1 line-comment stripping", "693d87a3a5e80b88156a062d2935aa3e9e278aad769fd947ec897caffcbb4fdc"],
-  ["K-1 module-extension normalization", "e6fc6591097ffdb0c7fe4774b0beb9e4775b03b794a4c07cabc3ef48bbdb9c4c"],
-  ["K-1 source-path separator normalization", "abf5e33e07b11a1cd4bf30dc7cf6374865426b74f7fae8eeef3972911deba45a"],
+  ["K-1 module-extension normalization", "93d89e64dbdc69d21f5502c1e7173c565aad0a1bc6f2a29b0bd6396fe38f462e"],
+  ["K-1 source-path separator normalization", "651f3fb3e3cf501ef8b72050722c59f735a6906e4cdbc75d819083d9346d852a"],
   ["line-terminator block-comment stripping", "61bbbea7aac48eafa3a24d78998eb49e81a6e7911953f3c25ead27692923a80d"],
   ["line-terminator line-comment stripping", "61bbbea7aac48eafa3a24d78998eb49e81a6e7911953f3c25ead27692923a80d"],
   ["ReDoS source-path separator normalization", "1b31e3478ce12f357ad0de08f669cdd462aef1c92b5e40ea2b7252bf483dc9bd"],

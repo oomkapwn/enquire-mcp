@@ -34,7 +34,7 @@ import { releaseMutationVersionedTransitionAuditProblems } from "./release-mutat
 
 const repoRoot = path.resolve(__dirname, "..");
 const RELEASE_MUTATION_IDENTITY_FIXTURE_SHA256 = "8205d24e6d42dd4cb8986368611514131abe701434beb30150e33ea08f4b1288";
-const RELEASE_MUTATION_TRANSITION_FIXTURE_SHA256 = "68f2a999f808a5f3ca1ce678715965733fc644f3509a67095d0c628f2f09bd8c";
+const RELEASE_MUTATION_TRANSITION_FIXTURE_SHA256 = "03debe01a4b97a5aa9ae1561c41c1699a69607feb088968f004c37fd8b06de89";
 const releaseMutationIdentityFixturePath = path.join(repoRoot, "tests/fixtures/release-mutation-identity.v2.json");
 const releaseMutationTransitionFixturePath = path.join(repoRoot, "tests/fixtures/release-mutation-transition.v3.json");
 const releaseIntegritySourcePath = path.join(repoRoot, "tests/release-integrity.test.ts");
@@ -347,7 +347,7 @@ const EXPECTED_REPOSITORY_MUTATION_HELPER_CALL_ENTRIES = [
   ],
   [
     "resource-list-admission.test.ts",
-    { count: 1, sha256: "fe4ae8b35895321640c61af5248f0e00b776b6af5ff0dc5991bf2e32283e4a53" }
+    { count: 1, sha256: "4e3f6bc801b0222e3c10363aa0f2e78c834a99d0003a83dd096c39f868b9a1ce" }
   ],
   [
     "sink-parity-invariant.test.ts",

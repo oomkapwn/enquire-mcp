@@ -86,7 +86,6 @@ describe("resource inventory admission", () => {
     } finally {
       await fs.rm(pagedRoot, { recursive: true, force: true });
     }
-
   });
 
   it("fails both exhaustive resource contracts when the traversal receipt is incomplete", async () => {

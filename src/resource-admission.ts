@@ -44,7 +44,7 @@ export function decodeNotePath(uriPath: string): string {
  * `resources/list` page and the SDK registration in `tool-registry.ts` cannot
  * describe the same resource differently. The SDK merges a template entry as
  * `{ ...templateMetadata, ...resource }` and a static entry as
- * `{ uri, name, ...metadata }`, so {@link mergeResourcePage} below reproduces
+ * `{ uri, name, ...metadata }`, so {@link pageVaultResources} below reproduces
  * exactly that shape rather than inventing its own.
  */
 export const VAULT_INFO_RESOURCE = {
@@ -328,6 +328,9 @@ export async function readChunkResource(
 export function registerPagedResourceList(server: McpServer, vault: Vault): void {
   server.server.setRequestHandler("resources/list", async (request: { params?: { cursor?: unknown } }) => {
     const raw = request.params?.cursor;
+    // Defense in depth only: the SDK validates the request shape before a
+    // handler runs, so a non-string cursor is already rejected upstream and
+    // this branch is unreachable through the SDK's own routing.
     if (raw !== undefined && typeof raw !== "string") {
       throw new ProtocolError(ProtocolErrorCode.InvalidParams, "resources/list cursor must be a string");
     }

@@ -4,6 +4,16 @@ All notable changes to this project will be documented here. The format follows 
 
 ## [4.0.0-rc.7] — 2026-08-31
 
+### `resources/list` answers a large vault with a page instead of an error (AH-6)
+
+> **TL;DR:** **A vault past the inventory budget used to get a JSON-RPC error from every `resources/list`; it now gets a bounded page and an opaque continuation cursor.**
+>
+> **Why it was a defect, not just a limit.** The specification is explicit: a server that declares the `resources` capability MUST respond to `resources/list` with the set of resources available to the client. Answering with an error is not one of the sanctioned ways to decline — returning an empty set is, throwing is not. The old behaviour therefore failed that MUST for every client of a vault over the file/entry budget.
+>
+> **Bounded claim — the protocol's own consistency floor, not more.** The spec states there is no cross-page consistency guarantee and that "if the underlying data changes between page fetches, clients may observe duplicates or gaps"; a client needing a coherent snapshot re-fetches from the beginning without a cursor. This server holds no snapshot and claims nothing stronger: within one unchanged vault the pages partition the listing exactly once in a deterministic order, and a note created or deleted between pages changes what later pages contain. A cursor this server did not mint is refused with `-32602`, which is what the spec asks for an invalid cursor. Page size is server-chosen (the spec forbids clients assuming a fixed one); it is 500 notes here, so an ordinary vault still answers in a single page.
+>
+> **Method note:** the SDK's high-level resource API structurally cannot paginate — a `ResourceTemplate`'s `list` callback receives no request params, so an inbound cursor never reaches it, and the SDK rebuilds the reply from `result.resources` alone, so an outbound `nextCursor` is dropped. `resources/list` is therefore taken over by a raw handler installed AFTER registration (registering first and replacing later is required: the reverse order makes the registration itself throw). Both resource descriptions now come from one exported constant used by the registration and the page alike, so the merged wire shape cannot drift between them. Privacy filtering happens inside the walk, so an excluded note is absent before anything is counted or cut.
+
 ### `clear-feedback` erases the active vault's marks (AH-5c)
 
 > **TL;DR:** **The closed-loop feedback sidecar of the vault you are USING is now erasable by a command.**

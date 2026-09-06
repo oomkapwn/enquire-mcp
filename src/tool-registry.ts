@@ -7,7 +7,13 @@ import { VERSION } from "./index.js";
 import { textResult } from "./mcp-result.js";
 import { DEFAULT_OCR_TIMEOUT_MS } from "./ocr-admission.js";
 import { MAX_RESEARCH_SUBQUERIES } from "./research-protocol.js";
-import { decodeNotePath, listVaultNoteResources, readChunkResource, vaultResourceInfo } from "./resource-admission.js";
+import {
+  decodeNotePath,
+  readChunkResource,
+  VAULT_INFO_RESOURCE,
+  VAULT_NOTE_TEMPLATE_METADATA,
+  vaultResourceInfo
+} from "./resource-admission.js";
 import type { ServerDeps } from "./server.js";
 import { RENAME_NOTE_INPUT_SCHEMA } from "./tool-input-admission.js";
 import {
@@ -1564,13 +1570,9 @@ export function registerChunkResource(server: McpServer, idx: FtsIndex, vault: V
 
 export function registerResources(server: McpServer, vault: Vault): void {
   server.registerResource(
-    "vault-info",
-    "obsidian://vault/info",
-    {
-      title: "Vault metadata",
-      description: "Root path, note count, write-enabled flag, and limits for the connected vault.",
-      mimeType: "application/json"
-    },
+    VAULT_INFO_RESOURCE.name,
+    VAULT_INFO_RESOURCE.uri,
+    { ...VAULT_INFO_RESOURCE.metadata },
     async (uri) => {
       const payload = await vaultResourceInfo(vault, VERSION);
       return {
@@ -1581,14 +1583,13 @@ export function registerResources(server: McpServer, vault: Vault): void {
 
   server.registerResource(
     "vault-note",
-    new ResourceTemplate("obsidian://note/{+notePath}", {
-      list: async () => ({ resources: await listVaultNoteResources(vault) })
-    }),
-    {
-      title: "Vault notes",
-      description: "Each markdown note in the vault, addressable via `obsidian://note/<relative-path>`.",
-      mimeType: "text/markdown"
-    },
+    // `list` is deliberately absent: the SDK's own resources/list handler
+    // cannot carry a cursor in either direction (its template callback receives
+    // no request params, and it rebuilds the reply keeping only `resources`),
+    // so `registerPagedResourceList` in server.ts owns that method instead and
+    // this template contributes only reads and templates/list.
+    new ResourceTemplate("obsidian://note/{+notePath}", { list: undefined }),
+    { ...VAULT_NOTE_TEMPLATE_METADATA },
     async (uri, params) => {
       const raw = Array.isArray(params.notePath) ? params.notePath.join("/") : (params.notePath as string);
       const decoded = decodeNotePath(raw);

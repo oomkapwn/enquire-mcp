@@ -1549,15 +1549,14 @@ export function registerChunkResource(server: McpServer, idx: FtsIndex, vault: V
   // Index FIRST so the {+notePath} can greedily eat slash-bearing paths.
   server.registerResource(
     "vault-chunk",
-    new ResourceTemplate("obsidian://chunk/{chunkIndex}/{+notePath}", {
-      list: async () => {
-        // No exhaustive enumeration — chunks are a derived index that can
-        // contain thousands of entries per vault. Clients should construct
-        // these URIs from search hits returned by `obsidian_full_text_search`.
-        // We surface a single example URI so the schema is discoverable.
-        return { resources: [] };
-      }
-    }),
+    // No enumeration: chunks are a derived index that can hold thousands of
+    // entries per vault, and clients construct these URIs from the
+    // `chunk_index` + `rel_path` of a search hit. `list` is absent rather than
+    // returning an empty array because since AH-6 the server answers
+    // `resources/list` with its own handler, which never consults a template
+    // callback — an empty-array callback here would be dead code that reads
+    // like a contributing one.
+    new ResourceTemplate("obsidian://chunk/{chunkIndex}/{+notePath}", { list: undefined }),
     {
       title: "Vault chunks (FTS5 index)",
       description:

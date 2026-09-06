@@ -868,7 +868,7 @@ Surgical YAML manipulation: set one or more frontmatter keys, or remove them by 
 | `obsidian://vault/info`      | static JSON    | Root, note count, write flag, byte/cache limits, server version. |
 | `obsidian://note/{notePath}` | template (md)  | Each markdown note. `notePath` is the URI-encoded vault-relative path. |
 
-The note template implements `list`, so MCP clients with a resource browser will see the full vault enumerated on connect.
+`resources/list` is answered by the server in bounded pages (500 notes) with an opaque `nextCursor`, so a resource browser walks the vault a page at a time rather than receiving it whole on connect. A cursor the server did not mint is refused with `-32602`. Page boundaries carry no snapshot: as the protocol itself states, a client that needs a coherent view of the whole listing re-fetches from the beginning without a cursor. A vault beyond the inventory budget (10,000 notes / 100,000 visited entries) still refuses the listing — see AH-6b.
 
 ## MCP prompts
 

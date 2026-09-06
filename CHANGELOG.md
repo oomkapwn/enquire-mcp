@@ -14,6 +14,8 @@ All notable changes to this project will be documented here. The format follows 
 >
 > **Method note:** the SDK's high-level resource API structurally cannot paginate — a `ResourceTemplate`'s `list` callback receives no request params, so an inbound cursor never reaches it, and the SDK rebuilds the reply from `result.resources` alone, so an outbound `nextCursor` is dropped. `resources/list` is therefore taken over by a raw handler installed AFTER registration (registering first and replacing later is required: the reverse order makes the registration itself throw). Both resource descriptions now come from one exported constant used by the registration and the page alike, so the merged wire shape cannot drift between them. Privacy filtering happens inside the walk, so an excluded note is absent before anything is counted or cut.
 
+> **Follow-up corrections (post-merge re-sweep tail).** `docs/api.md` claimed the note template implements `list` and that a client "will see the full vault enumerated on connect" — both halves became false with this change, and the page/cursor/refusal contract is stated there now. The chunk template's `list` callback returned an empty array that no longer routes anywhere, so it is `undefined` rather than dead code reading like a contributing one. A `{@link}` pointed at a symbol that was never created. The handler's non-string-cursor guard is labelled as unreachable through the SDK's own routing rather than implying it fires.
+
 ### `clear-feedback` erases the active vault's marks (AH-5c)
 
 > **TL;DR:** **The closed-loop feedback sidecar of the vault you are USING is now erasable by a command.**

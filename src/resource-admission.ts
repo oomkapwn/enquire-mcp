@@ -310,9 +310,13 @@ export async function readChunkResource(
  * first; a later `setRequestHandler` replaces it, while doing this BEFORE
  * registration would make the registration itself throw.
  *
- * The protocol requires a server advertising the `resources` capability to
- * answer with the set of available resources. Before this, a vault beyond the
- * inventory budget answered every `resources/list` with an error instead.
+ * SCOPE — this does not yet make a beyond-budget vault answerable. The page is
+ * sliced from {@link listVaultNoteResources}, which still refuses an incomplete
+ * walk, so the protocol violation for such a vault (a server advertising the
+ * `resources` capability MUST answer with the set of available resources, and
+ * an error is not a sanctioned way to decline) remains OPEN until the walk
+ * itself becomes resumable. What is delivered here is the bounded page size,
+ * the cursor contract, and the handler that can carry them.
  *
  * @param server - The MCP server whose method is being replaced.
  * @param vault - Live path/privacy authority for the listing.

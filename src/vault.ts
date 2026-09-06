@@ -1367,11 +1367,7 @@ export class Vault {
    * const page = await vault.listNotePage([".md"], 500);
    * const next = page.hasMore ? await vault.listNotePage([".md"], 500, page.entries.at(-1)?.relPath) : null;
    */
-  async listNotePage(
-    extensions: readonly string[],
-    limit: number,
-    after?: string
-  ): Promise<NotePageListing> {
+  async listNotePage(extensions: readonly string[], limit: number, after?: string): Promise<NotePageListing> {
     if (!Number.isSafeInteger(limit) || limit < 1) throw new TypeError("limit must be a positive safe integer");
     if (extensions.length === 0) throw new TypeError("extensions must contain at least one file extension");
     const normalizedExtensions = new Set<string>();

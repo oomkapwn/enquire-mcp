@@ -1,3 +1,4 @@
+import { type McpServer, ProtocolError, ProtocolErrorCode } from "@modelcontextprotocol/server";
 import type { FtsIndex } from "./fts5.js";
 import { readLiveFtsChunk } from "./tools/index.js";
 import type { Vault } from "./vault.js";
@@ -295,4 +296,46 @@ export async function readChunkResource(
   return {
     contents: [{ uri: uri.href, mimeType: "application/json", text: JSON.stringify(payload, null, 2) }]
   };
+}
+
+/**
+ * Take ownership of `resources/list` so a large vault gets a bounded PAGE
+ * instead of an error.
+ *
+ * Why a raw handler: the SDK's own `resources/list` cannot paginate in either
+ * direction — a `ResourceTemplate`'s `list` callback receives no request params
+ * (so an inbound cursor never reaches it) and the SDK rebuilds the reply from
+ * `result.resources` alone (so an outbound `nextCursor` is dropped). Installed
+ * AFTER `registerResources`, whose registration puts the SDK's handler in place
+ * first; a later `setRequestHandler` replaces it, while doing this BEFORE
+ * registration would make the registration itself throw.
+ *
+ * The protocol requires a server advertising the `resources` capability to
+ * answer with the set of available resources. Before this, a vault beyond the
+ * inventory budget answered every `resources/list` with an error instead.
+ *
+ * @param server - The MCP server whose method is being replaced.
+ * @param vault - Live path/privacy authority for the listing.
+ * @returns Nothing; the handler is installed as a side effect.
+ * @example
+ * registerResources(server, vault);
+ * registerPagedResourceList(server, vault);
+ */
+export function registerPagedResourceList(server: McpServer, vault: Vault): void {
+  server.server.setRequestHandler("resources/list", async (request: { params?: { cursor?: unknown } }) => {
+    const raw = request.params?.cursor;
+    if (raw !== undefined && typeof raw !== "string") {
+      throw new ProtocolError(ProtocolErrorCode.InvalidParams, "resources/list cursor must be a string");
+    }
+    try {
+      return await pageVaultResources(vault, raw);
+    } catch (error) {
+      if (error instanceof ResourceCursorError) {
+        // The specification asks for -32602 on a cursor the server did not
+        // mint; the client's documented recovery is to restart without one.
+        throw new ProtocolError(ProtocolErrorCode.InvalidParams, error.message);
+      }
+      throw error;
+    }
+  });
 }

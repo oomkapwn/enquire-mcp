@@ -1586,7 +1586,7 @@ export function registerResources(server: McpServer, vault: Vault): void {
     // `list` is deliberately absent: the SDK's own resources/list handler
     // cannot carry a cursor in either direction (its template callback receives
     // no request params, and it rebuilds the reply keeping only `resources`),
-    // so `registerPagedResourceList` in server.ts owns that method instead and
+    // so `registerPagedResourceList` (resource-admission) owns that method and
     // this template contributes only reads and templates/list.
     new ResourceTemplate("obsidian://note/{+notePath}", { list: undefined }),
     { ...VAULT_NOTE_TEMPLATE_METADATA },

@@ -71,6 +71,20 @@ export const VAULT_NOTE_TEMPLATE_METADATA = {
  */
 export const RESOURCE_PAGE_LIMIT = 500;
 
+/**
+ * One entry of a `resources/list` page, in the exact shape the SDK puts on the
+ * wire: `uri` is the only required field, and the rest are the merged
+ * registration metadata. Typed concretely rather than as a loose record so the
+ * compiler holds the page to the protocol's own resource shape.
+ */
+export interface PagedResourceEntry {
+  uri: string;
+  name: string;
+  title?: string;
+  description?: string;
+  mimeType?: string;
+}
+
 /** Raised when a client supplies a cursor this server did not mint. */
 export class ResourceCursorError extends Error {
   constructor(message: string) {
@@ -155,7 +169,7 @@ export function decodeResourceCursor(cursor: string): string {
 export async function pageVaultResources(
   vault: Vault,
   cursor?: string
-): Promise<{ resources: Array<Record<string, unknown>>; nextCursor?: string }> {
+): Promise<{ resources: PagedResourceEntry[]; nextCursor?: string }> {
   const after = cursor === undefined ? null : decodeResourceCursor(cursor);
   const notes = await listVaultNoteResources(vault);
   const start = after === null ? 0 : notes.findIndex((note) => note.description > after);
@@ -163,7 +177,7 @@ export async function pageVaultResources(
   // page, which is a legal end state; -1 means exactly that.
   const from = start === -1 ? notes.length : start;
   const slice = notes.slice(from, from + RESOURCE_PAGE_LIMIT);
-  const resources: Array<Record<string, unknown>> = [];
+  const resources: PagedResourceEntry[] = [];
   if (after === null) {
     // The SDK merges a STATIC entry as `{ uri, name, ...metadata }`.
     resources.push({ uri: VAULT_INFO_RESOURCE.uri, name: VAULT_INFO_RESOURCE.name, ...VAULT_INFO_RESOURCE.metadata });

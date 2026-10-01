@@ -344,13 +344,13 @@ export async function verifyBasicMcpb(artifact) {
   assert.deepEqual([...componentRefs].sort(), [...archivedPackageRefs].sort(), "SBOM misses installed packages");
   assert.deepEqual(
     [...(archivedPackageVersions.get("@hono/node-server") ?? [])],
-    ["2.0.11"],
-    "MCPB must bundle only patched @hono/node-server 2.0.11"
+    ["2.1.3"],
+    "MCPB must bundle only patched @hono/node-server 2.1.3"
   );
   assert.deepEqual(
     [...(archivedPackageVersions.get("hono") ?? [])],
-    ["4.13.7"],
-    "MCPB must bundle only patched hono 4.13.7"
+    ["4.13.11"],
+    "MCPB must bundle only patched hono 4.13.11"
   );
   for (const entry of licenses.packages) {
     assert.equal(typeof entry.declared_license, "string");
@@ -428,8 +428,8 @@ export async function verifyBasicMcpb(artifact) {
     "version"
   ]);
   assert.deepEqual(runtimePackage.overrides, {
-    "@hono/node-server": "^2.0.11",
-    hono: "^4.13.7"
+    "@hono/node-server": "^2.1.3",
+    hono: "^4.13.11"
   });
 
   const scratch = createOwnedScratch();

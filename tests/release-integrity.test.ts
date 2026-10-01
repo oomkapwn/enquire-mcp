@@ -9517,12 +9517,12 @@ function legacyMcpbContractProblems(inputs: {
     !inputs.consumer.includes("optional dependency identity leaked") ||
     !inputs.consumer.includes("nativeBinaryReason") ||
     !inputs.consumer.includes("native executable leaked into Basic MCPB") ||
-    !inputs.consumer.includes('"@hono/node-server": "^2.0.11"') ||
-    !inputs.consumer.includes('hono: "^4.13.7"') ||
+    !inputs.consumer.includes('"@hono/node-server": "^2.1.3"') ||
+    !inputs.consumer.includes('hono: "^4.13.11"') ||
     !inputs.consumer.includes('archivedPackageVersions.get("@hono/node-server")') ||
-    !inputs.consumer.includes('["2.0.11"]') ||
+    !inputs.consumer.includes('["2.1.3"]') ||
     !inputs.consumer.includes('archivedPackageVersions.get("hono")') ||
-    !inputs.consumer.includes('["4.13.7"]') ||
+    !inputs.consumer.includes('["4.13.11"]') ||
     !inputs.consumer.includes("stranded embedding index and activation guard") ||
     !inputs.consumer.includes("Basic session changed isolated cache sentinel paths") ||
     !inputs.consumer.includes("XDG_CACHE_HOME") ||
@@ -22349,7 +22349,7 @@ done`;
     expect(
       mcpbContractProblems({
         ...mcpbInputs,
-        consumer: replaceExactly(mcpbInputs.consumer, '["2.0.11"]', '["1.19.9"]')
+        consumer: replaceExactly(mcpbInputs.consumer, '["2.1.3"]', '["1.19.9"]')
       })
     ).toContain(
       "MCPB consumer must prove exact inventory, transparency records, resources, omitted deps, negatives, and post-refusal liveness"

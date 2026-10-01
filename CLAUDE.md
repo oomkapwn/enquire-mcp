@@ -101,3 +101,4 @@ Standing rules that lived only in that log and that the code cannot teach:
 - **A generative fuzz or differential corpus is only as strong as the shapes its generator can produce.** When a detector class recurs, first check that the generator can even emit the new shape (v3.10.0-rc.36, rc.54).
 - **A behavioral dependency major is verified by a v-old-vs-v-new differential run BEFORE any code edit**, then the contract tests are re-derived to the new behavior (v3.11.0-rc.6).
 - **Shell is `zsh`: `status` is read-only there.** Never name a poll or loop variable `status`.
+- **After any artifact re-render or rebuild, re-measure every quantitative claim affected by it in the same commit.** Preserve only verified dimensions/counts; do not carry forward stale asset byte sizes from an earlier draft (v3.9.0-rc.30).

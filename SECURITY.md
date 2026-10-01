@@ -340,6 +340,14 @@ adm-zip. The previous Sharp and adm-zip exceptions are removed; any moderate-or-
 advisory must fail the clean-consumer gate. Hosted CI must prove the actual newly resolved graph.
 This policy does not repair historical installations or alter the already-published rc.3.
 
+The source/MCPB override for Node-server is not inherited by an installed npm dependency. Registry
+metadata checked on 2026-10-01 still shows `@modelcontextprotocol/node@2.1.0` requiring
+`@hono/node-server ^1.19.9`; that range cannot admit the 2.1.3 fix for
+[`GHSA-rmxm-3fg6-px4f`](https://github.com/honojs/node-server/security/advisories/GHSA-rmxm-3fg6-px4f).
+Enquire does not invoke its `serveStatic` helper, but the consumer dependency residual remains and
+must be adjudicated before publication. A green npm audit only certifies advisories visible to its
+current index and severity policy; it is not proof that this independently identified residual vanished.
+
 A consumer may report multiple vulnerable package nodes because npm propagates advisories through
 parent packages. Promotion to npm `@latest` still requires a clean published-consumer audit plus the
 separate compatibility, independent-audit and maintainer-authorization gates.

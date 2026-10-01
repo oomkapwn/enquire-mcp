@@ -29,9 +29,6 @@
     },
     {
       "id": "script.mcpb-build"
-    },
-    {
-      "id": "script.mcpb-consumer"
     }
   ],
   "sourceChanges": [
@@ -76,7 +73,7 @@
       "reason": "reviewed source bytes changed while catalogue identity stayed fixed",
       "witness": {
         "from": "sha256:7f2f2986eb158994ec66c45e70d85d62545b1f5803797287bcd735cda9be2abd",
-        "to": "sha256:3868f044514107d8b8fa90baa950b969a79039fadffa3f1cc12cc8a9d2e6125d"
+        "to": "sha256:c6b16aedf6016117514577cea99df48d2aa66416880f8e0b27ad2697538068c2"
       }
     },
     {
@@ -87,7 +84,18 @@
       "reason": "reviewed source bytes changed while catalogue identity stayed fixed",
       "witness": {
         "from": "sha256:21a5263ce68c6bb3055324205f1c514309f93e52d16bf6f971730ad4b170a591",
-        "to": "sha256:5e8331c02485feaeb79bff3d221229871c66331a19b28053a1fb6038420c14ee"
+        "to": "sha256:92218ce6452c5cb5240fefc2e3278d6ca651505f214ae5d08e76083251ace434"
+      }
+    },
+    {
+      "id": "script.mcpb-consumer",
+      "allowedChanges": [
+        "/contentSha256"
+      ],
+      "reason": "reviewed source bytes changed while catalogue identity stayed fixed",
+      "witness": {
+        "from": "sha256:2cfb2db19276219ef19fd1145638871da5dd475e1116944823e7462fa478c8d1",
+        "to": "sha256:7622873298f6be5f48d9e6ae7f78df9a319ce0854340db3cdae40db682393a98"
       }
     },
     {
@@ -197,7 +205,7 @@
       "reason": "reviewed source bytes changed while catalogue identity stayed fixed",
       "witness": {
         "from": "sha256:ccccb48bf5cf1d24ae9c64d4bb8eac7b7ded90fcbb7453dbb72b3dea981e12ea",
-        "to": "sha256:14b2132d858a17f0a441ef76007dd293dda1e8fba392ddeba09daa2f963c826c"
+        "to": "sha256:0de1f979895ccf7f4919b3890cccda0fb7930b62b65fd51dbcc4bb5d96b41d20"
       }
     },
     {
@@ -2701,7 +2709,7 @@
     }
   ],
   "current": {
-    "matrixSourceSha256": "7926c3b9783e86b4438462ee11a506404401e8208d15c3e763723f5fb2d60743",
+    "matrixSourceSha256": "757b9fb053c8c846a6038798df60151c6e08798519ab1b6d2b9ee7c439dcbbfc",
     "matrixSliceSha256": "e6fbe3381884aa8c37d1baed8c7880b9ac9c53270ff1be425cafff03ba78b676",
     "legacyCount": 523,
     "declarativeCount": 94,

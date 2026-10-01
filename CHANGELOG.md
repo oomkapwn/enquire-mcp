@@ -6,11 +6,11 @@ All notable changes to this project will be documented here. The format follows 
 
 ### Re-arm dependency audit after upstream fixes (2026-10-01)
 
-> **TL;DR:** Raise the source floors to `js-yaml@5.4.1`, `hono@4.13.7` and `adm-zip@0.6.1`, and remove the two superseded consumer exceptions instead of adding exceptions for newly reported advisories.
+> **TL;DR:** Raise the source floors to `js-yaml@5.4.1`, `hono@4.13.7`, `adm-zip@0.6.1` and `brace-expansion@5.0.11`, and remove the two superseded consumer exceptions instead of adding exceptions for newly reported advisories.
 >
 > **Bounded claim.** The root lockfile and MCPB consumer contract now require the patched dependency versions. Fresh npm consumers can resolve Transformers 4.3.0 with patched Sharp and a newer ONNX Runtime that admits patched adm-zip; both audit allowlists are empty. Historical publications and existing consumer installations remain unchanged. Removing exceptions is audit policy, not proof of a clean graph: the hosted source and clean-consumer audits must establish that before merge.
 >
-> **Method note:** Compared the three minimal Dependabot patches with the current lockfile, checked GitHub security advisories and public registry metadata, swept the matching Basic-bundle policy and structural contract, and retained fail-closed production moderate+/development high+ thresholds. The packed three-OS consumer and full hosted CI gates validate compatibility.
+> **Method note:** Compared the three minimal Dependabot patches with the current lockfile, checked GitHub security advisories and public registry metadata, swept the matching Basic-bundle policy and structural contract, and retained fail-closed production moderate+/development high+ thresholds. The first hosted audit additionally found two HIGH brace-expansion advisories not yet in the repository's Dependabot alert list; their patched floors require 5.0.11. The packed three-OS consumer and full hosted CI gates validate compatibility.
 
 ### Maintainer context refresh (2026-10-01)
 

@@ -215,7 +215,7 @@
     "@modelcontextprotocol/server": "2.0.0",
     "chokidar": "^5.0.0",
     "commander": "^15.0.0",
-    "js-yaml": "^5.2.3",
+    "js-yaml": "^5.4.1",
     "zod": "^4.4.3"
   },
   "devDependencies": {
@@ -244,9 +244,9 @@
     "tesseract.js": "^7.0.0"
   },
   "overrides": {
-    "hono": "^4.12.34",
+    "hono": "^4.13.7",
     "protobufjs": "^7.6.5",
-    "adm-zip": "^0.6.0",
+    "adm-zip": "^0.6.1",
     "brace-expansion": "^5.0.9",
     "@hono/node-server": "^2.0.11",
     "fast-uri": "^3.1.5",

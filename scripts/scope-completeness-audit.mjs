@@ -35,7 +35,7 @@
 //     fails — that's the existing defense)
 //   • exempts: explicit allowlist — files where the pattern naturally
 //     appears in a historical-narrative or per-RC context (CHANGELOG,
-//     CLAUDE.md status entries). These are skipped.
+//     CLAUDE.md historical examples). These are skipped.
 //   • patterns: the regex pattern(s) the defense should match
 //
 // Run via: node scripts/scope-completeness-audit.mjs [--report]
@@ -74,9 +74,9 @@ export const DEFENSES = [
       // those are historical, not current-state. Each line in CHANGELOG
       // is exempt regardless of the count.
       "CHANGELOG.md",
-      // CLAUDE.md status section is a chronological log of each release
-      // with its test count at ship time. Same historical-narrative
-      // exemption as CHANGELOG.
+      // CLAUDE.md retains historical lesson examples with old counts.
+      // Its current header/rc bullet counts are independently checked by
+      // currentReleaseTestCountProblems in docs-consistency.test.ts.
       "CLAUDE.md",
       // Audit responses written at a specific point in time embed the
       // count from THAT moment.

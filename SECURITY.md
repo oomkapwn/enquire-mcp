@@ -334,26 +334,21 @@ npm applies `overrides` only from the root project performing an install. The ov
 - **Source checkout:** production advisories at moderate+ and development advisories at high+ fail with an empty allowlist.
 - **Published consumer:** CI packs the actual npm tarball with scripts disabled, uses that artifact as a file dependency in a clean temporary root with no overrides, resolves a lockfile from scratch without running lifecycle scripts, and audits production dependencies at moderate+. This preserves future peer/bundled dependency semantics instead of copying a hand-selected subset of manifest fields. A new advisory fails; a temporary exception also fails once its advisory disappears, forcing removal instead of becoming permanent.
 
-As of the current v4.0.0-rc.7 maintenance line, the published-consumer audit policy has exactly two configured
-temporary upstream exceptions, listed below. The live registry-resolved graph stopped reporting
-[`GHSA-frvp-7c67-39w9`](https://github.com/advisories/GHSA-frvp-7c67-39w9), so the stale-entry gate
-rejected that now-stale exception and it was removed. This is a live consumer-resolution receipt, not
-a claim about historical package graphs or a rebuilt publication; the already-published rc.3 remains
-unchanged.
+As of the 2026-10-01 maintenance update, both allowlists are empty. Registry consumers can resolve
+Transformers 4.3.0, which depends on patched Sharp and an ONNX Runtime generation that admits patched
+adm-zip. The previous Sharp and adm-zip exceptions are removed; any moderate-or-higher production
+advisory must fail the clean-consumer gate. Hosted CI must prove the actual newly resolved graph.
+This policy does not repair historical installations or alter the already-published rc.3.
 
-- [`GHSA-f88m-g3jw-g9cj`](https://github.com/advisories/GHSA-f88m-g3jw-g9cj) via optional `@huggingface/transformers` → `sharp`. Enquire uses text-only feature extraction and reranking, not Transformers' image/Sharp decode path. Removal is tracked in [huggingface/transformers.js#1729](https://github.com/huggingface/transformers.js/issues/1729).
-- [`GHSA-xcpc-8h2w-3j85`](https://github.com/advisories/GHSA-xcpc-8h2w-3j85) via optional Transformers → `onnxruntime-node` → `adm-zip`. This code is outside the MCP/vault runtime and is used by an upstream install-time extraction path; the residual install-time supply-chain/availability risk is accepted for RC testing only. Removal is tracked in [huggingface/transformers.js#1727](https://github.com/huggingface/transformers.js/issues/1727).
-
-These are reachability assessments, not claims that the dependencies are patched. A standard consumer
-may report multiple vulnerable package nodes because npm propagates unique advisories through their
-parent packages. Release candidates may carry only the exact, removal-tracked exceptions approved for
-that candidate; promotion to npm `@latest` is blocked until the published-consumer audit is clean.
+A consumer may report multiple vulnerable package nodes because npm propagates advisories through
+parent packages. Promotion to npm `@latest` still requires a clean published-consumer audit plus the
+separate compatibility, independent-audit and maintainer-authorization gates.
 
 ## MCPB Basic boundary (`v4.0.0-rc.7`; introduced in `v4.0.0-rc.2`)
 
 The Basic bundle is an intentionally narrower distribution profile, not the full npm edition. Its manifest grants one user-selected vault directory and launches a fixed surface of exactly 13 read-only tools with zero prompts. It disables write tools, watcher controls, persistent/on-disk indexes, embedding-model discovery, PDF, and OCR. Recommended search falls back to live in-memory TF-IDF, and the fixed launch contract also refuses to consult a full edition's existing embedding database or watcher-startup guard.
 
-The archive contains the server JavaScript and ordinary JavaScript dependencies; a compatible MCPB host must supply Node.js 22.13 or newer. The isolated dependency graph pins patched `@hono/node-server@2.0.11` and `hono@4.12.34`; the remote consumer contract verifies the versions actually present in the archive along with its content inventory, CycloneDX SBOM, and license/notice inventory. Those controls do not claim a real desktop GUI acceptance run, signing, or directory approval.
+The archive contains the server JavaScript and ordinary JavaScript dependencies; a compatible MCPB host must supply Node.js 22.13 or newer. The isolated dependency graph pins patched `@hono/node-server@2.0.11` and `hono@4.13.7`; the remote consumer contract verifies the versions actually present in the archive along with its content inventory, CycloneDX SBOM, and license/notice inventory. Those controls do not claim a real desktop GUI acceptance run, signing, or directory approval.
 
 enquire initiates no outbound calls while serving, but requested note content is returned to the MCP client. The host's directory approval and the client's own cloud/privacy behavior remain separate trust boundaries. Review the manifest and the published checksum/provenance before granting a vault.
 

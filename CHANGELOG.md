@@ -4,6 +4,22 @@ All notable changes to this project will be documented here. The format follows 
 
 ## [4.0.0-rc.7] — 2026-08-31
 
+### Re-arm dependency audit after upstream fixes (2026-10-01)
+
+> **TL;DR:** Raise the source floors to `js-yaml@5.4.1`, `hono@4.13.7` and `adm-zip@0.6.1`, and remove the two superseded consumer exceptions instead of adding exceptions for newly reported advisories.
+>
+> **Bounded claim.** The root lockfile and MCPB consumer contract now require the patched dependency versions. Fresh npm consumers can resolve Transformers 4.3.0 with patched Sharp and a newer ONNX Runtime that admits patched adm-zip; both audit allowlists are empty. Historical publications and existing consumer installations remain unchanged. Removing exceptions is audit policy, not proof of a clean graph: the hosted source and clean-consumer audits must establish that before merge.
+>
+> **Method note:** Compared the three minimal Dependabot patches with the current lockfile, checked GitHub security advisories and public registry metadata, swept the matching Basic-bundle policy and structural contract, and retained fail-closed production moderate+/development high+ thresholds. The packed three-OS consumer and full hosted CI gates validate compatibility.
+
+### Maintainer context refresh (2026-10-01)
+
+> **TL;DR:** The agent guide keeps current work and standing rules in a short entrypoint; the complete release log remains available in Git history and this CHANGELOG.
+>
+> **Bounded claim.** The approved CLAUDE.md reduction preserves both version markers, the current test-count markers, and the explicit security, filesystem, audit, release and compatibility rules. Its current header names the September implementation boundary and accepted tooling/AH-7/AH-8 queue. AGENTS.md now records hosted-only validation and the current 13-context, admin-enforced, linear-history protection snapshot. This documentation change does not close pending behavioral audit findings or publish rc.7.
+>
+> **Method note:** Compared the predecessor and trimmed guide, reconciled current claims against GitHub main, inspected the consumer checks for both version/test-count markers, and corrected scope-audit comments that still described the removed log. Candidate CI and independent read-only review validate the resulting change before merge.
+
 ### `resources/list` answers in bounded pages with an opaque cursor (AH-6)
 
 > **TL;DR:** **`resources/list` answers in bounded pages with an opaque continuation cursor, for a vault of any size — the page comes from a resumable walk whose cost is proportional to the page, not the vault.**

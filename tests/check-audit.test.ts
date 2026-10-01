@@ -87,13 +87,13 @@ describe("check-audit scoped gate (rc.50)", () => {
     expect(offendingAdvisories(onlyAllowlisted, { minSeverity: "moderate", allowlist: TEST_ALLOW })).toEqual([]);
   });
 
-  it("keeps the source allowlist empty and pins the consumer-only exceptions (drift guard)", () => {
+  it("keeps both allowlists empty and rejects stale or invalid exceptions (drift guard)", () => {
     // v3.10.0-rc.53 — the js-yaml advisory was RESOLVED (gray-matter dropped), so the
     // source-tree allowlist is empty. Published consumers cannot inherit this
     // package's root overrides, so their exact temporary exceptions are tracked
     // separately and may neither grow nor silently outlive the current audit evidence.
     expect(Object.keys(ALLOWLIST)).toEqual([]);
-    expect(Object.keys(CONSUMER_ALLOWLIST).sort()).toEqual(["GHSA-f88m-g3jw-g9cj", "GHSA-xcpc-8h2w-3j85"].sort());
+    expect(Object.keys(CONSUMER_ALLOWLIST)).toEqual([]);
     expect(invalidAllowlistEntries(CONSUMER_ALLOWLIST)).toEqual([]);
     expect(
       staleAllowlistEntries(

@@ -59,12 +59,11 @@ export const ALLOWLIST = {
  * list is intentionally separate from the empty source-tree allowlist above.
  * Every entry must name the unreachable surface and an upstream removal trigger.
  */
-export const CONSUMER_ALLOWLIST = {
-  "GHSA-xcpc-8h2w-3j85":
-    "transformers 4.2.0 pins onnxruntime-node 1.24.3, whose adm-zip ^0.5.16 cannot admit patched 0.6.0; enquire never accepts or extracts caller-supplied ZIP archives. Remove when https://github.com/huggingface/transformers.js/issues/1727 resolves upstream.",
-  "GHSA-f88m-g3jw-g9cj":
-    "transformers 4.2.0 pins sharp ^0.34.5, below patched 0.35.0; enquire uses text-only embedding/reranking and never invokes sharp's image/libvips path. Remove with the next transformers release tracked by https://github.com/huggingface/transformers.js/issues/1729."
-};
+// 2026-10-01: registry consumers can resolve Transformers 4.3.0, whose
+// sharp ^0.35.4 and onnxruntime-node 1.30.0 admit the patched dependencies.
+// The hosted clean-consumer audit must prove the graph; do not retain the
+// superseded 4.2.0 exceptions or allow new advisories to pass unnoticed.
+export const CONSUMER_ALLOWLIST = {};
 
 const SEV_RANK = { info: 0, low: 1, moderate: 2, high: 3, critical: 4 };
 const AUDIT_RETRY_ATTEMPTS = 3;

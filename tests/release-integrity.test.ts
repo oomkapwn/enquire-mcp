@@ -9518,11 +9518,11 @@ function legacyMcpbContractProblems(inputs: {
     !inputs.consumer.includes("nativeBinaryReason") ||
     !inputs.consumer.includes("native executable leaked into Basic MCPB") ||
     !inputs.consumer.includes('"@hono/node-server": "^2.0.11"') ||
-    !inputs.consumer.includes('hono: "^4.12.34"') ||
+    !inputs.consumer.includes('hono: "^4.13.7"') ||
     !inputs.consumer.includes('archivedPackageVersions.get("@hono/node-server")') ||
     !inputs.consumer.includes('["2.0.11"]') ||
     !inputs.consumer.includes('archivedPackageVersions.get("hono")') ||
-    !inputs.consumer.includes('["4.12.34"]') ||
+    !inputs.consumer.includes('["4.13.7"]') ||
     !inputs.consumer.includes("stranded embedding index and activation guard") ||
     !inputs.consumer.includes("Basic session changed isolated cache sentinel paths") ||
     !inputs.consumer.includes("XDG_CACHE_HOME") ||

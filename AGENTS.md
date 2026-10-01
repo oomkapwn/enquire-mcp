@@ -16,7 +16,7 @@ Notes for AI coding agents (Cursor, Claude Code, Codex, Aider, Devin, etc.) work
 - OIA: `npm run check:oia` (state-driven drift scan — 12 checks)
 - Version sync: `node scripts/check-version-consistency.mjs`
 
-`release.yml` directly enumerates the 13 release-required CI checks listed below, all of which run on every PR. Branch protection now enforces all 13 directly enumerated contexts (live snapshot verified 2026-08-21). The protected `test (22)` context runs exactly Node 22.13.0, the literal `engines.node` floor; its explicit matrix label must not change. The pinned `test-windows` hostile-filesystem and startup-interlock job is an additional named check-run enforced transitively as a blocking prerequisite of `smoke`, so a Windows failure must make `smoke` fail rather than skip. The `package-consumer` context aggregates blocking Linux, Windows, and macOS packed-install lanes; `mcpb-basic` consumes one exact Linux-built bundle on those same three systems. Local checks above must pass before pushing.
+`release.yml` directly enumerates the 13 release-required CI checks listed below, all of which run on every PR. Branch protection enforces all 13 directly enumerated contexts (live snapshot verified 2026-10-01). The protected `test (22)` context runs exactly Node 22.13.0, the literal `engines.node` floor; its explicit matrix label must not change. The pinned `test-windows` hostile-filesystem and startup-interlock job is an additional named check-run enforced transitively as a blocking prerequisite of `smoke`, so a Windows failure must make `smoke` fail rather than skip. The `package-consumer` context aggregates blocking Linux, Windows, and macOS packed-install lanes; `mcpb-basic` consumes one exact Linux-built bundle on those same three systems. In the current maintainer-approved lane, the commands above run in hosted CI: do not install dependencies or run project validation on the maintainer's MacBook. Review source and diffs locally; require green candidate CI before merging and green merged-main CI before claiming completion.
 
 ## Architecture (5-minute orientation)
 
@@ -172,7 +172,7 @@ Additional unprotected checks:
 - `mcpb-basic-package` and `mcpb-basic (linux|windows|macos)` are fail-capable producer/consumer jobs aggregated by the directly release-required `mcpb-basic` context.
 - GitHub's default CodeQL setup runs two separate unprotected analyses: `Analyze (actions)` and `Analyze (javascript-typescript)`.
 
-Live branch-protection snapshot (verified 2026-08-21): all 13 contexts above, `enforce_admins:false`, and 0 required approving reviews.
+Live branch-protection snapshot (verified 2026-10-01): all 13 contexts above, `enforce_admins:true`, required linear history, and no required approving-review configuration. Re-query GitHub before relying on this snapshot.
 
 ## Do NOT
 

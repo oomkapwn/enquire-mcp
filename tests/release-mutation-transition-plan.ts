@@ -449,6 +449,11 @@ const RELEASE_MUTATION_V3_SUCCESSOR_TRANSITIONS = [
     oldId: "release.m504",
     newId: "release.m684",
     reason: "package consumer command mutation now uses the current exact command fragments"
+  },
+  {
+    oldId: "release.m468",
+    newId: "release.m696",
+    reason: "Basic Node-server negative control now mutates the patched 2.1.3 identity"
   }
 ] as const;
 
@@ -462,6 +467,11 @@ const RELEASE_MUTATION_V3_SUCCESSOR_TARGET_WITNESSES: Readonly<
     }
   >
 > = Object.freeze({
+  "release.m696": {
+    caseNodeSha256: "1b2db4125a3a1f0b125cbb86187603bf1575d170c8d89693b8fd1c5911cdbb7a",
+    logicalProjectionSha256: "efeaf650c633d027fde2e5038bbdc660c57836b9f2e02061b2f48167bf5edbe6",
+    nodeSha256: "0f200ef03c0f52052f60c8063fceaf27316ba2c3dace9ac46c113968652652f7"
+  },
   "release.m563": {
     caseNodeSha256: "51bc26b0be01072b7df492b509f631b14ba5393f47132b5b71b35dde6fec4e8f",
     logicalProjectionSha256: "34597a45252300f93fbb7213b46cc61f1ec1b219b4f13c4487cd3fcc21adf800",
@@ -855,7 +865,7 @@ export const RELEASE_MUTATION_V3_SUCCESSORS: readonly ReleaseMutationSuccessorPl
 
 const RELEASE_MUTATION_V3_SUCCESSOR_OLD_ID_SET = new Set(RELEASE_MUTATION_V3_SUCCESSORS.map((entry) => entry.oldId));
 
-/** Exhaustive 484-entry old-ID class whose logical projections must remain exactly equal. */
+/** Exhaustive 483-entry old-ID class whose logical projections must remain exactly equal. */
 export const RELEASE_MUTATION_V3_UNCHANGED_OLD_IDS: readonly string[] = Object.freeze(
   Array.from({ length: 560 }, (_, index) => `release.m${String(index + 1).padStart(3, "0")}`).filter(
     (id) => !RELEASE_MUTATION_V3_SUCCESSOR_OLD_ID_SET.has(id)

@@ -566,7 +566,10 @@ if (isEntrypoint(import.meta.url)) {
   const devAudit = runAudit("--include=dev", REPO_ROOT, "source-dev");
   const prodAll = offendingAdvisories(prodAudit, { minSeverity: "moderate", allowlist: {} });
   const devAll = offendingAdvisories(devAudit, { minSeverity: "high", allowlist: {} });
-  const prod = offendingAdvisories(prodAudit, { minSeverity: "moderate", allowlist: ALLOWLIST });
+  // A source exception is DEV-ONLY by construction. Passing ALLOWLIST here too (it used to) let a
+  // waiver silently cover the production graph as well, so a dependency that later became
+  // production-reachable would have been allowed without anyone changing the allowlist.
+  const prod = prodAll;
   const dev = offendingAdvisories(devAudit, { minSeverity: "high", allowlist: ALLOWLIST });
   const { audit: consumerAudit, version: consumerVersion } = runPublishedConsumerAudit();
   const consumerAll = offendingAdvisories(consumerAudit, { minSeverity: "moderate", allowlist: {} });

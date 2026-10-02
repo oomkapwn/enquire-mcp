@@ -27,7 +27,7 @@
 //
 // The social preview PNG stays as CI renders it; the tracked SVG carries the number and is listed.
 
-import { readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { isEntrypoint } from "./lib/entrypoint.mjs";
@@ -390,10 +390,9 @@ async function main() {
     const result = bumpTestCount(options);
     for (const message of result.messages) process.stdout.write(`${message}\n`);
     if (result.changedFiles.length > 0) {
-      const summary =
-        `bump-test-count: rewrote ${result.changedFiles.length} file(s), ` +
-        `${result.replacedSlots} slot(s)\n`;
-      process.stdout.write(summary);
+      const files = result.changedFiles.length;
+      const slots = result.replacedSlots;
+      process.stdout.write(`bump-test-count: rewrote ${files} file(s), ${slots} slot(s)\n`);
       for (const relativePath of result.changedFiles) process.stdout.write(`bump-test-count:   ${relativePath}\n`);
     }
     return 0;

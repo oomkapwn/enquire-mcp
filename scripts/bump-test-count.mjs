@@ -335,9 +335,17 @@ export function bumpTestCount(options = {}) {
     }
   }
   if (options.check === true || options.dryRun === true) {
+    const untouched = {
+      declared: plan.declared,
+      actual: plan.actual,
+      changedFiles: [],
+      replacedSlots: 0,
+      excludedHits: plan.excludedHits,
+      messages
+    };
     if (plan.declared === plan.actual) {
       messages.push("bump-test-count: surfaces already agree with the census");
-      return { declared: plan.declared, actual: plan.actual, changedFiles: [], replacedSlots: 0, excludedHits: plan.excludedHits, messages };
+      return untouched;
     }
     const detail = plan.changes
       .map((change) => `bump-test-count: stale ${change.relativePath} (${change.replaced} slot(s))`)
@@ -346,7 +354,7 @@ export function bumpTestCount(options = {}) {
       fail(`surfaces disagree with the census (${plan.declared} declared, ${plan.actual} actual):\n${detail}`);
     }
     messages.push(detail);
-    return { declared: plan.declared, actual: plan.actual, changedFiles: [], replacedSlots: 0, excludedHits: plan.excludedHits, messages };
+    return untouched;
   }
   for (const change of plan.changes) {
     writeFileSync(path.join(repoRoot, change.relativePath), change.after);
@@ -358,9 +366,9 @@ export function bumpTestCount(options = {}) {
       fail(`${change.relativePath} does not carry ${plan.actual} after the rewrite — aborting`);
     }
     const staleLeft = [...written.matchAll(tokenPattern(plan.declared))].length;
-    const historicalHit = change.relativePath === "CHANGELOG.md" || change.relativePath === "CLAUDE.md";
-    if (staleLeft > 0 && !historicalHit) {
-      fail(`${change.relativePath} still declares ${plan.declared} in ${staleLeft} place(s) after the rewrite — aborting`);
+    const historical = change.relativePath === "CHANGELOG.md" || change.relativePath === "CLAUDE.md";
+    if (staleLeft > 0 && !historical) {
+      fail(`${change.relativePath} still declares ${plan.declared} in ${staleLeft} place(s) — aborting`);
     }
   }
   return {
@@ -382,7 +390,10 @@ async function main() {
     const result = bumpTestCount(options);
     for (const message of result.messages) process.stdout.write(`${message}\n`);
     if (result.changedFiles.length > 0) {
-      process.stdout.write(`bump-test-count: rewrote ${result.changedFiles.length} file(s), ${result.replacedSlots} slot(s)\n`);
+      const summary =
+        `bump-test-count: rewrote ${result.changedFiles.length} file(s), ` +
+        `${result.replacedSlots} slot(s)\n`;
+      process.stdout.write(summary);
       for (const relativePath of result.changedFiles) process.stdout.write(`bump-test-count:   ${relativePath}\n`);
     }
     return 0;

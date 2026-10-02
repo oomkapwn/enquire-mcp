@@ -4,6 +4,16 @@ All notable changes to this project will be documented here. The format follows 
 
 ## [4.0.0-rc.7] — 2026-08-31
 
+### The declared test count moves with one command, and release history stays intact (T1)
+
+> **TL;DR:** **`node scripts/bump-test-count.mjs` recomputes the exact source-test count and rewrites every surface that declares it, so the count can no longer drift away from the tree; `--check` fails the run instead of writing.**
+>
+> **Bounded claim.** Tooling only — no product, protocol, or public runtime behaviour changes, and no declared count moves in this change. The script counts registrations with the same rule the `tests/docs-consistency.test.ts` invariant uses, so the two cannot disagree about the number, and it lives in `scripts/`, which the census does not read: the tool contributes nothing to the number it measures. A surface that declares no count is a hard error rather than a silent skip, and the two release-mutation fixtures that hold these digits as machine-generated sha256/offset pins are reported and never rewritten.
+>
+> **The reason this is a table and not a search-and-replace.** `CHANGELOG.md` and `CLAUDE.md` carry release history next to their current claim, and the invariant reads only the `Unreleased` plus newest `## [` section of the changelog and only the current-state line plus the current-version bullet of the agent guide. A blind replace would rewrite a historical arrow and falsify the record. Both files are therefore rewritten inside exactly the spans the invariant reads: an arrow's target moves, its source does not, and every older section and bullet is left byte-exact.
+>
+> **Method note:** Every surface was enumerated from the tree rather than assumed, and each declared occurrence was read in context before the table was accepted. The cascade was proved on a copy of this repository with a deliberately introduced desync: twenty surfaces and sixty-one slots moved, and every removed line carried the old count while every added line carried the new one. The result was then judged by the invariant's OWN `currentReleaseTestCountProblems` function, extracted from this test suite and executed against the rewritten tree — clean at the new count, and reporting four concrete problems against the unmodified tree at the same count. Release-mutation fixtures and the historical `### Tests` sections were compared by digest before and after. Under D-45 no local package-manager, build, lint, test, coverage, audit, or benchmark workload was used; hosted CI remains the validation authority.
+
 ### One unavoidable source-tree dependency exception, pinned exactly (CVE-2026-85393)
 
 > **TL;DR:** **`GHSA-86w9-cpqp-85rv` is accepted with a documented rationale, and the source allowlist — empty since the js-yaml advisory was resolved — now holds exactly this one key, asserted by name so a second waiver cannot appear unannounced.**

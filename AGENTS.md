@@ -51,6 +51,7 @@ scripts/
 ├── check-per-file-coverage.mjs        — per-file branch floor enforcement
 ├── check-version-consistency.mjs      — version sync across 8 surfaces
 ├── check-changelog-coverage.mjs       — CHANGELOG claims vs reality
+├── bump-test-count.mjs                — recompute the source-test count across all 20 surfaces
 
 tests/
 ├── *.test.ts                          — Vitest unit tests

@@ -50,7 +50,28 @@ export const ALLOWLIST = {
   // RESOLVED, not allowlisted: gray-matter was dropped (it pinned the vulnerable js-yaml@3)
   // and frontmatter parsing migrated to js-yaml@4.2.0 (see src/frontmatter.ts). The tree
   // no longer contains a vulnerable js-yaml, so the entry was removed and the gate re-armed.
-  // Empty = the strictest posture; add a GHSA here ONLY with a rationale + resolution path.
+  //
+  // 2026-10-03 — GHSA-86w9-cpqp-85rv (CVE-2026-85393, high). node-forge does not validate the
+  // element count of nested DigestAlgorithm sequences during RSA PKCS#1 v1.5 signature
+  // verification, so a crafted signature can be accepted. This is an INCOMPLETE fix for
+  // CVE-2026-33894, not a fresh regression.
+  //
+  // Why a waiver is the only available move: the advisory declares no patched version and
+  // 1.4.0 is the newest node-forge on the registry, so there is no version to bump to. The one
+  // dependent is @anthropic-ai/mcpb, a DEV dependency used by the MCPB packaging gates; the
+  // affected primitive is signature VERIFICATION inside a build-time tool, and node-forge is not
+  // reachable from the published package. The production threshold (prod >= moderate) is
+  // therefore untouched — only the dev threshold (dev >= high) trips.
+  //
+  // Remove this entry the moment upstream ships a release that validates the element count, and
+  // delete the line rather than letting a waiver become permanent:
+  // https://github.com/digitalbazaar/forge/issues/1149
+  "GHSA-86w9-cpqp-85rv":
+    "Incomplete fix for CVE-2026-33894; the advisory declares no patched version and 1.4.0 is the " +
+    "newest node-forge on the registry, so no bump exists. The only dependent is the dev-only " +
+    "@anthropic-ai/mcpb build gate, so the published package is unaffected and only the dev " +
+    "threshold trips. Remove this entry as soon as upstream validates nested DigestAlgorithm " +
+    "element counts. Upstream tracker: https://github.com/digitalbazaar/forge/issues/1149"
 };
 
 /**

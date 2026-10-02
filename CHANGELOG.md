@@ -4,6 +4,20 @@ All notable changes to this project will be documented here. The format follows 
 
 ## [4.0.0-rc.7] — 2026-08-31
 
+### One unavoidable source-tree dependency exception, pinned exactly (CVE-2026-85393)
+
+> **TL;DR:** **`GHSA-86w9-cpqp-85rv` is accepted with a documented rationale, and the source allowlist — empty since the js-yaml advisory was resolved — now holds exactly this one key, asserted by name so a second waiver cannot appear unannounced.**
+>
+> **What the advisory is.** node-forge does not validate the element count of nested `DigestAlgorithm` sequences during RSA PKCS#1 v1.5 signature verification, so a crafted signature can be accepted. This is an **incomplete fix for CVE-2026-33894**, not a fresh regression.
+>
+> **Why a waiver is the only available move.** The advisory declares no patched version, and 1.4.0 is the newest node-forge on the registry, so there is no version to bump to. The single dependent is `@anthropic-ai/mcpb`, a dev dependency used by the MCPB packaging gates; the affected primitive is signature *verification* inside a build-time tool, and node-forge is not reachable from the published package. The production threshold (prod ≥ moderate) is therefore untouched — only the dev threshold (dev ≥ high) trips.
+>
+> **Bounded claim.** This re-enables the hosted `audit` gate; it does not lower a threshold, add an exception for any production or consumer graph, or accept any other advisory. `CONSUMER_ALLOWLIST` remains empty, so a registry consumer still receives none of this project's exceptions.
+>
+> **The drift guard is not weakened — it is made real.** The existing test asserted the source allowlist was empty, which it still effectively was. Pinning the exact key list rather than loosening the assertion means a second, unplanned waiver still fails the test, so widening the allowlist can never ride along as a side effect of an unrelated fix. Separately, `invalidAllowlistEntries` was asserted only for the consumer list: with the source list empty the "rationale + upstream tracker URL" rule was vacuously true, so it was never actually enforced where it now matters. That assertion is added, which is what requires the entry to carry both a removal instruction and the upstream tracker `digitalbazaar/forge#1149`.
+>
+> **Method note:** Confirmed the dependency edge and its dev-only status by parsing the lockfile rather than reading the advisory prose. Confirmed no patched release exists by querying the npm registry directly (latest is 1.4.0). Located the upstream tracker by searching the node-forge issue tracker, so the URL in the entry is a real open issue and not a placeholder. Validated the new entry by executing the project's own `invalidAllowlistEntries` and `staleAllowlistEntries` against it, with negative controls showing an entry lacking the removal instruction or the tracker URL is rejected. Neither `scripts/check-audit.mjs` nor this test is a pinned entry in the trusted Vitest bootstrap receipt, so no receipt regeneration is involved. Under D-45 no local package-manager, build, lint, test, coverage, audit, or benchmark workload was used.
+
 ### Re-arm dependency audit after upstream fixes (2026-10-01)
 
 > **TL;DR:** Raise the source floors to `js-yaml@5.4.1`, `hono@4.13.11`, `@hono/node-server@2.1.3`, `adm-zip@0.6.1` and `brace-expansion@5.0.12`, and remove the two superseded consumer exceptions instead of adding exceptions for newly reported advisories.

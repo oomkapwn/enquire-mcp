@@ -87,13 +87,23 @@ describe("check-audit scoped gate (rc.50)", () => {
     expect(offendingAdvisories(onlyAllowlisted, { minSeverity: "moderate", allowlist: TEST_ALLOW })).toEqual([]);
   });
 
-  it("keeps both allowlists empty and rejects stale or invalid exceptions (drift guard)", () => {
+  it("keeps both allowlists minimal and rejects stale or invalid exceptions (drift guard)", () => {
     // v3.10.0-rc.53 — the js-yaml advisory was RESOLVED (gray-matter dropped), so the
-    // source-tree allowlist is empty. Published consumers cannot inherit this
+    // source-tree allowlist returned to empty. Published consumers cannot inherit this
     // package's root overrides, so their exact temporary exceptions are tracked
     // separately and may neither grow nor silently outlive the current audit evidence.
-    expect(Object.keys(ALLOWLIST)).toEqual([]);
+    //
+    // 2026-10-03 — ONE source exception is carried, not an open-ended set: GHSA-86w9-cpqp-85rv
+    // (CVE-2026-85393) has no patched node-forge at all, and its only dependent is the dev-only
+    // @anthropic-ai/mcpb build gate. Pinning the EXACT key list is what keeps this a drift guard:
+    // a second, unplanned waiver still fails here, so widening the allowlist can never be an
+    // unreviewed side effect of fixing something else.
+    expect(Object.keys(ALLOWLIST)).toEqual(["GHSA-86w9-cpqp-85rv"]);
     expect(Object.keys(CONSUMER_ALLOWLIST)).toEqual([]);
+    // The source allowlist was empty until now, so the "rationale + upstream tracker" rule was
+    // vacuously satisfied for it and never asserted. With a live entry it must be checked, or the
+    // rule the gate documents is unenforced exactly where it now matters.
+    expect(invalidAllowlistEntries(ALLOWLIST)).toEqual([]);
     expect(invalidAllowlistEntries(CONSUMER_ALLOWLIST)).toEqual([]);
     expect(
       staleAllowlistEntries(

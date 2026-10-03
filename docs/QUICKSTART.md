@@ -1,3 +1,5 @@
+> **Distribution status:** this branch documents an unpublished source candidate. Candidate-specific npm commands and MCPB download URLs below are not currently usable. For available artifacts, use [published GitHub releases](https://github.com/oomkapwn/enquire-mcp/releases) or [published npm versions](https://www.npmjs.com/package/@oomkapwn/enquire-mcp?activeTab=versions). Stable-install commands remain separate from candidate instructions.
+
 # Quickstart — enquire-mcp in 5 minutes
 
 From `npm install` to a working **long-term memory layer for your AI agents**, backed by your Obsidian vault, inside Claude Desktop (or any MCP client). One happy path. Concrete commands, expected output, troubleshooting at the bottom.

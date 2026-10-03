@@ -331,10 +331,10 @@ The `obsidian_embeddings_search` tool plus the `install-model` and `build-embedd
 
 npm applies `overrides` only from the root project performing an install. The overrides in enquire's source `package.json` keep its development/release lockfile on patched transitive versions, but they are ignored when the published package is installed as somebody else's dependency. Release CI therefore audits two distinct graphs:
 
-- **Source checkout:** production advisories at moderate+ and development advisories at high+ fail with an empty allowlist.
+- **Source checkout:** production advisories at moderate+ fail without exceptions. Development advisories at high+ consult the source-only allowlist. Its sole accepted exception is `GHSA-86w9-cpqp-85rv` in dev-only node-forge, required by the MCPB packaging tool; its rationale and removal condition are recorded in `scripts/check-audit.mjs`. It does not waive a production or published-consumer advisory.
 - **Published consumer:** CI packs the actual npm tarball with scripts disabled, uses that artifact as a file dependency in a clean temporary root with no overrides, resolves a lockfile from scratch without running lifecycle scripts, and audits production dependencies at moderate+. This preserves future peer/bundled dependency semantics instead of copying a hand-selected subset of manifest fields. A new advisory fails; a temporary exception also fails once its advisory disappears, forcing removal instead of becoming permanent.
 
-As of the 2026-10-01 maintenance update, both allowlists are empty. Registry consumers can resolve
+After the 2026-10-03 maintenance update, the production source graph and the consumer graph have no exceptions; only the development graph carries the node-forge exception above. Registry consumers can resolve
 Transformers 4.3.0, which depends on patched Sharp and an ONNX Runtime generation that admits patched
 adm-zip. The previous Sharp and adm-zip exceptions are removed; any moderate-or-higher production
 advisory must fail the clean-consumer gate. Hosted CI must prove the actual newly resolved graph.

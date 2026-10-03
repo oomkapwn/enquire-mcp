@@ -1,3 +1,5 @@
+> **Distribution status:** this branch documents an unpublished source candidate. Candidate-specific npm commands and MCPB download URLs below are not currently usable. For available artifacts, use [published GitHub releases](https://github.com/oomkapwn/enquire-mcp/releases) or [published npm versions](https://www.npmjs.com/package/@oomkapwn/enquire-mcp?activeTab=versions). Stable-install commands remain separate from candidate instructions.
+
 <div align="center">
 
 <a href="https://github.com/oomkapwn/enquire-mcp"><img src="./assets/social-preview.png" alt="enquire-mcp — AI メモリのための #1 Obsidian MCP。" width="100%"></a>

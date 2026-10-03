@@ -4,6 +4,14 @@ All notable changes to this project will be documented here. The format follows 
 
 ## [4.0.0-rc.7] — 2026-08-31
 
+### Audit follow-ups and distribution status are explicit
+
+> **TL;DR:** The continuation queue now starts with data preservation, exact persistence targets, generation-consistent retrieval and bounded work. These are open audit follow-ups, not claimed fixes. Public guidance distinguishes the unpublished source candidate from available artifacts, and source-audit policy now describes the development-only node-forge exception accurately.
+>
+> **Bounded claim.** Documentation and handoff only: no product code, test-count, dependency, workflow, version, tag or publication change. Private coordination and detailed pre-fix scenarios stay local. The agent guide no longer exposes personal account-recovery or absolute-workspace details. Historical release records are preserved.
+>
+> **Method note:** Reviewed the exact main source, relevant caller/guard tests, current PRs, branch protection and hosted run identities; independent read-only checks were challenged against their cited source. Current CI describes the tested baseline; newly found scenarios still require causal hosted regressions. No local install, build, lint, tests, coverage, OIA, smoke or benchmark workload was run.
+
 ### The mutation-helper census can be reproduced without TypeScript, and its limits are now written down (T4)
 
 > **TL;DR:** **`scripts/mutation-helper-census.py` recomputes the mutation-helper owner hash and call census from a TypeScript test file using only the Python standard library, and it reproduces 23 of the 28 reviewed pins exactly. The five it does not reproduce are named in the file, with the reason, so its output is never mistaken for a gate.**

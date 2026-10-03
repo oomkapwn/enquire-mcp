@@ -1,6 +1,6 @@
 # enquire-mcp — Roadmap
 
-> Public roadmap for **enquire-mcp**, the #1 Obsidian MCP for freshness-aware, cited AI memory backed by your own vault. Updated 2026-08-31 (`v4.0.0-rc.7`: the current preview of the MCPB Basic bundle first introduced in `v4.0.0-rc.2` on the published `v4.0.0-rc.1` official-SDK-v2 foundation, behind a fail-closed 13-gate remote publication chain; stable `@latest` remains v3).
+> Public roadmap for **enquire-mcp**, the #1 Obsidian MCP for freshness-aware, cited AI memory backed by your own vault. Updated 2026-10-04 (`v4.0.0-rc.7`: the unpublished source candidate of the MCPB Basic bundle first introduced in `v4.0.0-rc.2` on the published `v4.0.0-rc.1` official-SDK-v2 foundation, behind a fail-closed 13-gate remote publication chain; stable `@latest` remains v3).
 >
 > **North Star:** be — and confidently *stay* — the best project in its spheres (Obsidian MCP; local-first AI-memory layer) on **technology** and **reliability**. "Confidently" means every claim we make is one an external auditor or a privacy-conscious user can verify against the code.
 
@@ -19,9 +19,22 @@ Already shipped and differentiating:
 - **Structured Obsidian documents** — Canvas parsing, Dataview-style LIST/TABLE queries, and supported Base-filter execution (no Obsidian process needed).
 - **PDFs blended into search** with `[page: N]` citations + Tesseract OCR for scanned docs.
 - **Forgetting-aware freshness** (v3.10) — every search hit carries `age_days` + a `stale` flag from the note's live mtime, the `obsidian_stale_notes` tool surfaces aged notes, and opt-in recency re-ranking (`--recency-weight` / `--stale-days`, default off) lets agents prefer fresher knowledge. This directly addresses stale-fact reuse; the 2026-07-24 pinned direct-peer sources do not document an equivalent retrieval control.
-- **Process maturity** — 2272 tests and 13 release-required CI checks (all 13 currently branch-protected; live snapshot verified 2026-08-21). The v4 line defines official-client protocol conformance, a three-OS packed-consumer aggregate, an MCPB Basic gate that consumes one exact Linux-built candidate on Linux, Windows, and macOS, and a Docker build/introspection gate before release. A pinned Windows hostile-filesystem and startup-interlock prerequisite fails the protected `smoke` context closed; the project also carries a semver-bound public surface, signed npm build provenance (SLSA Build L2), 12 state-driven OIA drift checks, and structural invariants.
+- **Process maturity** — 2272 tests and 13 release-required CI checks (all 13 currently branch-protected; live snapshot verified 2026-10-04). The v4 line defines official-client protocol conformance, a three-OS packed-consumer aggregate, an MCPB Basic gate that consumes one exact Linux-built candidate on Linux, Windows, and macOS, and a Docker build/introspection gate before release. A pinned Windows hostile-filesystem and startup-interlock prerequisite fails the protected `smoke` context closed; the project also carries a semver-bound public surface, signed npm build provenance (SLSA Build L2), 12 state-driven OIA drift checks, and structural invariants.
 
 The **v4.0.0 `@rc` preview** keeps those v3 activation, watcher-generation and mainstream local-filesystem hardlink guarantees while moving the public transports to official MCP SDK v2. Era-aware stdio and strict modern HTTP (`2026-07-28`) coexist with supported legacy clients from one registration factory; malformed modern claims never downgrade. Aggregate write tracking keeps shared persistence behind active modern/stdio work, and the new remote gates are defined to exercise the official client plus the packed public package across Linux, Windows and macOS. The single intentional programmatic break is the nominal SDK type returned by `buildMcpServer()`; tool/prompt/resource, CLI, privacy, write-gate and storage behavior remain compatible. npm `@latest` remains stable v3 pending the explicit stable-promotion decision.
+
+## Current continuation — audit follow-ups
+
+The current source candidate is not a published npm package or GitHub Release. Previously green CI remains evidence for the tested baseline, not a clean bill of health for every audit scenario. No release or stable promotion is scheduled.
+
+- [ ] **Preserve data across supported writes and rollback.** Exercise narrow privacy filters and interrupted overwrite flows before extending write features.
+- [ ] **Keep persistence coordination separate from the exact storage target.** Validate cache, feedback and embedding families across filesystem name variants; destructive operations must affect only the selected artifact.
+- [ ] **Keep retrieval evidence generation-consistent.** Query/snippet, frontmatter filtering and freshness must describe the same admitted note generation.
+- [ ] **Bound optional embedding and resource-list work.** Cover pathological headings, path/cursor boundaries and sparse-directory traversal without making unmeasured complexity claims.
+- [ ] **Make tooling and policy claims truthful.** Close the partial-drift check and census limitations, then reconcile prompt/tool/CLI contracts and causal controls.
+- [ ] **Bound optional acquisition before trusted publication.** Preserve offline serving while adding explicit download admission, interruption cleanup and atomic artifact promotion.
+
+Work stays serial and risk-driven. Each fix needs positive and negative controls, independent review, hosted candidate CI and post-merge verification. Private coordination and detailed pre-fix scenarios are not part of the public artifact. Russian/PDF improvements follow these safety and correctness closures; benchmark work remains parked.
 
 ## Leadership plan (why the roadmap is shaped this way)
 

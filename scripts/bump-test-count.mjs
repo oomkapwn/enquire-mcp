@@ -66,7 +66,8 @@ const SURFACES = [
   "docs/COMPARISON.md",
   "llms-ctx.txt",
   "llms.txt",
-  "package.json"
+  "package.json",
+  "site/index.html"
 ];
 
 /** Machine-generated pins whose digits must survive; reported, never rewritten. */
@@ -134,6 +135,27 @@ export function countSourceTests(repoRoot) {
 /** Whole-word integer match so a 4-digit count never matches inside a 5- or 6-digit neighbour. */
 function tokenPattern(count) {
   return new RegExp(`(?<![\\d])${count}(?![\\d])`, "g");
+}
+
+/**
+ * The landing page writes the count as `2,272` for display, not as `2272`. A plain token pattern
+ * cannot see it — `2272` is not a substring — so without this the one public surface that shows the
+ * number to a human reader would be the one surface that silently drifts.
+ */
+const GROUPED_SURFACES = new Set(["site/index.html"]);
+
+/** Match a surface's own notation for the count, so one call site stays correct for every surface. */
+function countPattern(relativePath, count) {
+  if (!GROUPED_SURFACES.has(relativePath)) return tokenPattern(count);
+  return new RegExp(`(?<![\\d,])${countText(relativePath, count)}(?![\\d,])`, "g");
+}
+
+/**
+ * The count as THIS surface writes it. Matching and replacing must agree, or a no-op bump would
+ * rewrite `2,272` to `2272` and silently change the page's formatting.
+ */
+function countText(relativePath, count) {
+  return GROUPED_SURFACES.has(relativePath) ? count.toLocaleString("en-US") : String(count);
 }
 
 /**
@@ -251,10 +273,10 @@ export function rewriteSurface(source, relativePath, previous, next, version) {
   if (relativePath === "CLAUDE.md") {
     return rewriteClaudeSurface(source, version, next);
   }
-  const pattern = tokenPattern(previous);
+  const pattern = countPattern(relativePath, previous);
   const matches = [...source.matchAll(pattern)];
   if (matches.length === 0) fail(`${relativePath} declares no current test count (${previous})`);
-  return { text: source.replace(pattern, String(next)), replaced: matches.length };
+  return { text: source.replace(pattern, countText(relativePath, next)), replaced: matches.length };
 }
 
 /**
@@ -307,11 +329,11 @@ export function buildBumpPlan(repoRoot = DEFAULT_REPO_ROOT) {
   }
   const excludedHits = EXCLUDED.map((relativePath) => {
     const text = readFileSync(path.join(repoRoot, relativePath), "utf8");
-    return { relativePath, hits: [...text.matchAll(tokenPattern(declared))].length };
+    return { relativePath, hits: [...text.matchAll(countPattern(relativePath, declared))].length };
   });
   const staleSurfaces = SURFACES.filter((relativePath) => {
     const text = readFileSync(path.join(repoRoot, relativePath), "utf8");
-    return [...text.matchAll(tokenPattern(actual))].length === 0;
+    return [...text.matchAll(countPattern(relativePath, actual))].length === 0;
   });
   return { declared, actual, version, changes, excludedHits, staleSurfaces };
 }
@@ -362,13 +384,15 @@ export function bumpTestCount(options = {}) {
   // Post-write proof: every surface now carries the new count and no longer the old one.
   for (const change of plan.changes) {
     const written = readFileSync(path.join(repoRoot, change.relativePath), "utf8");
-    if (!written.includes(String(plan.actual))) {
-      fail(`${change.relativePath} does not carry ${plan.actual} after the rewrite — aborting`);
+    // The proof must read the count in the surface's OWN notation: the landing page writes `2,275`,
+    // which does not contain the plain substring `2275`, so a plain includes() aborts a correct run.
+    if (!written.includes(countText(change.relativePath, plan.actual))) {
+      fail(`${change.relativePath} does not carry ${plan.actual} after the rewrite`);
     }
-    const staleLeft = [...written.matchAll(tokenPattern(plan.declared))].length;
+    const staleLeft = [...written.matchAll(countPattern(change.relativePath, plan.declared))].length;
     const historical = change.relativePath === "CHANGELOG.md" || change.relativePath === "CLAUDE.md";
     if (staleLeft > 0 && !historical) {
-      fail(`${change.relativePath} still declares ${plan.declared} in ${staleLeft} place(s) — aborting`);
+      fail(`${change.relativePath} still declares ${plan.declared} in ${staleLeft} place(s)`);
     }
   }
   return {

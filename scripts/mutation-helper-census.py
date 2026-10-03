@@ -272,6 +272,36 @@ def _first_string_literal(src, lo, hi, mk):
     return None
 
 
+def _params_close_before_arrow(head, arrow):
+    """index of the ')' closing an arrow's parameter list, honouring a return-type annotation.
+
+    A plain arrow puts ')' immediately before '=>', but `(): void =>` does not, and the original
+    code required exactly that. Every arrow carrying a return type therefore fell through to
+    `anonymous-function` instead of the `it:<title>` owner TypeScript reports. Scanning back, a
+    ')' at bracket depth 0 IS the parameter list's close; a ':' at depth 0 starts a return type,
+    whose own parens (and even a nested '=>') are skipped to reach that ')'.
+    """
+    depth = 0
+    i = arrow - 1
+    while i >= 0:
+        c = head[i]
+        if c in ")]}":
+            if depth == 0:
+                return i if c == ")" else None
+            depth += 1
+        elif c in "([{":
+            if depth == 0:
+                return None
+            depth -= 1
+        elif c == ":" and depth == 0:
+            j = i - 1
+            while j >= 0 and head[j].isspace():
+                j -= 1
+            return j if j >= 0 and head[j] == ")" else None
+        i -= 1
+    return None
+
+
 def _arrow_call_owner(src, head):
     """head = source through an arrow's '{'. Owner id, or None if not that shape."""
     if not head.endswith("{"):
@@ -279,12 +309,22 @@ def _arrow_call_owner(src, head):
     arrow = head.rfind("=>", 0, len(head) - 1)
     if arrow < 0 or head[arrow + 2:].strip() != "{":
         return None
-    i = arrow - 1
-    while i >= 0 and head[i].isspace():
-        i -= 1
-    if i < 0 or head[i] != ")":
+    i = _params_close_before_arrow(head, arrow)
+    if i is None:
         return None
-    j = _match_back(head, i, "(", ")")
+    j = None
+    depth = 0
+    q = i
+    while q >= 0:
+        c = head[q]
+        if c == ")":
+            depth += 1
+        elif c == "(":
+            depth -= 1
+            if depth == 0:
+                j = q
+                break
+        q -= 1
     if j is None:
         return None
     k = j - 1

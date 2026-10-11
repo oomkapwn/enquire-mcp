@@ -290,7 +290,16 @@ const EXPECTED_REPOSITORY_MUTATION_HELPER_CALL_ENTRIES = [
   ],
   [
     "enforcement-guard-invariant.test.ts",
-    { count: 41, sha256: "86bd9ac2aeb2e1ee477a9408d439a096a6697697efa25ec65c3462b5d6050776" }
+    // v4.0.0-rc.8 (FA-01) — the guard-order pin now names
+    // `assertMutationTmpTransportPublic(tmp, abs, "temporary destination", …)`
+    // instead of `assertMutationPathPublic(tmp, "write", …)` for the transport
+    // admission that follows the exclusive open. Count stays 41 and the owning
+    // `it(...)` blocks are unchanged: one call-site was renamed, not added or
+    // dropped, which is exactly the drift this digest exists to catch. The
+    // recomputed value was taken from the gate's own reported digest, never
+    // from scripts/mutation-helper-census.py — this file is a
+    // KNOWN_DIGEST_DIFFERENCES entry, so that script must not write a pin.
+    { count: 41, sha256: "2237d495a67d4f464327b5a576e71610705586c42ca45778e91c7dbb19e0bb0c" }
   ],
   [
     "erasure-invariant.test.ts",

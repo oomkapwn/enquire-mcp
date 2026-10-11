@@ -993,9 +993,7 @@ describe("rollback-safe batch write cancellation", () => {
   // source must stay link-free (a self-rewrite hits the same tmp filter before the
   // forward move and masks the loss this regression pins — see FA-01 adversarial
   // review, audits/fa01-p1-codex-2026-10-11-retry.md, trap 2).
-  it(
-    "rename_note restores an overwritten destination when the allowlist excludes the restore tmp (FA-01)",
-    async () => {
+  it("rename_note restores an overwritten destination when the allowlist excludes the restore tmp (FA-01)", async () => {
     const sourceBytes = "# Source\n\nSOURCE-CONTENT-SENTINEL\n";
     const destBytes = Buffer.concat([
       Buffer.from("# Destination\n\nDEST-ORIGINAL-SENTINEL\n"),
@@ -1029,14 +1027,11 @@ describe("rollback-safe batch write cancellation", () => {
     expect(restoredDest.equals(destBytes)).toBe(true);
     const leftovers = (await fs.readdir(root)).filter((name) => name.endsWith(".tmp"));
     expect(leftovers).toEqual([]);
-    }
-  );
+  });
 
   // The denylist variant of the same filter, at depth: `**/*.tmp` catches the
   // transport in every folder while the notes it serves stay public.
-  it(
-    "(positive-control) rename_note rollback also survives an --exclude-glob '**/*.tmp' denylist (FA-01)",
-    async () => {
+  it("(positive-control) rename_note rollback also survives an --exclude-glob '**/*.tmp' denylist (FA-01)", async () => {
     const sourceBytes = "# Source\n\nSOURCE-DENYLIST-SENTINEL\n";
     const destBytes = "# Destination\n\nDEST-DENYLIST-SENTINEL\n";
     await fs.mkdir(path.join(root, "Notes"), { recursive: true });
@@ -1058,47 +1053,34 @@ describe("rollback-safe batch write cancellation", () => {
     };
 
     await expect(
-      renameNote(
-        vault,
-        { from: "Notes/Source.md", to: "Notes/Dest.md", overwrite: true },
-        { signal: abort.signal }
-      )
+      renameNote(vault, { from: "Notes/Source.md", to: "Notes/Dest.md", overwrite: true }, { signal: abort.signal })
     ).rejects.toBeInstanceOf(WriteRequestAbortedError);
     expect(await fs.readFile(path.join(root, "Notes", "Source.md"), "utf8")).toBe(sourceBytes);
     expect(await fs.readFile(path.join(root, "Notes", "Dest.md"), "utf8")).toBe(destBytes);
-    }
-  );
+  });
 
   // The transport inherits its TARGET's admission — so an ordinary overwrite must
   // keep working under the same filter that used to break it, and the fix must not
   // widen the surface: a target the filters refuse still refuses, by the target's
   // own exclusion, and its bytes stay untouched.
-  it(
-    "(positive-control) an ordinary overwrite still commits under an allowlist that excludes the transport tmp (FA-01)",
-    async () => {
+  it("(positive-control) an ordinary overwrite still commits under an allowlist that excludes the transport tmp (FA-01)", async () => {
     await fs.writeFile(path.join(root, "Dest.md"), "# Destination\n\nDEST-ORIGINAL-SENTINEL\n");
     const vault = new Vault(root, { enableWrite: true, readPaths: ["**/*.md"] });
     await vault.ensureExists();
     await vault.writeNote("Dest.md", "# Destination\n\nOVERWRITTEN-SENTINEL\n", { overwrite: true });
-    expect(await fs.readFile(path.join(root, "Dest.md"), "utf8")).toBe(
-      "# Destination\n\nOVERWRITTEN-SENTINEL\n"
-    );
-    }
-  );
+    expect(await fs.readFile(path.join(root, "Dest.md"), "utf8")).toBe("# Destination\n\nOVERWRITTEN-SENTINEL\n");
+  });
 
-  it(
-    "(negative-control) an overwrite whose target the allowlist refuses still refuses (FA-01)",
-    async () => {
+  it("(negative-control) an overwrite whose target the allowlist refuses still refuses (FA-01)", async () => {
     const privateBytes = "# Private\n\nPRIV-SENTINEL\n";
     await fs.mkdir(path.join(root, "Private"), { recursive: true });
     await fs.writeFile(path.join(root, "Private", "note.md"), privateBytes);
     // Root-level *.md only: Private/note.md is outside the public surface.
     const vault = new Vault(root, { enableWrite: true, readPaths: ["*.md"] });
     await vault.ensureExists();
-    await expect(
-      vault.writeNote("Private/note.md", "# Private\n\nOVERWRITE\n", { overwrite: true })
-    ).rejects.toThrow(/Refusing to write — (temporary destination|destination) is excluded by/);
+    await expect(vault.writeNote("Private/note.md", "# Private\n\nOVERWRITE\n", { overwrite: true })).rejects.toThrow(
+      /Refusing to write — (temporary destination|destination) is excluded by/
+    );
     expect(await fs.readFile(path.join(root, "Private", "note.md"), "utf8")).toBe(privateBytes);
-    }
-  );
+  });
 });

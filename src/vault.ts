@@ -2102,16 +2102,18 @@ export class Vault {
    *
    * The tmp file is an internal transport: it is opened beside the already-validated
    * target, filled, and renamed onto it. Its admission is the target's admission, not its
-   * own — `Dest.md.<nonce>.tmp` cannot match a `**/*.md` read-paths allow-glob that admits
-   * `Dest.md` itself, and `--exclude-glob '*.tmp'` (or `**/*.tmp`) catches the transport
-   * while the destination it serves stays public. Before rc.8 that mismatch could destroy
-   * data: a cancelled overwrite-rename rolled the source back, but restoring the snapshot
-   * of the overwritten destination went through this tmp, was refused by the user's own
-   * filter, and the destination's pre-rename bytes were lost with only a rollback-failed
-   * error. Inheriting the target's admission here cannot widen the public surface: the
-   * target path itself is still checked (before this transport opens, and again before the
-   * rename onto it), and a target the filters refuse still refuses — by the target's own
-   * reason, reported against the tmp path that tried to move.
+   * own — `Dest.md.<nonce>.tmp` ends in `.tmp`, so a read-paths allow-glob that admits
+   * `Dest.md` itself (an `*.md` glob, at any depth) cannot admit it, while an `*.tmp`
+   * exclude-glob — which bites only at the vault root unless written depth-spanning —
+   * refuses the transport while the destination it serves stays public. Before rc.8 that
+   * mismatch could destroy data: a cancelled overwrite-rename rolled the source back, but
+   * restoring the snapshot of the overwritten destination went through this tmp, was
+   * refused by the user's own filter, and the destination's pre-rename bytes were lost
+   * with only a rollback-failed error. Inheriting the target's admission here cannot
+   * widen the public surface: the target path itself is still checked (before this
+   * transport opens, and again before the rename onto it), and a target the filters
+   * refuse still refuses — by the target's own reason, reported against the tmp path
+   * that tried to move.
    *
    * The rollbackRecovery flag flows into both sides so a `.enquire-rollback` target keeps
    * admitting its own hidden transport exactly as before; nothing else about the hidden /

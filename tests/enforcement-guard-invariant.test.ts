@@ -716,7 +716,7 @@ describe("enforcement-guarantee → code-guard invariant (rc.3, overclaim #15/#1
     expect(createWrite).toBeGreaterThan(createAdmission);
     const temporaryOpen = vault.indexOf('fh = await this.openSafe(tmp, "wx", tmpMode);');
     const temporaryAdmission = vault.indexOf(
-      'await this.assertMutationPathPublic(tmp, "write", "temporary destination", opts.rollbackRecovery === true);',
+      'await this.assertMutationTmpTransportPublic(tmp, abs, "temporary destination", opts.rollbackRecovery === true);',
       temporaryOpen
     );
     const temporaryWrite = vault.indexOf('await fh.writeFile(content, "utf8");', temporaryOpen);

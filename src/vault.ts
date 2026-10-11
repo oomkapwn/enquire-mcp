@@ -1997,14 +1997,14 @@ export class Vault {
       try {
         fh = await this.openSafe(tmp, "wx", tmpMode); // O_EXCL — never follows a pre-planted symlink
         createdTmp = true;
-        await this.assertMutationPathPublic(tmp, "write", "temporary destination", opts.rollbackRecovery === true);
+        await this.assertMutationTmpTransportPublic(tmp, abs, "temporary destination", opts.rollbackRecovery === true);
         if (Buffer.isBuffer(content)) await fh.writeFile(content);
         else await fh.writeFile(content, "utf8");
         publishedStat = await fh.stat();
         await fh.close();
         fh = undefined;
         await this.assertMutationLeafNotSymlink(abs, "write");
-        await this.assertMutationPathPublic(tmp, "write", "temporary source", opts.rollbackRecovery === true);
+        await this.assertMutationTmpTransportPublic(tmp, abs, "temporary source", opts.rollbackRecovery === true);
         await this.assertMutationPathPublic(abs, "write", "destination", opts.rollbackRecovery === true);
         await this.renameSafe(tmp, abs);
       } catch (err) {
@@ -2095,6 +2095,49 @@ export class Vault {
       throw new Error(`Refusing to ${operation} — ${role} is excluded by ${reason}: ${rel}`);
     }
     return rel;
+  }
+
+  /**
+   * v4.0.0-rc.8 (FA-01) — target-bound admission for the atomic-overwrite tmp transport.
+   *
+   * The tmp file is an internal transport: it is opened beside the already-validated
+   * target, filled, and renamed onto it. Its admission is the target's admission, not its
+   * own — `Dest.md.<nonce>.tmp` cannot match a `**/*.md` read-paths allow-glob that admits
+   * `Dest.md` itself, and `--exclude-glob '*.tmp'` (or `**/*.tmp`) catches the transport
+   * while the destination it serves stays public. Before rc.8 that mismatch could destroy
+   * data: a cancelled overwrite-rename rolled the source back, but restoring the snapshot
+   * of the overwritten destination went through this tmp, was refused by the user's own
+   * filter, and the destination's pre-rename bytes were lost with only a rollback-failed
+   * error. Inheriting the target's admission here cannot widen the public surface: the
+   * target path itself is still checked (before this transport opens, and again before the
+   * rename onto it), and a target the filters refuse still refuses — by the target's own
+   * reason, reported against the tmp path that tried to move.
+   *
+   * The rollbackRecovery flag flows into both sides so a `.enquire-rollback` target keeps
+   * admitting its own hidden transport exactly as before; nothing else about the hidden /
+   * reserved, symlink, exclusive-create, or containment guarantees changes here.
+   *
+   * @param tmpAbs - Absolute path of the transport tmp (sibling of the target).
+   * @param targetAbs - Absolute path of the already-validated target the tmp will move onto.
+   * @param role - Role name for the refusal message ("temporary destination", "temporary source").
+   * @param rollbackRecovery - Whether this write is an internal rollback-recovery write.
+   * @returns The vault-relative transport path, as {@link assertMutationPathPublic} would.
+   */
+  private async assertMutationTmpTransportPublic(
+    tmpAbs: string,
+    targetAbs: string,
+    role: string,
+    rollbackRecovery = false
+  ): Promise<string> {
+    const rel = await this.canonicalRelForPrivacyCheck(tmpAbs);
+    const tmpReason = this.writeExclusionProblem(rel, rollbackRecovery);
+    if (tmpReason === null) return rel;
+    const targetRel = await this.canonicalRelForPrivacyCheck(targetAbs);
+    if (this.writeExclusionProblem(targetRel, rollbackRecovery) === null) {
+      // The transport inherits its admitted target's authority (see the doc comment).
+      return rel;
+    }
+    throw new Error(`Refusing to write — ${role} is excluded by ${tmpReason}: ${rel}`);
   }
 
   /**

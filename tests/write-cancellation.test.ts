@@ -1083,4 +1083,49 @@ describe("rollback-safe batch write cancellation", () => {
     );
     expect(await fs.readFile(path.join(root, "Private", "note.md"), "utf8")).toBe(privateBytes);
   });
+
+  // ─── FA-01 residual (2026-10-12 independent review): a rollback snapshot whose path
+  // is not the canonical path of its own file. `renameFile` does not normalize its
+  // destination, but `writeNoteContent` trims what it is given, so a destination named
+  // ` Dest.md` is reachable through a rename yet unaddressable through the write path.
+  // Restoring its snapshot used to land those bytes in the unrelated `Dest.md` and
+  // report a successful rollback; the old tmp refusal only prevented it by accident.
+  it("a cancelled overwrite-rename never restores a snapshot into a different file (FA-01 residual)", async () => {
+    const sourceBytes = "# Source\n\nSOURCE-RESIDUAL-SENTINEL\n";
+    const unrelatedBytes = "# Destination\n\nUNRELATED-MUST-SURVIVE-SENTINEL\n";
+    const spaceBytes = "# Spaced\n\nSPACED-DEST-SENTINEL\n";
+    await fs.writeFile(path.join(root, "Source.md"), sourceBytes);
+    await fs.writeFile(path.join(root, "Dest.md"), unrelatedBytes);
+    // Created on disk, not through writeNote — that is exactly why this is reachable:
+    // the write API cannot create it, but a synced or externally created vault can have it.
+    await fs.writeFile(path.join(root, " Dest.md"), spaceBytes);
+    // `**/*.md` admits ` Dest.md`, its transport tmp is refused, and — after FA-01 —
+    // the transport now inherits the admission of whatever `writeNoteContent` resolves.
+    const vault = new Vault(root, { enableWrite: true, readPaths: ["**/*.md"] });
+    await vault.ensureExists();
+
+    const abort = new AbortController();
+    const renameFile = vault.renameFile.bind(vault);
+    let forwardCount = 0;
+    vault.renameFile = async (...args: Parameters<Vault["renameFile"]>) => {
+      const result = await renameFile(...args);
+      if (forwardCount === 0 && args[1] === " Dest.md") {
+        forwardCount += 1;
+        abort.abort(new Error("deterministic post-forward cancellation"));
+      }
+      return result;
+    };
+
+    // Loud failure: the snapshot names a path the write path cannot address.
+    await expect(
+      renameNote(vault, { from: "Source.md", to: " Dest.md", overwrite: true }, { signal: abort.signal })
+    ).rejects.toThrow(/rollback failed for 1 file\(s\)/);
+    expect(forwardCount).toBe(1);
+    // The source came home, and — the point of the control — the UNRELATED note that the
+    // trimmed name collides with kept its own bytes instead of being silently overwritten.
+    expect(await fs.readFile(path.join(root, "Source.md"), "utf8")).toBe(sourceBytes);
+    expect(await fs.readFile(path.join(root, "Dest.md"), "utf8")).toBe(unrelatedBytes);
+    const leftovers = (await fs.readdir(root)).filter((name) => name.endsWith(".tmp"));
+    expect(leftovers).toEqual([]);
+  });
 });

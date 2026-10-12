@@ -21,10 +21,35 @@ interface NoteSnapshot {
   before: string | Buffer;
 }
 
+/**
+ * A rollback snapshot must address exactly the file it was captured from.
+ *
+ * `Vault.writeNoteContent` normalizes the path it is handed — it trims it
+ * (`src/vault.ts`), then appends `.md` when the extension is missing — while
+ * `Vault.renameFile` does not normalize its destination at all. So a destination
+ * name that differs from its normalized form, such as a leading-space
+ * ` Dest.md`, is reachable through a rename but can never be written through the
+ * write path. Restoring its snapshot would silently land those bytes in
+ * `Dest.md`, overwriting an unrelated note, and then report a successful
+ * rollback. A name the write path cannot address is not recoverable; say so
+ * instead of writing somewhere else.
+ *
+ * Reachable only since FA-01 made the atomic-overwrite transport inherit its
+ * target's admission. Before it, the transport tmp of a name that normalizes
+ * away was refused by the note's own filter, so the misaddressed write could
+ * not happen — it failed loudly by accident rather than by design.
+ */
+function assertRestorableSnapshotPath(relPath: string): void {
+  if (relPath !== relPath.trim()) {
+    throw new Error(`Refusing to restore snapshot — "${relPath}" is not the canonical path of its own file`);
+  }
+}
+
 async function restoreNoteSnapshots(vault: Vault, snapshots: readonly NoteSnapshot[]): Promise<string[]> {
   const failures: string[] = [];
   for (const snapshot of [...snapshots].reverse()) {
     try {
+      assertRestorableSnapshotPath(snapshot.path);
       if (Buffer.isBuffer(snapshot.before)) {
         await vault.restoreFileBytesPublic(snapshot.path, snapshot.before);
       } else {

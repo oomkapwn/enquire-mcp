@@ -30,7 +30,7 @@ jobs:
         run: |
           set -u
           manifest=.github/trusted-vitest-bootstrap.sha256
-          expected_manifest_sha=8652fc70700a4230d9764c122601afa976dbe4590a4c2f4e2c0679ae6688cba7
+          expected_manifest_sha=5c29037228c761bd1892c371ab30f99c67ecaae4edb64224f14db8a0989e21ca
           expected_path_sha=5581eea048d9360a3fff43c79e1d55d40492a082ee468ee74c3738f60c2f82f9
           workflow=.github/workflows/ci.yml
           [[ -d .github && ! -L .github ]]

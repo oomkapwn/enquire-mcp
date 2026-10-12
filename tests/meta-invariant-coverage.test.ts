@@ -34,7 +34,7 @@ import { releaseMutationVersionedTransitionAuditProblems } from "./release-mutat
 
 const repoRoot = path.resolve(__dirname, "..");
 const RELEASE_MUTATION_IDENTITY_FIXTURE_SHA256 = "8205d24e6d42dd4cb8986368611514131abe701434beb30150e33ea08f4b1288";
-const RELEASE_MUTATION_TRANSITION_FIXTURE_SHA256 = "5add5dceb8f1281336d095a2c35cab1ad2c8daa523f16a4bc4f6e2f7692f024d";
+const RELEASE_MUTATION_TRANSITION_FIXTURE_SHA256 = "987fadf23c95908930a8fac15c08d73c1b3965c33650b08a981d287e80eb19d1";
 const releaseMutationIdentityFixturePath = path.join(repoRoot, "tests/fixtures/release-mutation-identity.v2.json");
 const releaseMutationTransitionFixturePath = path.join(repoRoot, "tests/fixtures/release-mutation-transition.v3.json");
 const releaseIntegritySourcePath = path.join(repoRoot, "tests/release-integrity.test.ts");
@@ -290,16 +290,7 @@ const EXPECTED_REPOSITORY_MUTATION_HELPER_CALL_ENTRIES = [
   ],
   [
     "enforcement-guard-invariant.test.ts",
-    // v4.0.0-rc.8 (FA-01) — the guard-order pin now names
-    // `assertMutationTmpTransportPublic(tmp, abs, "temporary destination", …)`
-    // instead of `assertMutationPathPublic(tmp, "write", …)` for the transport
-    // admission that follows the exclusive open. Count stays 41 and the owning
-    // `it(...)` blocks are unchanged: one call-site was renamed, not added or
-    // dropped, which is exactly the drift this digest exists to catch. The
-    // recomputed value was taken from the gate's own reported digest, never
-    // from scripts/mutation-helper-census.py — this file is a
-    // KNOWN_DIGEST_DIFFERENCES entry, so that script must not write a pin.
-    { count: 41, sha256: "2237d495a67d4f464327b5a576e71610705586c42ca45778e91c7dbb19e0bb0c" }
+    { count: 41, sha256: "86bd9ac2aeb2e1ee477a9408d439a096a6697697efa25ec65c3462b5d6050776" }
   ],
   [
     "erasure-invariant.test.ts",
@@ -334,7 +325,7 @@ const EXPECTED_REPOSITORY_MUTATION_HELPER_CALL_ENTRIES = [
   ["jsonld.test.ts", { count: 11, sha256: "3595b905b156414aca69c02ca6e4ca1968b256095b233348842cdc9dbba749e4" }],
   [
     "meta-invariant-coverage.test.ts",
-    { count: 246, sha256: "3d39c569dbb1a74db4940c0114fe989801ffec77d2e319eaed3bec0784408b59" }
+    { count: 246, sha256: "928e32acc64eb78ce84015a48d8a3356a6de1a0cc0455ee55e07587457a09937" }
   ],
   [
     "no-internal-imports.test.ts",

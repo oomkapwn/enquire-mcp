@@ -26,7 +26,10 @@ jobs:
   regenerate:
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    if: ${{ github.ref == 'refs/heads/main' }}
+    # The lockfile bytes must land through a reviewed pull request, so the
+    # regeneration itself only ever runs on a working branch. Dispatch it on
+    # the branch that will carry the lockfile change, never on main.
+    if: ${{ github.ref != 'refs/heads/main' }}
     permissions:
       contents: read
     steps:

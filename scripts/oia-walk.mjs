@@ -1380,6 +1380,7 @@ for (const docFile of DOCS_FILES_TO_SCAN) {
     ["ci.yml#audit", "257a09114a4e895df831ace40f70115b66d7ae38a41eb166ff5dca10df1b245c"],
     ["dist-tag-cleanup.yml#cleanup", "b1dcb901eb22fd286c299b8e3ee1ac9f21cb529665be150c9a476b5a305e4ce0"],
     ["publish-docs.yml#build", "476bc2a8aea0d3def4c805b616058ba0c4aea7f9d940e73a5d9da4b5b977cfba"],
+    ["regenerate-lock.yml#regenerate", "2e9a5e307c587c23d04edc450afe7a5ebd98b323596bc481f43cf250ce181e04"],
     ["release.yml#verify", "d99c2e59a073a1f2ef5f670be90ab5662c2b45c2800b215e9259d9d6e1353496"],
     ["release.yml#npm_publish", "2486876be9061db2f8004e4923042784ea13f2a7de780861a50d6959ab651a8d"],
     ["release.yml#github_release", "108ecb3285e85905af15541a079ba1877e7713da88bb51e3c0f8f00f30aa5dec"],

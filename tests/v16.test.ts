@@ -95,7 +95,10 @@ describe("findPath (v1.6 multi-hop graph traversal)", () => {
     try {
       // Hub → M00..M14 → Final: fifteen distinct routes of equal length,
       // comfortably past the ten that may be reported.
-      await fs.writeFile(path.join(fanRoot, "Hub.md"), Array.from({ length: 15 }, (_, i) => `[[M${String(i).padStart(2, "0")}]]`).join(" "));
+      await fs.writeFile(
+        path.join(fanRoot, "Hub.md"),
+        Array.from({ length: 15 }, (_, i) => `[[M${String(i).padStart(2, "0")}]]`).join(" ")
+      );
       for (let i = 0; i < 15; i += 1) {
         await fs.writeFile(path.join(fanRoot, `M${String(i).padStart(2, "0")}.md`), "[[Final]]\n");
       }

@@ -1502,7 +1502,10 @@ describe("exact selected persistence target (FA-02: NFD/NFC)", () => {
     if (!(await probeByteExactFilesystem(f.root))) return;
     // Only the NFC twin exists; the caller selected the NFD spelling.
     await fs.writeFile(path.join(f.root, NFC_BASE), "twin-bytes\n");
-    const scope = await resolvePersistenceLeaseScope({ targetPath: path.join(f.root, NFD_BASE), familyKey: "embed-db" });
+    const scope = await resolvePersistenceLeaseScope({
+      targetPath: path.join(f.root, NFD_BASE),
+      familyKey: "embed-db"
+    });
     // The scope names the exact selected spelling — NOT the existing twin.
     expect(scope.targetName).toBe(NFD_BASE);
     // And the path consumers reconstruct from it stays on the absent target:
@@ -1546,7 +1549,10 @@ describe("exact selected persistence target (FA-02: NFD/NFC)", () => {
     // the pinned name was the twin's, so a later path reconstruction would have
     // operated on the twin instead of the selected target.)
     await fs.writeFile(path.join(f.root, NFC_BASE), "twin-bytes\n");
-    const scope = await resolvePersistenceLeaseScope({ targetPath: path.join(f.root, NFD_BASE), familyKey: "embed-db" });
+    const scope = await resolvePersistenceLeaseScope({
+      targetPath: path.join(f.root, NFD_BASE),
+      familyKey: "embed-db"
+    });
     expect(scope.targetName).toBe(NFD_BASE);
     await expect(revalidatePersistenceLeaseScope(scope)).resolves.toBeUndefined();
   });

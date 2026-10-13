@@ -42,10 +42,40 @@ import type { CachedNote, Vault } from "./vault.js";
  * (the default `paraphrase-multilingual-MiniLM-L12-v2` at 128 tokens ≈ ~512
  * chars), so passing arbitrarily long text just wastes tokenizer work. This cap
  * (~2000 tokens, well above any model's window) bounds the worst case a large
- * opt-in `--late-chunk-context` could produce. The DEFAULT path
- * (`contextChars <= 0`) never assembles context and is unaffected.
+ * opt-in `--late-chunk-context` could produce.
+ *
+ * FA-04 — this is now the per-chunk budget of LAST resort on both paths, not
+ * only the contextual one: the default path never assembled context, but it was
+ * never clamped either. Callers bound a whole note with `embedChunkBudget`
+ * before reaching this value.
  */
 export const MAX_EMBED_CHARS = 8000;
+
+/** FA-04 — per-NOTE aggregate budget for the text handed to the embedder.
+ *  `MAX_EMBED_CHARS` bounds one chunk; without an aggregate, a note with many
+ *  chunks sends `chunkCount × MAX_EMBED_CHARS` characters in total, which
+ *  grows with the note rather than with what a single embedding can use. The
+ *  budget is shared evenly and capped per chunk, so ordinary notes are
+ *  untouched and only pathologically large ones are bounded.
+ *
+ *  Sized against `MAX_CHUNK_CHARS` (4096) rather than picked: a chunk is at
+ *  most 4096 characters, so as long as the per-chunk share stays above that,
+ *  no real chunk text is ever truncated and the budget only bounds how many
+ *  chunks are in flight at once. `512_000 / 8000 = 64`, so a note of up to 64
+ *  chunks keeps the full budget, and chunk text itself only starts being
+ *  trimmed past ~125 chunks (~512 KB of note). */
+export const MAX_EMBED_NOTE_CHARS = 512_000;
+
+/** Floor on a single chunk's share of the note budget. A budget that reached
+ *  zero would turn an embedding into a meaningless fragment, so the aggregate
+ *  bound is `max(MAX_EMBED_NOTE_CHARS, chunkCount × this)`. */
+export const MIN_EMBED_CHARS = 512;
+
+/** The per-chunk budget a note with `chunkCount` chunks may spend. */
+export function embedChunkBudget(chunkCount: number): number {
+  if (!Number.isSafeInteger(chunkCount) || chunkCount <= 0) return MAX_EMBED_CHARS;
+  return Math.max(MIN_EMBED_CHARS, Math.min(MAX_EMBED_CHARS, Math.floor(MAX_EMBED_NOTE_CHARS / chunkCount)));
+}
 
 /**
  * v2.15.0 — context-prefixed embedding text builder ("late-chunking-style"
@@ -70,17 +100,33 @@ export const MAX_EMBED_CHARS = 8000;
 export function buildEmbedText(
   chunks: ReadonlyArray<{ text: string; breadcrumb?: string }>,
   i: number,
-  opts: { docTitle?: string; contextChars: number }
+  opts: { docTitle?: string; contextChars: number; budgetChars?: number }
 ): string {
   const c = chunks[i];
   if (!c) return "";
+  // FA-04 — the clamp is a property of the INPUT, so it applies on both the
+  // default and the contextual path. Previously the default path returned
+  // `breadcrumb + text` with no limit at all: `MAX_EMBED_CHARS` was only ever
+  // reached from the contextual overflow branch below. `budgetChars` lets the
+  // caller impose a per-note aggregate budget; at its default the contextual
+  // branch behaves exactly as it did before.
+  const budget = opts.budgetChars ?? MAX_EMBED_CHARS;
+  // Clamp BEFORE concatenation, and cap the breadcrumb at half the budget: the
+  // breadcrumb is navigable context, the chunk text is the signal being
+  // embedded. Slicing the concatenation instead would let a pathological
+  // breadcrumb (deeply nested headings) consume the whole budget and push the
+  // chunk text out entirely — the chunk would then be embedded as pure
+  // heading noise.
+  const crumbCap = Math.max(MIN_EMBED_CHARS, Math.floor(budget / 2));
+  const crumb = c.breadcrumb && c.breadcrumb.length > crumbCap ? c.breadcrumb.slice(0, crumbCap) : c.breadcrumb;
+  const core = crumb ? `${crumb}\n\n${c.text}` : c.text;
   if (opts.contextChars <= 0) {
     // Legacy v2.1.0 form — breadcrumb only.
-    return c.breadcrumb ? `${c.breadcrumb}\n\n${c.text}` : c.text;
+    return core.slice(0, budget);
   }
   const parts: string[] = [];
   if (opts.docTitle) parts.push(`[doc: ${opts.docTitle}]`);
-  if (c.breadcrumb) parts.push(c.breadcrumb);
+  if (crumb) parts.push(crumb);
   // Previous chunk tail — last N chars, trimmed at word boundary.
   const prev = chunks[i - 1];
   if (prev) {
@@ -95,16 +141,14 @@ export function buildEmbedText(
     if (head.length > 0) parts.push(`${head} …`);
   }
   const joined = parts.join("\n\n");
-  if (joined.length <= MAX_EMBED_CHARS) return joined;
+  if (joined.length <= budget) return joined;
   // v3.9.0-rc.28 (external-audit M-2) — a pathological `lateChunkContext` (e.g.
   // 4000) can assemble ~12K chars, far beyond any embedding model's token budget
   // (paraphrase-multilingual-MiniLM truncates at 128 tokens; the model would
   // discard the overflow anyway, wasting tokenizer work). Clamp: keep the CORE
   // chunk (+ breadcrumb) intact and drop the surrounding neighbor context, then
-  // hard-cap. Default path (`contextChars <= 0`) returns early above and is
-  // unaffected; this only fires on opt-in oversized context.
-  const core = c.breadcrumb ? `${c.breadcrumb}\n\n${c.text}` : c.text;
-  return core.slice(0, MAX_EMBED_CHARS);
+  // hard-cap.
+  return core.slice(0, budget);
 }
 
 /**
@@ -199,7 +243,8 @@ export async function embedSingleNote(
   const embedTexts = chunks.map((_c, i) =>
     buildEmbedText(chunks, i, {
       docTitle: typeof docTitle === "string" ? docTitle : undefined,
-      contextChars
+      contextChars,
+      budgetChars: embedChunkBudget(chunks.length)
     })
   );
   const vectors = await embedder.embed(embedTexts);
@@ -291,7 +336,9 @@ export async function embedSinglePdf(
   const chunks = chunkContent(joined);
   if (chunks.length === 0) return null;
   const docTitle = path.basename(entry.relPath, ".pdf");
-  const embedTexts = chunks.map((_c, i) => buildEmbedText(chunks, i, { docTitle, contextChars }));
+  const embedTexts = chunks.map((_c, i) =>
+    buildEmbedText(chunks, i, { docTitle, contextChars, budgetChars: embedChunkBudget(chunks.length) })
+  );
   const vectors = await embedder.embed(embedTexts);
   if (vectors.length !== chunks.length) {
     throw new Error(`embedder returned ${vectors.length} vectors for ${chunks.length} chunks of ${entry.relPath}`);

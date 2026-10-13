@@ -8,7 +8,12 @@
 //   • Tolerates missing breadcrumb / docTitle
 
 import { describe, expect, it } from "vitest";
-import { MAX_EMBED_CHARS } from "../src/embed-pipeline.js";
+import {
+  MAX_EMBED_CHARS,
+  MAX_EMBED_NOTE_CHARS,
+  MIN_EMBED_CHARS,
+  embedChunkBudget
+} from "../src/embed-pipeline.js";
 import { buildEmbedText } from "../src/index.js";
 
 describe("buildEmbedText (v2.15.0 late-chunking context windowing)", () => {
@@ -120,6 +125,75 @@ describe("buildEmbedText (v2.15.0 late-chunking context windowing)", () => {
       expect(out.length).toBeLessThan(MAX_EMBED_CHARS);
       expect(out).toContain("[doc: Doc]");
       expect(out).toContain("…"); // neighbor context present (not the clamp fallback)
+    });
+  });
+
+  // FA-04 — the clamp was a property of the CONTEXTUAL path only. The default
+  // path returned `breadcrumb + chunk text` with no limit at all, so a
+  // pathological breadcrumb (deeply nested, very long headings) produced an
+  // unbounded embed text on the default — the default being the path users get
+  // without opting into context windowing.
+  describe("FA-04: the input is clamped on both paths, and a note has an aggregate budget", () => {
+    it("clamps the DEFAULT path (contextChars <= 0), which previously had no clamp", () => {
+      // 1200 headings × 12 chars + 1199 × " > " ≈ 18K chars — over the 8000
+      // budget on the breadcrumb alone, so the old code returned it verbatim.
+      const longBreadcrumb = Array.from({ length: 1200 }, (_, i) => `H${String(i).padStart(3, "0")}-heading`).join(
+        " > "
+      );
+      const out = buildEmbedText([{ text: "core note body", breadcrumb: longBreadcrumb }], 0, { contextChars: 0 });
+      // Positive control: the input really did overflow the budget.
+      expect(longBreadcrumb.length).toBeGreaterThan(MAX_EMBED_CHARS);
+      expect(out.length).toBeLessThanOrEqual(MAX_EMBED_CHARS);
+      // The breadcrumb is capped at half the budget, so the chunk text — the
+      // actual signal — survives. Clamping the concatenation instead would have
+      // discarded it entirely and embedded pure heading noise.
+      expect(out.split("\n\n")[0]).toHaveLength(MAX_EMBED_CHARS / 2);
+      expect(out).toContain("core note body");
+    });
+
+    it("clamps the DEFAULT path when the chunk text alone exceeds the budget", () => {
+      const out = buildEmbedText([{ text: "x".repeat(MAX_EMBED_CHARS * 2) }], 0, { contextChars: 0 });
+      expect(out.length).toBe(MAX_EMBED_CHARS);
+    });
+
+    it("leaves an ordinary default-path note byte-identical", () => {
+      const out = buildEmbedText([{ text: "core body", breadcrumb: "## Setup > ### Install" }], 0, { contextChars: 0 });
+      expect(out).toBe("## Setup > ### Install\n\ncore body");
+    });
+
+    it("shares a per-note aggregate budget across chunks, and never below the floor", () => {
+      // An ordinary note keeps the full per-chunk budget. The threshold is
+      // pinned, not assumed: 64 chunks still gets the whole 8000, 65 does not.
+      // At 8000 per chunk that is ~512 KB of note before anything is trimmed.
+      expect(embedChunkBudget(1)).toBe(MAX_EMBED_CHARS);
+      expect(embedChunkBudget(8)).toBe(MAX_EMBED_CHARS);
+      expect(embedChunkBudget(64)).toBe(MAX_EMBED_CHARS);
+      expect(embedChunkBudget(65)).toBeLessThan(MAX_EMBED_CHARS);
+      // A pathological one is bounded: the per-chunk share shrinks so the note
+      // total cannot grow without limit, and it stops at the floor.
+      const many = embedChunkBudget(10_000);
+      expect(many).toBeLessThan(MAX_EMBED_CHARS);
+      expect(many).toBe(MIN_EMBED_CHARS);
+      // And the aggregate bound holds for a mid-size note.
+      expect(embedChunkBudget(200) * 200).toBeLessThanOrEqual(MAX_EMBED_NOTE_CHARS);
+    });
+
+    it("honours a caller-supplied per-chunk budget on the contextual path", () => {
+      const parts = [
+        { text: "A".repeat(2000) },
+        { text: "B".repeat(2000) },
+        { text: "C".repeat(2000) }
+      ];
+      // Same input, only the budget differs — so any length difference is
+      // attributable to `budgetChars` and nothing else.
+      const tight = buildEmbedText(parts, 1, { contextChars: 1000, docTitle: "Doc", budgetChars: 900 });
+      const ordinary = buildEmbedText(parts, 1, { contextChars: 1000, docTitle: "Doc" });
+      expect(tight.length).toBe(900);
+      // The default budget is the same size for an ordinary note, so the
+      // contextual path is unchanged where it was already correct: 4020 chars
+      // is under MAX_EMBED_CHARS and is returned whole, not clamped to 900.
+      expect(ordinary.length).toBe(4020);
+      expect(ordinary.length).toBeGreaterThan(900);
     });
   });
 });

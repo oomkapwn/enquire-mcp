@@ -424,7 +424,20 @@ describe("Vault — --exclude-glob privacy filter (v0.11 P1)", () => {
       path: "Project.v2/note.v2.md"
     });
 
-    expect(restrictedVaultPathReason("Nested\\.Secrets\\note.md")).toBe("hidden or reserved vault path");
+    // F02 — a backslash is a path separator only on the host where it is one.
+// On Windows this spelling really does reach the reserved `.Secrets` segment
+// and must be refused. On POSIX the very same string is ONE filename that
+// happens to contain backslashes, and refusing it is the defect this change
+// removes — the old unconditional assertion silently encoded that bug as the
+// expected answer. Each branch states the host's own semantics instead.
+if (process.platform === "win32") {
+  expect(restrictedVaultPathReason("Nested\\.Secrets\\note.md")).toBe("hidden or reserved vault path");
+} else {
+  expect(restrictedVaultPathReason("Nested\\.Secrets\\note.md")).toBeNull();
+  // The genuine two-segment spelling is still refused on this host, so the
+  // reserved-segment guarantee is intact — only the separator assumption went.
+  expect(restrictedVaultPathReason("Nested/.Secrets/note.md")).toBe("hidden or reserved vault path");
+}
     expect(restrictedVaultPathReason("Nested/.Git./config")).toBe("hidden or reserved vault path");
     expect(restrictedVaultPathReason("nested/THUMBS.DB ")).toBe("hidden or reserved vault path");
     expect(restrictedVaultPathReason("Project.v2/my-node_modules-notes.md")).toBeNull();

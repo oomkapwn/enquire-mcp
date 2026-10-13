@@ -260,6 +260,38 @@ describe("buildWikilinkGraph — resolution edge cases (v3.6.2 branches)", () =>
     expect(aLinks?.size).toBe(1); // only one Dup edge — second is shadowed
   });
 
+  // FA-07 — the sibling of the first-wins rule above, and the case that rule
+  // must NOT override. A qualified link names a path, so it must never be
+  // captured by an unrelated note that merely shares its basename.
+  it("a qualified link resolves to its exact path, not to a colliding basename", async () => {
+    const v = await vaultWith({
+      "A.md": "[[Folder2/Sub]]",
+      // `byBasename` holds `sub` → the FIRST note in walk order. Folder1 sorts
+      // before Folder2, so the unguarded resolver pointed this link at the
+      // shadow note and the exact-path branch was never reached.
+      "Folder1/Sub.md": "shadow",
+      "Folder2/Sub.md": "real"
+    });
+    const g = await buildWikilinkGraph(v);
+    expect(g.adjacency.get("A.md")?.get("Folder2/Sub.md")).toBe(1);
+    // The shadow note must not receive an edge it was never linked to.
+    expect(g.adjacency.get("A.md")?.get("Folder1/Sub.md")).toBeUndefined();
+    expect(g.adjacency.get("A.md")?.size).toBe(1);
+  });
+
+  // The companion guarantee: a qualified link whose exact path does not exist
+  // still falls back to the basename, so FA-07 did not make qualified links
+  // strictly path-only.
+  it("a qualified link with no exact path still falls back to the basename", async () => {
+    const v = await vaultWith({
+      "A.md": "[[NoSuchDir/Sub]]",
+      "Folder1/Sub.md": "reachable only by basename"
+    });
+    const g = await buildWikilinkGraph(v);
+    expect(g.adjacency.get("A.md")?.get("Folder1/Sub.md")).toBe(1);
+    expect(g.adjacency.get("A.md")?.size).toBe(1);
+  });
+
   it("ignores wikilinks whose target trims to empty (e.g. [[#section-only]])", async () => {
     const v = await vaultWith({
       "A.md": "ref to section: [[#orphan]] and [[B]]",

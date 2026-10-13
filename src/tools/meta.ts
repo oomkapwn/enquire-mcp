@@ -2369,7 +2369,10 @@ export interface FindPathResult {
   path: PathStep[];
   /** Number of hops in `path`. -1 when not found. 0 for from = to. */
   hops: number;
-  /** Up to 10 same-length alternatives, only when include_alternatives=true. */
+  /** Up to 10 same-length alternatives, only when include_alternatives=true.
+   *  The chosen path is included as the first entry: `tests/v16.test.ts` pins
+   *  that both same-length siblings are reported, which only holds while it is
+   *  part of the returned set. */
   alternatives?: PathStep[][];
 }
 
@@ -2464,6 +2467,16 @@ export async function findPath(
   // nodes has been expanded, bounding worst-case CPU/I/O regardless of vault
   // size — defense-in-depth against an adversarial/pathological graph.
   const MAX_VISITED = 50_000;
+  /** FA-08 — retention bound for same-length alternatives. Previously `found`
+   *  grew across the whole traversal and was sliced to this many only at the
+   *  end, so a graph with many duplicate targets materialized every candidate
+   *  before discarding all but ten. */
+  const MAX_ALTERNATIVES = 10;
+  /** Selection order for retained alternatives — identical to the sort applied
+   *  at the end, so bounded retention during traversal yields exactly the same
+   *  result set as the previous accumulate-then-slice behaviour. */
+  const compareTrails = (a: PathStep[], b: PathStep[]): number =>
+    a.length - b.length || (a[0]?.path ?? "").localeCompare(b[0]?.path ?? "");
   type FrontierEntry = { rel: string; trail: PathStep[] };
   const visited = new Set<string>([fromEntry.relPath]);
   let frontier: FrontierEntry[] = [
@@ -2487,8 +2500,8 @@ export async function findPath(
         if (m.absPath === toEntry.absPath) {
           if (foundDepth === -1) foundDepth = depth + 1;
           if (foundDepth === depth + 1) {
-            found.push(newTrail);
             if (!includeAlts) {
+              found.push(newTrail);
               return {
                 from: fromEntry.relPath,
                 to: toEntry.relPath,
@@ -2496,6 +2509,22 @@ export async function findPath(
                 hops: foundDepth,
                 path: newTrail
               };
+            }
+            // FA-08 — keep the best MAX_ALTERNATIVES by `compareTrails` as
+            // we go, inserting in order and dropping the worst. Same retained
+            // set and same order as sorting everything at the end, but the
+            // array never exceeds the bound regardless of how many duplicate
+            // targets the traversal visits.
+            let lo = 0;
+            let hi = found.length;
+            while (lo < hi) {
+              const mid = (lo + hi) >>> 1;
+              if (compareTrails(found[mid] as PathStep[], newTrail) <= 0) lo = mid + 1;
+              else hi = mid;
+            }
+            if (lo < MAX_ALTERNATIVES) {
+              found.splice(lo, 0, newTrail);
+              if (found.length > MAX_ALTERNATIVES) found.length = MAX_ALTERNATIVES;
             }
           }
         } else {
@@ -2515,7 +2544,7 @@ export async function findPath(
   }
 
   if (found.length > 0) {
-    found.sort((a, b) => a.length - b.length || (a[0]?.path ?? "").localeCompare(b[0]?.path ?? ""));
+    found.sort(compareTrails);
     const first = found[0];
     if (!first) {
       return { from: fromEntry.relPath, to: toEntry.relPath, found: false, hops: -1, path: [] };
@@ -2527,7 +2556,7 @@ export async function findPath(
       hops: foundDepth,
       path: first
     };
-    if (includeAlts) result.alternatives = found.slice(0, 10);
+    if (includeAlts) result.alternatives = found.slice(0, MAX_ALTERNATIVES);
     return result;
   }
 

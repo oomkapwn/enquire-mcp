@@ -85,6 +85,44 @@ describe("findPath (v1.6 multi-hop graph traversal)", () => {
     expect(altMidpoints).toContain("Y.md");
   });
 
+  // FA-08 — the traversal used to accumulate every same-length path it found
+  // and slice to ten only at the very end, so a graph with many distinct
+  // same-length routes materialized all of them. Retention is now bounded
+  // during traversal. This pins the OUTPUT contract on a duplicate-heavy
+  // graph: the bound must not change what the caller is promised.
+  it("bounds alternative retention without changing the reported contract", async () => {
+    const fanRoot = await fs.mkdtemp(path.join(os.tmpdir(), "obsidian-mcp-v16-alt-"));
+    try {
+      // Hub → M00..M14 → Final: fifteen distinct routes of equal length,
+      // comfortably past the ten that may be reported.
+      await fs.writeFile(path.join(fanRoot, "Hub.md"), Array.from({ length: 15 }, (_, i) => `[[M${String(i).padStart(2, "0")}]]`).join(" "));
+      for (let i = 0; i < 15; i += 1) {
+        await fs.writeFile(path.join(fanRoot, `M${String(i).padStart(2, "0")}.md`), "[[Final]]\n");
+      }
+      await fs.writeFile(path.join(fanRoot, "Final.md"), "destination\n");
+
+      const v = new Vault(fanRoot);
+      const out = await findPath(v, { from: "Hub.md", to: "Final.md", include_alternatives: true });
+      expect(out.found).toBe(true);
+      expect(out.hops).toBe(2);
+      expect(out.alternatives).toBeTruthy();
+      // The documented ceiling still holds…
+      expect((out.alternatives ?? []).length).toBeLessThanOrEqual(10);
+      // …and everything reported is a real two-hop route through a real
+      // midpoint, so bounding retention cannot invent or drop a hop.
+      for (const alt of out.alternatives ?? []) {
+        expect(alt).toHaveLength(3);
+        expect(alt[0]?.path).toBe("Hub.md");
+        expect(alt[2]?.path).toBe("Final.md");
+        expect(alt[1]?.path).toMatch(/^M\d\d\.md$/u);
+      }
+      // The chosen path is the retained head, and it is one of the routes.
+      expect((out.alternatives ?? []).some((alt) => JSON.stringify(alt) === JSON.stringify(out.path))).toBe(true);
+    } finally {
+      await fs.rm(fanRoot, { recursive: true, force: true });
+    }
+  });
+
   it("follow_embeds=true (default) traverses ![[embeds]] like wikilinks", async () => {
     const v = new Vault(root);
     // A → B → C → ![[Embed Target]]. Reachable only through embed.

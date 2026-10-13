@@ -4,6 +4,30 @@ All notable changes to this project will be documented here. The format follows 
 
 ## [4.0.0-rc.7] — 2026-08-31
 
+### A qualified wikilink can no longer resolve to a different note that shares its basename (FA-07)
+
+> **TL;DR:** **The communities wikilink resolver discarded the path qualification before looking anything up, and consulted the first-wins basename index before the exact-path branch — so `[[Folder2/Sub]]` was silently resolved to whichever unrelated note happened to hold the basename `Sub` first in walk order, and the exact-path match was never attempted.**
+>
+> **What could happen before.** `buildWikilinkGraph` built a basename index that keeps the first note seen (`if (!byBasename.has(base))`), then resolved each link with `foldName(path.basename(target))`. Taking `path.basename` throws away everything before the last segment, so a folder-qualified link and a bare link collapse to the same key. Because the basename lookup ran first and set `toPath` unconditionally, the direct-path branch below it was reachable only when the basename lookup *missed* — which is exactly the case that had no collision. With a collision it never ran, and the community graph drew an edge to the wrong note.
+>
+> **Bare ambiguity is unchanged, on purpose.** `[[Dup]]` with two notes named `Dup.md` still resolves first-wins, and `tests/communities.test.ts` pins that as intended behaviour rather than a defect. Only a target that actually carries a `/` changes: it tries its exact path first and falls back to the basename when that path does not exist, so qualified links never became strictly path-only.
+>
+> **Bounded claim.** This changes link resolution in `buildWikilinkGraph` only. Node and edge construction, budgets, weight and degree accounting, the bare first-wins rule, and the existing basename→path fallback order are untouched. Two controls: one qualified link with a colliding basename now lands on the exact path and gives the shadow note no edge; one qualified link whose exact path does not exist still resolves by basename, so the fix did not over-tighten.
+>
+> **Method note:** Found by reading the resolver's branch order against the card's "qualified exact path wins" claim, then noticing that the pre-existing control for the path branch (`tests/communities.test.ts:275`) passes for the wrong reason — its own comment records that the basename lookup already resolves the target, so the exact-path branch it appears to cover is never reached in that fixture. The new control reproduces the collision the old fixture omits. Under D-45 no local package-manager, build, lint, test, coverage, audit, or benchmark workload was used; hosted CI is the validation authority.
+
+### Traversal no longer materializes every same-length alternative before discarding them (FA-08)
+
+> **TL;DR:** **`find_path` accumulated every same-length path the BFS found and sliced to ten only after the traversal finished, so a graph with many distinct equal-length routes built all of them in memory first. Retention is now bounded during traversal, keeping the ten best under the comparator the final sort already used.**
+>
+> **What could happen before.** With `include_alternatives`, every match pushed onto an unbounded array; the bound `found.slice(0, 10)` was applied at the very end. Peak retention scaled with how many duplicate targets the graph presented, not with what could be reported.
+>
+> **The output does not change, deliberately.** The obvious fix — stop pushing once ten are collected — would have changed results, because the final sort selects `path` and the retained set lexicographically, not in traversal order. Instead each candidate is inserted at its sorted position and the worst is dropped, so the retained set and its order are exactly those the old accumulate-then-sort produced. This is a resource fix and is claimed as one: the retention bound is internal state and is not observable through the public result, so no old-behaviour control can distinguish it. What the control does pin is that bounding changed nothing a caller can see.
+>
+> **Bounded claim.** Retained alternatives, the chosen `path`, `hops`, and traversal semantics are unchanged. `MAX_VISITED` still caps expansion. The control builds fifteen distinct equal-length routes, well past the ten that may be reported, and asserts the documented ceiling still holds and that every reported route is a genuine three-step `Hub → M?? → Final` path with `path` among them.
+>
+> **Method note:** The card's word "distinct" was checked against the contract before being acted on, and it means distinct alternatives among themselves — not distinct from `path`. `tests/v16.test.ts:76` requires both same-length siblings to appear in `alternatives`, which only holds while the chosen path is part of the returned set, so excluding it would have broken a tested contract. That reading was confirmed against the test rather than assumed, and the slice is unchanged.
+
 ### A persistence lease can no longer publish, open, or erase a Unicode-alias cousin of the file it was given (FA-02)
 
 > **TL;DR:** **The lease resolved its target to an NFC-normalized basename, and all six consumers rebuild the storage path they publish to, open, or erase from that name — so on a byte-exact filesystem an operation addressed to an NFD-spelled file landed on its NFC twin instead. The lease now preserves the exact selected name and keeps Unicode-alias exclusion where it actually belongs: in the digest, which already folded the name.**
@@ -205,9 +229,9 @@ All notable changes to this project will be documented here. The format follows 
 
 - FTS5 schema **v7**: a sibling FTS5 table `chunk_parts` carries, for every identifier-bearing chunk, the words each compound identifier is spelled from (camelCase, upper-case runs, digit edges; NFC; bounded by truncation) next to a copy of that chunk's text. A search runs `chunks` exactly as v6 did and appends `chunk_parts`-only hits after every ranked hit with score 0 — found, never ranked — so `poolDayData` becomes reachable by "pool day data" while no rank moves for any query. (A weight-0 column inside `chunks` was measured on CI to move ranks: FTS5's bm25() normalises by the whole row's length.) An existing persistent index rebuilds once on first open; both schema admission maps admit v7.
 
-### Tests (2284)
+### Tests (2287)
 
-**2228 → 2284 source tests.** Forty-two new causal contracts cover the audit closures and staged embedding replacement above; table-driven phases additionally exercise rollback, authority ordering, fail-fast sync operations, clear/replacement interlocks, and promotion refusal without inflating the declared `it()` count.
+**2228 → 2287 source tests.** Forty-two new causal contracts cover the audit closures and staged embedding replacement above; table-driven phases additionally exercise rollback, authority ordering, fail-fast sync operations, clear/replacement interlocks, and promotion refusal without inflating the declared `it()` count.
 
 ### Maintainer handoff reflects the post-AH-4 repository state
 

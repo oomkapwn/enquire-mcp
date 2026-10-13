@@ -271,13 +271,22 @@ export async function buildWikilinkGraph(
       // Normalize: strip section/block, take just the target part.
       const target = link.target.split(/[#^]/)[0]?.trim();
       if (!target) continue;
-      // Resolution: try basename match, then path match.
-      const lookupKey = foldName(path.basename(target).replace(/\.md$/i, ""));
-      let toPath = byBasename.get(lookupKey);
-      if (!toPath) {
-        // Try direct path match.
+      // Resolution (v4.0.0-rc.8, FA-07): a PATH-QUALIFIED target resolves by its
+      // exact path FIRST. The basename index is first-wins-on-collision, so
+      // checking it first meant `[[Folder2/Sub]]` was captured by whichever
+      // unrelated note happened to hold the basename `Sub` first in walk order,
+      // and the exact-path branch below became unreachable whenever that
+      // collision existed. A bare target keeps its documented first-wins
+      // ambiguity unchanged — that behaviour is intentional, not an oversight.
+      let toPath: string | undefined;
+      if (target.includes("/")) {
         const candidate = target.endsWith(".md") ? target : `${target}.md`;
-        if (adj.has(candidate.replace(/\\/g, "/"))) toPath = candidate.replace(/\\/g, "/");
+        const normalized = candidate.replace(/\\/g, "/");
+        if (adj.has(normalized)) toPath = normalized;
+      }
+      if (!toPath) {
+        const lookupKey = foldName(path.basename(target).replace(/\.md$/i, ""));
+        toPath = byBasename.get(lookupKey);
       }
       if (!toPath || toPath === fromPath) continue;
       // Add edge in BOTH directions (undirected, weight 1 per direction).

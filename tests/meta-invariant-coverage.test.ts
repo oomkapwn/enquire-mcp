@@ -34,7 +34,7 @@ import { releaseMutationVersionedTransitionAuditProblems } from "./release-mutat
 
 const repoRoot = path.resolve(__dirname, "..");
 const RELEASE_MUTATION_IDENTITY_FIXTURE_SHA256 = "8205d24e6d42dd4cb8986368611514131abe701434beb30150e33ea08f4b1288";
-const RELEASE_MUTATION_TRANSITION_FIXTURE_SHA256 = "74daf8224e2ea23a326d571a7849683727016b8084549c4af991cae49463d686";
+const RELEASE_MUTATION_TRANSITION_FIXTURE_SHA256 = "27b7090fb408ea0d6700fb3098adf8c7d3a1e3a69cf7ea4e8f8af73000c83193";
 const releaseMutationIdentityFixturePath = path.join(repoRoot, "tests/fixtures/release-mutation-identity.v2.json");
 const releaseMutationTransitionFixturePath = path.join(repoRoot, "tests/fixtures/release-mutation-transition.v3.json");
 const releaseIntegritySourcePath = path.join(repoRoot, "tests/release-integrity.test.ts");
@@ -316,7 +316,7 @@ const EXPECTED_REPOSITORY_MUTATION_HELPER_CALL_ENTRIES = [
   ],
   [
     "k1-ast-invariant.test.ts",
-    { count: 4, sha256: "2a7d5ac80f8e1731a0264a1db9de79788dae4bf2b48e44082bedb937827c0fc3" }
+    { count: 4, sha256: "c7d3902e64f8c3869466febfd13cb051e30cd2da4b9246814c542fa0dde7e8b0" }
   ],
   [
     "k1-class-invariant.test.ts",

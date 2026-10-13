@@ -8,12 +8,7 @@
 //   • Tolerates missing breadcrumb / docTitle
 
 import { describe, expect, it } from "vitest";
-import {
-  embedChunkBudget,
-  MAX_EMBED_CHARS,
-  MAX_EMBED_NOTE_CHARS,
-  MIN_EMBED_CHARS
-} from "../src/embed-pipeline.js";
+import { embedChunkBudget, MAX_EMBED_CHARS, MAX_EMBED_NOTE_CHARS, MIN_EMBED_CHARS } from "../src/embed-pipeline.js";
 import { buildEmbedText } from "../src/index.js";
 
 describe("buildEmbedText (v2.15.0 late-chunking context windowing)", () => {

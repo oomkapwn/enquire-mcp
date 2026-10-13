@@ -4,6 +4,18 @@ All notable changes to this project will be documented here. The format follows 
 
 ## [4.0.0-rc.7] — 2026-08-31
 
+### A long vault path can no longer end pagination with a cursor the server itself rejects (F03)
+
+> **TL;DR:** **The cursor mint had no bound of its own. `decodeResourceCursor` rejects any token over `MAX_CURSOR_CHARS` (4096), but `encodeResourceCursor` minted one anyway: base64url grows as `ceil(bytes/3) × 4`, so a vault-relative path of 3070+ UTF-8 bytes produced a `nextCursor` that the very next `resources/list` call here rejected with `ResourceCursorError` — pagination failed at exactly the longest paths, at the client, with an error that named nothing. The producer and the decoder now share one bound, and a mint that cannot honor it refuses loudly instead.**
+>
+> **What could happen before.** A page cursor is minted only for the last entry of a full page, so the defect needed the longest path to land exactly at a page boundary — reachable with ~13 nested 240-byte components (well under `MAX_WALK_DEPTH = 64` and ext4's 255-byte `NAME_MAX`). The old outcome was the worst of the three possible: worse than failing at the mint, and worse than ending the listing, because the failure surfaced as JSON-RPC `-32602` — an *invalid-params* error blaming the client for a token this server itself produced.
+>
+> **Why refusing at the mint, not omitting the cursor.** Omitting `nextCursor` with entries still behind it would end the listing silently — the client believes the vault is exhausted and the remaining notes simply vanish from the listing. That is the failure mode this change exists to prevent, so the mint throws instead: a distinct `ResourceCursorMintError` naming the path's byte count and the shared bound, with the same documented recovery the other inventory budgets already print (bounded search tools, directly constructed `obsidian://note/<path>` URIs). The inbound failure stays `ResourceCursorError` → `-32602`, because a token the client mis-copies is genuinely the client's fault; a token the vault's own paths make unrepresentable is not.
+>
+> **Bounded claim.** This adds one check to `encodeResourceCursor` and one error class. It does not change the cursor format (`v1:` + base64url — a minted token decodes to the same path as before), the decoder's bound or its error mapping, the page size, walk order, or the exhaustive `listVaultNoteResources` inventory, which has no cursor protocol and still sees every entry regardless of path length. Paths under 3069 bytes — every path an ordinary vault produces — mint exactly the token they did before.
+>
+> **Method note:** The thresholds are derived, not estimated: 3069 ASCII bytes mint a 4096-character token the decoder still accepts; 3070 mint 4098 and both sides refuse. Every control's expected value was read off a stdlib mirror of the changed function before any commit — including the 3252-byte filesystem path whose mint throws, the 2753-byte one that still paginates, and the walk-order placement (`note-*.md` sorts before a `zz-deep…/` subtree, `zzz-tail.md` after it) that puts the long path exactly at entry #500 of a full page. The real-filesystem controls run on POSIX hosts (Linux ext4, macOS APFS) where such paths are constructible; on Windows the 260-character path limit makes an over-bound mint unreachable through the real filesystem, and the unit controls cover the bound itself on every host. Under D-45 no local test or build was run; hosted CI is the validation authority.
+
 ### The embedding input is now clamped on both build paths, with a per-note aggregate budget (FA-04)
 
 > **TL;DR:** **`MAX_EMBED_CHARS` only ever applied to the opt-in context-windowing path. The default path — what every user gets without opting in — returned `breadcrumb + chunk text` with no limit at all, and a note with many chunks could hand the embedder `chunkCount × MAX_EMBED_CHARS` characters in total. Both are now bounded, and the bound is applied to the breadcrumb *before* it is concatenated.**
@@ -258,9 +270,9 @@ All notable changes to this project will be documented here. The format follows 
 
 - FTS5 schema **v7**: a sibling FTS5 table `chunk_parts` carries, for every identifier-bearing chunk, the words each compound identifier is spelled from (camelCase, upper-case runs, digit edges; NFC; bounded by truncation) next to a copy of that chunk's text. A search runs `chunks` exactly as v6 did and appends `chunk_parts`-only hits after every ranked hit with score 0 — found, never ranked — so `poolDayData` becomes reachable by "pool day data" while no rank moves for any query. (A weight-0 column inside `chunks` was measured on CI to move ranks: FTS5's bm25() normalises by the whole row's length.) An existing persistent index rebuilds once on first open; both schema admission maps admit v7.
 
-### Tests (2297)
+### Tests (2303)
 
-**2228 → 2297 source tests.** Fifty-two new causal contracts cover the audit closures and staged embedding replacement above; table-driven phases additionally exercise rollback, authority ordering, fail-fast sync operations, clear/replacement interlocks, and promotion refusal without inflating the declared `it()` count.
+**2228 → 2303 source tests.** Fifty-eight new causal contracts cover the audit closures and staged embedding replacement above; table-driven phases additionally exercise rollback, authority ordering, fail-fast sync operations, clear/replacement interlocks, and promotion refusal without inflating the declared `it()` count.
 
 ### Maintainer handoff reflects the post-AH-4 repository state
 

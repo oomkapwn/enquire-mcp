@@ -11,6 +11,7 @@ import {
   pageVaultResources,
   RESOURCE_PAGE_LIMIT,
   ResourceCursorError,
+  ResourceCursorMintError,
   vaultResourceInfo
 } from "../src/resource-admission.js";
 import { Vault } from "../src/vault.js";
@@ -268,5 +269,151 @@ describe("F02: POSIX literal-backslash filename keeps one identity (AH-4 surface
     } finally {
       await fs.rm(paged, { recursive: true, force: true });
     }
+  });
+});
+
+// F03 — the cursor mint had no bound of its own. `decodeResourceCursor`
+// rejects any token over MAX_CURSOR_CHARS (4096), but `encodeResourceCursor`
+// happily minted one: base64url grows as ceil(bytes/3)*4, so a relPath of
+// 3070+ UTF-8 bytes produced a `nextCursor` the very next call here rejected
+// with `ResourceCursorError` — pagination broke at exactly the longest
+// paths, at the client, with an error that named nothing. The producer and
+// the decoder now share ONE bound: a mint that cannot honor it refuses
+// loudly (an omitted `nextCursor` would end the listing silently instead,
+// which is the failure mode this exists to prevent).
+describe("F03: the cursor mint honors the same bound the decoder enforces", () => {
+  // Exact thresholds derived from the shared constant, not estimated:
+  // 3069 ASCII bytes -> 4096-token chars (decoder accepts, bound inclusive);
+  // 3070 -> 4098 (both sides refuse).
+  const ASCII_MINT_MAX = 3069;
+
+  it("mints a round-tripping token at the exact supported boundary", () => {
+    const path = "x".repeat(ASCII_MINT_MAX);
+    const token = encodeResourceCursor(path);
+    expect(token).toHaveLength(4096);
+    expect(decodeResourceCursor(token)).toBe(path);
+  });
+
+  it("refuses to mint past the boundary instead of minting a self-rejected token", async () => {
+    const overlong = "x".repeat(ASCII_MINT_MAX + 1);
+    // Positive control: the OLD defect was that this mint SUCCEEDED and the
+    // decoder rejected the result. Both halves of that defect are pinned dead.
+    await expect(encodeResourceCursor(overlong)).rejects.toBeInstanceOf(ResourceCursorMintError);
+    await expect(encodeResourceCursor(overlong)).rejects.not.toBeInstanceOf(ResourceCursorError);
+    // The mint names the byte count and the shared bound.
+    await expect(encodeResourceCursor(overlong)).rejects.toThrow(
+      new RegExp(`${ASCII_MINT_MAX + 1}-byte path.*4096-character bound`, "s")
+    );
+    // And the decoder's own bound is untouched: a hand-built over-length
+    // token with a valid prefix still refuses inbound.
+    const handBuilt = Buffer.from(`v1:${overlong}`, "utf8").toString("base64url");
+    expect(() => decodeResourceCursor(handBuilt)).toThrow(ResourceCursorError);
+  });
+
+  it("round-trips a long multi-byte (Unicode) path through the same bound", () => {
+    // 1534 Cyrillic chars = 3068 UTF-8 bytes — under the byte boundary, so
+    // the token round-trips; base64url never mangles the payload.
+    const cyrillic = "я".repeat(1534);
+    const token = encodeResourceCursor(cyrillic);
+    expect(decodeResourceCursor(token)).toBe(cyrillic);
+  });
+
+  it("keeps a structural negative control that the mint consults the shared bound", () => {
+    const source = readFileSync(path.resolve(__dirname, "../src/resource-admission.ts"), "utf8");
+    expect(source).toContain("encoded.length > MAX_CURSOR_CHARS");
+    const mutant = replaceExactly(
+      source,
+      "encoded.length > MAX_CURSOR_CHARS",
+      "encoded.length > Number.MAX_SAFE_INTEGER"
+    );
+    expect(mutant).not.toContain("encoded.length > MAX_CURSOR_CHARS");
+  });
+
+  // The real-filesystem page control. A page cursor is minted only for the
+  // LAST entry of a FULL page, so the long path must land exactly at entry
+  // #500 in walk order with at least one entry behind it. Walk order is
+  // lexicographic on `${name}/` for directories (vault.ts noteWalkOrderKey),
+  // so `note-*.md` sorts before a `zz-deep…/` subtree and a `zzz-tail.md`
+  // sorts after it — the deep path is placed, not hoped for.
+  describe("real Linux filesystem pages", () => {
+    const POSIX = process.platform !== "win32";
+    /** Bytes of one path component: 239 < ext4/APFS 255-byte NAME_MAX. */
+    const COMPONENT = "d".repeat(239);
+
+    it("refuses to mint at a page boundary on an over-bound path (no silent drop)", async () => {
+      if (!POSIX) return;
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-f03-over-"));
+      try {
+        // 499 notes, then the deep subtree at walk position 500, then a tail
+        // file so the page is genuinely full and hasMore is true.
+        for (let i = 0; i < 499; i += 1) {
+          await fs.writeFile(path.join(root, `note-${String(i).padStart(4, "0")}.md`), "body");
+        }
+        let dir = root;
+        for (let i = 0; i < 13; i += 1) {
+          dir = path.join(dir, `zz-deep${i}-${COMPONENT}`);
+        }
+        await fs.mkdir(dir, { recursive: true });
+        await fs.writeFile(path.join(dir, "deep-over.md"), "# deep\n");
+        await fs.writeFile(path.join(root, "zzz-tail.md"), "body");
+
+        const vault = new Vault(root);
+        // The exhaustive inventory has no cursor protocol, so it still sees
+        // every entry: 501 notes, with the deep one past the mint bound.
+        const exhaustive = await listVaultNoteResources(vault);
+        expect(exhaustive).toHaveLength(501);
+        const deep = exhaustive.find((r) => r.description.includes("deep-over.md"));
+        expect(deep?.description.length, "the deep path is over the 3069-byte mint bound").toBeGreaterThan(3069);
+
+        // The mint fires on page 1: the deep path is entry #500 of a full
+        // page, so this call cannot resolve. The OLD behavior minted a cursor
+        // here that the next call rejected with ResourceCursorError; an
+        // omitted-nextCursor outcome (the silent drop) would have RESOLVED —
+        // the rejection itself is the no-silent-drop control.
+        await expect(pageVaultResources(vault)).rejects.toBeInstanceOf(ResourceCursorMintError);
+        await expect(pageVaultResources(vault)).rejects.not.toBeInstanceOf(ResourceCursorError);
+      } finally {
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("paginates to completion when a long real path stays inside the bound", async () => {
+      if (!POSIX) return;
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-f03-under-"));
+      try {
+        for (let i = 0; i < 520; i += 1) {
+          await fs.writeFile(path.join(root, `note-${String(i).padStart(4, "0")}.md`), "body");
+        }
+        // ~11 * 240 ≈ 2650 bytes of relPath — long, but under the 3069 bound.
+        let dir = root;
+        for (let i = 0; i < 11; i += 1) {
+          dir = path.join(dir, `zz-deep${i}-${COMPONENT}`);
+        }
+        await fs.mkdir(dir, { recursive: true });
+        await fs.writeFile(path.join(dir, "deep-under.md"), "# deep\n");
+
+        const vault = new Vault(root);
+        const seen: string[] = [];
+        let cursor: string | undefined;
+        do {
+          const page = await pageVaultResources(vault, cursor);
+          for (const r of page.resources) {
+            if (r.uri === "obsidian://vault/info") continue;
+            seen.push(r.description);
+          }
+          cursor = page.nextCursor;
+        } while (cursor !== undefined);
+
+        // Every emitted cursor round-tripped: the listing completed with no
+        // duplicate, no gap, and the long real path surfaced in a page.
+        expect(new Set(seen).size).toBe(seen.length);
+        expect(seen).toHaveLength(521);
+        const longOnes = seen.filter((p) => p.startsWith("zz-deep0-"));
+        expect(longOnes).toHaveLength(1);
+        expect(longOnes[0].length).toBeGreaterThan(2000);
+      } finally {
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    });
   });
 });

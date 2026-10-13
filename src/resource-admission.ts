@@ -97,6 +97,18 @@ export class ResourceCursorError extends Error {
 const CURSOR_PREFIX = "v1:";
 const MAX_CURSOR_CHARS = 4096;
 
+/** F03 — the mint refused to produce a token its own decoder would reject.
+ *  This is a property of the VAULT (a path too long for cursor pagination),
+ *  not of the client's request: the inbound-token failure stays
+ *  `ResourceCursorError` (JSON-RPC -32602), while this one surfaces as a
+ *  server-side error naming the path and the bound. */
+export class ResourceCursorMintError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ResourceCursorMintError";
+  }
+}
+
 /**
  * Mint the opaque continuation token for a page that ended at `lastRelPath`.
  *
@@ -104,13 +116,35 @@ const MAX_CURSOR_CHARS = 4096;
  * to be unguessable, and this one deliberately carries no vault-identifying
  * material beyond a path the same response already returned.
  *
+ * F03 — the producer and the decoder share ONE bound, `MAX_CURSOR_CHARS`.
+ * Before this, only the decoder was bounded: a relPath of ~3067+ UTF-8 bytes
+ * minted a token the very next `decodeResourceCursor` call rejected with
+ * `ResourceCursorError`, so pagination failed at exactly the longest paths,
+ * at the client, with an error that named nothing. A mint that cannot honor
+ * the bound now refuses loudly instead — an omitted `nextCursor` would end
+ * the listing silently, which is the failure mode this exists to prevent.
+ *
  * @param lastRelPath - Canonical vault-relative path of the page's final note.
  * @returns A base64url token to hand back as `nextCursor`.
+ * @throws {ResourceCursorMintError} If the encoded token would exceed the
+ *   decoder's `MAX_CURSOR_CHARS` bound — i.e. this vault holds a path too
+ *   long for cursor pagination. Bounded search tools and directly constructed
+ *   `obsidian://note/<path>` URIs remain the documented recovery.
  * @example
  * const nextCursor = encodeResourceCursor("Projects/plan.md");
  */
 export function encodeResourceCursor(lastRelPath: string): string {
-  return Buffer.from(`${CURSOR_PREFIX}${lastRelPath}`, "utf8").toString("base64url");
+  const encoded = Buffer.from(`${CURSOR_PREFIX}${lastRelPath}`, "utf8").toString("base64url");
+  if (encoded.length > MAX_CURSOR_CHARS) {
+    const bytes = Buffer.byteLength(lastRelPath, "utf8");
+    throw new ResourceCursorMintError(
+      `resources/list cursor for a ${bytes}-byte path would be ${encoded.length} characters, over the ` +
+        `${MAX_CURSOR_CHARS}-character bound shared with the decoder; this vault contains a path too long for ` +
+        `cursor pagination — discover notes through bounded search tools and construct ` +
+        `obsidian://note/<path> URIs directly`
+    );
+  }
+  return encoded;
 }
 
 /**

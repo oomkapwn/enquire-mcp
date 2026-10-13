@@ -294,14 +294,16 @@ describe("F03: the cursor mint honors the same bound the decoder enforces", () =
     expect(decodeResourceCursor(token)).toBe(path);
   });
 
-  it("refuses to mint past the boundary instead of minting a self-rejected token", async () => {
+  it("refuses to mint past the boundary instead of minting a self-rejected token", () => {
     const overlong = "x".repeat(ASCII_MINT_MAX + 1);
     // Positive control: the OLD defect was that this mint SUCCEEDED and the
     // decoder rejected the result. Both halves of that defect are pinned dead.
-    await expect(encodeResourceCursor(overlong)).rejects.toBeInstanceOf(ResourceCursorMintError);
-    await expect(encodeResourceCursor(overlong)).rejects.not.toBeInstanceOf(ResourceCursorError);
+    // The mint throws synchronously, so these are toThrow — `.rejects` would
+    // let the exception escape the assertion before expect() wraps it.
+    expect(() => encodeResourceCursor(overlong)).toThrow(ResourceCursorMintError);
+    expect(() => encodeResourceCursor(overlong)).not.toThrow(ResourceCursorError);
     // The mint names the byte count and the shared bound.
-    await expect(encodeResourceCursor(overlong)).rejects.toThrow(
+    expect(() => encodeResourceCursor(overlong)).toThrow(
       new RegExp(`${ASCII_MINT_MAX + 1}-byte path.*4096-character bound`, "s")
     );
     // And the decoder's own bound is untouched: a hand-built over-length

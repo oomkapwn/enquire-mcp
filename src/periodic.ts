@@ -12,6 +12,7 @@
 
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
+import { toVaultSlashPath } from "./vault-path-policy.js";
 import { stripSurroundingSlashes } from "./wildcard-match.js";
 
 export type PeriodicKind = "daily" | "weekly" | "monthly" | "quarterly" | "yearly";
@@ -123,7 +124,7 @@ async function readExactPeriodicConfig(vaultRoot: string, relPath: string, confi
 function normaliseFolder(folder: string): string {
   // Strip leading/trailing slashes, normalize backslashes, then re-add a
   // single trailing slash if non-empty so callers can concatenate cleanly.
-  const stripped = stripSurroundingSlashes(folder.replace(/\\/g, "/"));
+  const stripped = stripSurroundingSlashes(toVaultSlashPath(folder));
   return stripped ? `${stripped}/` : "";
 }
 

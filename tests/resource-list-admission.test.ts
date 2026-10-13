@@ -3,7 +3,9 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  decodeNotePath,
   decodeResourceCursor,
+  encodeNotePath,
   encodeResourceCursor,
   listVaultNoteResources,
   pageVaultResources,
@@ -143,5 +145,128 @@ describe("resource inventory admission", () => {
       "resourceBytes < 0"
     );
     expect(mutant).not.toContain("resourceBytes > MAX_RESOURCE_LIST_UTF8_BYTES - serializedBytes");
+  });
+});
+
+// F02 — a POSIX filename may legally contain a backslash. `toVaultSlashPath`
+// normalizes `\` to `/` only where `\` IS a separator (Windows); elsewhere it
+// left the name alone. Every `.replace(/\\/g, "/")` at the relPath call sites
+// undid that guard, splitting one file into two identities.
+//
+// These controls discriminate only where the two spellings are genuinely two
+// different files — Linux ext4 and macOS APFS, which is where hosted CI runs
+// the POSIX half. On Windows there is no backslash-in-a-name identity to
+// preserve, so the same invariant is asserted against the host's real two-
+// segment path rather than skipped: there, `a/b.md` IS what is on disk and
+// the assertion passes for the host's own semantics instead of for a fact the
+// test never checked.
+describe("F02: POSIX literal-backslash filename keeps one identity (AH-4 surface)", () => {
+  const LITERAL = process.platform !== "win32";
+  /** What the file is actually called on this host. */
+  const REL = LITERAL ? "a\\b.md" : "a/b.md";
+  /** What the old unconditional `.replace(/\\/g, "/")` would have claimed. */
+  const SPLIT_REL = "a/b.md";
+
+  let root = "";
+
+  beforeEach(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-f02-"));
+  });
+
+  afterEach(async () => {
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  /** Write the one name that means different things per platform. */
+  async function writeTheNote(target = root): Promise<void> {
+    if (LITERAL) {
+      await fs.writeFile(path.join(target, "a\\b.md"), "# body-a-b\n");
+      return;
+    }
+    await fs.mkdir(path.join(target, "a"), { recursive: true });
+    await fs.writeFile(path.join(target, "a", "b.md"), "# body-a-b\n");
+  }
+
+  it("advertises the note under the name that is actually on disk", async () => {
+    await writeTheNote();
+    const vault = new Vault(root);
+    const resources = await listVaultNoteResources(vault);
+    expect(resources).toHaveLength(1);
+    expect(resources[0].description).toBe(REL);
+    expect(resources[0].uri).toBe(`obsidian://note/${encodeNotePath(REL)}`);
+    if (LITERAL) {
+      // The old code advertised `a/b.md` — a path that addresses NOTHING in
+      // this vault, because no `a/` directory exists. That is the defect.
+      expect(resources[0].description).not.toBe(SPLIT_REL);
+      expect(resources[0].uri).not.toBe("obsidian://note/a/b.md");
+    }
+  });
+
+  it("round-trips the emitted URI back to the same note", async () => {
+    await writeTheNote();
+    const vault = new Vault(root);
+    const [resource] = await listVaultNoteResources(vault);
+    const uriPath = resource.uri.slice("obsidian://note/".length);
+    expect(decodeNotePath(uriPath)).toBe(REL);
+    // Not merely "the string round-trips" — the decoded identity reads the
+    // same body the inventory advertises.
+    const note = await vault.readNote(decodeNotePath(uriPath));
+    expect(note.content).toContain("body-a-b");
+  });
+
+  it("keeps a name whose tail only LOOKS reserved public", async () => {
+    // `x\.git` is one ordinary filename on POSIX. Splitting it yielded the
+    // segments `x` and `.git`, and the second is a reserved vault segment, so
+    // the note was excluded from the entire public surface.
+    if (!LITERAL) return;
+    await fs.writeFile(path.join(root, "x\\.git"), "# not-a-git-dir\n");
+    const vault = new Vault(root);
+    expect(vault.exclusionReason("x\\.git")).toBeNull();
+    const resources = await listVaultNoteResources(vault);
+    expect(resources.map((r) => r.description)).toEqual(["x\\.git"]);
+  });
+
+  it("still excludes a REAL reserved segment after normalization", async () => {
+    // Negative control: dropping normalization must not disable the reserved
+    // set. The backslash here is a genuine separator on every platform.
+    await fs.mkdir(path.join(root, "sub", ".obsidian"), { recursive: true });
+    await fs.writeFile(path.join(root, "sub", ".obsidian", "cfg.md"), "# secret\n");
+    await fs.writeFile(path.join(root, "sub", "ok.md"), "# fine\n");
+    const vault = new Vault(root);
+    const resources = await listVaultNoteResources(vault);
+    expect(resources.map((r) => r.description)).toEqual(["sub/ok.md"]);
+    expect(vault.exclusionReason("sub/.obsidian/cfg.md")).toBe("hidden or reserved vault path");
+  });
+
+  it("pages partition exactly the exhaustive admitted identities", async () => {
+    const paged = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-f02-page-"));
+    try {
+      await writeTheNote(paged);
+      await fs.writeFile(path.join(paged, "x\\.git"), "# not-a-git-dir\n");
+      for (let i = 0; i < RESOURCE_PAGE_LIMIT + 5; i += 1) {
+        await fs.writeFile(path.join(paged, `note-${String(i).padStart(4, "0")}.md`), "body");
+      }
+      const vault = new Vault(paged);
+      const exhaustive = (await listVaultNoteResources(vault)).map((r) => r.description);
+
+      const pagedIdentities: string[] = [];
+      let cursor: string | undefined;
+      do {
+        const page = await pageVaultResources(vault, cursor);
+        for (const r of page.resources) {
+          if (r.uri === "obsidian://vault/info") continue;
+          pagedIdentities.push(r.description);
+        }
+        cursor = page.nextCursor;
+      } while (cursor !== undefined);
+
+      // No duplicate, no gap, and the exotic names survived pagination.
+      expect(new Set(pagedIdentities).size).toBe(pagedIdentities.length);
+      expect([...pagedIdentities].sort()).toEqual([...exhaustive].sort());
+      expect(pagedIdentities).toContain(REL);
+      if (LITERAL) expect(pagedIdentities).toContain("x\\.git");
+    } finally {
+      await fs.rm(paged, { recursive: true, force: true });
+    }
   });
 });

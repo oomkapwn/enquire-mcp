@@ -19,7 +19,11 @@ import {
   readSensitiveArtifactText,
   removeSensitiveArtifactTemps
 } from "./sensitive-artifact.js";
-import { type RestrictedVaultPathReason, restrictedVaultPathReason } from "./vault-path-policy.js";
+import {
+  type RestrictedVaultPathReason,
+  restrictedVaultPathReason,
+  toVaultSlashPath
+} from "./vault-path-policy.js";
 import { compileGlobTokens, matchWildcardTokens } from "./wildcard-match.js";
 import { windowsRelativePathProblem } from "./windows-path.js";
 
@@ -240,8 +244,7 @@ export interface FileSourceState {
 const ENQUIRE_ROLLBACK_SEGMENT = ".enquire-rollback";
 
 function isEnquireRollbackRel(relPath: string): boolean {
-  const parts = relPath
-    .replace(/\\/g, "/")
+  const parts = toVaultSlashPath(relPath)
     .split("/")
     .filter((seg) => seg.length > 0 && seg !== ".");
   if (parts[0] !== ENQUIRE_ROLLBACK_SEGMENT || parts.length < 2) return false;
@@ -643,7 +646,7 @@ export class Vault {
 
   /** Return why a path is outside the public vault surface, or `null` when admitted. */
   exclusionReason(relPath: string): VaultExclusionReason | null {
-    const norm = relPath.replace(/\\/g, "/");
+    const norm = toVaultSlashPath(relPath);
     const restricted = restrictedVaultPathReason(norm);
     if (restricted) return restricted;
     return this.userExclusionReason(norm);
@@ -652,7 +655,7 @@ export class Vault {
   /** User-configured filters only. Trusted internal `.obsidian` config reads use this path. */
   private userExclusionReason(relPath: string): Exclude<VaultExclusionReason, "hidden or reserved vault path"> | null {
     if (this.excludeMatchers.length === 0 && this.readPathMatchers.length === 0) return null;
-    const norm = relPath.replace(/\\/g, "/");
+    const norm = toVaultSlashPath(relPath);
     if (this.readPathMatchers.length > 0 && !this.readPathMatchers.some((re) => re.test(norm))) {
       return "--read-paths allowlist (path doesn't match any allow-glob)";
     }
@@ -833,7 +836,7 @@ export class Vault {
       // Now we check isExcluded() using the live filter state for every
       // candidate and drop misses. The drop also marks the cache dirty,
       // so the next saveDiskCache writes the pruned snapshot back to disk.
-      if (this.isExcluded(relCheck.replace(/\\/g, "/"))) {
+      if (this.isExcluded(toVaultSlashPath(relCheck))) {
         return { kind: "drop", excludedByPrivacy: true } as const;
       }
       try {
@@ -1822,8 +1825,8 @@ export class Vault {
     if (content.length > this.maxFileBytes) {
       throw new Error(`Refusing to write ${content.length} bytes (limit ${this.maxFileBytes})`);
     }
-    const requestedAbs = this.resolveInside(destRel.replace(/\\/g, "/"));
-    const posix = vaultRelative(this.root, requestedAbs).replace(/\\/g, "/");
+    const requestedAbs = this.resolveInside(toVaultSlashPath(destRel));
+    const posix = vaultRelative(this.root, requestedAbs);
     const lexicalExclusion = this.exclusionReason(posix);
     if (lexicalExclusion) {
       throw new Error(`Refusing rollback recovery — snapshot source is excluded by ${lexicalExclusion}: ${posix}`);
@@ -1852,7 +1855,7 @@ export class Vault {
     }
     await this.assertRollbackRecoveryDirectory(recoveryRoot, "root");
     await this.assertRollbackRecoveryDirectory(namespaceAbs, "namespace");
-    const namespaceRel = vaultRelative(this.root, namespaceAbs).replace(/\\/g, "/");
+    const namespaceRel = vaultRelative(this.root, namespaceAbs);
     const recoveryRel = `${namespaceRel}/${path.posix.basename(posix)}`;
     if (!isEnquireRollbackRel(recoveryRel)) throw new Error(`Refusing rollback recovery path: ${recoveryRel}`);
     const result = await this.writeNoteContent(recoveryRel, content, {
@@ -2873,7 +2876,7 @@ export class Vault {
       // path into excluded files. v1.8.1: distinguish allowlist-miss from
       // explicit exclude-glob match in the error message so the user can
       // tell which flag is rejecting the path.
-      const norm = rel.replace(/\\/g, "/");
+      const norm = toVaultSlashPath(rel);
       const physicalExclusion = this.exclusionReason(norm);
       if (physicalExclusion) {
         throw new Error(`Path is excluded by ${physicalExclusion}: ${norm}`);
@@ -3322,7 +3325,7 @@ async function walkBoundedExtensions(
       continue;
     }
     if (!entry.isFile() || !extensions.has(path.extname(entry.name).toLowerCase())) continue;
-    const normalizedRelPath = relPath.replace(/\\/g, "/");
+    const normalizedRelPath = toVaultSlashPath(relPath);
     if (isExcluded(normalizedRelPath)) continue;
     if (state.entries.length >= maxFiles) {
       state.complete = false;
@@ -3420,7 +3423,7 @@ async function walkNotePage(
   for (const entry of ordered) {
     if (out.length > limit) return true;
     const full = path.join(dir, entry.name);
-    const relPath = vaultRelative(root, full).replace(/\\/g, "/");
+    const relPath = vaultRelative(root, full);
     if (restrictedVaultPathReason(relPath) || entry.isSymbolicLink()) continue;
     if (entry.isDirectory()) {
       if (depth >= MAX_WALK_DEPTH) continue;

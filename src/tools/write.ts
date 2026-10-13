@@ -4,6 +4,7 @@ import { parseFrontmatter, stringifyFrontmatter } from "../frontmatter.js";
 import { foldName, foldTag, lookupFoldedAny } from "../name-fold.js";
 import { resolvePeriodicNoteName } from "../periodic.js";
 import type { FileEntry, Vault } from "../vault.js";
+import { toVaultSlashPath } from "../vault-path-policy.js";
 import { foldForMatch, splitLinesWithEnds, stripTrailingSlashes } from "../wildcard-match.js";
 import { throwIfWriteAborted, WriteRequestAbortedError } from "../write-lifecycle.js";
 import { findBestMatch, stripMd } from "./meta.js";
@@ -325,7 +326,7 @@ export async function renameNote(
     destinationBefore = { path: canonicalToRel, before: await vault.readBinaryFile(toAbsCheck) };
   }
   const newBasename = stripMd(path.basename(toRelNorm));
-  const newDir = path.dirname(toRelNorm).replace(/\\/g, "/");
+  const newDir = toVaultSlashPath(path.dirname(toRelNorm));
   const entries = await vault.listMarkdown();
   const isDestinationEntry = (entry: FileEntry): boolean =>
     entry.absPath === toAbsCheck || vault.toRel(entry.absPath) === canonicalToRel;

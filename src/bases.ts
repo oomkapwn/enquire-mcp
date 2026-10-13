@@ -35,6 +35,7 @@ import { foldName, foldTag, lookupFoldedKey, nfc, nfcLower } from "./name-fold.j
 import { extractFrontmatterTags, extractInlineTags, extractWikilinks, stripCodeAndInline } from "./parser.js";
 import { MAX_SCAN_NOTES } from "./tools/limits.js";
 import type { Vault } from "./vault.js";
+import { toVaultSlashPath } from "./vault-path-policy.js";
 
 /** Top-level shape of a parsed `.base` file. Mirrors the Obsidian schema. */
 export interface ParsedBase {
@@ -676,7 +677,7 @@ export async function queryBase(vault: Vault, args: QueryBaseArgs): Promise<Base
       // case-SENSITIVE in Obsidian/Dataview. The `file.name ==` branch already folds via foldName
       // (NFC + case), idempotent under this normalize; the result projection (line ~346) keeps the
       // raw relPath verbatim.
-      path: e.relPath.replace(/\\/g, "/").normalize("NFC"),
+      path: toVaultSlashPath(e.relPath).normalize("NFC"),
       tags,
       frontmatter: fm,
       outbound,

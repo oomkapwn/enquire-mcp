@@ -2,6 +2,7 @@ import * as path from "node:path";
 import type { OcrTextExtractionLimits } from "../ocr.js";
 import type { PdfTextExtractionLimits } from "../pdf.js";
 import type { Vault } from "../vault.js";
+import { toVaultSlashPath } from "../vault-path-policy.js";
 import { findBestMatch } from "./meta.js";
 
 // ─── obsidian_list_canvases (v1.7) ──────────────────────────────────────────
@@ -253,7 +254,7 @@ export async function readCanvas(vault: Vault, args: { path: string }): Promise<
   // file-nodes), pinning serve-http for all clients. The `findBestMatch` basename fallback below
   // already resolves path-qualified targets via its own cached index.
   const byRelPath = new Map<string, (typeof allMarkdown)[number]>();
-  for (const m of allMarkdown) byRelPath.set(m.relPath.replace(/\\/g, "/"), m);
+  for (const m of allMarkdown) byRelPath.set(toVaultSlashPath(m.relPath), m);
   const nodes: CanvasNode[] = [];
   const summary = { text: 0, file: 0, link: 0, group: 0, unknown: 0 };
   const brokenRefs: string[] = [];

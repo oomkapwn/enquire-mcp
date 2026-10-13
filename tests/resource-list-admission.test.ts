@@ -337,13 +337,22 @@ describe("F03: the cursor mint honors the same bound the decoder enforces", () =
   // lexicographic on `${name}/` for directories (vault.ts noteWalkOrderKey),
   // so `note-*.md` sorts before a `zz-deep…/` subtree and a `zzz-tail.md`
   // sorts after it — the deep path is placed, not hoped for.
+  //
+  // Linux-only, and the card names Linux for a reason: Linux bounds only each
+  // component (NAME_MAX 255), so a 3.2KB vault-relative path is constructible.
+  // macOS bounds the WHOLE path at PATH_MAX=1024 bytes, so even a vault at a
+  // 3-character root cannot hold a boundary-length relPath — the first CI
+  // round hit ENAMETOOLONG (errno -63) building the fixture. Windows caps at
+  // 260 characters. On those hosts the over-bound mint is unreachable through
+  // the real filesystem, and the boundary itself stays covered by the unit
+  // controls above, which need no filesystem.
   describe("real Linux filesystem pages", () => {
-    const POSIX = process.platform !== "win32";
+    const LONG_PATH_HOST = process.platform === "linux";
     /** Bytes of one path component: 239 < ext4/APFS 255-byte NAME_MAX. */
     const COMPONENT = "d".repeat(239);
 
     it("refuses to mint at a page boundary on an over-bound path (no silent drop)", async () => {
-      if (!POSIX) return;
+      if (!LONG_PATH_HOST) return;
       const root = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-f03-over-"));
       try {
         // 499 notes, then the deep subtree at walk position 500, then a tail
@@ -380,7 +389,7 @@ describe("F03: the cursor mint honors the same bound the decoder enforces", () =
     });
 
     it("paginates to completion when a long real path stays inside the bound", async () => {
-      if (!POSIX) return;
+      if (!LONG_PATH_HOST) return;
       const root = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-f03-under-"));
       try {
         for (let i = 0; i < 520; i += 1) {

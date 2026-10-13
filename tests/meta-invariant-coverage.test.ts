@@ -347,7 +347,7 @@ const EXPECTED_REPOSITORY_MUTATION_HELPER_CALL_ENTRIES = [
   ],
   [
     "resource-list-admission.test.ts",
-    { count: 2, sha256: "3016d509d2d3d043f658ce9656336f931c2b6f849c076732b05c9fbd6f27f88e" }
+    { count: 2, sha256: "44c626fce260b9396c7c16be4f8fb15f41c111bd7f578ae1a6ecc658d9c1b41d" }
   ],
   [
     "sink-parity-invariant.test.ts",

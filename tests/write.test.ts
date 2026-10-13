@@ -1584,3 +1584,44 @@ describe("write-path code-fence classifier — inline-span desync (v3.11.5-rc.1)
     expect(r.content).toContain("[[Z]] out"); // real, rewritten (was skipped pre-rc.5)
   });
 });
+
+// ─── v4.0.0-rc.8 (FA-01 re-sweep, forward direction): a plan path the write path
+// cannot address must never be written. The plan reads each peer's own bytes via
+// its absolute path (no normalization), but `writeNote` trims the relative path it
+// is given — so rewriting a note named ` Dest.md` would read ITS content and write
+// it into the unrelated `Dest.md`, silently clobbering that note. The restore
+// direction of this asymmetry is guarded in restoreNoteSnapshots; these controls
+// pin the forward direction in both tools that rewrite vault-enumerated files.
+describe("forward rewrite target-addressing (FA-01 re-sweep)", () => {
+  it("rename_note refuses upfront when a backlink peer's path is not addressable, and the colliding note keeps its bytes", async () => {
+    const v = new Vault(root, { enableWrite: true });
+    await v.ensureExists();
+    await fs.writeFile(path.join(root, "Apollo.md"), "Apollo body.\n");
+    // On-disk non-canonical name: the write path resolves it to "Dest.md".
+    await fs.writeFile(path.join(root, " Dest.md"), "See [[Apollo]].\n");
+    await fs.writeFile(path.join(root, "Dest.md"), "# Unrelated\n\nUNRELATED-MUST-SURVIVE\n");
+    await expect(renameNote(v, { from: "Apollo.md", to: "Apollo Project.md" })).rejects.toThrow(
+      /Refusing to rename — a backlink-bearing file is not addressable/
+    );
+    // Transactional refusal: nothing moved, nothing written — and the note the
+    // trimmed name collides with kept its own bytes.
+    expect(await fs.readFile(path.join(root, "Apollo.md"), "utf8")).toBe("Apollo body.\n");
+    expect(await fs.readFile(path.join(root, "Dest.md"), "utf8")).toBe("# Unrelated\n\nUNRELATED-MUST-SURVIVE\n");
+    expect(await fs.readFile(path.join(root, " Dest.md"), "utf8")).toBe("See [[Apollo]].\n");
+  });
+
+  it("replace_in_notes refuses a non-addressable matching file into errors and keeps the colliding note intact", async () => {
+    const v = new Vault(root, { enableWrite: true });
+    await v.ensureExists();
+    await fs.writeFile(path.join(root, " Dest.md"), "# Spaced\n\nUNIQUE-NEEDLE-SENTINEL\n");
+    await fs.writeFile(path.join(root, "Dest.md"), "# Unrelated\n\nUNRELATED-MUST-SURVIVE\n");
+    const out = await replaceInNotes(v, { search: "UNIQUE-NEEDLE-SENTINEL", replace: "REPLACED" });
+    expect(out.files_updated).toEqual([]);
+    expect(out.partial).toBe(true);
+    expect(out.errors?.map((e) => e.path)).toContain(" Dest.md");
+    expect(await fs.readFile(path.join(root, "Dest.md"), "utf8")).toBe(
+      "# Unrelated\n\nUNRELATED-MUST-SURVIVE\n"
+    );
+    expect(await fs.readFile(path.join(root, " Dest.md"), "utf8")).toBe("# Spaced\n\nUNIQUE-NEEDLE-SENTINEL\n");
+  });
+});

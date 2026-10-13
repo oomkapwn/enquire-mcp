@@ -384,6 +384,21 @@ export async function renameNote(
     const { content: newContent, count } = rewriteOutsideCodeFences(content, oldRawsToNew);
     if (count === 0) continue;
 
+    // v4.0.0-rc.8 (FA-01 re-sweep, forward direction) — a peer whose on-disk name is
+    // not the canonical form the write path resolves (e.g. a leading-space ` Dest.md`)
+    // would have its rewritten content read from ITS OWN bytes (readNote above goes
+    // through absPath, which does not normalize) but WRITTEN into the trimmed name —
+    // silently clobbering an unrelated note. The write path cannot address such a
+    // name at all, so the rename refuses upfront, transactionally, before a single
+    // byte is written; the user can rename the oddly-named file and retry. The
+    // refusal fires only when this entry would actually have been written.
+    if (e.relPath !== e.relPath.trim()) {
+      throw new Error(
+        `Refusing to rename — a backlink-bearing file is not addressable by the write path ` +
+          `and its rewrite would land in a different file: ${e.relPath}`
+      );
+    }
+
     const proposal: RenameProposal = { path: e.relPath, rewrites: count, before: content, after: newContent };
     if (isSource) {
       // The source file's rewrite is held separately so we can write it last,
@@ -1080,6 +1095,19 @@ export async function replaceInNotes(
       oversized.push({
         path: e.relPath,
         message: `Refusing to rewrite — projected ${projected} bytes exceeds limit ${vault.maxFileBytes}`
+      });
+      continue;
+    }
+    // v4.0.0-rc.8 (FA-01 re-sweep, forward direction) — same guard as the rename
+    // path: the plan read this file's own bytes through absPath (no
+    // normalization), but writeNote trims the path it is given, so a
+    // non-canonical name (e.g. a leading space) would land the rewritten
+    // content in a DIFFERENT file. The batch is per-file by contract, so this
+    // one file is refused into `errors` and the rest of the batch proceeds.
+    if (e.relPath !== e.relPath.trim()) {
+      oversized.push({
+        path: e.relPath,
+        message: `Refusing to rewrite — path is not addressable by the write path and the rewrite would land in a different file`
       });
       continue;
     }

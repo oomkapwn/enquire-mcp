@@ -1619,9 +1619,7 @@ describe("forward rewrite target-addressing (FA-01 re-sweep)", () => {
     expect(out.files_updated).toEqual([]);
     expect(out.partial).toBe(true);
     expect(out.errors?.map((e) => e.path)).toContain(" Dest.md");
-    expect(await fs.readFile(path.join(root, "Dest.md"), "utf8")).toBe(
-      "# Unrelated\n\nUNRELATED-MUST-SURVIVE\n"
-    );
+    expect(await fs.readFile(path.join(root, "Dest.md"), "utf8")).toBe("# Unrelated\n\nUNRELATED-MUST-SURVIVE\n");
     expect(await fs.readFile(path.join(root, " Dest.md"), "utf8")).toBe("# Spaced\n\nUNIQUE-NEEDLE-SENTINEL\n");
   });
 });

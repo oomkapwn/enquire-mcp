@@ -215,15 +215,15 @@ describe("F02: POSIX literal-backslash filename keeps one identity (AH-4 surface
   });
 
   it("keeps a name whose tail only LOOKS reserved public", async () => {
-    // `x\.git` is one ordinary filename on POSIX. Splitting it yielded the
-    // segments `x` and `.git`, and the second is a reserved vault segment, so
+    // `x\.git.md` is one ordinary filename on POSIX. Splitting it yielded the
+    // segments `x` and `.git.md`, and the second starts with a dot, so
     // the note was excluded from the entire public surface.
     if (!LITERAL) return;
-    await fs.writeFile(path.join(root, "x\\.git"), "# not-a-git-dir\n");
+    await fs.writeFile(path.join(root, "x\\.git.md"), "# not-a-git-dir\n");
     const vault = new Vault(root);
-    expect(vault.exclusionReason("x\\.git")).toBeNull();
+    expect(vault.exclusionReason("x\\.git.md")).toBeNull();
     const resources = await listVaultNoteResources(vault);
-    expect(resources.map((r) => r.description)).toEqual(["x\\.git"]);
+    expect(resources.map((r) => r.description)).toEqual(["x\\.git.md"]);
   });
 
   it("still excludes a REAL reserved segment after normalization", async () => {
@@ -242,7 +242,7 @@ describe("F02: POSIX literal-backslash filename keeps one identity (AH-4 surface
     const paged = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-f02-page-"));
     try {
       await writeTheNote(paged);
-      await fs.writeFile(path.join(paged, "x\\.git"), "# not-a-git-dir\n");
+      await fs.writeFile(path.join(paged, "x\\.git.md"), "# not-a-git-dir\n");
       for (let i = 0; i < RESOURCE_PAGE_LIMIT + 5; i += 1) {
         await fs.writeFile(path.join(paged, `note-${String(i).padStart(4, "0")}.md`), "body");
       }
@@ -264,7 +264,7 @@ describe("F02: POSIX literal-backslash filename keeps one identity (AH-4 surface
       expect(new Set(pagedIdentities).size).toBe(pagedIdentities.length);
       expect([...pagedIdentities].sort()).toEqual([...exhaustive].sort());
       expect(pagedIdentities).toContain(REL);
-      if (LITERAL) expect(pagedIdentities).toContain("x\\.git");
+      if (LITERAL) expect(pagedIdentities).toContain("x\\.git.md");
     } finally {
       await fs.rm(paged, { recursive: true, force: true });
     }

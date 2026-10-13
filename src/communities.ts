@@ -28,9 +28,9 @@
 // to ~50K notes; full multi-phase Louvain is a future optimization.
 
 import * as path from "node:path";
-import { toVaultSlashPath } from "../vault-path-policy.js";
 import { foldName } from "./name-fold.js";
 import type { Vault } from "./vault.js";
+import { toVaultSlashPath } from "./vault-path-policy.js";
 
 /**
  * v3.9.0-rc.35 (external-audit AS#5 / R-B) — hard cap on the number of notes

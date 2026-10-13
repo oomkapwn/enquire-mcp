@@ -4,6 +4,20 @@ All notable changes to this project will be documented here. The format follows 
 
 ## [4.0.0-rc.7] — 2026-08-31
 
+### The resumable listing's cost is bounded by the resume path, not by the page — the overclaim is corrected and the work-bounded traversal is designed (F04)
+
+> **TL;DR:** **The AH-6 summary claimed the page "comes from a resumable walk whose cost is proportional to the page, not the vault". The second half is right; the first is false. `walkNotePage` re-reads and fully sorts the root directory on every page, and each directory on the path down to the resume point pays its own listing+sort. Per-page cost is bounded by the directory listings along the resume path — not by the page, and a genuinely work-bounded traversal requires a redesign that is designed here, not implemented.**
+>
+> **What the walk actually does, read from source.** On every page: `fs.readdir` reads the root's entire listing and sorts it; every directory the walk enters pays the same; completed subtrees sorting at or before the cursor are pruned whole (`canSkipNoteSubtree`), files at or before the cursor are skipped by comparison *before* their `stat`, and the walk stops one entry past the page. So the cost of a resumed page is `O(listings along the resume path + entries until the page fills)` — it does not scale with notes already returned, but it is not proportional to the page either. A vault whose root holds 100 000 notes pays that listing and sort for every page; a deep vault pays the listings along one path.
+>
+> **The explicit residual.** With `fs.readdir` as the only directory primitive — Node exposes no incremental `getdents`, no `telldir`/`seekdir` — the listings along the resume path are irreducible at this layer. The residual is stated where the claim was: the code comment and the AH-6 summary above now carry the truthful bound, and nothing in this change pretends the residual away.
+>
+> **The design, not the implementation.** A genuinely work-bounded resumable sparse traversal would keep a hierarchical cursor — a stack of `(directory, entry)` positions — and per step read exactly one directory listing, binary-search the resume name within it, and descend; cancellation is "stop calling", already honest today because the walk holds no partial state, no open handles and no cleanup, and every step is idempotent under an unchanged vault. What that design cannot escape without new primitives is the per-directory listing cost; what it can eliminate is re-listing *completed* directories across pages, which needs a listing cache keyed by `(path, mtime)` and a staleness contract — a materially broader change that the audit explicitly gates on an owner decision, and this entry does not implement it. No timing benchmark is offered or implied: these bounds are source arithmetic, the same standard the resource budgets already use.
+>
+> **Bounded claim.** This changes one comment and one unreleased summary line — no behavior. The walk, the cursor format, the page size, the partition guarantee and the exhaustive inventory are untouched. A structural control pins the truthful claim in source: restoring the old "proportional to the page" wording makes the control red, so the overclaim cannot silently return.
+>
+> **Method note:** the cost model was read from `walkNotePage` line by line — the readdir, the sort, the subtree prune, the pre-cursor file skip before `stat` — rather than inferred from the claim it replaces; the AH-6 entry itself documents that its first version had to be corrected once already (a different overclaim, AH-6b), which is the precedent for correcting this one in place before release. Under D-45 no local test or build was run; hosted CI is the validation authority.
+
 ### A long vault path can no longer end pagination with a cursor the server itself rejects (F03)
 
 > **TL;DR:** **The cursor mint had no bound of its own. `decodeResourceCursor` rejects any token over `MAX_CURSOR_CHARS` (4096), but `encodeResourceCursor` minted one anyway: base64url grows as `ceil(bytes/3) × 4`, so a vault-relative path of 3070+ UTF-8 bytes produced a `nextCursor` that the very next `resources/list` call here rejected with `ResourceCursorError` — pagination failed at exactly the longest paths, at the client, with an error that named nothing. The producer and the decoder now share one bound, and a mint that cannot honor it refuses loudly instead.**
@@ -184,7 +198,7 @@ All notable changes to this project will be documented here. The format follows 
 
 ### `resources/list` answers in bounded pages with an opaque cursor (AH-6)
 
-> **TL;DR:** **`resources/list` answers in bounded pages with an opaque continuation cursor, for a vault of any size — the page comes from a resumable walk whose cost is proportional to the page, not the vault.**
+> **TL;DR:** **`resources/list` answers in bounded pages with an opaque continuation cursor, for a vault of any size — the page comes from a resumable walk whose cost is bounded by the directory listings along the resume path, not by the vault and not by the page (F04 corrected the original "proportional to the page" claim; see the F04 entry below).**
 >
 > **Corrected before release, then actually closed (AH-6b).** The first version of this entry claimed the beyond-budget vault receives a page; it did not — the page was sliced from `listVaultNoteResources`, which refuses an incomplete walk. The post-merge re-sweep caught that overclaim (the function's own `@throws` had conceded the limit while the summary denied it), and rather than leave the violation recorded as open, the walk itself is now resumable: `Vault#listNotePage` orders each directory's entries so a depth-first walk emits globally sorted paths, prunes whole subtrees that sort at or below the cursor, and stops one entry past the page. A page therefore needs no completeness receipt and no total, and an unreadable subdirectory is skipped rather than denying the listing. The exhaustive `listFilesByExtensionsBounded` is untouched for its existing callers, including the exact note count `vaultResourceInfo` genuinely requires.
 >
@@ -270,9 +284,9 @@ All notable changes to this project will be documented here. The format follows 
 
 - FTS5 schema **v7**: a sibling FTS5 table `chunk_parts` carries, for every identifier-bearing chunk, the words each compound identifier is spelled from (camelCase, upper-case runs, digit edges; NFC; bounded by truncation) next to a copy of that chunk's text. A search runs `chunks` exactly as v6 did and appends `chunk_parts`-only hits after every ranked hit with score 0 — found, never ranked — so `poolDayData` becomes reachable by "pool day data" while no rank moves for any query. (A weight-0 column inside `chunks` was measured on CI to move ranks: FTS5's bm25() normalises by the whole row's length.) An existing persistent index rebuilds once on first open; both schema admission maps admit v7.
 
-### Tests (2303)
+### Tests (2304)
 
-**2228 → 2303 source tests.** Fifty-eight new causal contracts cover the audit closures and staged embedding replacement above; table-driven phases additionally exercise rollback, authority ordering, fail-fast sync operations, clear/replacement interlocks, and promotion refusal without inflating the declared `it()` count.
+**2228 → 2304 source tests.** Fifty-eight new causal contracts cover the audit closures and staged embedding replacement above; table-driven phases additionally exercise rollback, authority ordering, fail-fast sync operations, clear/replacement interlocks, and promotion refusal without inflating the declared `it()` count.
 
 ### Maintainer handoff reflects the post-AH-4 repository state
 

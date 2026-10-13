@@ -428,3 +428,27 @@ describe("F03: the cursor mint honors the same bound the decoder enforces", () =
     });
   });
 });
+
+// F04 — the AH-6 summary claimed the page "comes from a resumable walk whose
+// cost is proportional to the page, not the vault". The second half holds;
+// the first does not: walkNotePage re-lists and fully sorts the ROOT on every
+// page, and each directory on the path to the resume point pays its own
+// listing. The truthful bound — directory listings along the resume path, not
+// the page — is now stated where the claim was. This control pins it in
+// source so the overclaim cannot silently return.
+describe("F04: the resumable listing's cost claim matches the walk's source", () => {
+  it("keeps a structural control for the truthful page-cost residual", () => {
+    const source = readFileSync(path.resolve(__dirname, "../src/resource-admission.ts"), "utf8");
+    // Positive: the truthful bound is stated at the call site.
+    expect(source).toContain("NOT page-proportional (F04)");
+    expect(source).toContain("bounded by the directory listings along the resume");
+    // Negative: restoring the old overclaim makes this control red — the
+    // mutant swaps the truthful marker back to the false claim.
+    const mutant = replaceExactly(
+      source,
+      "// Resumable, but NOT page-proportional (F04): every page re-lists and fully",
+      "// Resumable: the page costs a walk proportional to the PAGE, and needs no"
+    );
+    expect(mutant).not.toContain("NOT page-proportional (F04)");
+  });
+});

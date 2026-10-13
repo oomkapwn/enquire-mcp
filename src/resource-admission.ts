@@ -204,10 +204,22 @@ export async function pageVaultResources(
   cursor?: string
 ): Promise<{ resources: PagedResourceEntry[]; nextCursor?: string }> {
   const after = cursor === undefined ? undefined : decodeResourceCursor(cursor);
-  // Resumable: the page costs a walk proportional to the PAGE, and needs no
-  // completeness receipt — which is what lets a vault of any size be listed at
-  // all. `listVaultNoteResources` remains the exhaustive path for the note
-  // count in `vaultResourceInfo`, where an exact total genuinely is required.
+  // Resumable, but NOT page-proportional (F04): every page re-lists and fully
+  // sorts the ROOT directory, and each directory on the path down to the
+  // resume point pays its own listing+sort; completed subtrees are pruned
+  // whole (canSkipNoteSubtree), so the cost does not scale with notes already
+  // returned — but it is bounded by the directory listings along the resume
+  // path, not by the page. A vault with one enormous root directory pays that
+  // listing for every page. This is the explicit residual of the current
+  // design; a genuinely work-bounded traversal (hierarchical cursor, one
+  // directory listed per step) is designed in the F04 changelog entry and is
+  // gated on an explicit owner decision, because fs.readdir is Node's only
+  // directory primitive here — per-step incremental reads would need a dirent
+  // cache or a different primitive, which is a redesign, not a patch.
+  // No completeness receipt is needed — which is what lets a vault of any
+  // size be listed at all. `listVaultNoteResources` remains the exhaustive
+  // path for the note count in `vaultResourceInfo`, where an exact total
+  // genuinely is required.
   const page = await vault.listNotePage([".md"], RESOURCE_PAGE_LIMIT, after);
   const slice = page.entries.map(
     (entry): VaultNoteResource => ({

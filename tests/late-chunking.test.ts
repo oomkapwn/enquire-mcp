@@ -9,10 +9,10 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  embedChunkBudget,
   MAX_EMBED_CHARS,
   MAX_EMBED_NOTE_CHARS,
-  MIN_EMBED_CHARS,
-  embedChunkBudget
+  MIN_EMBED_CHARS
 } from "../src/embed-pipeline.js";
 import { buildEmbedText } from "../src/index.js";
 
@@ -135,11 +135,9 @@ describe("buildEmbedText (v2.15.0 late-chunking context windowing)", () => {
   // without opting into context windowing.
   describe("FA-04: the input is clamped on both paths, and a note has an aggregate budget", () => {
     it("clamps the DEFAULT path (contextChars <= 0), which previously had no clamp", () => {
-      // 1200 headings × 12 chars + 1199 × " > " ≈ 18K chars — over the 8000
-      // budget on the breadcrumb alone, so the old code returned it verbatim.
-      const longBreadcrumb = Array.from({ length: 1200 }, (_, i) => `H${String(i).padStart(3, "0")}-heading`).join(
-        " > "
-      );
+      // 700 headings joined by " > " — over the 8000 budget on the breadcrumb
+      // alone, so the old code returned it verbatim.
+      const longBreadcrumb = Array.from({ length: 700 }, (_, i) => `H${i}-heading`).join(" > ");
       const out = buildEmbedText([{ text: "core note body", breadcrumb: longBreadcrumb }], 0, { contextChars: 0 });
       // Positive control: the input really did overflow the budget.
       expect(longBreadcrumb.length).toBeGreaterThan(MAX_EMBED_CHARS);
@@ -179,11 +177,7 @@ describe("buildEmbedText (v2.15.0 late-chunking context windowing)", () => {
     });
 
     it("honours a caller-supplied per-chunk budget on the contextual path", () => {
-      const parts = [
-        { text: "A".repeat(2000) },
-        { text: "B".repeat(2000) },
-        { text: "C".repeat(2000) }
-      ];
+      const parts = [{ text: "A".repeat(2000) }, { text: "B".repeat(2000) }, { text: "C".repeat(2000) }];
       // Same input, only the budget differs — so any length difference is
       // attributable to `budgetChars` and nothing else.
       const tight = buildEmbedText(parts, 1, { contextChars: 1000, docTitle: "Doc", budgetChars: 900 });

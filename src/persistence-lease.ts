@@ -50,7 +50,12 @@ export interface PersistenceLeaseScope {
   readonly canonicalParent: string;
   /** Device/inode identity pinned when the canonical parent was resolved. */
   readonly parentIdentity: PersistenceLeaseParentIdentity;
-  /** Canonical basename used in the scope digest. */
+  /**
+   * EXACT on-disk basename of the selected target — the same spelling the
+   * caller selected, never a normalized rewrite (FA-02). Used both in the
+   * scope digest (which folds it, so Unicode-alias spellings of one logical
+   * target share one lease) and by consumers to rebuild the storage path.
+   */
   readonly targetName: string;
   /** Caller-supplied semantic persistence family. */
   readonly familyKey: string;
@@ -1556,9 +1561,23 @@ async function targetCanonicalName(absoluteTarget: string, canonicalParent: stri
     if (path.dirname(targetReal) !== canonicalParent) {
       throw new PersistenceLeaseIntegrityError("Persistence lease target escaped its canonical real parent");
     }
-    return path.basename(targetReal).normalize("NFC");
+    // v4.0.0-rc.8 (FA-02) — the EXACT on-disk basename, never a normalized spelling.
+    // This name is not only a lease identity: every consumer rebuilds the very
+    // storage path it publishes to, opens, or erases from
+    // `path.join(canonicalParent, targetName)`. On a byte-exact filesystem an
+    // NFD spelling and its NFC twin are two different files, so a normalized
+    // name redirected erasure/publish onto whichever cousin happened to exist
+    // in the other form (and made an absent selected target look present when
+    // its alias existed). The alias SAFETY lives one layer down instead:
+    // persistenceScopeDigest folds the name (NFC + case) so both spellings of
+    // one logical target still share one lease scope and cannot bypass mutual
+    // exclusion — that guard is preserved by construction.
+    return path.basename(targetReal);
   } catch (error) {
-    if (errorCode(error) === "ENOENT") return path.basename(absoluteTarget).normalize("NFC");
+    // Absent selected target: the exact spelling the caller selected, so an
+    // operation on it stays on it instead of materializing at a normalized
+    // cousin that may exist.
+    if (errorCode(error) === "ENOENT") return path.basename(absoluteTarget);
     throw error;
   }
 }
@@ -1585,7 +1604,6 @@ export async function revalidatePersistenceLeaseScope(scope: PersistenceLeaseSco
     typeof scope.targetName !== "string" ||
     scope.targetName.length === 0 ||
     path.basename(scope.targetName) !== scope.targetName ||
-    scope.targetName !== scope.targetName.normalize("NFC") ||
     !hasExactFileIdentity(scope.parentIdentity) ||
     (namespaceIdentity !== undefined &&
       (typeof namespaceIdentity !== "object" ||

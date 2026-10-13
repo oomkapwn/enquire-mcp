@@ -121,8 +121,8 @@ interface HttpServeCli extends Omit<ServeOptions, "tokenize"> {
  * `--index-file` is a dedicated index the caller owns; privacy-filtered sync
  * there remains the M-8 contract. The selected parent is canonicalized before
  * discovery/open so stable lexical parent aliases converge, while the exact
- * leaf spelling remains the caller-selected storage path rather than the
- * NFC/folded lease identity. An
+ * leaf spelling remains the caller-selected storage path — which, since FA-02,
+ * `targetName` preserves verbatim (the lease digest folds it separately). An
  * identity-resolution failure is not proof of a dedicated target and
  * therefore fails closed by withholding sync.
  * Privacy on that shared or unproven destination also skips `open()` unless
@@ -151,9 +151,14 @@ async function resolvePersistentFtsReadTarget(
   } catch {
     return { file: indexFile, shouldSync: false };
   }
-  // `targetName` is an NFC-normalized lease identity, not a storage pathname.
-  // Preserve the exact caller-selected leaf so a normalization-sensitive
-  // filesystem cannot redirect an existing NFD index to a new NFC sibling.
+  // v4.0.0-rc.8 (FA-02) — `targetName` now IS the exact caller-selected leaf
+  // (`targetCanonicalName` no longer NFC-normalizes it), so this re-join and
+  // `selected.canonicalParent + selected.targetName` name one identical file.
+  // The explicit re-join stays because its result IS the returned read target,
+  // and deriving it from the caller's own `indexFile` keeps that pathname the
+  // caller's exact selection — never a lease-side spelling rewrite. It also
+  // stays correct where a normalization-insensitive filesystem reports a
+  // different on-disk form than the caller typed.
   const canonicalSelected = path.join(selected.canonicalParent, path.basename(path.resolve(indexFile)));
   const sharedFile = defaultIndexFile(vaultRoot);
   try {

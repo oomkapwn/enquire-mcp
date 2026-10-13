@@ -1453,3 +1453,101 @@ describe("portable cross-process persistence lease", () => {
     await lease.release();
   });
 });
+
+// ─── FA-02 (2026-10-13 audit card): the EXACT selected persistence target must
+// survive the lease's normalized identity. `targetCanonicalName` used to return
+// an NFC-normalized basename, and every consumer rebuilds the storage path it
+// publishes/opens/erases from `path.join(canonicalParent, targetName)` — so on
+// a byte-exact filesystem an NFD spelling and its NFC twin were two different
+// files, and the normalized name redirected the operation onto whichever
+// cousin existed in the other form (or made an absent selected target look
+// present). The alias SAFETY is separate and stays: the scope digest folds the
+// name, so both spellings of one logical target still share one lease.
+describe("exact selected persistence target (FA-02: NFD/NFC)", () => {
+  const NFC_BASE = "caf\u00e9.artifact"; // é precomposed
+  const NFD_BASE = "cafe\u0301.artifact"; // e + combining acute
+
+  // Byte-exact filesystems (Linux ext4, Windows NTFS) keep both spellings as
+  // two files; normalization-insensitive ones (macOS APFS) map them to one.
+  // The distinct-file controls are only meaningful on the former; the probe
+  // keeps the suite honest on the latter instead of asserting impossibilities.
+  async function probeByteExactFilesystem(root: string): Promise<boolean> {
+    await fs.writeFile(path.join(root, NFC_BASE), "nfc");
+    try {
+      await fs.writeFile(path.join(root, NFD_BASE), "nfd");
+      return (await fs.readFile(path.join(root, NFC_BASE), "utf8")) === "nfc";
+    } finally {
+      await fs.rm(path.join(root, NFC_BASE), { force: true });
+      await fs.rm(path.join(root, NFD_BASE), { force: true });
+    }
+  }
+
+  it("resolves each existing Unicode-alias spelling to its own exact name while both share one lease digest", async () => {
+    const f = await fixture();
+    if (!(await probeByteExactFilesystem(f.root))) return;
+    await fs.writeFile(path.join(f.root, NFC_BASE), "nfc-bytes\n");
+    await fs.writeFile(path.join(f.root, NFD_BASE), "nfd-bytes\n");
+    const nfc = await resolvePersistenceLeaseScope({ targetPath: path.join(f.root, NFC_BASE), familyKey: "embed-db" });
+    const nfd = await resolvePersistenceLeaseScope({ targetPath: path.join(f.root, NFD_BASE), familyKey: "embed-db" });
+    // EXACT names: each scope names the file it selected, in that file's own
+    // spelling. (Pre-FA-02 both came back NFC — silently one file's identity.)
+    expect(nfc.targetName).toBe(NFC_BASE);
+    expect(nfd.targetName).toBe(NFD_BASE);
+    // The alias guard is preserved by construction: one fold in the digest.
+    expect(nfd.digest).toBe(nfc.digest);
+  });
+
+  it("keeps an absent selected target on its exact spelling instead of a normalized cousin", async () => {
+    const f = await fixture();
+    if (!(await probeByteExactFilesystem(f.root))) return;
+    // Only the NFC twin exists; the caller selected the NFD spelling.
+    await fs.writeFile(path.join(f.root, NFC_BASE), "twin-bytes\n");
+    const scope = await resolvePersistenceLeaseScope({ targetPath: path.join(f.root, NFD_BASE), familyKey: "embed-db" });
+    // The scope names the exact selected spelling — NOT the existing twin.
+    expect(scope.targetName).toBe(NFD_BASE);
+    // And the path consumers reconstruct from it stays on the absent target:
+    // erasure/publish of the selection finds ENOENT, never the cousin.
+    const reconstructed = path.join(scope.canonicalParent, scope.targetName);
+    await expect(fs.lstat(reconstructed)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await fs.readFile(path.join(f.root, NFC_BASE), "utf8")).toBe("twin-bytes\n");
+  });
+
+  it("keeps cross-alias lease mutual exclusion: a publisher on one spelling conflicts with an eraser on the other", async () => {
+    const f = await fixture();
+    if (!(await probeByteExactFilesystem(f.root))) return;
+    await fs.writeFile(path.join(f.root, NFD_BASE), "held\n");
+    const publisher = await acquirePersistenceLease({
+      targetPath: path.join(f.root, NFD_BASE),
+      familyKey: "feedback-v1",
+      role: "publisher"
+    });
+    try {
+      // The eraser selects the OTHER spelling of the same logical target.
+      // The digest folds both to one scope, so exclusion must still fire —
+      // this is the lease alias guard the FA-02 fix must preserve.
+      await expect(
+        acquirePersistenceLease({
+          targetPath: path.join(f.root, NFC_BASE),
+          familyKey: "feedback-v1",
+          role: "eraser"
+        })
+      ).rejects.toBeInstanceOf(PersistenceLeaseConflictError);
+    } finally {
+      await publisher.release();
+    }
+  });
+
+  it("revalidation still admits an absent exact-spelled target (publishers pin a scope before creating the file)", async () => {
+    const f = await fixture();
+    if (!(await probeByteExactFilesystem(f.root))) return;
+    // The NFD spelling is selected and absent; its NFC twin exists. The pinned
+    // scope must carry the EXACT selection and remain revalidatable — the
+    // publish flow acquires its lease before the first byte exists. (Pre-FA-02
+    // the pinned name was the twin's, so a later path reconstruction would have
+    // operated on the twin instead of the selected target.)
+    await fs.writeFile(path.join(f.root, NFC_BASE), "twin-bytes\n");
+    const scope = await resolvePersistenceLeaseScope({ targetPath: path.join(f.root, NFD_BASE), familyKey: "embed-db" });
+    expect(scope.targetName).toBe(NFD_BASE);
+    await expect(revalidatePersistenceLeaseScope(scope)).resolves.toBeUndefined();
+  });
+});

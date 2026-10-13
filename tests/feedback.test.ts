@@ -655,3 +655,47 @@ describe("server.ts feedback keying (rc.8 fix-site gate, rc.12)", () => {
     expect(src).not.toMatch(/defaultFeedbackFile\(\s*opts\.vault\s*\)/);
   });
 });
+
+// ─── FA-02 consumer control: erasing a SELECTED feedback store must act on the
+// exact selected file. `targetCanonicalName` used to NFC-normalize the target
+// name, so on a byte-exact filesystem clearing an absent NFD-spelled sidecar
+// resolved to the EXISTING NFC twin and unlinked it — the wrong file, gone.
+// The lease-level contract controls live in persistence-lease.test.ts; this
+// one proves the consumer wiring end to end.
+describe("clearOnDisk exact selected target (FA-02)", () => {
+  const NFC_FEEDBACK = "caf\u00e9.feedback.json"; // é precomposed
+  const NFD_FEEDBACK = "cafe\u0301.feedback.json"; // e + combining acute
+
+  it("clearing an absent NFD-selected feedback file never erases its NFC twin", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-fa02-feedback-"));
+    try {
+      // Byte-exact FS probe: on a normalization-insensitive FS both spellings
+      // are one file, the NFD selection IS the twin, and removing it is the
+      // correct outcome there — those hosts assert their own truth.
+      await fs.writeFile(path.join(root, NFC_FEEDBACK), "twin-bytes\n");
+      let byteExact = true;
+      try {
+        await fs.writeFile(path.join(root, NFD_FEEDBACK), "probe\n");
+        byteExact = (await fs.readFile(path.join(root, NFC_FEEDBACK), "utf8")) === "twin-bytes\n";
+      } finally {
+        await fs.rm(path.join(root, NFD_FEEDBACK), { force: true });
+        await fs.writeFile(path.join(root, NFC_FEEDBACK), "twin-bytes\n");
+      }
+      const removed = await FeedbackStore.clearOnDisk(path.join(root, NFD_FEEDBACK));
+      if (byteExact) {
+        // The selected NFD file is absent: nothing is removed, and the NFC
+        // twin — a DIFFERENT file the caller never selected — keeps its bytes.
+        // (Pre-FA-02 the normalized name resolved to the twin and unlinked it.)
+        expect(removed).toBe(false);
+        expect(await fs.readFile(path.join(root, NFC_FEEDBACK), "utf8")).toBe("twin-bytes\n");
+      } else {
+        // Normalization-insensitive host: the selection and the twin are the
+        // same file, so removing the selection legitimately removes it.
+        expect(removed).toBe(true);
+        await expect(fs.lstat(path.join(root, NFC_FEEDBACK))).rejects.toMatchObject({ code: "ENOENT" });
+      }
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+});

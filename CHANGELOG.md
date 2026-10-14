@@ -1,4 +1,4 @@
-plain# Changelog
+# Changelog
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
@@ -17,7 +17,6 @@ All notable changes to this project will be documented here. The format follows 
 > **Bounded claim.** One boolean threaded through the loop and one conditional increment. The plan, the preflight, the namespace eraser, the pinned-scope revalidation on both sides of the unlink, the sensitive-artifact branch and its throw, the byte estimate and the result shape are untouched. The byte total stays a **pre-removal estimate**, which the interface comment now says explicitly rather than leaving "best-effort byte total" to carry it.
 >
 > **Method note:** the control simulates the real race rather than mocking the counter — `fs.unlink` is spied so the preflighted `.json` entry is genuinely deleted and then raises a genuine `ENOENT`, while a sibling `.fts5.db` entry unlinks normally. It asserts all three things the change distinguishes: both targets appear in `removable` (the plan is unchanged), `removed` is `1` not `2` (the count is honest), and both paths are absent afterwards (the postcondition is unchanged). Without the fix that control fails on the count alone. Under D-45 no local test or build was run; hosted CI is the validation authority.
->>>>>>> 0674f78 (fix: a prune that removed nothing no longer reports an artifact removed (F06))
 
 ### A marker written as a heading is finally matched, as the contract already promised (FA-09)
 
@@ -30,7 +29,6 @@ All notable changes to this project will be documented here. The format follows 
 > **Bounded claim.** The change is one branch: the `continue` is replaced by the heading assignment, and the candidate accounting below it is untouched. **One deliberate consequence, stated rather than hidden: heading lines are now admitted work**, so they are charged against `maxCandidates` and `maxCandidateUtf8Bytes` like any other candidate — a note whose headings match nothing costs nothing, but a vault of marker-headings now consumes budget it previously could not. The limits, the budgets, the result projection, the retention heap, `limit`, the retry/worker paths, and the list/blockquote/numbered forms are unchanged. Custom patterns reach heading lines too, which is the same fix seen from the other side.
 >
 > **Method note:** the premise was mirrored, not assumed — the real default pattern compiled standalone confirms all four markers in heading form (`# Q:`, `## Open question:`, `## TODO?`, `### ??`) capture their text, that `- Q:` / `> Q:` still capture as before, and that `# Design notes`, `# Background`, `# ###` and a plain line capture nothing. One probe expectation was dropped as over-reaching rather than encoded: `#Open question:` with no space does not match, because the prefix group requires `\s+` — that is the pattern's long-standing behaviour, not something this change alters, so no test claims it. Under D-45 no local test or build was run; hosted CI is the validation authority.
->>>>>>> 00d39bb (fix: a marker written as a heading is matched, as the contract promised (FA-09))
 
 ### An audit process crash is no longer reported as the endpoint timing out (FA-06)
 
@@ -57,8 +55,6 @@ All notable changes to this project will be documented here. The format follows 
 > **Bounded claim.** One new unexported helper plus its two call sites. The catalogs' entries, keys, `Object.keys` order and freeze state are unchanged — `Object.keys(EMBEDDING_MODELS)` still returns exactly `["multilingual", "bge"]` — and the resolver error messages, the CLI's unknown-alias branch, doctor's read, the default aliases and every model id are untouched. Three controls: five inherited keys refused by both resolvers with the unknown-alias error; `in` false and bracket lookup `undefined` for the same five on both catalogs; and the known aliases still resolving with the catalog shape and frozen state asserted, so the admission change is pinned not to over-tighten. **Not proven and not claimed:** no arbitrary model download or offline-bypass was demonstrated reachable — the resolvers still throw before any model id is handed onward, and the inherited member was a `Function`, not a plausible id.
 >
 > **Method note:** the premise was mirrored before any edit rather than taken from the finding: a stdlib stand-in of the frozen literal plus `resolveModel`'s exact read-then-truthiness shape admits `toString`, `constructor`, `valueOf` and `__proto__` and returns `hfId=undefined` for each, while the known alias resolves normally. Every lookup site of both catalogs was then read in source — `Object.keys`, optional-chained reads, `in` routing, doctor's read — to confirm none of them depends on a prototype member of the catalog object itself, which is what makes the null prototype safe rather than merely effective. Under D-45 no local test or build was run; hosted CI is the validation authority.
-marker-tail
-plain>>>>>>> 3308c6c (fix: an audit process crash is no longer reported as the endpoint timeout (FA-06))
 
 ### `bump-test-count --check` rejects partial scoped drift even when the anchors agree (P02)
 
@@ -355,8 +351,6 @@ plain>>>>>>> 3308c6c (fix: an audit process crash is no longer reported as the e
 ### Tests (2321)
 
 **2228 → 2321 source tests.** Sixty-one new causal contracts cover the audit closures and staged embedding replacement above; table-driven phases additionally exercise rollback, authority ordering, fail-fast sync operations, clear/replacement interlocks, and promotion refusal without inflating the declared `it()` count.
-marker-tail
-plain>>>>>>> 3308c6c (fix: an audit process crash is no longer reported as the endpoint timeout (FA-06))
 
 ### Maintainer handoff reflects the post-AH-4 repository state
 

@@ -320,7 +320,9 @@ describe("getOpenQuestions heading-prefixed markers", () => {
 
   it("a custom pattern reaches heading lines too", async () => {
     const { vault } = await fixture({ "c.md": ["# Decision needed", "- Decision needed", "plain line"].join("\n") });
-    const out = await getOpenQuestions(vault, { pattern: "^\\s*(?:[#\\-\\s]*)?Decision needed\\s*$" });
+    // Capture group 1 is where the question text comes from — a custom pattern
+    // with no group matches nothing, which is the contract, not a quirk.
+    const out = await getOpenQuestions(vault, { pattern: "^\\s*(?:[#\\-\\s]*)?(Decision needed)\\s*$" });
     expect(out.map((question) => question.question)).toEqual(["Decision needed", "Decision needed"]);
     expect(out.map((question) => question.context_heading)).toEqual(["Decision needed", "Decision needed"]);
   });

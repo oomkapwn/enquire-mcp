@@ -16,7 +16,7 @@
 // internal labels that ad-hoc resolvers concatenate onto their output.
 
 import { execFileSync } from "node:child_process";
-import { readFileSync, readdirSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -122,7 +122,11 @@ describe("META-invariant: tracked files carry no merge or resolver residue", () 
       ["src/example.ts", "<<<<<<< HEAD"],
       ["src/example.ts", ">>>>>>> 9f1c2ab (feat: something)"]
     ];
-    for (const [where, line] of real) expect(RESIDUE.some((p) => p.test(line)), `${where}: ${line}`).toBe(true);
+    for (const [where, line] of real)
+      expect(
+        RESIDUE.some((p) => p.test(line)),
+        `${where}: ${line}`
+      ).toBe(true);
   });
 
   it("NEGATIVE: ordinary content that looks similar is NOT flagged", () => {
@@ -137,6 +141,10 @@ describe("META-invariant: tracked files carry no merge or resolver residue", () 
       ["setext H2 underline — legal Markdown, deliberately not matched", "======="],
       ["table row", "| a | b |"]
     ];
-    for (const [where, line] of safe) expect(RESIDUE.some((p) => p.test(line)), `${where}: ${line}`).toBe(false);
+    for (const [where, line] of safe)
+      expect(
+        RESIDUE.some((p) => p.test(line)),
+        `${where}: ${line}`
+      ).toBe(false);
   });
 });

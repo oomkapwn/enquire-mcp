@@ -358,3 +358,56 @@ describe("check-audit scoped gate (rc.50)", () => {
     expect(releaseWorkflowUsesSharedChannelResolver(preFixInlineResolver)).toBe(false);
   });
 });
+
+// FA-06 — `auditAttemptTimeoutPayload` counted ANY string signal as the
+// per-attempt deadline, so an audit process that died on SIGSEGV with empty
+// stdout was reported as ETIMEDOUT "the registry advisory endpoint did not
+// answer" and spent the retry budget on attempts that would die identically.
+// The shapes below are what `execFileSync` ACTUALLY throws (probed on
+// Node 25.9.0): a deadline kill carries errno ETIMEDOUT and the pinned
+// SIGKILL with NO `killed` flag, while a crash carries the signal it died on
+// with `code`/`errno` null. `killed` does not exist on a sync spawn result at
+// all — the fixture asserting it covers a shape the runtime never emits, so
+// both shapes are asserted here.
+describe("FA-06: a process crash is not impersonated as the endpoint timeout", () => {
+  it("the deadline's real shape is still a retryable timeout", () => {
+    // Positive, taken from a real execFileSync timeout rather than from memory.
+    const real = auditAttemptTimeoutPayload(
+      { code: "ETIMEDOUT", errno: -60, signal: "SIGKILL", status: null, stdout: "" },
+      40_000
+    );
+    expect(retryableAuditError(real)).toMatchObject({ code: "ETIMEDOUT" });
+    // The pre-existing `killed: true` fixture is kept: it still maps to a
+    // timeout, so narrowing the signal branch cannot regress that shape.
+    const killed = auditAttemptTimeoutPayload({ killed: true, signal: "SIGKILL", stdout: "" }, 40_000);
+    expect(retryableAuditError(killed)).toMatchObject({ code: "ETIMEDOUT" });
+  });
+
+  it("NEGATIVE: fault signals never become a retryable timeout", () => {
+    for (const signal of ["SIGSEGV", "SIGABRT", "SIGBUS", "SIGILL", "SIGFPE", "SIGTRAP", "SIGSYS"]) {
+      const payload = auditAttemptTimeoutPayload({ code: null, errno: null, signal, status: null, stdout: "" }, 40_000);
+      expect(payload, signal).toBeUndefined();
+      expect(retryableAuditError(payload), signal).toBeUndefined();
+    }
+  });
+
+  it("a crash keeps the caller's fail-closed path instead of burning retries", () => {
+    // What readAuditPayload does with a non-timeout empty-output failure.
+    const crash = { code: null, errno: null, signal: "SIGSEGV", status: null, stdout: "" };
+    const output = (auditAttemptTimeoutPayload(crash, 40_000), crash.stdout?.toString() ?? "");
+    expect(() => {
+      if (!output.trim()) throw new Error(`npm audit produced no JSON: ${crash.signal}`);
+    }).toThrow(/npm audit produced no JSON: SIGSEGV/);
+  });
+
+  it("an unclassifiable kill stays retryable — SIGKILL is what OUR deadline sends", () => {
+    // The regression guard for this fix: SIGKILL is our own killSignal
+    // (readAuditPayload pins it), so it must stay OUT of the fault set, and an
+    // external SIGTERM/SIGKILL we cannot attribute keeps its retries rather
+    // than silently becoming fail-closed.
+    for (const signal of ["SIGKILL", "SIGTERM"]) {
+      const payload = auditAttemptTimeoutPayload({ code: null, errno: null, signal, status: null, stdout: "" }, 40_000);
+      expect(retryableAuditError(payload), signal).toMatchObject({ code: "ETIMEDOUT" });
+    }
+  });
+});

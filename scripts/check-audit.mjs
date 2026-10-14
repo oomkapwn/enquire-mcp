@@ -122,6 +122,14 @@ const RETRYABLE_AUDIT_CODES = new Set([
 ]);
 const RETRYABLE_AUDIT_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504]);
 const SAFE_AUDIT_CODE = /^[A-Z][A-Z0-9_]{0,31}$/u;
+// FA-06 — a process that died on a fault signal never reached the deadline:
+// Node reports the signal the child died on and leaves `code`/`errno` null, so
+// "any string signal" was enough to impersonate the per-attempt timeout. The
+// per-attempt kill is pinned to SIGKILL (see readAuditPayload), so SIGKILL is
+// deliberately ABSENT here — it is what our own deadline produces, and an
+// external SIGKILL is indistinguishable from it, which is why that family stays
+// retryable rather than silently becoming fail-closed.
+const AUDIT_FAULT_SIGNALS = new Set(["SIGABRT", "SIGBUS", "SIGFPE", "SIGILL", "SIGSEGV", "SIGSYS", "SIGTRAP"]);
 
 function isRecord(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -165,17 +173,25 @@ function auditErrorDiagnostic(value) {
  * produced output, or failed for another reason, is not a timeout and returns
  * `undefined` so the caller keeps its existing fail-closed handling.
  *
+ * A fault signal (SIGSEGV, SIGABRT, …) is explicitly NOT one of those reasons:
+ * it means the child died, so the registry endpoint never had a chance to
+ * answer, and reporting it as `ETIMEDOUT` both mislabels the cause and spends
+ * the retry budget on an attempt that will die the same way.
+ *
  * @param {unknown} err - The thrown execFileSync error.
  * @param {number} timeoutMs - The bound that was applied.
  * @returns {object|undefined} A payload `retryableAuditError` recognizes.
  * @example
- * auditAttemptTimeoutPayload({ killed: true, signal: "SIGKILL", stdout: "" }, 40_000);
+ * auditAttemptTimeoutPayload({ code: "ETIMEDOUT", signal: "SIGKILL", status: null, stdout: "" }, 40_000);
+ * auditAttemptTimeoutPayload({ signal: "SIGSEGV", status: null, stdout: "" }, 40_000); // undefined
  */
 export function auditAttemptTimeoutPayload(err, timeoutMs) {
   if (!isRecord(err)) return undefined;
   const output = typeof err.stdout === "string" ? err.stdout : (err.stdout?.toString?.() ?? "");
   if (output.trim()) return undefined;
-  const timedOut = err.code === "ETIMEDOUT" || err.killed === true || typeof err.signal === "string";
+  const signal = typeof err.signal === "string" && err.signal.length > 0 ? err.signal : undefined;
+  if (signal && AUDIT_FAULT_SIGNALS.has(signal)) return undefined;
+  const timedOut = err.code === "ETIMEDOUT" || err.killed === true || signal !== undefined;
   if (!timedOut) return undefined;
   return {
     error: {

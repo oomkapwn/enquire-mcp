@@ -1,8 +1,22 @@
-# Changelog
+plain# Changelog
 
 All notable changes to this project will be documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [4.0.0-rc.7] — 2026-08-31
+
+### An audit process crash is no longer reported as the endpoint timing out (FA-06)
+
+> **TL;DR:** **`auditAttemptTimeoutPayload` treated ANY string signal as the per-attempt deadline. An `npm audit` child that died on SIGSEGV with empty stdout was therefore reported as `ETIMEDOUT — the registry advisory endpoint did not answer` and spent the whole retry budget on attempts that would die identically. A fault signal is now explicitly not a timeout; the crash keeps the caller's existing fail-closed path.**
+>
+> **What could happen before.** The function's own contract already said "failed for another reason is not a timeout", but the test was `typeof err.signal === "string"`, which is true for a crash. Node reports the signal a child died on with `code`/`errno` left null, so a segfault was indistinguishable from a kill at that branch — and the mislabel was not cosmetic: `ETIMEDOUT` is in `RETRYABLE_AUDIT_CODES`, so the crash was retried as a transient and only surfaced, after the retries, as a network-endpoint story that never happened. Fail-closed was never at risk; the diagnosis was wrong and the retry budget was spent on a non-transient.
+>
+> **Why SIGKILL is deliberately NOT in the rejection set.** `readAuditPayload` pins `killSignal: "SIGKILL"`, so SIGKILL is what our own deadline sends — adding it would reject the real timeout path. An external SIGKILL/SIGTERM we cannot attribute is likewise indistinguishable from ours, so that family keeps its retries rather than silently becoming fail-closed; a control pins both. Only signals a deadline can never produce are rejected: SIGABRT, SIGBUS, SIGFPE, SIGILL, SIGSEGV, SIGSYS, SIGTRAP.
+>
+> **A vacuous positive control, found while fixing this.** The pre-existing control asserted the timeout shape `{ killed: true, signal: "SIGKILL", stdout: "" }`, and the TSDoc `@example` repeated it. Probing the real call on Node 25.9.0 shows `killed` does not appear on a synchronous `spawnSync` result at all — it is an async `ChildProcess` property. A real deadline throws `{ code: "ETIMEDOUT", errno: -60, signal: "SIGKILL", status: null }` with no `killed` flag, so the existing control exercised only the third disjunct while real timeouts were caught by the first, which nothing asserted. Both shapes are now asserted, and the example is corrected; the synthetic fixture is kept rather than deleted, because it still documents a shape other platforms may emit.
+>
+> **Bounded claim.** One new `AUDIT_FAULT_SIGNALS` set and one early return in `auditAttemptTimeoutPayload`. The retry policy, attempt/backoff counts, `retryableAuditError`, the npm invocation and its timeout bound are untouched. A stdlib comparison of the old and new functions over nine shapes shows exactly three classifications change — SIGSEGV, SIGABRT and SIGBUS move from "ETIMEDOUT (retry)" to "fail-closed" — while the real deadline, the legacy `killed` fixture, an external SIGTERM/SIGKILL, a non-zero exit, ENOENT and output-present all classify identically before and after.
+>
+> **Method note:** every control's expectation was executed against the REAL exported function before committing — `scripts/check-audit.mjs` imports only stdlib plus its own lib, so the assertions run under plain `node` without the project's toolchain, giving 21/21. Causality was then proven by removing the guard from a `/tmp` copy and re-running: exactly the 14 fault-signal assertions went red while the 7 positives and pre-existing negatives stayed green. The nine-shape old-vs-new comparison is likewise a stdlib mirror, so the bounded claim above is measured, not asserted. Under D-45 no local test or build was run; hosted CI is the validation authority.
 
 ### Inherited prototype keys are no longer admitted as model aliases (FA-05)
 
@@ -15,6 +29,8 @@ All notable changes to this project will be documented here. The format follows 
 > **Bounded claim.** One new unexported helper plus its two call sites. The catalogs' entries, keys, `Object.keys` order and freeze state are unchanged — `Object.keys(EMBEDDING_MODELS)` still returns exactly `["multilingual", "bge"]` — and the resolver error messages, the CLI's unknown-alias branch, doctor's read, the default aliases and every model id are untouched. Three controls: five inherited keys refused by both resolvers with the unknown-alias error; `in` false and bracket lookup `undefined` for the same five on both catalogs; and the known aliases still resolving with the catalog shape and frozen state asserted, so the admission change is pinned not to over-tighten. **Not proven and not claimed:** no arbitrary model download or offline-bypass was demonstrated reachable — the resolvers still throw before any model id is handed onward, and the inherited member was a `Function`, not a plausible id.
 >
 > **Method note:** the premise was mirrored before any edit rather than taken from the finding: a stdlib stand-in of the frozen literal plus `resolveModel`'s exact read-then-truthiness shape admits `toString`, `constructor`, `valueOf` and `__proto__` and returns `hfId=undefined` for each, while the known alias resolves normally. Every lookup site of both catalogs was then read in source — `Object.keys`, optional-chained reads, `in` routing, doctor's read — to confirm none of them depends on a prototype member of the catalog object itself, which is what makes the null prototype safe rather than merely effective. Under D-45 no local test or build was run; hosted CI is the validation authority.
+marker-tail
+plain>>>>>>> 3308c6c (fix: an audit process crash is no longer reported as the endpoint timeout (FA-06))
 
 ### `bump-test-count --check` rejects partial scoped drift even when the anchors agree (P02)
 
@@ -311,6 +327,8 @@ All notable changes to this project will be documented here. The format follows 
 ### Tests (2310)
 
 **2228 → 2310 source tests.** Sixty-one new causal contracts cover the audit closures and staged embedding replacement above; table-driven phases additionally exercise rollback, authority ordering, fail-fast sync operations, clear/replacement interlocks, and promotion refusal without inflating the declared `it()` count.
+marker-tail
+plain>>>>>>> 3308c6c (fix: an audit process crash is no longer reported as the endpoint timeout (FA-06))
 
 ### Maintainer handoff reflects the post-AH-4 repository state
 

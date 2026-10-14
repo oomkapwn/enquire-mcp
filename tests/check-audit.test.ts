@@ -392,9 +392,11 @@ describe("FA-06: a process crash is not impersonated as the endpoint timeout", (
   });
 
   it("a crash keeps the caller's fail-closed path instead of burning retries", () => {
-    // What readAuditPayload does with a non-timeout empty-output failure.
+    // What readAuditPayload does with a non-timeout empty-output failure: no
+    // timeout payload, so it falls through to the "no JSON" throw.
     const crash = { code: null, errno: null, signal: "SIGSEGV", status: null, stdout: "" };
-    const output = (auditAttemptTimeoutPayload(crash, 40_000), crash.stdout?.toString() ?? "");
+    expect(auditAttemptTimeoutPayload(crash, 40_000)).toBeUndefined();
+    const output = crash.stdout.toString();
     expect(() => {
       if (!output.trim()) throw new Error(`npm audit produced no JSON: ${crash.signal}`);
     }).toThrow(/npm audit produced no JSON: SIGSEGV/);

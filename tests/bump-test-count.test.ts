@@ -7,12 +7,12 @@
 // agree" without ever looking at them. These controls build a synthetic repo
 // so the rejection is proven causally, without mutating the real tree.
 
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 // @ts-expect-error — .mjs script, no types; we exercise the pure exported core.
-import { bumpTestCount, buildBumpPlan } from "../scripts/bump-test-count.mjs";
+import { buildBumpPlan, bumpTestCount } from "../scripts/bump-test-count.mjs";
 
 /** The synthetic census: one file, exactly 100 `it(` registrations. */
 const COUNT = 100;

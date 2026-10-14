@@ -21,6 +21,50 @@ afterEach(async () => {
 });
 
 describe("namespace-exclusive cache prune", () => {
+  it("F06: counts only artifacts it actually removed when a planned target vanishes", async () => {
+    const root = await makeRoot();
+    const cacheDir = path.join(root, "enquire");
+    await fs.mkdir(cacheDir);
+    const vanishing = path.join(cacheDir, `${OTHER}.json`);
+    const surviving = path.join(cacheDir, `${OTHER}.fts5.db`);
+    await fs.writeFile(vanishing, "GONE_BEFORE_UNLINK", { mode: 0o600 });
+    await fs.writeFile(surviving, "REALLY_REMOVED", { mode: 0o600 });
+    const canonicalDir = await fs.realpath(cacheDir);
+    const canonicalVanishing = path.join(canonicalDir, `${OTHER}.json`);
+
+    // A concurrent prune wins the race: the planned artifact is already gone by
+    // the time this prune unlinks it, so removeArtifact observes ENOENT and
+    // answers `false`. That is a benign outcome — the artifact IS absent — but
+    // it is not a removal, so it must not be counted as one.
+    const realUnlink = fs.unlink.bind(fs);
+    let raced = false;
+    const unlinkSpy = vi.spyOn(fs, "unlink").mockImplementation(async (candidate, ...args) => {
+      if (!raced && String(candidate) === canonicalVanishing) {
+        raced = true;
+        await realUnlink(candidate, ...args);
+        const enoent = new Error("ENOENT: no such file or directory") as NodeJS.ErrnoException;
+        enoent.code = "ENOENT";
+        throw enoent;
+      }
+      return realUnlink(candidate, ...args);
+    });
+    let result: Awaited<ReturnType<typeof executeCachePrune>>;
+    try {
+      result = await executeCachePrune(cacheDir, KEEP);
+    } finally {
+      unlinkSpy.mockRestore();
+    }
+
+    expect(raced).toBe(true);
+    // Both targets were PLANNED — the contract reports what preflight selected.
+    expect([...result.removable].sort()).toEqual([`${OTHER}.fts5.db`, `${OTHER}.json`].sort());
+    // But only one was actually unlinked, and that is what `removed` reports.
+    expect(result.removed).toBe(1);
+    // The postcondition still holds for both: absent is the goal either way.
+    await expect(fs.access(surviving)).rejects.toThrow();
+    await expect(fs.access(vanishing)).rejects.toThrow();
+  });
+
   it("rejects a canonical-parent rename/replacement before deletion and leaves replacement bytes untouched", async () => {
     const root = await makeRoot();
     const cacheDir = path.join(root, "enquire");

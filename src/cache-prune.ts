@@ -13,9 +13,13 @@ export const MAX_CACHE_PRUNE_ENTRIES = 4_096;
 export interface CachePruneExecutionResult {
   /** Exact preflighted basenames selected under non-kept routing stems. */
   readonly removable: readonly string[];
-  /** Number of artifacts removed after the pinned-scope checks. */
+  /**
+   * Artifacts this prune actually unlinked, after the pinned-scope checks. A
+   * planned target that was already absent when the unlink ran is planned in
+   * {@link CachePruneExecutionResult.removable} but is not counted here.
+   */
   readonly removed: number;
-  /** Best-effort byte total observed before removal. */
+  /** Best-effort estimate of the bytes observed before removal, not a post-check. */
   readonly bytes: number;
 }
 
@@ -106,19 +110,25 @@ export async function executeCachePrune(cacheDir: string, keepHash: string): Pro
     let removed = 0;
     for (const name of removable) {
       await revalidatePersistenceLeaseScope(eraser.scope);
+      let removedThisEntry: boolean;
       try {
         const target = path.join(canonicalDir, name);
         if (sensitiveArtifactFinalBasename(name)) {
           const removedGenerated = await removeSensitiveArtifactTempEntry(target);
           if (!removedGenerated) throw new Error("artifact changed after prune preflight");
+          removedThisEntry = true;
         } else {
-          await removeArtifact(target, "preflighted cache artifact");
+          // F06 — `removeArtifact` answers `false` when the entry is already
+          // absent. A planned artifact that vanished between preflight and
+          // unlink performed no removal, so it is not counted as one; the
+          // count stays "artifacts removed" as the result contract says.
+          removedThisEntry = await removeArtifact(target, "preflighted cache artifact");
         }
       } catch (error) {
         throw new Error(`Unable to remove a preflighted cache artifact: ${name}`, { cause: error });
       }
       await revalidatePersistenceLeaseScope(eraser.scope);
-      removed += 1;
+      if (removedThisEntry) removed += 1;
     }
     await revalidatePersistenceLeaseScope(eraser.scope);
     result = { removable, removed, bytes };

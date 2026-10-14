@@ -4,6 +4,21 @@ All notable changes to this project will be documented here. The format follows 
 
 ## [4.0.0-rc.7] — 2026-08-31
 
+### A prune that removed nothing no longer reports an artifact removed (F06)
+
+> **TL;DR:** **`executeCachePrune` discarded `removeArtifact`'s boolean and incremented `removed` unconditionally. When a preflighted artifact vanished between planning and unlinking — a concurrent prune, an external cleaner — `removeArtifact` answered `false` on ENOENT, no `unlink` happened, and the run still counted it. The CLI prints that number: `enquire prune: removed N artifact(s) (~M MB)`. The result contract says "artifacts removed"; the code was counting artifacts attempted. It now counts removals.**
+>
+> **What could happen before.** The shared leaf `removeArtifact` answers `true` on a real unlink and `false` on ENOENT. `cache-prune.ts` threw that answer away and incremented per planned entry, so a race could report five removed artifacts while performing two unlinks — overstating erasure work in the one surface a user reads to decide whether their cache is clean.
+>
+> **The adjudication, stated.** The audit left the choice open: count actual removals, or count successfully-absent planned targets. **Actual removals** is the one the interface already documented, and it is the only reading that cannot overstate what was erased — so `removable` continues to report what preflight selected, and `removed` reports what was unlinked. `removed <= removable.length` always holds, and the two numbers can now legitimately differ.
+>
+> **No new failure mode.** An ENOENT-after-preflight entry does not throw: the postcondition prune exists to establish — the artifact is absent — already holds, and failing closed on a normal race would be worse than counting it honestly. This is deliberately **not** unified with the sensitive-artifact branch one line above, which throws `"artifact changed after prune preflight"` on the same `false` — there the absence is an integrity signal about a security-relevant artifact, here it is a benign concurrent delete of a cache file. The two branches keep their different contracts on purpose.
+>
+> **Bounded claim.** One boolean threaded through the loop and one conditional increment. The plan, the preflight, the namespace eraser, the pinned-scope revalidation on both sides of the unlink, the sensitive-artifact branch and its throw, the byte estimate and the result shape are untouched. The byte total stays a **pre-removal estimate**, which the interface comment now says explicitly rather than leaving "best-effort byte total" to carry it.
+>
+> **Method note:** the control simulates the real race rather than mocking the counter — `fs.unlink` is spied so the preflighted `.json` entry is genuinely deleted and then raises a genuine `ENOENT`, while a sibling `.fts5.db` entry unlinks normally. It asserts all three things the change distinguishes: both targets appear in `removable` (the plan is unchanged), `removed` is `1` not `2` (the count is honest), and both paths are absent afterwards (the postcondition is unchanged). Without the fix that control fails on the count alone. Under D-45 no local test or build was run; hosted CI is the validation authority.
+>>>>>>> 0674f78 (fix: a prune that removed nothing no longer reports an artifact removed (F06))
+
 ### A marker written as a heading is finally matched, as the contract already promised (FA-09)
 
 > **TL;DR:** **`# Q: Should we ship?` was unreachable. The default pattern explicitly allows a heading prefix and both the tool description and `docs/api.md` promise one — but the scanner `continue`d on every heading line before the matcher ever ran. `- Q:` and `> Q:` matched; the documented heading form did not. A heading now flows through the ordinary candidate path.**

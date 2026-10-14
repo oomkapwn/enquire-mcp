@@ -265,3 +265,67 @@ describe("getOpenQuestions bounded producer admission", () => {
     );
   });
 });
+
+// FA-09 — the default pattern accepts a heading prefix
+// `(?:[#\->\*\d\.]+\s+)?` and tool-registry.ts / docs/api.md both promise one,
+// but every heading was `continue`d before the matcher ran, so `# Q: …` could
+// never match while `- Q: …` and `> Q: …` always did.
+describe("getOpenQuestions heading-prefixed markers", () => {
+  it("a marker written as a heading is found, and is its own context_heading", async () => {
+    const body = ["# Q: Should we ship the audit fix?", "", "## Design notes", "", "- Q: list marker still works"];
+    const { vault } = await fixture({ "h.md": body.join("\n") });
+    const out = await getOpenQuestions(vault, {});
+    expect(out.map((question) => question.question)).toEqual([
+      "Should we ship the audit fix?",
+      "list marker still works"
+    ]);
+    // A heading that IS the marker is its own section; a body line under a
+    // heading still carries the enclosing one.
+    expect(out[0]?.context_heading).toBe("Q: Should we ship the audit fix?");
+    expect(out[0]?.line).toBe(1);
+    expect(out[1]?.context_heading).toBe("Design notes");
+  });
+
+  it("the heading form works for the other default markers too", async () => {
+    const { vault } = await fixture({
+      "m.md": ["# Open question: which parser?", "## TODO? drop v3 schema", "### ?? double question"].join("\n")
+    });
+    const out = await getOpenQuestions(vault, {});
+    expect(out.map((question) => question.question)).toEqual([
+      "which parser?",
+      "drop v3 schema",
+      "double question"
+    ]);
+  });
+
+  it("NEGATIVE: a plain heading is not a question", async () => {
+    const { vault } = await fixture({ "p.md": ["# Design notes", "## Background", "### Q: real one"].join("\n") });
+    const out = await getOpenQuestions(vault, {});
+    expect(out.map((question) => question.question)).toEqual(["real one"]);
+    expect(out[0]?.context_heading).toBe("Q: real one");
+  });
+
+  it("NEGATIVE: a marker heading inside a fenced block is still not a question", async () => {
+    const { vault } = await fixture({
+      "f.md": ["```md", "# Q: this is documentation, not a question", "```", "", "Q: this one is real"].join("\n")
+    });
+    const out = await getOpenQuestions(vault, {});
+    expect(out.map((question) => question.question)).toEqual(["this one is real"]);
+  });
+
+  it("NEGATIVE: the degenerate empty-text heading still leaves context_heading alone", async () => {
+    // `# ###` is a heading-shaped line with empty text. It matches no marker,
+    // and it must not clear the enclosing heading.
+    const { vault } = await fixture({ "d.md": ["## Real section", "# ###", "- Q: under the real section"].join("\n") });
+    const out = await getOpenQuestions(vault, {});
+    expect(out.map((question) => question.question)).toEqual(["under the real section"]);
+    expect(out[0]?.context_heading).toBe("Real section");
+  });
+
+  it("a custom pattern reaches heading lines too", async () => {
+    const { vault } = await fixture({ "c.md": ["# Decision needed", "- Decision needed", "plain line"].join("\n") });
+    const out = await getOpenQuestions(vault, { pattern: "^\\s*(?:[#\\-\\s]*)?Decision needed\\s*$" });
+    expect(out.map((question) => question.question)).toEqual(["Decision needed", "Decision needed"]);
+    expect(out.map((question) => question.context_heading)).toEqual(["Decision needed", "Decision needed"]);
+  });
+});

@@ -2150,10 +2150,17 @@ export async function getOpenQuestions(
       }
       lineBytes = addOpenQuestionBudget("body line text", lineBytes, currentLineBytes, limits.maxLineUtf8Bytes);
       if (line.inFence) continue;
-      if (line.heading) {
-        if (line.heading.text) currentHeading = line.heading.text;
-        continue;
-      }
+      // FA-09 — a heading is a matchable line. The default pattern accepts a
+      // heading prefix (`(?:[#\->\*\d\.]+\s+)?`), and tool-registry.ts plus
+      // docs/api.md both promise one, but skipping every heading before the
+      // matcher made `# Q: …` / `## Open question: …` unreachable while `- Q:`
+      // and `> Q:` worked. The heading is recorded first, so a heading that is
+      // itself a marker is its own context_heading, and then it flows through
+      // the ordinary candidate path — including the budget accounting, since a
+      // heading is now admitted work. Fenced lines are still skipped above, and
+      // a heading with empty text (the degenerate `# ###`) still leaves
+      // currentHeading untouched.
+      if (line.heading?.text) currentHeading = line.heading.text;
 
       const currentCandidateBytes =
         currentLineBytes +

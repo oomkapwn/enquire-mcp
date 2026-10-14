@@ -4,6 +4,19 @@ All notable changes to this project will be documented here. The format follows 
 
 ## [4.0.0-rc.7] — 2026-08-31
 
+### A marker written as a heading is finally matched, as the contract already promised (FA-09)
+
+> **TL;DR:** **`# Q: Should we ship?` was unreachable. The default pattern explicitly allows a heading prefix and both the tool description and `docs/api.md` promise one — but the scanner `continue`d on every heading line before the matcher ever ran. `- Q:` and `> Q:` matched; the documented heading form did not. A heading now flows through the ordinary candidate path.**
+>
+> **What could happen before.** The default pattern's prefix group is `(?:[#\->\*\d\.]+\s+)?` — the `#` is right there, written in — while the scanner skipped headings with `if (line.heading) { …update currentHeading…; continue; }`. The two halves of the contract contradicted each other in source, and only the second one ran. The skip exists for a real reason: a heading must update `context_heading` for the lines beneath it. The fix keeps that and stops it from also meaning "never a match".
+>
+> **The heading is recorded first.** `currentHeading` is assigned before the line reaches matching, so a heading that is itself a marker reports **itself** as `context_heading` — `# Q: …` → `context_heading: "Q: …"`, which is the honest answer to "the heading it lives under" — and a body line under a later heading is unaffected. Fenced lines are still skipped above the branch, and a heading with empty text (the degenerate `# ###`, already a documented case in `tests/structure.test.ts`) still leaves `currentHeading` untouched.
+>
+> **Bounded claim.** The change is one branch: the `continue` is replaced by the heading assignment, and the candidate accounting below it is untouched. **One deliberate consequence, stated rather than hidden: heading lines are now admitted work**, so they are charged against `maxCandidates` and `maxCandidateUtf8Bytes` like any other candidate — a note whose headings match nothing costs nothing, but a vault of marker-headings now consumes budget it previously could not. The limits, the budgets, the result projection, the retention heap, `limit`, the retry/worker paths, and the list/blockquote/numbered forms are unchanged. Custom patterns reach heading lines too, which is the same fix seen from the other side.
+>
+> **Method note:** the premise was mirrored, not assumed — the real default pattern compiled standalone confirms all four markers in heading form (`# Q:`, `## Open question:`, `## TODO?`, `### ??`) capture their text, that `- Q:` / `> Q:` still capture as before, and that `# Design notes`, `# Background`, `# ###` and a plain line capture nothing. One probe expectation was dropped as over-reaching rather than encoded: `#Open question:` with no space does not match, because the prefix group requires `\s+` — that is the pattern's long-standing behaviour, not something this change alters, so no test claims it. Under D-45 no local test or build was run; hosted CI is the validation authority.
+>>>>>>> 00d39bb (fix: a marker written as a heading is matched, as the contract promised (FA-09))
+
 ### An audit process crash is no longer reported as the endpoint timing out (FA-06)
 
 > **TL;DR:** **`auditAttemptTimeoutPayload` treated ANY string signal as the per-attempt deadline. An `npm audit` child that died on SIGSEGV with empty stdout was therefore reported as `ETIMEDOUT — the registry advisory endpoint did not answer` and spent the whole retry budget on attempts that would die identically. A fault signal is now explicitly not a timeout; the crash keeps the caller's existing fail-closed path.**

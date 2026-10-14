@@ -452,3 +452,66 @@ describe("F04: the resumable listing's cost claim matches the walk's source", ()
     expect(mutant).not.toContain("NOT page-proportional (F04)");
   });
 });
+
+// F05 — `Buffer.from(x, "base64url")` is PERMISSIVE: characters outside the
+// alphabet are ignored rather than rejected, and a TRUNCATED token decodes to
+// a shorter but still plausible path. Measured on the real codec: dropping one
+// character from the token for `Projects/plan.md` yields `Projects/plan.m`, so
+// the listing silently resumed from the wrong position instead of failing.
+describe("F05: a cursor this server never minted is refused", () => {
+  const PATH = "Projects/plan.md";
+  const TOKEN = encodeResourceCursor(PATH);
+
+  it("a minted cursor round-trips, including Unicode and the exact boundary", () => {
+    expect(decodeResourceCursor(TOKEN)).toBe(PATH);
+    // The canonicality check must not over-tighten: Unicode paths and a token
+    // sitting exactly on the shared bound both still decode.
+    for (const p of ["Заметки/план.md", "日本語/メモ.md", "emoji/🌞.md", "café/naïve.md"]) {
+      expect(decodeResourceCursor(encodeResourceCursor(p)), p).toBe(p);
+    }
+    const atBound = "x".repeat(3069);
+    expect(decodeResourceCursor(encodeResourceCursor(atBound))).toBe(atBound);
+  });
+
+  it("NEGATIVE: a truncated token is refused instead of resuming from a wrong path", () => {
+    // Drop counts that leave a NON-canonical token. Measured on the real
+    // codec: `Projects/plan.md` mints 26 chars, and these drops decode to a
+    // shorter path whose canonical re-encoding no longer equals the input.
+    for (const drop of [1, 3, 4, 8]) {
+      const truncated = TOKEN.slice(0, -drop);
+      // Pre-fix this returned a shorter but plausible path (e.g. `Projects/plan.m`),
+      // which is the whole defect: silent wrong resume, not a loud failure.
+      expect(() => decodeResourceCursor(truncated), `drop ${drop}`).toThrow(ResourceCursorError);
+    }
+    // Empty string stays an explicitly refused cursor, not a "start from top".
+    expect(() => decodeResourceCursor("")).toThrow(ResourceCursorError);
+  });
+
+  it("a truncation that happens to be CANONICAL is still accepted — on purpose", () => {
+    // Dropping 2 chars leaves exactly 24 base64url chars = 18 bytes = a
+    // COMPLETE, canonical token for `Projects/plan.m` — a path that genuinely
+    // exists in some vault. The protocol is stateless: any canonical
+    // `v1:<path>` is admissible and the walk filters it. Rejecting it would
+    // break real pagination, so this is pinned to stop a future "tightening"
+    // from over-reaching past what F05 asked for.
+    const shorter = TOKEN.slice(0, -2);
+    expect(decodeResourceCursor(shorter)).toBe("Projects/plan.m");
+    expect(shorter).toBe(encodeResourceCursor("Projects/plan.m"));
+  });
+
+  it("NEGATIVE: characters outside the base64url alphabet are refused, not ignored", () => {
+    const at = 6;
+    for (const junk of ["!", " ", "\n", "@", "\t"]) {
+      expect(() => decodeResourceCursor(`${TOKEN.slice(0, at)}${junk}${TOKEN.slice(at)}`), junk).toThrow(
+        ResourceCursorError
+      );
+    }
+  });
+
+  it("NEGATIVE: a wrong scheme prefix and a NUL path are still refused", () => {
+    const wrongPrefix = Buffer.from("v2:Projects/plan.md", "utf8").toString("base64url");
+    expect(() => decodeResourceCursor(wrongPrefix)).toThrow(ResourceCursorError);
+    const nulPath = Buffer.from(`v1:Projects/pl\u0000an.md`, "utf8").toString("base64url");
+    expect(() => decodeResourceCursor(nulPath)).toThrow(ResourceCursorError);
+  });
+});

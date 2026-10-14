@@ -4,6 +4,20 @@ All notable changes to this project will be documented here. The format follows 
 
 ## [4.0.0-rc.7] — 2026-08-31
 
+### A cursor this server never minted is refused — the permissive base64 decode is gone (F05)
+
+> **TL;DR:** **`decodeResourceCursor` used `Buffer.from(cursor, "base64url")`, which is PERMISSIVE: characters outside the alphabet are ignored rather than rejected, and a TRUNCATED token decodes to a shorter but still plausible path. Measured on the real codec: dropping one character from the token for `Projects/plan.md` yields `Projects/plan.m`, so a resumed listing silently started from the wrong position instead of failing. The decoder now requires the decode/encode round-trip to reproduce its input byte-for-byte.**
+>
+> **What could happen before.** The function's own comment already promised the opposite — *"anything else is a token this server did not produce (or a truncated one)"* — but the checks were only the `v1:` prefix, a non-empty path and no NUL. A token with `!` or a space injected anywhere decoded to the SAME path and was accepted. The `try`/`catch` around `Buffer.from` was dead code: base64url decoding does not throw on malformed input, it silently drops what it cannot read. A client could hand back a token this server never minted and pagination continued.
+>
+> **Why one equality, and not a path-shape heuristic.** A token this server mints is by definition the canonical encoding of `v1:<path>`, so requiring `encode(decode(cursor)) === cursor` makes the accepted set EXACTLY the minted space. One equality covers junk characters, truncation and non-canonical forms at once, and it cannot produce a false rejection — every token the server actually hands out still passes. A separate "does this look like a canonical relative Markdown path" heuristic would add surface for over-tightening without closing anything the equality does not already close; deliberately **not** restricted to `.md`, because the listing also serves PDF and Canvas entries and such a rule would turn a hardening change into a pagination outage.
+>
+> **What is deliberately still accepted.** Dropping exactly two characters from the 26-character token for `Projects/plan.md` leaves 24 chars = 18 bytes = a COMPLETE, canonical token for `Projects/plan.m` — a path that genuinely exists in some vault. The protocol is stateless, so any canonical `v1:<path>` is admissible and the walk filters it. A control pins this as intended, so a later "tightening" cannot over-reach past what F05 asked for.
+>
+> **Bounded claim.** One added equality and one local variable in `decodeResourceCursor`. The mint is untouched, `MAX_CURSOR_CHARS` and its bound are untouched (the 3069-byte / 4096-character boundary still round-trips), the empty string is still an explicitly refused cursor, the error type is still `ResourceCursorError` → JSON-RPC `-32602`, and valid Unicode paths — Cyrillic, Japanese, emoji, accented Latin — still round-trip. Five controls, two of them negative.
+>
+> **Method note:** every expectation was executed against a mirror of the changed decoder before the commit, and that check caught a wrong control rather than a wrong fix: I had asserted that dropping *any* of 1/2/4/8 characters is refused, but dropping 2 produces a canonical token for a different real path, which the decoder is *supposed* to accept. The control was corrected to the non-canonical drops and a new one pins the canonical-truncation case as intended. This is the same over-reach as dropping `#Open question:` (FA-09) and `marker-tail extra` (residue gate) — a plausible-sounding expectation the contract does not actually require. Under D-45 no local test or build was run; hosted CI is the validation authority.
+
 ### A prune that removed nothing no longer reports an artifact removed (F06)
 
 > **TL;DR:** **`executeCachePrune` discarded `removeArtifact`'s boolean and incremented `removed` unconditionally. When a preflighted artifact vanished between planning and unlinking — a concurrent prune, an external cleaner — `removeArtifact` answered `false` on ENOENT, no `unlink` happened, and the run still counted it. The CLI prints that number: `enquire prune: removed N artifact(s) (~M MB)`. The result contract says "artifacts removed"; the code was counting artifacts attempted. It now counts removals.**
@@ -348,9 +362,9 @@ All notable changes to this project will be documented here. The format follows 
 
 - FTS5 schema **v7**: a sibling FTS5 table `chunk_parts` carries, for every identifier-bearing chunk, the words each compound identifier is spelled from (camelCase, upper-case runs, digit edges; NFC; bounded by truncation) next to a copy of that chunk's text. A search runs `chunks` exactly as v6 did and appends `chunk_parts`-only hits after every ranked hit with score 0 — found, never ranked — so `poolDayData` becomes reachable by "pool day data" while no rank moves for any query. (A weight-0 column inside `chunks` was measured on CI to move ranks: FTS5's bm25() normalises by the whole row's length.) An existing persistent index rebuilds once on first open; both schema admission maps admit v7.
 
-### Tests (2321)
+### Tests (2326)
 
-**2228 → 2321 source tests.** Sixty-one new causal contracts cover the audit closures and staged embedding replacement above; table-driven phases additionally exercise rollback, authority ordering, fail-fast sync operations, clear/replacement interlocks, and promotion refusal without inflating the declared `it()` count.
+**2228 → 2326 source tests.** Sixty-one new causal contracts cover the audit closures and staged embedding replacement above; table-driven phases additionally exercise rollback, authority ordering, fail-fast sync operations, clear/replacement interlocks, and promotion refusal without inflating the declared `it()` count.
 
 ### Maintainer handoff reflects the post-AH-4 repository state
 

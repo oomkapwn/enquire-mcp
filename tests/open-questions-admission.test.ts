@@ -291,11 +291,7 @@ describe("getOpenQuestions heading-prefixed markers", () => {
       "m.md": ["# Open question: which parser?", "## TODO? drop v3 schema", "### ?? double question"].join("\n")
     });
     const out = await getOpenQuestions(vault, {});
-    expect(out.map((question) => question.question)).toEqual([
-      "which parser?",
-      "drop v3 schema",
-      "double question"
-    ]);
+    expect(out.map((question) => question.question)).toEqual(["which parser?", "drop v3 schema", "double question"]);
   });
 
   it("NEGATIVE: a plain heading is not a question", async () => {

@@ -4,6 +4,18 @@ All notable changes to this project will be documented here. The format follows 
 
 ## [4.0.0-rc.7] — 2026-08-31
 
+### `bump-test-count --check` rejects partial scoped drift even when the anchors agree (P02)
+
+> **TL;DR:** **`--check` verified digit equality, not canonical form. The anchors (`package.json` + `AGENTS.md`) and the census could both say 100 while a scoped claim slot held different digits — the changelog's `### Tests (N)` heading or the CLAUDE current bullet's `→ N source tests` arrow said 99 — and the check answered "surfaces already agree" without ever looking at the rewrite plan it had already built. The plan's non-empty change list at equal counts is exactly this drift; the check now rejects it.**
+>
+> **What could happen before.** `buildBumpPlan` computes what a bump WOULD rewrite for every surface, so a scoped slot holding 99 against a declared 100 lands in `plan.changes` — the bump would fix it. But the check branch tested `declared === actual` and returned success on equality alone, never consulting `plan.changes`. The finding's own adjudication holds: this was never a release-gate bypass — the independent `docs-consistency` invariant reads the same claim slots and rejects the drift — it was the maintainer tool agreeing with a tree the invariant would refuse, which is the one disagreement direction that wastes a maintainer's trust.
+>
+> **Why the drift is reachable only in the scoped surfaces.** For plain surfaces the rewrite is a digit-for-itself substitution — replacing the token 100 with 100 is always a no-op, so a plain surface can never carry a change at equal counts. The scoped handlers are the exception: they rewrite the digits INSIDE their claim slots, so a slot holding 99 is a real change. Both scoped surfaces are pinned by the controls: `CHANGELOG.md` (heading + arrow, 2 slots) and `CLAUDE.md` (current-state total + current-bullet arrow, 2 slots).
+>
+> **Bounded claim.** One branch in `scripts/bump-test-count.mjs`: at equal counts, `--check` now fails when the plan carries changes, naming each drifted surface and its slot count; `--dry-run` gains the same report without failing, which is its documented job. The plain-surface rewrites, the scoped handlers, the anchor agreement requirement, the excluded machine pins and the write path are untouched.
+>
+> **Method note:** The premise was not taken from the finding's word — it was derived first, and the derivation initially went the wrong way: at equal counts a digit-for-itself substitution looked like it could never produce a change, which would have made P02 vacuous. Re-reading the scoped handlers showed the miss — the rewrite replaces the digits INSIDE `→ N source tests` and `### Tests (N)`, so slots disagreeing with the declared count are genuine changes. Every control's expectation was then executed against the real script on a synthetic repository before any commit: canonical tree → empty plan and "already agree"; both scoped slots drifted → the plan carries `CHANGELOG.md:2, CLAUDE.md:2` and `--check` throws naming both; dry-run reports without failing. The synthetic repo builds every surface the script reads — anchors, plain tokens, both scoped shapes, the excluded pins, a 100-`it(` census — so the controls are hermetic and do not mutate the real tree. Under D-45 no local test or build was run; hosted CI is the validation authority.
+
 ### The resumable listing's cost is bounded by the resume path, not by the page — the overclaim is corrected and the work-bounded traversal is designed (F04)
 
 > **TL;DR:** **The AH-6 summary claimed the page "comes from a resumable walk whose cost is proportional to the page, not the vault". The second half is right; the first is false. `walkNotePage` re-reads and fully sorts the root directory on every page, and each directory on the path down to the resume point pays its own listing+sort. Per-page cost is bounded by the directory listings along the resume path — not by the page, and a genuinely work-bounded traversal requires a redesign that is designed here, not implemented.**
@@ -284,9 +296,9 @@ All notable changes to this project will be documented here. The format follows 
 
 - FTS5 schema **v7**: a sibling FTS5 table `chunk_parts` carries, for every identifier-bearing chunk, the words each compound identifier is spelled from (camelCase, upper-case runs, digit edges; NFC; bounded by truncation) next to a copy of that chunk's text. A search runs `chunks` exactly as v6 did and appends `chunk_parts`-only hits after every ranked hit with score 0 — found, never ranked — so `poolDayData` becomes reachable by "pool day data" while no rank moves for any query. (A weight-0 column inside `chunks` was measured on CI to move ranks: FTS5's bm25() normalises by the whole row's length.) An existing persistent index rebuilds once on first open; both schema admission maps admit v7.
 
-### Tests (2304)
+### Tests (2307)
 
-**2228 → 2304 source tests.** Fifty-eight new causal contracts cover the audit closures and staged embedding replacement above; table-driven phases additionally exercise rollback, authority ordering, fail-fast sync operations, clear/replacement interlocks, and promotion refusal without inflating the declared `it()` count.
+**2228 → 2307 source tests.** Sixty-one new causal contracts cover the audit closures and staged embedding replacement above; table-driven phases additionally exercise rollback, authority ordering, fail-fast sync operations, clear/replacement interlocks, and promotion refusal without inflating the declared `it()` count.
 
 ### Maintainer handoff reflects the post-AH-4 repository state
 

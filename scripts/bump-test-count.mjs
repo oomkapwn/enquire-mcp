@@ -3,7 +3,7 @@
 //
 // Usage:
 //   node scripts/bump-test-count.mjs            rewrite every surface that holds the old count
-//   node scripts/bump-test-count.mjs --check    exit 1 and list stale surfaces; writes nothing
+//   node scripts/bump-test-count.mjs --check    exit 1 on stale surfaces or partial scoped drift; writes nothing
 //   node scripts/bump-test-count.mjs --dry-run  report the plan, write nothing
 //
 // The count rule is the one `tests/docs-consistency.test.ts::countActualTests` uses, so this
@@ -366,7 +366,26 @@ export function bumpTestCount(options = {}) {
       messages
     };
     if (plan.declared === plan.actual) {
-      messages.push("bump-test-count: surfaces already agree with the census");
+      // P02 — the anchors can agree with the census while a SCOPED surface
+      // holds different digits in a claim slot: the changelog's `### Tests (N)`
+      // heading, the CLAUDE current-bullet's `→ N source tests` arrow. The
+      // anchors (package.json + AGENTS.md) and the census both say 100, the
+      // changelog section says 99 — a bump would rewrite it, so the plan
+      // carries a change at EQUAL counts, and the old check returned
+      // "already agree" without ever looking. Reject it: `--check` verifies
+      // the canonical form, not just digit equality. The dry-run still only
+      // reports — its job is to show what a bump would change.
+      if (plan.changes.length > 0) {
+        const drift = plan.changes
+          .map((change) => `bump-test-count: drifted ${change.relativePath} (${change.replaced} slot(s))`)
+          .join("\n");
+        if (options.check === true) {
+          fail(`anchors equal the census (${plan.declared}) but scoped claim slots drifted:\n${drift}`);
+        }
+        messages.push(drift);
+      } else {
+        messages.push("bump-test-count: surfaces already agree with the census");
+      }
       return untouched;
     }
     const detail = plan.changes

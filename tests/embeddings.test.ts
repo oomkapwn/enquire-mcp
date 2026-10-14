@@ -203,9 +203,7 @@ describe("FA-05: inherited prototype keys are not admitted as model aliases", ()
   it("resolvers refuse inherited keys with the unknown-alias error", () => {
     for (const key of INHERITED) {
       expect(() => resolveModel(key), `resolveModel(${key})`).toThrow(/Unknown embedding model alias/);
-      expect(() => resolveRerankerModel(key), `resolveRerankerModel(${key})`).toThrow(
-        /Unknown reranker model alias/
-      );
+      expect(() => resolveRerankerModel(key), `resolveRerankerModel(${key})`).toThrow(/Unknown reranker model alias/);
     }
   });
 

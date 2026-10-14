@@ -60,16 +60,8 @@ function writeSyntheticRepo(root: string, changelogTests: number, claudeTests: n
   );
   // The excluded machine-generated pins must exist; their digits are reported,
   // never rewritten. One digit run each keeps the report non-vacuous.
-  writeFileSync(
-    path.join(root, "tests", "fixtures", "release-mutation-identity.v2.json"),
-    '{"pin": 7}',
-    "utf8"
-  );
-  writeFileSync(
-    path.join(root, "tests", "fixtures", "release-mutation-transition.v3.json"),
-    '{"pin": 8}',
-    "utf8"
-  );
+  writeFileSync(path.join(root, "tests", "fixtures", "release-mutation-identity.v2.json"), '{"pin": 7}', "utf8");
+  writeFileSync(path.join(root, "tests", "fixtures", "release-mutation-transition.v3.json"), '{"pin": 8}', "utf8");
   // package.json is BOTH an anchor and a plain surface.
   writeFileSync(
     path.join(root, "package.json"),

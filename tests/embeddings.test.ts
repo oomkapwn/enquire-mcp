@@ -187,3 +187,46 @@ describe("resolveRerankerModel", () => {
     }
   });
 });
+
+// FA-05 — the catalogs were normal-prototype object literals, so inherited
+// keys were admitted: `EMBEDDING_MODELS["toString"]` returned the inherited
+// Function — truthy — and resolveModel handed it onward as a "model", while
+// the CLI's `alias in RERANKER_MODELS` routed an inherited key into a real
+// install branch. The catalogs now carry a null prototype, which makes every
+// lookup site own-property BY CONSTRUCTION: resolvers, the CLI's `in`, and
+// doctor's read alike see `undefined` for anything the catalog did not define.
+// No arbitrary download was proven reachable; the resolvers still throw
+// before any model id is handed onward.
+describe("FA-05: inherited prototype keys are not admitted as model aliases", () => {
+  const INHERITED = ["toString", "constructor", "valueOf", "hasOwnProperty", "__proto__"] as const;
+
+  it("resolvers refuse inherited keys with the unknown-alias error", () => {
+    for (const key of INHERITED) {
+      expect(() => resolveModel(key), `resolveModel(${key})`).toThrow(/Unknown embedding model alias/);
+      expect(() => resolveRerankerModel(key), `resolveRerankerModel(${key})`).toThrow(
+        /Unknown reranker model alias/
+      );
+    }
+  });
+
+  it("the catalogs hold no inherited members, so the CLI's `in` routing is safe", () => {
+    for (const key of INHERITED) {
+      expect(key in EMBEDDING_MODELS, `in EMBEDDING_MODELS (${key})`).toBe(false);
+      expect(key in RERANKER_MODELS, `in RERANKER_MODELS (${key})`).toBe(false);
+      expect(EMBEDDING_MODELS[key], `EMBEDDING_MODELS[${key}]`).toBeUndefined();
+      expect(RERANKER_MODELS[key], `RERANKER_MODELS[${key}]`).toBeUndefined();
+    }
+  });
+
+  it("known aliases still resolve, and the catalog shape is unchanged", () => {
+    // Positive control: the admission change did not over-tighten.
+    expect(resolveModel(DEFAULT_MODEL_ALIAS).alias).toBe(DEFAULT_MODEL_ALIAS);
+    expect(resolveModel("bge").dim).toBe(384);
+    expect(resolveRerankerModel(DEFAULT_RERANKER_ALIAS).alias).toBe(DEFAULT_RERANKER_ALIAS);
+    expect(Object.keys(EMBEDDING_MODELS)).toEqual(["multilingual", "bge"]);
+    expect(Object.keys(RERANKER_MODELS)).toContain("rerank-bge");
+    // Frozen at module load, as before the change.
+    expect(Object.isFrozen(EMBEDDING_MODELS)).toBe(true);
+    expect(Object.isFrozen(RERANKER_MODELS)).toBe(true);
+  });
+});

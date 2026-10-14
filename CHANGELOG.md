@@ -4,6 +4,18 @@ All notable changes to this project will be documented here. The format follows 
 
 ## [4.0.0-rc.7] — 2026-08-31
 
+### Inherited prototype keys are no longer admitted as model aliases (FA-05)
+
+> **TL;DR:** **The two model catalogs were frozen object literals carrying the normal prototype, and every lookup site trusts the catalog instead of re-checking membership. `resolveModel("toString")` therefore returned the inherited `Function` — truthy — and handed a function onward as an `EmbeddingModel` with `hfId === undefined`; the CLI routed with `alias in EMBEDDING_MODELS`, so an inherited key took the real install branch instead of the unknown-alias one. Both catalogs now carry a null prototype, which makes own-property admission true at every site BY CONSTRUCTION.**
+>
+> **What could happen before.** Three lookup styles reach a catalog, and all three inherit: the resolvers read `catalog[key]` and admit on truthiness (`embeddings.ts:165`, `:616`), the CLI routes install on `alias in catalog` (`cli.ts:866`, `:888`), and doctor reads the same way the resolvers do (`doctor.ts:1393`). Against a normal prototype that means `toString`, `constructor`, `valueOf`, `hasOwnProperty` and `__proto__` are all present and truthy, so none of the three can tell an inherited member from a catalog entry. The failure is a type lie downstream of a truthiness check, not a crash: the entry's own fields read back as `undefined` rather than throwing at the boundary.
+>
+> **Why the catalog, and not a guard at each site.** A per-site `Object.hasOwn` would fix the three sites that exist today and leave the next lookup site unfixed — the defect class is precisely "a site that trusts the catalog". The null prototype makes membership own-property for every current and future site at once, and it is the property the sites already rely on. The helper `frozenCatalog` (`embeddings.ts:69`) drops the prototype BEFORE freezing, because `Object.setPrototypeOf` throws on a non-extensible object; freezing first would have turned the fix into a `TypeError` at module load.
+>
+> **Bounded claim.** One new unexported helper plus its two call sites. The catalogs' entries, keys, `Object.keys` order and freeze state are unchanged — `Object.keys(EMBEDDING_MODELS)` still returns exactly `["multilingual", "bge"]` — and the resolver error messages, the CLI's unknown-alias branch, doctor's read, the default aliases and every model id are untouched. Three controls: five inherited keys refused by both resolvers with the unknown-alias error; `in` false and bracket lookup `undefined` for the same five on both catalogs; and the known aliases still resolving with the catalog shape and frozen state asserted, so the admission change is pinned not to over-tighten. **Not proven and not claimed:** no arbitrary model download or offline-bypass was demonstrated reachable — the resolvers still throw before any model id is handed onward, and the inherited member was a `Function`, not a plausible id.
+>
+> **Method note:** the premise was mirrored before any edit rather than taken from the finding: a stdlib stand-in of the frozen literal plus `resolveModel`'s exact read-then-truthiness shape admits `toString`, `constructor`, `valueOf` and `__proto__` and returns `hfId=undefined` for each, while the known alias resolves normally. Every lookup site of both catalogs was then read in source — `Object.keys`, optional-chained reads, `in` routing, doctor's read — to confirm none of them depends on a prototype member of the catalog object itself, which is what makes the null prototype safe rather than merely effective. Under D-45 no local test or build was run; hosted CI is the validation authority.
+
 ### `bump-test-count --check` rejects partial scoped drift even when the anchors agree (P02)
 
 > **TL;DR:** **`--check` verified digit equality, not canonical form. The anchors (`package.json` + `AGENTS.md`) and the census could both say 100 while a scoped claim slot held different digits — the changelog's `### Tests (N)` heading or the CLAUDE current bullet's `→ N source tests` arrow said 99 — and the check answered "surfaces already agree" without ever looking at the rewrite plan it had already built. The plan's non-empty change list at equal counts is exactly this drift; the check now rejects it.**
@@ -296,9 +308,9 @@ All notable changes to this project will be documented here. The format follows 
 
 - FTS5 schema **v7**: a sibling FTS5 table `chunk_parts` carries, for every identifier-bearing chunk, the words each compound identifier is spelled from (camelCase, upper-case runs, digit edges; NFC; bounded by truncation) next to a copy of that chunk's text. A search runs `chunks` exactly as v6 did and appends `chunk_parts`-only hits after every ranked hit with score 0 — found, never ranked — so `poolDayData` becomes reachable by "pool day data" while no rank moves for any query. (A weight-0 column inside `chunks` was measured on CI to move ranks: FTS5's bm25() normalises by the whole row's length.) An existing persistent index rebuilds once on first open; both schema admission maps admit v7.
 
-### Tests (2307)
+### Tests (2310)
 
-**2228 → 2307 source tests.** Sixty-one new causal contracts cover the audit closures and staged embedding replacement above; table-driven phases additionally exercise rollback, authority ordering, fail-fast sync operations, clear/replacement interlocks, and promotion refusal without inflating the declared `it()` count.
+**2228 → 2310 source tests.** Sixty-one new causal contracts cover the audit closures and staged embedding replacement above; table-driven phases additionally exercise rollback, authority ordering, fail-fast sync operations, clear/replacement interlocks, and promotion refusal without inflating the declared `it()` count.
 
 ### Maintainer handoff reflects the post-AH-4 repository state
 

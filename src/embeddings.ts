@@ -41,12 +41,42 @@ export interface EmbeddingModel {
 }
 
 /**
+ * Freeze a model catalog and drop its prototype, so inherited keys are not
+ * reachable through it.
+ *
+ * The catalogs used to be normal-prototype frozen literals. Every lookup site
+ * trusts the catalog rather than re-checking membership, and all three styles
+ * of lookup inherit from `Object.prototype`:
+ * - `resolveModel` reads `catalog[key]` and admits on truthiness, so
+ *   `catalog["toString"]` returned the inherited `Function` — truthy — and a
+ *   `Function` was handed onward as an {@link EmbeddingModel} with
+ *   `hfId === undefined`.
+ * - The CLI routes with `alias in catalog` (`cli.ts:866`/`:888`), so an
+ *   inherited key took the real install branch instead of the unknown-alias one.
+ * - `doctor.ts:1393` reads the same way the resolvers do.
+ *
+ * A null prototype makes own-property admission true BY CONSTRUCTION at every
+ * one of those sites, present and future, instead of relying on each site to
+ * remember its own guard. No arbitrary model download was proven reachable:
+ * the resolvers still throw before any model id is handed onward.
+ *
+ * Order matters — {@link Object.setPrototypeOf} throws on a non-extensible
+ * object, so the prototype is dropped before the freeze, never after.
+ *
+ * @param catalog - The catalog literal to freeze.
+ * @returns The same entries, frozen, with no inherited members.
+ */
+function frozenCatalog<T extends object>(catalog: T): Readonly<T> {
+  return Object.freeze(Object.setPrototypeOf(catalog, null));
+}
+
+/**
  * Catalog of supported embedding models, keyed by CLI-friendly alias.
  * Add new entries by pinning the Xenova-converted ONNX model id, dim
  * count, and approximate download size. Frozen at module load so
  * runtime can't accidentally mutate.
  */
-export const EMBEDDING_MODELS: Readonly<Record<string, EmbeddingModel>> = Object.freeze({
+export const EMBEDDING_MODELS: Readonly<Record<string, EmbeddingModel>> = frozenCatalog({
   multilingual: Object.freeze({
     alias: "multilingual",
     hfId: "Xenova/paraphrase-multilingual-MiniLM-L12-v2",
@@ -504,7 +534,7 @@ export interface RerankerModel {
  * Each entry trades off quality vs latency vs download size; see comments
  * inline for guidance. Frozen at module load.
  */
-export const RERANKER_MODELS: Readonly<Record<string, RerankerModel>> = Object.freeze({
+export const RERANKER_MODELS: Readonly<Record<string, RerankerModel>> = frozenCatalog({
   // BGE-reranker-base — English, ~110 MB. Latency ~30-50ms per pair on M1 CPU.
   "rerank-bge": Object.freeze({
     alias: "rerank-bge",

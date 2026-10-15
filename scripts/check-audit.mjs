@@ -266,15 +266,19 @@ function advisoryTraceRank(packageName, vulnerabilities, visiting = new Set()) {
 }
 
 /**
- * Pure core — given an `npm audit --json` payload, return the distinct advisories at or
- * above `minSeverity` that are NOT allowlisted. Exported so the test can prove the gate
- * isn't vacuous (a real advisory id fails; the allowlisted id passes).
+ * Pure core — given an `npm audit --json` payload, return EVERY distinct
+ * advisory it reports, with no severity floor and no allowlist applied.
+ *
+ * The staleness check needs this wider view: an allowlisted advisory that is
+ * still reported is not stale, it is merely below the gate's threshold for its
+ * graph. Filtering first made "disappeared" and "below threshold"
+ * indistinguishable, so a legitimate dev-only waiver on a moderate advisory
+ * was reported stale and the gate demanded its removal.
+ *
  * @param {object} auditJson - parsed `npm audit --json`
- * @param {{minSeverity: keyof typeof SEV_RANK, allowlist: Record<string,string>}} opts
  * @returns {Array<{id:string, severity:string, title:string, module:string}>}
  */
-export function offendingAdvisories(auditJson, { minSeverity, allowlist }) {
-  const floor = SEV_RANK[minSeverity] ?? 2;
+export function reportedAdvisories(auditJson) {
   const found = new Map();
   for (const [pkg, v] of Object.entries(auditJson?.vulnerabilities ?? {})) {
     for (const via of v?.via ?? []) {
@@ -287,15 +291,30 @@ export function offendingAdvisories(auditJson, { minSeverity, allowlist }) {
         // advisory must still fail closed instead of disappearing from the gate.
         const id = ghsa ?? source ?? (url ? `url:${url}` : `unidentified:${pkg}:${via.title ?? "advisory"}`);
         const sev = typeof (via.severity ?? v.severity) === "string" ? (via.severity ?? v.severity) : "unknown";
-        const rank = SEV_RANK[sev];
-        // Unknown future severities fail closed. Known severities below the
-        // configured floor retain the existing scoped behavior.
-        if (rank !== undefined && rank < floor) continue;
         found.set(id, { id, severity: sev, title: via.title ?? "", module: via.name ?? pkg });
       }
     }
   }
-  return [...found.values()].filter((a) => !allowlist[a.id]);
+  return [...found.values()];
+}
+
+/**
+ * Pure core — given an `npm audit --json` payload, return the distinct advisories at or
+ * above `minSeverity` that are NOT allowlisted. Exported so the test can prove the gate
+ * isn't vacuous (a real advisory id fails; the allowlisted id passes).
+ * @param {object} auditJson - parsed `npm audit --json`
+ * @param {{minSeverity: keyof typeof SEV_RANK, allowlist: Record<string,string>}} opts
+ * @returns {Array<{id:string, severity:string, title:string, module:string}>}
+ */
+export function offendingAdvisories(auditJson, { minSeverity, allowlist }) {
+  const floor = SEV_RANK[minSeverity] ?? 2;
+  return reportedAdvisories(auditJson).filter((advisory) => {
+    const rank = SEV_RANK[advisory.severity];
+    // Unknown future severities fail closed. Known severities below the
+    // configured floor retain the existing scoped behavior.
+    if (rank !== undefined && rank < floor) return false;
+    return !allowlist[advisory.id];
+  });
 }
 
 /**
@@ -597,8 +616,13 @@ if (isEntrypoint(import.meta.url)) {
   const offenders = [...new Map([...prod, ...dev, ...consumer].map((a) => [a.id, a])).values()];
   const allowed = Object.keys(effectiveConsumerAllowlist);
   const sourceAll = [...new Map([...prodAll, ...devAll].map((a) => [a.id, a])).values()];
-  const staleSourceAllowlist = staleAllowlistEntries(sourceAll, ALLOWLIST);
-  const staleConsumerAllowlist = staleAllowlistEntries(consumerAll, CONSUMER_ALLOWLIST);
+  // Staleness asks "did this advisory disappear?", so it must see every reported
+  // advisory, not only the ones at or above each graph's threshold: a dev-only
+  // waiver on a moderate advisory is still live and must not be reported stale.
+  const sourceReported = [...reportedAdvisories(prodAudit), ...reportedAdvisories(devAudit)];
+  const consumerReported = reportedAdvisories(consumerAudit);
+  const staleSourceAllowlist = staleAllowlistEntries(sourceReported, ALLOWLIST);
+  const staleConsumerAllowlist = staleAllowlistEntries(consumerReported, CONSUMER_ALLOWLIST);
   const invalidSourceAllowlist = invalidAllowlistEntries(ALLOWLIST);
   const invalidConsumerAllowlist = invalidAllowlistEntries(CONSUMER_ALLOWLIST);
   if (offenders.length > 0) {

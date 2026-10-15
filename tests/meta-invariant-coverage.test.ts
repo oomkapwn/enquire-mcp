@@ -110,6 +110,11 @@ const EXPECTED_NAMED_STRUCTURAL_FILES = [
   "abs-path-leak-invariant.test.ts",
   "cache-isolation-invariant.test.ts",
   "cli-flag-docs-invariant.test.ts",
+  // Added 2026-10-15 after the residue audit: seven lines of unresolved-merge
+  // residue reached main with every gate green, because no gate scanned tracked
+  // text for it. The sweep is structural (it reads every tracked file) and its
+  // two negative controls are inside the file, so it belongs under this census.
+  "conflict-residue-invariant.test.ts",
   "docker-glama-invariant.test.ts",
   "enforcement-guard-invariant.test.ts",
   "entrypoint-guard-invariant.test.ts",

@@ -58,6 +58,18 @@ All notable changes to this project will be documented here. The format follows 
 >
 > **Method note:** every control's expectation was executed against the REAL exported function before committing — `scripts/check-audit.mjs` imports only stdlib plus its own lib, so the assertions run under plain `node` without the project's toolchain, giving 21/21. Causality was then proven by removing the guard from a `/tmp` copy and re-running: exactly the 14 fault-signal assertions went red while the 7 positives and pre-existing negatives stayed green. The nine-shape old-vs-new comparison is likewise a stdlib mirror, so the bounded claim above is measured, not asserted. Under D-45 no local test or build was run; hosted CI is the validation authority.
 
+### The npm description can finally say that 2329 counts registrations (anchor vocabulary widened)
+
+> **TL;DR:** **`package.json`'s description is an ANCHOR for `bump-test-count`: `readDeclaredCount` aborted the entire script with *"does not declare a recognisable test count"* unless the text matched `(?<![\d])(\d{3,5})(?=\s*\+?\s*tests?\b)`. That shape made the most public surface unable to say what its number is. The pattern now accepts a CLOSED qualifier list, and the description reads "2329 declared test registrations".**
+>
+> **Why it was shaped that way and is now widened.** The census counts `it(` registrations; the suite EXECUTES 3424 cases, because 136 `it.each`/`test.each` sites expand. "2329 tests" on the npm front page is therefore a 1.47x precision claim. The ten translated READMEs, `llms.txt` and `AGENTS.md` already hedge; the anchor's own vocabulary was the only thing stopping the one surface that matters most.
+>
+> **Closed on purpose.** The qualifier set is `declared|registered|source|unit|total`, at most two in a row. An unlisted qualifier — "100 arbitrary tests", "100 integration tests" — makes the script **abort loudly** rather than widening the match. That direction is the point: the expensive failure is silently reading some OTHER number off a surface, and an unknown qualifier must cost a maintainer a failed run, not a wrong count.
+>
+> **Bounded claim.** One named constant replacing one inline regex, plus the description's wording. `readDeclaredCount`'s agreement check between the two anchors is untouched, the rewrite path is untouched — `tokenPattern` matches the digits directly, so the next count bump rewrites "2329 declared test registrations" exactly as it rewrote "2329 tests" — and every other surface, exclusion and dry-run behaviour is unchanged. Two controls: six phrasings that must be read, three that must abort.
+>
+> **Method note:** both controls were executed against the real `scripts/bump-test-count.mjs` before the commit, against a synthetic 100-`it(` repo built exactly as the existing P02 controls build theirs. The negative direction is asserted for all three rejected phrasings rather than one, because a list-based pattern is precisely where an over-broad acceptance would hide.
+
 ### The public test count says what it counts: registrations, not cases
 
 > **TL;DR:** **`2329` is the number of `it(` registrations in `tests/`. The suite actually EXECUTES `3424` cases** — measured from a green `test (22)` run (`3214 passed | 210 skipped`). Calling 2329 "tests" overstates the precision by 1.47x on the surfaces a reader sees first, including the npm package description. The prose now says what the number is; the machine-pinned forms are untouched.**
@@ -404,9 +416,9 @@ All notable changes to this project will be documented here. The format follows 
 
 - FTS5 schema **v7**: a sibling FTS5 table `chunk_parts` carries, for every identifier-bearing chunk, the words each compound identifier is spelled from (camelCase, upper-case runs, digit edges; NFC; bounded by truncation) next to a copy of that chunk's text. A search runs `chunks` exactly as v6 did and appends `chunk_parts`-only hits after every ranked hit with score 0 — found, never ranked — so `poolDayData` becomes reachable by "pool day data" while no rank moves for any query. (A weight-0 column inside `chunks` was measured on CI to move ranks: FTS5's bm25() normalises by the whole row's length.) An existing persistent index rebuilds once on first open; both schema admission maps admit v7.
 
-### Tests (2329)
+### Tests (2331)
 
-**2228 → 2329 source tests.** Sixty-one new causal contracts cover the audit closures and staged embedding replacement above; table-driven phases additionally exercise rollback, authority ordering, fail-fast sync operations, clear/replacement interlocks, and promotion refusal without inflating the declared `it()` count.
+**2228 → 2331 source tests.** Sixty-one new causal contracts cover the audit closures and staged embedding replacement above; table-driven phases additionally exercise rollback, authority ordering, fail-fast sync operations, clear/replacement interlocks, and promotion refusal without inflating the declared `it()` count.
 ### Maintainer handoff reflects the post-AH-4 repository state
 
 > **TL;DR:** **The agent handoff now starts from the shipped AH-4 boundary instead of the earlier rc.6 release attempt.** `CLAUDE.md` records that PR #565 completed staged embedding replacement, that its candidate and squash-main checks passed, that no product implementation is currently in flight, and that distribution remains deferred. The next bounded action is a read-only AH-4 sibling sweep before one backlog card is selected.

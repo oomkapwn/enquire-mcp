@@ -76,6 +76,22 @@ const EXCLUDED = [
   "tests/fixtures/release-mutation-transition.v3.json"
 ];
 
+/**
+ * How an ANCHOR surface may phrase the declared count.
+ *
+ * The census counts `it(` REGISTRATIONS, which is not the number of executed
+ * cases (`it.each` expands), so an anchor that has to say "2329 tests" is also
+ * asserting a precision it does not have. A closed qualifier list lets the
+ * anchors say what they count — "2329 declared test registrations" — without
+ * opening the match to any digits followed by any word ending in "test".
+ *
+ * CLOSED on purpose: an unknown qualifier aborts the script loudly instead of
+ * silently matching some other number, which is the direction that costs a
+ * maintainer a wrong count rather than a failed run.
+ */
+const DECLARED_COUNT_PATTERN =
+  /(?<![\d])(\d{3,5})(?=\s*\+?\s*(?:(?:declared|registered|source|unit|total)\s+){0,2}tests?\b)/i;
+
 /** Two independent declarations of the current count; they must agree before anything is written. */
 const ANCHORS = ["package.json", "AGENTS.md"];
 
@@ -288,7 +304,7 @@ export function rewriteSurface(source, relativePath, previous, next, version) {
 export function readDeclaredCount(repoRoot = DEFAULT_REPO_ROOT) {
   const found = new Map();
   for (const relativePath of ANCHORS) {
-    const match = read(repoRoot, relativePath).match(/(?<![\d])(\d{3,5})(?=\s*\+?\s*tests?\b)/i);
+    const match = read(repoRoot, relativePath).match(DECLARED_COUNT_PATTERN);
     if (match === null) fail(`${relativePath} does not declare a recognisable test count`);
     found.set(relativePath, Number(match[1]));
   }

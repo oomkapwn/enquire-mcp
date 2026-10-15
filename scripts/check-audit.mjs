@@ -599,15 +599,13 @@ if (isEntrypoint(import.meta.url)) {
   // Same thresholds as the bare gate this replaces: prod ≥ moderate, dev ≥ high.
   const prodAudit = runAudit("--omit=dev", REPO_ROOT, "source-prod");
   const devAudit = runAudit("--include=dev", REPO_ROOT, "source-dev");
-  const prodAll = offendingAdvisories(prodAudit, { minSeverity: "moderate", allowlist: {} });
-  const devAll = offendingAdvisories(devAudit, { minSeverity: "high", allowlist: {} });
-  // A source exception is DEV-ONLY by construction. Passing ALLOWLIST here too (it used to) let a
-  // waiver silently cover the production graph as well, so a dependency that later became
-  // production-reachable would have been allowed without anyone changing the allowlist.
-  const prod = prodAll;
+  // A source exception is DEV-ONLY by construction. Passing ALLOWLIST to the prod
+  // call too (it used to) let a waiver silently cover the production graph as well, so a
+  // dependency that later became production-reachable would have been allowed without
+  // anyone changing the allowlist.
+  const prod = offendingAdvisories(prodAudit, { minSeverity: "moderate", allowlist: {} });
   const dev = offendingAdvisories(devAudit, { minSeverity: "high", allowlist: ALLOWLIST });
   const { audit: consumerAudit, version: consumerVersion } = runPublishedConsumerAudit();
-  const consumerAll = offendingAdvisories(consumerAudit, { minSeverity: "moderate", allowlist: {} });
   const effectiveConsumerAllowlist = consumerAllowlistForVersion(consumerVersion, CONSUMER_ALLOWLIST);
   const consumer = offendingAdvisories(consumerAudit, {
     minSeverity: "moderate",
@@ -615,7 +613,6 @@ if (isEntrypoint(import.meta.url)) {
   });
   const offenders = [...new Map([...prod, ...dev, ...consumer].map((a) => [a.id, a])).values()];
   const allowed = Object.keys(effectiveConsumerAllowlist);
-  const sourceAll = [...new Map([...prodAll, ...devAll].map((a) => [a.id, a])).values()];
   // Staleness asks "did this advisory disappear?", so it must see every reported
   // advisory, not only the ones at or above each graph's threshold: a dev-only
   // waiver on a moderate advisory is still live and must not be reported stale.

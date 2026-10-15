@@ -89,7 +89,8 @@ const EXCLUDED = [
  * silently matching some other number, which is the direction that costs a
  * maintainer a wrong count rather than a failed run.
  */
-const DECLARED_COUNT_PATTERN = /(?<![\d])(\d{3,5})(?=\s*\+?\s*(?:(?:declared|registered|source|unit|total)\s+){0,2}tests?\b)/i;
+const DECLARED_COUNT_PATTERN =
+  /(?<![\d])(\d{3,5})(?=\s*\+?\s*(?:(?:declared|registered|source|unit|total)\s+){0,2}tests?\b)/i;
 
 /** Two independent declarations of the current count; they must agree before anything is written. */
 const ANCHORS = ["package.json", "AGENTS.md"];

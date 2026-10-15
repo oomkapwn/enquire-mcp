@@ -15,6 +15,7 @@ import {
   offendingAdvisories,
   packedConsumerManifest,
   releaseChannelForVersion,
+  reportedAdvisories,
   retryableAuditError,
   staleAllowlistEntries,
   validateAuditReport,
@@ -117,6 +118,34 @@ describe("check-audit scoped gate (rc.50)", () => {
         "GHSA-now-fixed": "Remove at upstream URL"
       })
     ).toEqual(["GHSA-now-fixed"]);
+
+    // A live dev-only waiver below the dev threshold (high) is NOT stale: it is
+    // merely under the floor. Before this, the staleness check consumed the
+    // THRESHOLDED set, so "disappeared" and "below threshold" were
+    // indistinguishable and the gate demanded removal of a valid exception.
+    const belowFloorDev = {
+      vulnerabilities: {
+        "dev-only": {
+          name: "dev-only",
+          severity: "moderate",
+          via: [
+            {
+              source: 1094,
+              name: "dev-only",
+              severity: "moderate",
+              title: "moderate dev advisory",
+              url: "https://github.com/advisories/GHSA-below-below-below"
+            }
+          ]
+        }
+      }
+    };
+    const belowFloorAllow = { "GHSA-below-below-below": "Remove at https://github.com/o/r/issues/1" };
+    expect(offendingAdvisories(belowFloorDev, { minSeverity: "high", allowlist: {} })).toEqual([]);
+    expect(reportedAdvisories(belowFloorDev).map((a) => a.id)).toEqual(["GHSA-below-below-below"]);
+    expect(staleAllowlistEntries(reportedAdvisories(belowFloorDev), belowFloorAllow)).toEqual([]);
+    // NOT weakened: an entry whose advisory really left the report is still stale.
+    expect(staleAllowlistEntries([], belowFloorAllow)).toEqual(["GHSA-below-below-below"]);
     expect(
       invalidAllowlistEntries({
         "GHSA-no-removal": "https://github.com/upstream/issues/1",

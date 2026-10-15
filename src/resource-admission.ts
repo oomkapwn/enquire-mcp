@@ -174,6 +174,18 @@ export function decodeResourceCursor(cursor: string): string {
   if (relPath.length === 0 || relPath.includes("\u0000")) {
     throw new ResourceCursorError("Invalid resources/list cursor");
   }
+  // F05 — `Buffer.from(x, "base64url")` is PERMISSIVE: characters outside the
+  // alphabet are ignored rather than rejected, and a truncated token decodes
+  // to a SHORTER BUT STILL PLAUSIBLE path. Measured: dropping one character
+  // from the token for `Projects/plan.md` yields `Projects/plan.m`, so the
+  // listing silently resumed from the wrong position instead of failing.
+  //
+  // A token this server mints is by definition the canonical encoding of
+  // `v1:<path>`, so requiring the decode/encode round-trip to reproduce the
+  // input byte-for-byte is EXACT: every minted token still passes, while junk
+  // characters, truncation and non-canonical forms all fail the one equality.
+  const canonical = Buffer.from(`${CURSOR_PREFIX}${relPath}`, "utf8").toString("base64url");
+  if (canonical !== cursor) throw new ResourceCursorError("Invalid resources/list cursor");
   return relPath;
 }
 

@@ -34,7 +34,7 @@ import { releaseMutationVersionedTransitionAuditProblems } from "./release-mutat
 
 const repoRoot = path.resolve(__dirname, "..");
 const RELEASE_MUTATION_IDENTITY_FIXTURE_SHA256 = "8205d24e6d42dd4cb8986368611514131abe701434beb30150e33ea08f4b1288";
-const RELEASE_MUTATION_TRANSITION_FIXTURE_SHA256 = "85552f1835488e5c27f7bf2cefce14021fb85742a79a374c0316b919721eeb93";
+const RELEASE_MUTATION_TRANSITION_FIXTURE_SHA256 = "ef88208203f52af17e01f78323dc062fdb8e837136696dd71c5245eccaf99de6";
 const releaseMutationIdentityFixturePath = path.join(repoRoot, "tests/fixtures/release-mutation-identity.v2.json");
 const releaseMutationTransitionFixturePath = path.join(repoRoot, "tests/fixtures/release-mutation-transition.v3.json");
 const releaseIntegritySourcePath = path.join(repoRoot, "tests/release-integrity.test.ts");
@@ -347,7 +347,7 @@ const EXPECTED_REPOSITORY_MUTATION_HELPER_CALL_ENTRIES = [
   ],
   [
     "resource-list-admission.test.ts",
-    { count: 3, sha256: "0b908227d43526ff5ce1534bd95ac1279b7d49b25ed1ae75f7ca1b13bd269a74" }
+    { count: 3, sha256: "d94ab7ac9e2af8d878c18b8c5bda5578406946f739f493d868ce23588367629c" }
   ],
   [
     "sink-parity-invariant.test.ts",

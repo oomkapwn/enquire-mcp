@@ -7,12 +7,12 @@
 // agree" without ever looking at them. These controls build a synthetic repo
 // so the rejection is proven causally, without mutating the real tree.
 
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 // @ts-expect-error — .mjs script, no types; we exercise the pure exported core.
-import { buildBumpPlan, bumpTestCount } from "../scripts/bump-test-count.mjs";
+import { buildBumpPlan, bumpTestCount, readDeclaredCount } from "../scripts/bump-test-count.mjs";
 
 /** The synthetic census: one file, exactly 100 `it(` registrations. */
 const COUNT = 100;
@@ -164,5 +164,51 @@ describe("P02: --check rejects partial scoped drift even when anchors equal the 
     expect(joined).toContain("drifted CHANGELOG.md");
     expect(joined).toContain("drifted CLAUDE.md");
     expect(joined).not.toContain("surfaces already agree with the census");
+  });
+
+  it("an anchor may say WHAT it counts, and still be read", () => {
+    // The census counts `it(` registrations, not executed cases, so an anchor
+    // forced to write "N tests" also asserts a precision it lacks. The pattern
+    // accepts a CLOSED qualifier list, so the npm description can say
+    // "N declared test registrations" instead.
+    writeSyntheticRepo(root, COUNT, COUNT);
+    const descriptionPath = path.join(root, "package.json");
+    const original = readFileSync(descriptionPath, "utf8");
+    try {
+      for (const phrasing of [
+        "100 tests",
+        "100+ tests",
+        "100 unit tests",
+        "100 declared test registrations",
+        "100 registered tests",
+        "100 source tests"
+      ]) {
+        writeFileSync(
+          descriptionPath,
+          JSON.stringify({ description: `47 tools, 19 prompts, ${phrasing}, MIT` }, null, 2),
+          "utf8"
+        );
+        expect(readDeclaredCount(root), phrasing).toBe(COUNT);
+      }
+    } finally {
+      writeFileSync(descriptionPath, original, "utf8");
+    }
+  });
+
+  it("NEGATIVE: the qualifier list is closed — an unknown one aborts, it does not guess", () => {
+    // The dangerous failure is silently matching some OTHER number, so an
+    // unlisted qualifier must abort loudly rather than be tolerated.
+    writeSyntheticRepo(root, COUNT, COUNT);
+    const descriptionPath = path.join(root, "package.json");
+    const original = readFileSync(descriptionPath, "utf8");
+    for (const phrasing of ["100 arbitrary tests", "100 questionable tests", "100 integration tests"]) {
+      writeFileSync(
+        descriptionPath,
+        JSON.stringify({ description: `47 tools, 19 prompts, ${phrasing}, MIT` }, null, 2),
+        "utf8"
+      );
+      expect(() => readDeclaredCount(root), phrasing).toThrow(/does not declare a recognisable test count/);
+    }
+    writeFileSync(descriptionPath, original, "utf8");
   });
 });

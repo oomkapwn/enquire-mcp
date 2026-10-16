@@ -1,4 +1,3 @@
-import { Buffer } from "node:buffer";
 import { spawn } from "node:child_process";
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
@@ -76,12 +75,7 @@ import {
   renderShellCommand,
   shellQuote
 } from "./mcp-config.js";
-import {
-  acquireOcrLanguagePack,
-  OCR_LANG_DOWNLOAD_BASE_URL,
-  ocrLangIsInstalled,
-  resolveTessdataDir
-} from "./ocr.js";
+import { acquireOcrLanguagePack, OCR_LANG_DOWNLOAD_BASE_URL, ocrLangIsInstalled, resolveTessdataDir } from "./ocr.js";
 import { resolvePersistenceLeaseScope } from "./persistence-lease.js";
 import { validateServeHttpRetrievalOpts } from "./retrieval-opts.js";
 import { FTS_SCHEMA_VERSION } from "./schema-contract.js";

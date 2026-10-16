@@ -5,7 +5,7 @@
 // controls per the CLAUDE.md rule since v3.6.4.
 
 import { Buffer } from "node:buffer";
-import { promises as fs } from "node:fs";
+import { mkdtempSync, promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -151,7 +151,7 @@ describe("resolveOcrPageRange (v3.9.0-rc.10)", () => {
 describe("acquireOcrLanguagePack — bounded, staged, never half-installed (AH-8)", () => {
   const roots: string[] = [];
   beforeEach(() => {
-    roots.push(fs.mkdtempSync(path.join(os.tmpdir(), "enquire-ocr-acquire-")));
+    roots.push(mkdtempSync(path.join(os.tmpdir(), "enquire-ocr-acquire-")));
   });
   afterEach(async () => {
     await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })));

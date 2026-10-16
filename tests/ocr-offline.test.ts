@@ -5,7 +5,7 @@
 // controls per the CLAUDE.md rule since v3.6.4.
 
 import { Buffer } from "node:buffer";
-import { mkdtempSync, promises as fs } from "node:fs";
+import { promises as fs, mkdtempSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";

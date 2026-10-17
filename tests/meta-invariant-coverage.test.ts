@@ -1814,6 +1814,17 @@ function isObviouslyReachableWithinSource(node: ts.Node, sourceFile: ts.SourceFi
 }
 
 /** Recognize each reviewed non-mutation transform by exact file and AST identity. */
+/**
+ * Reviewed transforms whose frozen OWNER sha no longer matches the file, with
+ * the COMPUTED value attached.
+ *
+ * These digests come from the parsed AST, so on a machine without the
+ * `typescript` package the only place the new value exists is the failing CI
+ * run. Reported next to the bare "unclassified raw .replace" problem, which on
+ * its own tells an editor that a pin moved but not what it must become.
+ */
+const REVIEWED_OWNER_SHA_DRIFT = new Set<string>();
+
 function reviewedOrdinaryTransformId(
   filename: string,
   node: ts.PropertyAccessExpression,
@@ -1840,7 +1851,28 @@ function reviewedOrdinaryTransformId(
       candidate.pattern === pattern.getText(sourceFile) &&
       candidate.replacement === replacement.getText(sourceFile)
   );
-  if (reviewed === undefined) return null;
+  if (reviewed === undefined) {
+    // Report WHICH pin moved and WHAT it must become. Without this the failure
+    // reads as a bare "unclassified raw .replace access", and the computed
+    // digest — obtainable only from a parsed AST — is unrecoverable locally.
+    const byOwner = REVIEWED_ORDINARY_TRANSFORMS.find(
+      (candidate) =>
+        candidate.filename === filename &&
+        candidate.method === node.name.text &&
+        owner !== null &&
+        candidate.owner === owner.id
+    );
+    if (byOwner !== undefined && owner !== null) {
+      const expected = EXPECTED_REVIEWED_ORDINARY_OWNER_SHA256.get(byOwner.id);
+      const computed = ordinaryTransformOwnerSha256(owner, sourceFile);
+      if (expected !== computed) {
+        REVIEWED_OWNER_SHA_DRIFT.add(
+          `${filename} ${byOwner.id} owner sha drifted; expected ${expected ?? "(unpinned)"}, computed ${computed}`
+        );
+      }
+    }
+    return null;
+  }
   if (filename !== "docs-consistency.test.ts") return reviewed.id;
 
   const declaration = call.parent;
@@ -3256,6 +3288,7 @@ function repositoryMutationOracleProblems(filename: string, source: string): str
       }
     }
   }
+  for (const drift of REVIEWED_OWNER_SHA_DRIFT) problems.push(drift);
   return problems;
 }
 

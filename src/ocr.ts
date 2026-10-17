@@ -46,7 +46,8 @@
 //     a missing language pack fails closed with an install hint
 
 import { Buffer } from "node:buffer";
-import { existsSync } from "node:fs";
+import { randomBytes } from "node:crypto";
+import { existsSync, promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
@@ -487,6 +488,100 @@ export function resolveTessdataDir(): string {
  */
 export function ocrLangIsInstalled(lang: string, dir: string = resolveTessdataDir()): boolean {
   return existsSync(path.join(dir, `${lang}.traineddata`));
+}
+
+/**
+ * Hard ceiling on one language-pack download. `tessdata_fast` packs are a few
+ * MB each, so this is generous by an order of magnitude — its job is to make an
+ * unbounded or hostile response impossible, not to be tight.
+ */
+export const MAX_OCR_LANG_DOWNLOAD_BYTES = 64 * 1024 * 1024;
+
+/** Wall-clock ceiling for the whole acquisition, connect and body alike. */
+export const OCR_LANG_DOWNLOAD_TIMEOUT_MS = 120_000;
+
+/** The single host an OCR pack may come from; the CLI builds its URL from this. */
+export const OCR_LANG_DOWNLOAD_BASE_URL = "https://github.com/tesseract-ocr/tessdata_fast/raw/main";
+
+/**
+ * Acquire one language pack under three bounds the previous path lacked: a
+ * deadline over the whole exchange, a byte ceiling enforced WHILE reading
+ * rather than after buffering, and a staged write that publishes by `rename`
+ * only once the bytes are complete.
+ *
+ * The publication rule is the point. {@link ocrLangIsInstalled} is an
+ * existence check, so a half-written pack left at the final path would read as
+ * installed, and the next `serve --ocr-pdfs` would fail deep inside the
+ * Tesseract worker instead of naming a bad download. A stage file is never
+ * visible to that check, and `rename` publishes atomically within a directory.
+ *
+ * @param lang - Tesseract language code, already validated by the CLI.
+ * @param destDir - Directory that will hold `<lang>.traineddata`.
+ * @param fetchImpl - Injectable seam for controls; production passes nothing.
+ * @returns The published byte count.
+ * @throws {Error} On network failure, a non-2xx response, an empty or oversized
+ *   body, or a deadline hit. No stage file survives any of them.
+ */
+export async function acquireOcrLanguagePack(
+  lang: string,
+  destDir: string,
+  fetchImpl: typeof fetch = fetch
+): Promise<number> {
+  const dest = path.join(destDir, `${lang}.traineddata`);
+  const stage = `${dest}.enquire-stage-${randomBytes(12).toString("hex")}`;
+  const deadline = AbortSignal.timeout(OCR_LANG_DOWNLOAD_TIMEOUT_MS);
+  const controller = new AbortController();
+  const onDeadline = (): void => {
+    controller.abort();
+  };
+  deadline.addEventListener("abort", onDeadline, { once: true });
+
+  try {
+    let response: Response;
+    try {
+      response = await fetchImpl(`${OCR_LANG_DOWNLOAD_BASE_URL}/${lang}.traineddata`, {
+        signal: controller.signal
+      });
+    } catch (error) {
+      if (deadline.aborted) {
+        throw new Error(`OCR language '${lang}' download exceeded ${OCR_LANG_DOWNLOAD_TIMEOUT_MS} ms`);
+      }
+      throw new Error(`network error fetching OCR language '${lang}'`, { cause: error });
+    }
+    if (!response.ok) throw new Error(`OCR language '${lang}' download failed (HTTP ${response.status})`);
+
+    const parts: Buffer[] = [];
+    let total = 0;
+    const reader = response.body?.getReader();
+    if (reader === undefined) {
+      const buffered = Buffer.from(await response.arrayBuffer());
+      if (buffered.byteLength > MAX_OCR_LANG_DOWNLOAD_BYTES) {
+        throw new Error(`OCR language '${lang}' is ${buffered.byteLength} bytes, over the download bound`);
+      }
+      parts.push(buffered);
+      total = buffered.byteLength;
+    } else {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        total += value.byteLength;
+        if (total > MAX_OCR_LANG_DOWNLOAD_BYTES) {
+          await reader.cancel();
+          throw new Error(`OCR language '${lang}' exceeded the ${MAX_OCR_LANG_DOWNLOAD_BYTES}-byte download bound`);
+        }
+        parts.push(Buffer.from(value));
+      }
+    }
+    if (total === 0) throw new Error(`OCR language '${lang}' download was empty`);
+
+    await fs.mkdir(destDir, { recursive: true });
+    await fs.writeFile(stage, Buffer.concat(parts, total));
+    await fs.rename(stage, dest);
+    return total;
+  } finally {
+    deadline.removeEventListener("abort", onDeadline);
+    await fs.unlink(stage).catch(() => undefined);
+  }
 }
 
 /**

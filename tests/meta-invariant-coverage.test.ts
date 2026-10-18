@@ -1822,6 +1822,11 @@ function isObviouslyReachableWithinSource(node: ts.Node, sourceFile: ts.SourceFi
  * `typescript` package the only place the new value exists is the failing CI
  * run. Reported next to the bare "unclassified raw .replace" problem, which on
  * its own tells an editor that a pin moved but not what it must become.
+ *
+ * Scoped PER INVOCATION and to the file under analysis: this oracle is also
+ * driven against deliberately mutated negative-control fixtures, and a global
+ * sink would file their expected mismatch as a real file's drift — reporting
+ * two contradictory values for one pin.
  */
 const REVIEWED_OWNER_SHA_DRIFT = new Set<string>();
 
@@ -3288,7 +3293,10 @@ function repositoryMutationOracleProblems(filename: string, source: string): str
       }
     }
   }
-  for (const drift of REVIEWED_OWNER_SHA_DRIFT) problems.push(drift);
+  for (const drift of REVIEWED_OWNER_SHA_DRIFT) {
+    if (drift.startsWith(`${filename} `)) problems.push(drift);
+  }
+  REVIEWED_OWNER_SHA_DRIFT.clear();
   return problems;
 }
 

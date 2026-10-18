@@ -330,7 +330,7 @@ const EXPECTED_REPOSITORY_MUTATION_HELPER_CALL_ENTRIES = [
   ["jsonld.test.ts", { count: 11, sha256: "3595b905b156414aca69c02ca6e4ca1968b256095b233348842cdc9dbba749e4" }],
   [
     "meta-invariant-coverage.test.ts",
-    { count: 246, sha256: "b600469983af4bbaf081209e0bbe77b009208966a2cd9c7e0b2a3f9f695c1efe" }
+    { count: 246, sha256: "a9837f7f193d9248be3d9c78fa525ff5e0391af7d59db1559f0e72ae6864c88d" }
   ],
   [
     "no-internal-imports.test.ts",

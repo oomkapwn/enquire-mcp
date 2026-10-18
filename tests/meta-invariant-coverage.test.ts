@@ -34,7 +34,7 @@ import { releaseMutationVersionedTransitionAuditProblems } from "./release-mutat
 
 const repoRoot = path.resolve(__dirname, "..");
 const RELEASE_MUTATION_IDENTITY_FIXTURE_SHA256 = "8205d24e6d42dd4cb8986368611514131abe701434beb30150e33ea08f4b1288";
-const RELEASE_MUTATION_TRANSITION_FIXTURE_SHA256 = "89feb2e79d9e079bea3473d72376ad9f35817413271b3a34b0153edcd77fa39e";
+const RELEASE_MUTATION_TRANSITION_FIXTURE_SHA256 = "c886596cd3b311aded027ca37c266b68ab7d8a4cdc53c9ec86e38965ea083a29";
 const releaseMutationIdentityFixturePath = path.join(repoRoot, "tests/fixtures/release-mutation-identity.v2.json");
 const releaseMutationTransitionFixturePath = path.join(repoRoot, "tests/fixtures/release-mutation-transition.v3.json");
 const releaseIntegritySourcePath = path.join(repoRoot, "tests/release-integrity.test.ts");
@@ -321,7 +321,7 @@ const EXPECTED_REPOSITORY_MUTATION_HELPER_CALL_ENTRIES = [
   ],
   [
     "k1-ast-invariant.test.ts",
-    { count: 4, sha256: "c7d3902e64f8c3869466febfd13cb051e30cd2da4b9246814c542fa0dde7e8b0" }
+    { count: 4, sha256: "8f4fa09a13b769ed79817b85411462d29100634dda3c160a7406bffddce1a3b2" }
   ],
   [
     "k1-class-invariant.test.ts",
@@ -330,7 +330,7 @@ const EXPECTED_REPOSITORY_MUTATION_HELPER_CALL_ENTRIES = [
   ["jsonld.test.ts", { count: 11, sha256: "3595b905b156414aca69c02ca6e4ca1968b256095b233348842cdc9dbba749e4" }],
   [
     "meta-invariant-coverage.test.ts",
-    { count: 246, sha256: "b600469983af4bbaf081209e0bbe77b009208966a2cd9c7e0b2a3f9f695c1efe" }
+    { count: 246, sha256: "a9837f7f193d9248be3d9c78fa525ff5e0391af7d59db1559f0e72ae6864c88d" }
   ],
   [
     "no-internal-imports.test.ts",
@@ -1001,8 +1001,8 @@ const EXPECTED_REVIEWED_ORDINARY_OWNER_SHA256_ENTRIES = [
   ["K-1 statement semicolon normalization", "9bb382eb2d071464957b3c6cec271cb2a843dfeeabd9225c92e4497597d839ef"],
   ["K-1 block-comment stripping", "693d87a3a5e80b88156a062d2935aa3e9e278aad769fd947ec897caffcbb4fdc"],
   ["K-1 line-comment stripping", "693d87a3a5e80b88156a062d2935aa3e9e278aad769fd947ec897caffcbb4fdc"],
-  ["K-1 module-extension normalization", "93d89e64dbdc69d21f5502c1e7173c565aad0a1bc6f2a29b0bd6396fe38f462e"],
-  ["K-1 source-path separator normalization", "651f3fb3e3cf501ef8b72050722c59f735a6906e4cdbc75d819083d9346d852a"],
+  ["K-1 module-extension normalization", "7b9e0143ac73e132f8271081c54ee3bd21fd958a1689c706b4297f73efaf3348"],
+  ["K-1 source-path separator normalization", "73c949badb4cab6d63ed82e6c0e4ef4249df127fbc8486a6d285d403a615eee8"],
   ["line-terminator block-comment stripping", "61bbbea7aac48eafa3a24d78998eb49e81a6e7911953f3c25ead27692923a80d"],
   ["line-terminator line-comment stripping", "61bbbea7aac48eafa3a24d78998eb49e81a6e7911953f3c25ead27692923a80d"],
   ["ReDoS source-path separator normalization", "1b31e3478ce12f357ad0de08f669cdd462aef1c92b5e40ea2b7252bf483dc9bd"],
@@ -1814,6 +1814,22 @@ function isObviouslyReachableWithinSource(node: ts.Node, sourceFile: ts.SourceFi
 }
 
 /** Recognize each reviewed non-mutation transform by exact file and AST identity. */
+/**
+ * Reviewed transforms whose frozen OWNER sha no longer matches the file, with
+ * the COMPUTED value attached.
+ *
+ * These digests come from the parsed AST, so on a machine without the
+ * `typescript` package the only place the new value exists is the failing CI
+ * run. Reported next to the bare "unclassified raw .replace" problem, which on
+ * its own tells an editor that a pin moved but not what it must become.
+ *
+ * Scoped PER INVOCATION and to the file under analysis: this oracle is also
+ * driven against deliberately mutated negative-control fixtures, and a global
+ * sink would file their expected mismatch as a real file's drift — reporting
+ * two contradictory values for one pin.
+ */
+const REVIEWED_OWNER_SHA_DRIFT = new Set<string>();
+
 function reviewedOrdinaryTransformId(
   filename: string,
   node: ts.PropertyAccessExpression,
@@ -1840,7 +1856,28 @@ function reviewedOrdinaryTransformId(
       candidate.pattern === pattern.getText(sourceFile) &&
       candidate.replacement === replacement.getText(sourceFile)
   );
-  if (reviewed === undefined) return null;
+  if (reviewed === undefined) {
+    // Report WHICH pin moved and WHAT it must become. Without this the failure
+    // reads as a bare "unclassified raw .replace access", and the computed
+    // digest — obtainable only from a parsed AST — is unrecoverable locally.
+    const byOwner = REVIEWED_ORDINARY_TRANSFORMS.find(
+      (candidate) =>
+        candidate.filename === filename &&
+        candidate.method === node.name.text &&
+        owner !== null &&
+        candidate.owner === owner.id
+    );
+    if (byOwner !== undefined && owner !== null) {
+      const expected = EXPECTED_REVIEWED_ORDINARY_OWNER_SHA256.get(byOwner.id);
+      const computed = ordinaryTransformOwnerSha256(owner, sourceFile);
+      if (expected !== computed) {
+        REVIEWED_OWNER_SHA_DRIFT.add(
+          `${filename} ${byOwner.id} owner sha drifted; expected ${expected ?? "(unpinned)"}, computed ${computed}`
+        );
+      }
+    }
+    return null;
+  }
   if (filename !== "docs-consistency.test.ts") return reviewed.id;
 
   const declaration = call.parent;
@@ -3256,6 +3293,10 @@ function repositoryMutationOracleProblems(filename: string, source: string): str
       }
     }
   }
+  for (const drift of REVIEWED_OWNER_SHA_DRIFT) {
+    if (drift.startsWith(`${filename} `)) problems.push(drift);
+  }
+  REVIEWED_OWNER_SHA_DRIFT.clear();
   return problems;
 }
 

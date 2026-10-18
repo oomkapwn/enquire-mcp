@@ -5,11 +5,12 @@
 // controls per the CLAUDE.md rule since v3.6.4.
 
 import { Buffer } from "node:buffer";
-import { promises as fs } from "node:fs";
+import { promises as fs, mkdtempSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  acquireOcrLanguagePack,
   assertOcrLangsInstalled,
   clampOcrScale,
   extractPdfWithOcr,
@@ -144,5 +145,68 @@ describe("resolveOcrPageRange (v3.9.0-rc.10)", () => {
   });
   it("THROWS on an inverted range instead of silently returning empty (NEGATIVE control)", () => {
     expect(() => resolveOcrPageRange([5, 2], 10)).toThrow(/invalid page range/i);
+  });
+});
+
+describe("acquireOcrLanguagePack — bounded, staged, never half-installed (AH-8)", () => {
+  const roots: string[] = [];
+  beforeEach(() => {
+    roots.push(mkdtempSync(path.join(os.tmpdir(), "enquire-ocr-acquire-")));
+  });
+  afterEach(async () => {
+    await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })));
+  });
+
+  const dir = (): string => roots[0] ?? "";
+  const pack = (): string => path.join(dir(), "rus.traineddata");
+  const stages = async (): Promise<string[]> =>
+    (await fs.readdir(dir())).filter((name) => name.includes(".enquire-stage-"));
+  const body = (bytes: Buffer): Response => new Response(ReadableStream.from([bytes]), { status: 200 });
+
+  it("publishes a complete pack and leaves no stage file behind", async () => {
+    const payload = Buffer.from("TRAINEDDATA-PAYLOAD");
+    const written = await acquireOcrLanguagePack("rus", dir(), async () => body(payload));
+    expect(written).toBe(payload.byteLength);
+    expect(await fs.readFile(pack(), "utf8")).toBe("TRAINEDDATA-PAYLOAD");
+    expect(await stages()).toEqual([]);
+    // The existence check that guards offline serve now sees a REAL pack.
+    expect(ocrLangIsInstalled("rus", dir())).toBe(true);
+  });
+
+  it("NEGATIVE: an oversized body is refused and never published", async () => {
+    // The bound is checked WHILE reading, so a server that streams past it
+    // never gets to finish buffering first.
+    await expect(
+      acquireOcrLanguagePack("rus", dir(), async () => body(Buffer.alloc(64 * 1024 * 1024 + 1)))
+    ).rejects.toThrow(/exceeded the .*-byte download bound/);
+    expect(ocrLangIsInstalled("rus", dir())).toBe(false);
+    expect(await stages()).toEqual([]);
+  });
+
+  it("NEGATIVE: a non-2xx, an empty body and a transport throw all publish nothing", async () => {
+    await expect(
+      acquireOcrLanguagePack("rus", dir(), async () => new Response("nope", { status: 404 }))
+    ).rejects.toThrow(/HTTP 404/);
+    await expect(acquireOcrLanguagePack("rus", dir(), async () => body(Buffer.alloc(0)))).rejects.toThrow(
+      /download was empty/
+    );
+    await expect(
+      acquireOcrLanguagePack("rus", dir(), async () => {
+        throw new Error("ECONNREFUSED");
+      })
+    ).rejects.toThrow(/network error fetching/);
+    expect(ocrLangIsInstalled("rus", dir())).toBe(false);
+    expect(await stages()).toEqual([]);
+  });
+
+  it("NEGATIVE: a refused download leaves a previous good pack untouched", async () => {
+    // Pre-fix the bytes went straight to the final path, so any interruption
+    // produced a half-pack that existsSync then reported as INSTALLED.
+    await fs.writeFile(pack(), "PREVIOUS-GOOD-PACK");
+    await expect(
+      acquireOcrLanguagePack("rus", dir(), async () => body(Buffer.alloc(64 * 1024 * 1024 + 1)))
+    ).rejects.toThrow();
+    expect(await fs.readFile(pack(), "utf8")).toBe("PREVIOUS-GOOD-PACK");
+    expect(await stages()).toEqual([]);
   });
 });

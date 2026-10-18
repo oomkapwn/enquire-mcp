@@ -1,4 +1,3 @@
-import { Buffer } from "node:buffer";
 import { spawn } from "node:child_process";
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
@@ -76,7 +75,7 @@ import {
   renderShellCommand,
   shellQuote
 } from "./mcp-config.js";
-import { ocrLangIsInstalled, resolveTessdataDir } from "./ocr.js";
+import { acquireOcrLanguagePack, OCR_LANG_DOWNLOAD_BASE_URL, ocrLangIsInstalled, resolveTessdataDir } from "./ocr.js";
 import { resolvePersistenceLeaseScope } from "./persistence-lease.js";
 import { validateServeHttpRetrievalOpts } from "./retrieval-opts.js";
 import { FTS_SCHEMA_VERSION } from "./schema-contract.js";
@@ -935,30 +934,23 @@ export async function main(invocation?: ConfigInput["invocation"]): Promise<void
         process.stdout.write(`enquire: OCR language '${lang}' already installed (${dest}).\n`);
         return;
       }
-      const url = `https://github.com/tesseract-ocr/tessdata_fast/raw/main/${lang}.traineddata`;
-      process.stderr.write(`enquire: downloading Tesseract language pack '${lang}' from ${url} ...\n`);
-      let res: Response;
+      // AH-8 — the download itself is bounded and staged in ocr.ts: a deadline
+      // over the whole exchange, a byte ceiling enforced while reading rather
+      // than after buffering, and publication by rename so a partial pack can
+      // never be mistaken for an installed one.
+      process.stderr.write(
+        `enquire: downloading Tesseract language pack '${lang}' from ${OCR_LANG_DOWNLOAD_BASE_URL}/${lang}.traineddata ...\n`
+      );
+      let written: number;
       try {
-        res = await fetch(url);
+        written = await acquireOcrLanguagePack(lang, dir);
       } catch (err) {
-        process.stderr.write(
-          `enquire install-ocr-lang: network error fetching '${lang}': ${err instanceof Error ? err.message : String(err)}\n`
-        );
+        process.stderr.write(`enquire install-ocr-lang: ${err instanceof Error ? err.message : String(err)}\n`);
         process.exit(1);
         return;
       }
-      if (!res.ok) {
-        process.stderr.write(
-          `enquire install-ocr-lang: download failed (HTTP ${res.status}) for '${lang}'. ` +
-            "Verify the code exists at https://github.com/tesseract-ocr/tessdata_fast.\n"
-        );
-        process.exit(1);
-      }
-      const bytes = Buffer.from(await res.arrayBuffer());
-      await fs.mkdir(dir, { recursive: true });
-      await fs.writeFile(dest, bytes);
       process.stdout.write(
-        `enquire: OCR language '${lang}' ready (${(bytes.length / 1e6).toFixed(1)} MB, cached at ${dest}). ` +
+        `enquire: OCR language '${lang}' ready (${(written / 1e6).toFixed(1)} MB, cached at ${dest}). ` +
           "`serve --ocr-pdfs` now OCRs this language fully offline.\n"
       );
     });

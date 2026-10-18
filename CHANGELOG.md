@@ -58,6 +58,18 @@ All notable changes to this project will be documented here. The format follows 
 >
 > **Method note:** every control's expectation was executed against the REAL exported function before committing — `scripts/check-audit.mjs` imports only stdlib plus its own lib, so the assertions run under plain `node` without the project's toolchain, giving 21/21. Causality was then proven by removing the guard from a `/tmp` copy and re-running: exactly the 14 fault-signal assertions went red while the 7 positives and pre-existing negatives stayed green. The nine-shape old-vs-new comparison is likewise a stdlib mirror, so the bounded claim above is measured, not asserted. Under D-45 no local test or build was run; hosted CI is the validation authority.
 
+### The OCR language download is bounded, staged, and cannot leave a half-installed pack (AH-8)
+
+> **TL;DR:** **`install-ocr-lang` fetched a language pack with no deadline, buffered the whole body with `arrayBuffer()`, and wrote the bytes straight to the final path. An interrupted write left a truncated `<lang>.traineddata`, which `ocrLangIsInstalled` — an `existsSync` check — then reported as INSTALLED, so the failure surfaced later as a Tesseract worker error instead of a bad download. The download now has a deadline, a byte ceiling enforced while reading, and publication by `rename`.**
+>
+> **Three bounds, and the publication rule is the load-bearing one.** A `.enquire-stage-<token>` file sits beside the destination, invisible to the existence check, and `rename` publishes atomically within a directory. The `finally` removes the stage on every path, so no refusal leaves debris. The byte ceiling is checked per chunk as the body arrives, not after buffering — a server that streams past the bound never gets to finish loading the response first.
+>
+> **What is deliberately unchanged.** The URL still comes from the single documented `tessdata_fast` host, the written file is still the uncompressed `<lang>.traineddata` that `assertOcrLangsInstalled` requires, the CLI's messages and exit codes are the same, and the offline guarantee is unaffected: `serve` still never downloads. The model path is untouched — it is delegated to transformers.js and was never the unbounded one.
+>
+> **Bounded claim.** One new exported helper plus a closed qualifier list of failure messages, and a 36-line call site in `cli.ts` reduced to one awaited call. The 64 MiB ceiling is generous by an order of magnitude over a real `tessdata_fast` pack (a few MB) — its job is to make an unbounded or hostile response impossible, not to be tight. Four controls: one positive (a complete pack publishes, no stage survives, the existence check sees it) and three negative (oversized refused mid-stream; non-2xx, empty and transport-throw all publish nothing; a previously good pack survives a refused download byte-for-byte).
+>
+> **Method note:** every expectation was executed before the commit against a mirror extracted from the function itself, over a real temp directory with a real staged write and rename. That caught a **wrong control, not a wrong fix**: the assertion was written `/exceeded the .* -byte download bound/` with a space, while the message reads `67108864-byte`. This is the fourth time this week a plausible-sounding expectation exceeded the contract — after `#Open question:` in FA-09, `marker-tail extra` in the residue gate, and `drop 2` in F05 — and the fourth time a check run before the commit is what kept it from costing a CI round. Under D-45 no local test or build was run; hosted CI is the validation authority.
+
 ### The npm description can finally say that 2329 counts registrations (anchor vocabulary widened)
 
 > **TL;DR:** **`package.json`'s description is an ANCHOR for `bump-test-count`: `readDeclaredCount` aborted the entire script with *"does not declare a recognisable test count"* unless the text matched `(?<![\d])(\d{3,5})(?=\s*\+?\s*tests?\b)`. That shape made the most public surface unable to say what its number is. The pattern now accepts a CLOSED qualifier list, and the description reads "2329 declared test registrations".**
@@ -416,9 +428,9 @@ All notable changes to this project will be documented here. The format follows 
 
 - FTS5 schema **v7**: a sibling FTS5 table `chunk_parts` carries, for every identifier-bearing chunk, the words each compound identifier is spelled from (camelCase, upper-case runs, digit edges; NFC; bounded by truncation) next to a copy of that chunk's text. A search runs `chunks` exactly as v6 did and appends `chunk_parts`-only hits after every ranked hit with score 0 — found, never ranked — so `poolDayData` becomes reachable by "pool day data" while no rank moves for any query. (A weight-0 column inside `chunks` was measured on CI to move ranks: FTS5's bm25() normalises by the whole row's length.) An existing persistent index rebuilds once on first open; both schema admission maps admit v7.
 
-### Tests (2331)
+### Tests (2335)
 
-**2228 → 2331 source tests.** Sixty-one new causal contracts cover the audit closures and staged embedding replacement above; table-driven phases additionally exercise rollback, authority ordering, fail-fast sync operations, clear/replacement interlocks, and promotion refusal without inflating the declared `it()` count.
+**2228 → 2335 source tests.** Sixty-one new causal contracts cover the audit closures and staged embedding replacement above; table-driven phases additionally exercise rollback, authority ordering, fail-fast sync operations, clear/replacement interlocks, and promotion refusal without inflating the declared `it()` count.
 ### Maintainer handoff reflects the post-AH-4 repository state
 
 > **TL;DR:** **The agent handoff now starts from the shipped AH-4 boundary instead of the earlier rc.6 release attempt.** `CLAUDE.md` records that PR #565 completed staged embedding replacement, that its candidate and squash-main checks passed, that no product implementation is currently in flight, and that distribution remains deferred. The next bounded action is a read-only AH-4 sibling sweep before one backlog card is selected.

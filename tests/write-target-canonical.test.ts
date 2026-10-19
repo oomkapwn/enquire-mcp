@@ -108,7 +108,12 @@ describe("FA-11: a write path that is not the canonical path of its own file", (
   it("NEGATIVE: a trailing space is refused as well — the LAST segment moves too", async () => {
     await fs.writeFile(path.join(root, "Trailing.md "), "# Trailing\n\nTRAILING-SENTINEL\n");
     await fs.writeFile(path.join(root, "Trailing.md"), "# Trimmed\n\nTRIMMED-SENTINEL\n");
-    const vault = vaultFor();
+    // A name that ENDS in a space does not end in `.md`, so a `*.md` allowlist
+    // never admits it and the target would simply be "not found". The broad
+    // allowlist is what makes the trailing-space shape reachable at all —
+    // which is why the realistic case is the LEADING space, and why this
+    // control says so instead of pretending both are equally easy to reach.
+    const vault = new Vault(root, { enableWrite: true, readPaths: ["**/*"] });
     await expect(frontmatterSet(vault, { path: "Trailing.md ", set: { status: "changed" } })).rejects.toThrow(
       NOT_CANONICAL
     );

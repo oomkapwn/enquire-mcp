@@ -457,7 +457,8 @@ describe("FTS5 fail-soft on --persistent-index open failure (v3.10.0-rc.33)", ()
 // through the full `resolveSafePath` pipeline, and smoke.mjs has always said
 // "list note templates and read one back" — but it only checked that the
 // template was registered. Nothing anywhere read a note, refused a private
-// path, or rejected a non-canonical chunk index.
+// path. The chunk template registers only with --persistent-index, so its index
+// validation is a unit control on readChunkResource instead.
 //
 // This drives the real binary over stdio JSON-RPC, which is the surface the
 // `no-internal-imports` invariant prescribes for registration boilerplate:
@@ -494,9 +495,11 @@ describe("AH-7 — resource handlers through the MCP surface", () => {
     const templates = listed?.resourceTemplates ?? [];
     const shapes = templates.map((t) => String(t.uriTemplate ?? ""));
     // A dropped registration and a single-segment template both fail here; the
-    // greedy form is what makes a nested path ONE parameter.
+    // greedy form is what makes a nested path ONE parameter. The CHUNK template
+    // is absent on purpose: it is registered only with --persistent-index, and
+    // its read path is covered by the smoke FTS variant plus the unit control
+    // on readChunkResource below.
     expect(shapes.some((s) => s.startsWith("obsidian://note/") && s.includes("{+notePath}"))).toBe(true);
-    expect(shapes.some((s) => s.startsWith("obsidian://chunk/") && s.includes("{chunkIndex}"))).toBe(true);
   });
 
   it("reads a note back through resources/read — the claim smoke only asserted", async () => {
@@ -529,14 +532,6 @@ describe("AH-7 — resource handlers through the MCP surface", () => {
       const leaked = JSON.stringify(res.result ?? "");
       expect(res.error, `${uri} must not resolve`).toBeDefined();
       expect(leaked, `${uri} must not leak content`).not.toContain("SECRET-MARKER");
-    }
-  });
-
-  it("NEGATIVE: a non-canonical chunk index is refused", async () => {
-    if (!client) return;
-    for (const idx of ["007", "+1", "1.5", "1e3", "0x1"]) {
-      const res = await client.rpc("resources/read", { uri: `obsidian://chunk/${idx}/A.md` });
-      expect(res.error?.message, idx).toMatch(/Invalid chunk index in URI/u);
     }
   });
 });

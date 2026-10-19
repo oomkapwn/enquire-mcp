@@ -9,6 +9,7 @@ import {
   encodeResourceCursor,
   listVaultNoteResources,
   pageVaultResources,
+  readChunkResource,
   RESOURCE_PAGE_LIMIT,
   ResourceCursorError,
   ResourceCursorMintError,
@@ -458,6 +459,52 @@ describe("F04: the resumable listing's cost claim matches the walk's source", ()
 // a shorter but still plausible path. Measured on the real codec: dropping one
 // character from the token for `Projects/plan.md` yields `Projects/plan.m`, so
 // the listing silently resumed from the wrong position instead of failing.
+// AH-7 — the chunk resource's index admission, as a pure function.
+// The template itself registers only with `--persistent-index`, so the e2e
+// suite cannot reach it without widening the server args; the SDK hands this
+// function the template params either way, so the validation contract is
+// exactly what these controls pin.
+describe("AH-7: readChunkResource refuses a non-canonical chunk index", () => {
+  let root = "";
+  let vault: Vault;
+
+  beforeEach(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "enquire-chunk-admission-"));
+    await fs.writeFile(path.join(root, "A.md"), "# A\n");
+    vault = new Vault(root);
+  });
+
+  afterEach(async () => {
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("accepts canonical indices and rejects every non-canonical spelling", async () => {
+    const chunkUri = new URL("obsidian://chunk/0/A.md");
+    const unreachableIndex = {} as never;
+
+    // A canonical index passes admission and fails later, at the live index —
+    // which is the proof admission did NOT reject it. Only the message is
+    // asserted, because the dummy index throws something else entirely.
+    for (const ok of ["0", "7", "123"]) {
+      const outcome = await readChunkResource(vault, unreachableIndex, chunkUri, {
+        chunkIndex: ok,
+        notePath: "A.md"
+      }).then(
+        () => "resolved",
+        (error: Error) => error.message
+      );
+      expect(outcome, ok).not.toMatch(/Invalid chunk index in URI/u);
+    }
+
+    for (const bad of ["", "007", "+1", "1.5", "-0", "1e3", "0x1", " 7", "7 "]) {
+      await expect(
+        readChunkResource(vault, unreachableIndex, chunkUri, { chunkIndex: bad, notePath: "A.md" }),
+        bad
+      ).rejects.toThrow(/Invalid chunk index in URI/u);
+    }
+  });
+});
+
 describe("F05: a cursor this server never minted is refused", () => {
   const PATH = "Projects/plan.md";
   const TOKEN = encodeResourceCursor(PATH);

@@ -1286,8 +1286,10 @@ const CHAT_THREAD_TITLE_RE = /^## Chat: (.+?)\s*$/m;
  *   is used only when creating a brand-new note from scratch.
  * @returns The note's vault-relative path plus the 1-based line range of
  *   the appended message (for jumping the UI to it).
- * @throws {Error} If `note_path` or `content` is empty, or `role` is not
- *   a valid value.
+ * @throws {Error} If `note_path` or `content` is empty, `role` is not
+ *   a valid value, or `note_path` is not canonical — a name with leading
+ *   or trailing whitespace is not the path of the file that was read, and
+ *   writing it would land on a different file, so it is refused.
  * @example
  * ```ts
  * await chatThreadAppend(vault, {

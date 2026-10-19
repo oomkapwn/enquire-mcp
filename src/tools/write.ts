@@ -93,7 +93,9 @@ function throwCancelledAfterRollback(operation: string, signal: AbortSignal | un
  * @returns `{ path, mtime, bytes }` — resolved vault-relative path, ISO
  *   mtime, and UTF-8 byte size of the written file.
  * @throws {Error} If the vault is read-only, the destination exists and
- *   `overwrite` is not true, or the path is excluded by the vault visibility policy.
+ *   `overwrite` is not true, the path is excluded by the vault visibility
+ *   policy, or the path is not canonical — leading or trailing whitespace
+ *   would land the write on a different file, so it is refused.
  * @throws {VaultPathError} If the path traverses outside the vault root.
  * @example
  * ```ts
@@ -791,8 +793,10 @@ export interface FrontmatterSetArgs {
  * @param args - {@link FrontmatterSetArgs}. `set` must be non-empty.
  * @returns `{ path, changed_keys, before, after, dry_run }` — `before`
  *   and `after` are the full frontmatter maps so the caller can diff.
- * @throws {Error} If `set` is empty, vault is read-only, or target can't
- *   be resolved.
+ * @throws {Error} If `set` is empty, vault is read-only, target can't
+ *   be resolved, or the resolved path is not canonical — a name with
+ *   leading or trailing whitespace is not the path of the file that was
+ *   read, and writing it would land on a different file, so it is refused.
  * @example
  * ```ts
  * // Mark a draft as published, set a date, delete a stale key

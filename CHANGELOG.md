@@ -4,6 +4,22 @@ All notable changes to this project will be documented here. The format follows 
 
 ## [4.0.0-rc.7] — 2026-08-31
 
+### A write can no longer land on a different file than the one it read (FA-11)
+
+> **TL;DR:** **`writeNoteContent` trimmed the relative path it was given, while the read side did not.** `resolveInside` and `toRel` keep a name exactly as it is, so a target called ` Dest.md` was READ through that name and WRITTEN through the trimmed one — `Dest.md`, a different file. `obsidian_frontmatter_set({ path: " Dest.md", set: { … } })` replaced the content of the unrelated `Dest.md` and answered with the padded name it never wrote. The write path now refuses a name it cannot address.**
+>
+> **What could happen before.** The trim was introduced as a CHECK — refuse an empty or dot-only name — and silently became a REDIRECT of the address. The MCP schemas do not trim either (`z.string()`, `z.string().min(1)`), so the padded path reaches the tool intact. Until FA-01 the damage was masked by accident: the atomic-overwrite transport's tmp file did not match the note filter, so the misaddressed write failed loudly. FA-01 made the transport inherit its target's admission, which removed the accident — and the re-sweep that followed guarded two sibling callers (`rename_note`, `replace_in_notes`) but not these two.
+>
+> **The two shapes, stated.** With a `Dest.md` beside the padded note, the write replaced its content. Without one, the write CREATED `Dest.md` from the padded note's content, left the padded note itself untouched, and still answered with a change report for a file it had not changed. The precondition is a vault that contains a note whose name carries a leading or trailing space — such a note is reachable, because the write API cannot create it but a synced or externally created vault can have it.
+>
+> **Why the guard is in the primitive.** The write path can only ever address the trimmed name, so a caller that resolves a target by its exact path is guaranteed to write somewhere else. A guard per caller would fix the two known callers and leave the foot-gun for the next one; the primitive refuses once, for every caller, and names the file it would have written.
+>
+> **One deliberate consequence.** `obsidian_create_note` with a padded path now REFUSES instead of silently creating the trimmed name. That is a behaviour change on a public tool, stated rather than hidden.
+>
+> **Bounded claim.** One conditional in `writeNoteContent` and three TSDoc updates. The read side is untouched — `resolveInside` and `toRel` still do not trim, and a name whose space is INSIDE the path (`Notes/ Dest.md`) is a different file, is still written exactly, and is not refused. The empty/dot-only refusal, the `.md` suffix rule, the allowlist and exclusion checks, the symlink refusal, the size cap, the atomic-overwrite transport and the rollback-recovery namespace (whose path never carries edge whitespace) are all untouched. Nine controls: one cause, six negative, two positive.
+>
+> **Method note:** the premise was mirrored on stdlib before the commit — `path.resolve`/`path.relative` keep the space on the read side while the trim moves the address to `Dest.md`; the mirror asserts the mismatch for ` Dest.md` and `Dest.md `, and asserts that `Notes/ Dest.md` is NOT a mismatch. The card was found by the card-interaction audit arm, and its counter-example was re-derived from the source before anything was changed. Under D-45 no local test or build was run; hosted CI is the validation authority.
+
 ### A cursor this server never minted is refused — the permissive base64 decode is gone (F05)
 
 > **TL;DR:** **`decodeResourceCursor` used `Buffer.from(cursor, "base64url")`, which is PERMISSIVE: characters outside the alphabet are ignored rather than rejected, and a TRUNCATED token decodes to a shorter but still plausible path. Measured on the real codec: dropping one character from the token for `Projects/plan.md` yields `Projects/plan.m`, so a resumed listing silently started from the wrong position instead of failing. The decoder now requires the decode/encode round-trip to reproduce its input byte-for-byte.**
@@ -461,9 +477,9 @@ hosted CI is the validation authority.
 
 - FTS5 schema **v7**: a sibling FTS5 table `chunk_parts` carries, for every identifier-bearing chunk, the words each compound identifier is spelled from (camelCase, upper-case runs, digit edges; NFC; bounded by truncation) next to a copy of that chunk's text. A search runs `chunks` exactly as v6 did and appends `chunk_parts`-only hits after every ranked hit with score 0 — found, never ranked — so `poolDayData` becomes reachable by "pool day data" while no rank moves for any query. (A weight-0 column inside `chunks` was measured on CI to move ranks: FTS5's bm25() normalises by the whole row's length.) An existing persistent index rebuilds once on first open; both schema admission maps admit v7.
 
-### Tests (2340)
+### Tests (2349)
 
-**2228 → 2340 source tests.** Sixty-one new causal contracts cover the audit closures and staged embedding replacement above; table-driven phases additionally exercise rollback, authority ordering, fail-fast sync operations, clear/replacement interlocks, and promotion refusal without inflating the declared `it()` count.
+**2228 → 2349 source tests.** Sixty-one new causal contracts cover the audit closures and staged embedding replacement above; table-driven phases additionally exercise rollback, authority ordering, fail-fast sync operations, clear/replacement interlocks, and promotion refusal without inflating the declared `it()` count.
 ### Maintainer handoff reflects the post-AH-4 repository state
 
 > **TL;DR:** **The agent handoff now starts from the shipped AH-4 boundary instead of the earlier rc.6 release attempt.** `CLAUDE.md` records that PR #565 completed staged embedding replacement, that its candidate and squash-main checks passed, that no product implementation is currently in flight, and that distribution remains deferred. The next bounded action is a read-only AH-4 sibling sweep before one backlog card is selected.

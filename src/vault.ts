@@ -1753,14 +1753,18 @@ export class Vault {
    * physical file but used to bypass `--exclude-glob "Personal/**"`.
    *
    * @param relPath - Vault-relative target path. `.md` suffix is added
-   *   if absent. Must not be empty / `.` / `.md`.
+   *   if absent. Must not be empty / `.` / `.md`, and must not carry
+   *   leading or trailing whitespace — such a name is not the canonical
+   *   path of any file this method can address, so it is refused rather
+   *   than trimmed onto a different file.
    * @param content - File body (UTF-8). Must be under the size cap.
    * @param opts.overwrite - If true, replace an existing file; otherwise
    *   throw when the target exists. Default false.
    * @returns Metadata about the written file.
    * @throws {Error} If the vault is read-only, the destination is
-   *   excluded, the target is a symlink, content exceeds the cap, or
-   *   the file exists and `overwrite` is false.
+   *   excluded, the target is a symlink, content exceeds the cap, the
+   *   target path is not canonical, or the file exists and `overwrite`
+   *   is false.
    */
   async writeNote(
     relPath: string,
@@ -1914,6 +1918,24 @@ export class Vault {
     const trimmed = relPath.trim();
     if (!trimmed || trimmed === "." || trimmed === ".md") {
       throw new Error(`Refusing to create note with empty or dot-only name: "${relPath}"`);
+    }
+    // FA-11 — that trim is a CHECK, but it was also silently REDIRECTING the
+    // address. `resolveInside` and `toRel` do NOT trim, so the read side keeps
+    // a leading space (` Dest.md`) while this method writes to `Dest.md` — a
+    // DIFFERENT file. A caller that resolves a target by its exact path
+    // (`frontmatter_set`, `chat_thread_append`) therefore read one file and
+    // replaced the other one's content, then reported the padded name it never
+    // wrote. The MCP input schemas do not trim either, so the padded path
+    // reaches the tool intact.
+    //
+    // The write path can only ever address the trimmed name, so a name it
+    // cannot address is refused loudly instead of being redirected.
+    if (trimmed !== relPath) {
+      throw new Error(
+        `Refusing to write — the target path is not canonical: "${relPath}" ` +
+          `(leading or trailing whitespace would address "${trimmed}" instead). ` +
+          `Use the exact name of the file you mean.`
+      );
     }
     const targetRel = trimmed.toLowerCase().endsWith(".md") ? trimmed : `${trimmed}.md`;
     const abs = this.resolveInside(targetRel);

@@ -450,3 +450,88 @@ describe("FTS5 fail-soft on --persistent-index open failure (v3.10.0-rc.33)", ()
     expect(tools.some((t) => t.name === "obsidian_search")).toBe(true);
   });
 });
+
+// ─── AH-7: resource handlers through the MCP surface ──────────────────
+//
+// The audit established BY READING that `obsidian://note/{+notePath}` routes
+// through the full `resolveSafePath` pipeline, and smoke.mjs has always said
+// "list note templates and read one back" — but it only checked that the
+// template was registered. Nothing anywhere read a note, refused a private
+// path. The chunk template registers only with --persistent-index, so its index
+// validation is a unit control on readChunkResource instead.
+//
+// This drives the real binary over stdio JSON-RPC, which is the surface the
+// `no-internal-imports` invariant prescribes for registration boilerplate:
+// `src/tool-registry.js` and `src/server.js` are integration-tested through
+// MCP, never imported by a test.
+describe("AH-7 — resource handlers through the MCP surface", () => {
+  let client: RpcClient | null = null;
+  let vaultPath = "";
+
+  beforeAll(async () => {
+    if (!distExists()) return;
+    vaultPath = await makeWikilinkVault("ah7-resources");
+    // A private directory and a traversal target: neither may be reachable
+    // through the resource path.
+    await fs.mkdir(path.join(vaultPath, ".private"), { recursive: true });
+    await fs.writeFile(path.join(vaultPath, ".private", "secret.md"), "SECRET-MARKER\n");
+    client = await spawnServer(vaultPath);
+    await client.rpc("initialize", {
+      protocolVersion: "2025-06-18",
+      capabilities: {},
+      clientInfo: { name: "ah7-resource-e2e", version: "1.0.0" }
+    });
+  });
+
+  afterAll(async () => {
+    client?.close();
+    if (vaultPath) await fs.rm(vaultPath, { recursive: true, force: true });
+  });
+
+  it("both resource templates are registered and keep the greedy {+notePath}", async () => {
+    if (!client) return;
+    const res = await client.rpc("resources/templates/list", {});
+    const listed = res.result as { resourceTemplates?: { uriTemplate?: string }[] } | undefined;
+    const templates = listed?.resourceTemplates ?? [];
+    const shapes = templates.map((t) => String(t.uriTemplate ?? ""));
+    // A dropped registration and a single-segment template both fail here; the
+    // greedy form is what makes a nested path ONE parameter. The CHUNK template
+    // is absent on purpose: it is registered only with --persistent-index, and
+    // its read path is covered by the smoke FTS variant plus the unit control
+    // on readChunkResource below.
+    expect(shapes.some((s) => s.startsWith("obsidian://note/") && s.includes("{+notePath}"))).toBe(true);
+  });
+
+  it("reads a note back through resources/read — the claim smoke only asserted", async () => {
+    if (!client) return;
+    const res = await client.rpc("resources/read", { uri: "obsidian://note/A.md" });
+    const contents = (res.result as { contents?: { mimeType?: string; text?: string }[] } | undefined)?.contents ?? [];
+    expect(res.error, JSON.stringify(res.error)).toBeUndefined();
+    expect(contents[0]?.mimeType).toBe("text/markdown");
+    expect(contents[0]?.text).toContain("Links:");
+  });
+
+  it("resolves a MULTI-SEGMENT note path, so the greedy {+notePath} still joins", async () => {
+    if (!client) return;
+    await fs.mkdir(path.join(vaultPath, "deep", "nested"), { recursive: true });
+    await fs.writeFile(path.join(vaultPath, "deep", "nested", "target.md"), "NESTED-TARGET\n");
+    const res = await client.rpc("resources/read", { uri: "obsidian://note/deep%2Fnested%2Ftarget.md" });
+    const contents = (res.result as { contents?: { text?: string }[] } | undefined)?.contents ?? [];
+    expect(res.error, JSON.stringify(res.error)).toBeUndefined();
+    expect(contents[0]?.text).toContain("NESTED-TARGET");
+  });
+
+  it("NEGATIVE: a hidden path and a traversal are refused through the resource path", async () => {
+    if (!client) return;
+    for (const uri of [
+      "obsidian://note/.private%2Fsecret.md",
+      "obsidian://note/..%2F..%2Fetc%2Fpasswd",
+      "obsidian://note/.obsidian%2Fapp.json"
+    ]) {
+      const res = await client.rpc("resources/read", { uri });
+      const leaked = JSON.stringify(res.result ?? "");
+      expect(res.error, `${uri} must not resolve`).toBeDefined();
+      expect(leaked, `${uri} must not leak content`).not.toContain("SECRET-MARKER");
+    }
+  });
+});

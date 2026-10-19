@@ -70,6 +70,39 @@ All notable changes to this project will be documented here. The format follows 
 >
 > **Method note:** every expectation was executed before the commit against a mirror extracted from the function itself, over a real temp directory with a real staged write and rename. That caught a **wrong control, not a wrong fix**: the assertion was written `/exceeded the .* -byte download bound/` with a space, while the message reads `67108864-byte`. This is the fourth time this week a plausible-sounding expectation exceeded the contract — after `#Open question:` in FA-09, `marker-tail extra` in the residue gate, and `drop 2` in F05 — and the fourth time a check run before the commit is what kept it from costing a CI round. Under D-45 no local test or build was run; hosted CI is the validation authority.
 
+add: the resource handlers are now driven the way the SDK drives them (AH-7)
+
+The registry has always had three resource registrations, and the audit
+established BY READING that `obsidian://note/{+notePath}` routes through
+the full `resolveSafePath` privacy pipeline. Reading is not evidence:
+until now nothing executed those callbacks, so a renamed resource, a
+dropped registration, a lost array-join on the greedy `{+notePath}`, or a
+privacy bypass in the resource path would have shipped silently.
+
+These controls capture what `registerResource` was handed and then invoke
+each handler the way the SDK does. `registerResource` is overloaded for a
+static URI and a `ResourceTemplate`, but both take
+(name, uriOrTemplate, metadata, handler), so one capture serves all three.
+
+Five controls:
+- the three registrations are exactly `vault-info`, `vault-note`,
+  `vault-chunk`, and both templates still carry the greedy `{+notePath}`
+  (a single-segment template would quietly stop resolving
+  `Projects/plan.md`);
+- a note reads back through the registered handler, `text/markdown`,
+  with the greedy parameter arriving as an ARRAY — joining it is the
+  branch that keeps multi-segment paths working;
+- NEGATIVE, the security property the audit only read: a `.private`
+  hidden directory and a `..` traversal segment are both refused
+  through the resource path;
+- `vault-info` returns the version as `application/json`;
+- NEGATIVE, a non-canonical chunk index (`007`, `+1`, `1.5`, `-0`, `1e3`,
+  `0x1`, empty) is refused. The index passed in is a deliberate dummy:
+  validation must reject these BEFORE any index access, and a stub that
+  would throw anyway would prove nothing.
+
+No production code changes. Under D-45 no local test or build was run;
+hosted CI is the validation authority.
 ### The npm description can finally say that 2329 counts registrations (anchor vocabulary widened)
 
 > **TL;DR:** **`package.json`'s description is an ANCHOR for `bump-test-count`: `readDeclaredCount` aborted the entire script with *"does not declare a recognisable test count"* unless the text matched `(?<![\d])(\d{3,5})(?=\s*\+?\s*tests?\b)`. That shape made the most public surface unable to say what its number is. The pattern now accepts a CLOSED qualifier list, and the description reads "2329 declared test registrations".**
@@ -428,9 +461,9 @@ All notable changes to this project will be documented here. The format follows 
 
 - FTS5 schema **v7**: a sibling FTS5 table `chunk_parts` carries, for every identifier-bearing chunk, the words each compound identifier is spelled from (camelCase, upper-case runs, digit edges; NFC; bounded by truncation) next to a copy of that chunk's text. A search runs `chunks` exactly as v6 did and appends `chunk_parts`-only hits after every ranked hit with score 0 — found, never ranked — so `poolDayData` becomes reachable by "pool day data" while no rank moves for any query. (A weight-0 column inside `chunks` was measured on CI to move ranks: FTS5's bm25() normalises by the whole row's length.) An existing persistent index rebuilds once on first open; both schema admission maps admit v7.
 
-### Tests (2335)
+### Tests (2340)
 
-**2228 → 2335 source tests.** Sixty-one new causal contracts cover the audit closures and staged embedding replacement above; table-driven phases additionally exercise rollback, authority ordering, fail-fast sync operations, clear/replacement interlocks, and promotion refusal without inflating the declared `it()` count.
+**2228 → 2340 source tests.** Sixty-one new causal contracts cover the audit closures and staged embedding replacement above; table-driven phases additionally exercise rollback, authority ordering, fail-fast sync operations, clear/replacement interlocks, and promotion refusal without inflating the declared `it()` count.
 ### Maintainer handoff reflects the post-AH-4 repository state
 
 > **TL;DR:** **The agent handoff now starts from the shipped AH-4 boundary instead of the earlier rc.6 release attempt.** `CLAUDE.md` records that PR #565 completed staged embedding replacement, that its candidate and squash-main checks passed, that no product implementation is currently in flight, and that distribution remains deferred. The next bounded action is a read-only AH-4 sibling sweep before one backlog card is selected.

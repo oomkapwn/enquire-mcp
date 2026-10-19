@@ -9,10 +9,10 @@ import {
   encodeResourceCursor,
   listVaultNoteResources,
   pageVaultResources,
-  readChunkResource,
   RESOURCE_PAGE_LIMIT,
   ResourceCursorError,
   ResourceCursorMintError,
+  readChunkResource,
   vaultResourceInfo
 } from "../src/resource-admission.js";
 import { Vault } from "../src/vault.js";

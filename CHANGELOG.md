@@ -4,6 +4,18 @@ All notable changes to this project will be documented here. The format follows 
 
 ## [4.0.0-rc.7] — 2026-08-31
 
+### markdown-it is bumped to 14.3.2 — the advisory published today is closed (DEP-01)
+
+> **TL;DR:** **GHSA-r7fv-28h4-cvq7 (high) — "markdown-it: Quadratic complexity in smartquotes with unmatched closing quotes" — was published on 2026-10-20 at 14:34 UTC, hours after this window's last green run, and turned the `audit` gate RED on every branch: the advisory was not in the allowlist, and that gate fails closed on anything new. The fix is a patch release, so this is a bump and not a waiver: `markdown-it` 14.3.0 → 14.3.2 in `package-lock.json`.**
+>
+> **Why a bump and not an allowlist entry.** The allowlist in `scripts/check-audit.mjs` exists for advisories that declare NO patched version — its one live entry (node-forge) says exactly that. This advisory declares 14.3.2 on the 14.x line (and 15.0.2 on 15.0.0–15.0.1), so a waiver would be the wrong instrument: a fix exists, and the house rule is that a waiver is deleted rather than left to become permanent.
+>
+> **What changes.** Three lines of `package-lock.json`: the version, the registry URL and the integrity hash of the `node_modules/markdown-it` entry. `markdown-it` is a **transitive dev dependency** (`"dev": true`), so the published package is unaffected and the consumer graph does not change; the declared range (`^14.3.0`) already admits 14.3.2. `package.json` is untouched — the dependency is not a direct one.
+>
+> **Bounded claim.** One lockfile entry and the bootstrap manifest digest that covers it. No source, no test, no tool behaviour, no public surface and no declared range changes; the allowlist and the scope rules are untouched.
+>
+> **Method note:** the advisory was read from the GitHub advisory API (`GET /advisories/GHSA-r7fv-28h4-cvq7`), not from the CI log text: published 2026-10-20T14:34:50Z, severity high, patched `14.3.2` for the 14.x line and `15.0.2` for 15.0.0–15.0.1. The integrity hash and the resolved URL are the ones the registry's own Dependabot PR (#620) prepared. Under D-45 no local install was run; `npm ci` in CI installs exactly what the lockfile pins.
+
 ### A write can no longer land on a different file than the one it read (FA-11)
 
 > **TL;DR:** **`writeNoteContent` trimmed the relative path it was given, while the read side did not.** `resolveInside` and `toRel` keep a name exactly as it is, so a target called ` Dest.md` was READ through that name and WRITTEN through the trimmed one — `Dest.md`, a different file. `obsidian_frontmatter_set({ path: " Dest.md", set: { … } })` replaced the content of the unrelated `Dest.md` and answered with the padded name it never wrote. The write path now refuses a name it cannot address.**

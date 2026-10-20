@@ -212,7 +212,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/node": "2.0.0",
-    "@modelcontextprotocol/server": "2.0.0",
+    "@modelcontextprotocol/server": "2.3.1",
     "chokidar": "^5.0.0",
     "commander": "^15.0.0",
     "js-yaml": "^5.4.1",

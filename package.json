@@ -221,7 +221,7 @@
   "devDependencies": {
     "@anthropic-ai/mcpb": "2.1.2",
     "@biomejs/biome": "^2.5.11",
-    "@modelcontextprotocol/client": "2.2.0",
+    "@modelcontextprotocol/client": "2.3.0",
     "@resvg/resvg-wasm": "2.6.2",
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^26.4.0",

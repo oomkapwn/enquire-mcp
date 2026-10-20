@@ -4,6 +4,17 @@ All notable changes to this project will be documented here. The format follows 
 
 ## [4.0.0-rc.7] — 2026-08-31
 
+### The open-question candidate budget charges every inspected line, and that is now stated (FA-14)
+
+> **TL;DR:** **FA-09's entry said "a note whose headings match nothing costs nothing". Read as a statement about the BUDGET, that is not what the code does and never was: since FA-09 every non-fenced line — a heading or not — is charged as a candidate BEFORE the matcher runs. A heading that matches nothing still costs a candidate; what it costs nothing in is the RESULT. The sentence is corrected here.**
+>
+> **What the accounting actually is.** The scan inspects every body line, and `maxCandidates` (1 000 000) is what bounds it: the charge happens before the line is matched, because a line that might match has to be a candidate before anyone knows whether it does. `maxLines` (2 000 000) bounds the lines visited, and `maxCandidateUtf8Bytes` (256 MiB) bounds the metadata carried with them. The budget is charged on inspection, not on success — that is the point of a bound on work.
+>
+> **The consequence, stated rather than left for a reader to infer.** Before FA-09 a heading was skipped before the accounting, so a heading-heavy vault cost almost nothing. Now it costs one candidate per heading, and for a vault whose lines are mostly headings the **candidate** cap (1 000 000) is the binding bound where the **line** cap (2 000 000) used to be. Such a vault now gets `obsidian_open_questions: candidate count exceeds the complete-scan limit of 1000000` — a loud, named refusal, narrowable with `folder`, instead of a quiet empty result. Raising that cap is an owner policy call, not a defect: the bound exists to cap the scan, and this card states the bound instead of moving it.
+>
+> **Bounded claim.** No production code changes: the accounting, the limits and the error are exactly as FA-09 left them. Three controls in `tests/open-questions-admission.test.ts` pin the behaviour the sentence used to misdescribe — a non-marker heading IS charged against the candidate budget (and the refusal names the budget), it yields no question, and a marker heading is charged the same way and still answers. The claim is corrected rather than the code changed, because the code is the honest one: the scan really does inspect every line.
+>
+> **Method note:** the accounting was re-derived from the source before anything was changed — the pre-FA-09 code skipped headings with `continue` BEFORE the candidate charge, and FA-09 removed that skip, so the charge now covers every non-fenced line. The card came out of the bounded-claims audit of the merged window. Under D-45 no local test or build was run; hosted CI is the validation authority.
 ### The breadcrumb can no longer take the whole budget — the chunk text survives at the floor (FA-12)
 
 > **TL;DR:** **FA-04's own comment promised that a pathological breadcrumb "cannot push the chunk text out entirely — the chunk would then be embedded as pure heading noise". The cap that enforced it could do exactly that. `crumbCap` was `max(MIN_EMBED_CHARS, floor(budget / 2))`, and that floor defeated the rule exactly where it mattered: at the budget floor (512, i.e. a note of ≥ 1000 chunks) the cap WAS the budget. A note of ≥ 1000 chunks with a breadcrumb longer than ~510 characters was embedded as pure heading noise — the chunk text was not merely trimmed, it was gone. The cap is now half the budget, with no floor.**

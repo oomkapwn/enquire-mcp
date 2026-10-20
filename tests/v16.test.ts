@@ -94,10 +94,13 @@ describe("findPath (v1.6 multi-hop graph traversal)", () => {
     const fanRoot = await fs.mkdtemp(path.join(os.tmpdir(), "obsidian-mcp-v16-alt-"));
     try {
       // Hub → M00..M14 → Final: fifteen distinct routes of equal length,
-      // comfortably past the ten that may be reported.
+      // comfortably past the ten that may be reported. The links run in
+      // REVERSE alphabetical order, so the traversal order and the
+      // lexicographic order are different — which is what lets the control
+      // below say WHICH order the retained set follows.
       await fs.writeFile(
         path.join(fanRoot, "Hub.md"),
-        Array.from({ length: 15 }, (_, i) => `[[M${String(i).padStart(2, "0")}]]`).join(" ")
+        Array.from({ length: 15 }, (_, i) => `[[M${String(14 - i).padStart(2, "0")}]]`).join(" ")
       );
       for (let i = 0; i < 15; i += 1) {
         await fs.writeFile(path.join(fanRoot, `M${String(i).padStart(2, "0")}.md`), "[[Final]]\n");
@@ -111,6 +114,26 @@ describe("findPath (v1.6 multi-hop graph traversal)", () => {
       expect(out.alternatives).toBeTruthy();
       // The documented ceiling still holds…
       expect((out.alternatives ?? []).length).toBeLessThanOrEqual(10);
+      // …and the retained set is the FIRST TEN routes in TRAVERSAL order — the
+      // order the hub's links are followed — and not a lexicographic one.
+      // (FA-15: the FA-08 entry said "the final sort selects `path` and the
+      // retained set lexicographically, not in traversal order". The
+      // comparator's key is degenerate for same-length trails — every accepted
+      // trail has the same length and the same first step — so the order IS the
+      // traversal order, and the hub's links run M14 → M00, so a lexicographic
+      // order would list them the other way round.)
+      expect((out.alternatives ?? []).map((alt) => alt[1]?.path)).toEqual([
+        "M14.md",
+        "M13.md",
+        "M12.md",
+        "M11.md",
+        "M10.md",
+        "M09.md",
+        "M08.md",
+        "M07.md",
+        "M06.md",
+        "M05.md"
+      ]);
       // …and everything reported is a real two-hop route through a real
       // midpoint, so bounding retention cannot invent or drop a hop.
       for (const alt of out.alternatives ?? []) {

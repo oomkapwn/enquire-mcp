@@ -1482,9 +1482,29 @@ describe("exact selected persistence target (FA-02: NFD/NFC)", () => {
     }
   }
 
+  // FA-16 — on a normalization-insensitive filesystem (macOS APFS) the two
+  // spellings are ONE file: the host maps both onto the same on-disk name.
+  // The distinct-file controls below only separate fixed from unfixed
+  // behaviour where the two are genuinely two files, so on such a host they
+  // assert the host's OWN semantics instead of skipping the fact. The FA-02
+  // entry claimed exactly that — and the controls did not do it: they returned
+  // before asserting anything, so on macOS they asserted nothing at all.
+  async function assertHostAliasSemantics(root: string): Promise<void> {
+    await fs.writeFile(path.join(root, NFC_BASE), "nfc-bytes\n");
+    const nfc = await resolvePersistenceLeaseScope({ targetPath: path.join(root, NFC_BASE), familyKey: "embed-db" });
+    const nfd = await resolvePersistenceLeaseScope({ targetPath: path.join(root, NFD_BASE), familyKey: "embed-db" });
+    // Both spellings name the ONE file that is really there…
+    expect(nfd.targetName).toBe(nfc.targetName);
+    // …and they share one lease, because the digest folds the name.
+    expect(nfd.digest).toBe(nfc.digest);
+  }
+
   it("resolves each existing Unicode-alias spelling to its own exact name while both share one lease digest", async () => {
     const f = await fixture();
-    if (!(await probeByteExactFilesystem(f.root))) return;
+    if (!(await probeByteExactFilesystem(f.root))) {
+      await assertHostAliasSemantics(f.root);
+      return;
+    }
     await fs.writeFile(path.join(f.root, NFC_BASE), "nfc-bytes\n");
     await fs.writeFile(path.join(f.root, NFD_BASE), "nfd-bytes\n");
     const nfc = await resolvePersistenceLeaseScope({ targetPath: path.join(f.root, NFC_BASE), familyKey: "embed-db" });
@@ -1499,7 +1519,19 @@ describe("exact selected persistence target (FA-02: NFD/NFC)", () => {
 
   it("keeps an absent selected target on its exact spelling instead of a normalized cousin", async () => {
     const f = await fixture();
-    if (!(await probeByteExactFilesystem(f.root))) return;
+    if (!(await probeByteExactFilesystem(f.root))) {
+      // The two spellings are ONE file here, so the selection is not absent:
+      // it names the file that is really there, and that file's bytes are
+      // intact. (The "absent target" distinction does not exist on this host.)
+      await fs.writeFile(path.join(f.root, NFC_BASE), "twin-bytes\n");
+      const scope = await resolvePersistenceLeaseScope({
+        targetPath: path.join(f.root, NFD_BASE),
+        familyKey: "embed-db"
+      });
+      expect(scope.targetName).toBe(NFC_BASE);
+      expect(await fs.readFile(path.join(f.root, NFC_BASE), "utf8")).toBe("twin-bytes\n");
+      return;
+    }
     // Only the NFC twin exists; the caller selected the NFD spelling.
     await fs.writeFile(path.join(f.root, NFC_BASE), "twin-bytes\n");
     const scope = await resolvePersistenceLeaseScope({
@@ -1517,7 +1549,11 @@ describe("exact selected persistence target (FA-02: NFD/NFC)", () => {
 
   it("keeps cross-alias lease mutual exclusion: a publisher on one spelling conflicts with an eraser on the other", async () => {
     const f = await fixture();
-    if (!(await probeByteExactFilesystem(f.root))) return;
+    // FA-16 — this control needs NO byte-exact host: the digest folds the
+    // name on every filesystem, so the two spellings are one lease scope
+    // whether they are two files or one. It used to return early on a
+    // normalization-insensitive host, which meant it asserted nothing in the
+    // macOS lane at all.
     await fs.writeFile(path.join(f.root, NFD_BASE), "held\n");
     const publisher = await acquirePersistenceLease({
       targetPath: path.join(f.root, NFD_BASE),
@@ -1542,7 +1578,18 @@ describe("exact selected persistence target (FA-02: NFD/NFC)", () => {
 
   it("revalidation still admits an absent exact-spelled target (publishers pin a scope before creating the file)", async () => {
     const f = await fixture();
-    if (!(await probeByteExactFilesystem(f.root))) return;
+    if (!(await probeByteExactFilesystem(f.root))) {
+      // One file here, so the selection is not absent: the pinned scope names
+      // the file that is really there and stays revalidatable.
+      await fs.writeFile(path.join(f.root, NFC_BASE), "twin-bytes\n");
+      const scope = await resolvePersistenceLeaseScope({
+        targetPath: path.join(f.root, NFD_BASE),
+        familyKey: "embed-db"
+      });
+      expect(scope.targetName).toBe(NFC_BASE);
+      await expect(revalidatePersistenceLeaseScope(scope)).resolves.toBeUndefined();
+      return;
+    }
     // The NFD spelling is selected and absent; its NFC twin exists. The pinned
     // scope must carry the EXACT selection and remain revalidatable — the
     // publish flow acquires its lease before the first byte exists. (Pre-FA-02

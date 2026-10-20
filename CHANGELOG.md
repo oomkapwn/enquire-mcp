@@ -4,6 +4,30 @@ All notable changes to this project will be documented here. The format follows 
 
 ## [4.0.0-rc.7] — 2026-08-31
 
+### The retained alternatives are the first ten routes in traversal order (FA-15)
+
+> **TL;DR:** **FA-08's entry said "the final sort selects `path` and the retained set lexicographically, not in traversal order". The sort key is degenerate for the trails it compares — every accepted trail has the same length and the same first step, so the comparator returns 0 for every pair and the retained set comes out in TRAVERSAL order, not a lexicographic one. The set and the order are unchanged by FA-08, as that entry also said; only the word "lexicographically" was wrong.**
+>
+> **What the order actually is.** The alternatives are inserted at their sorted position in a bounded array, and the worst is dropped when it overflows. With a comparator that cannot distinguish two same-length trails, the binary search converges on the end of the array, so the array holds the routes in the order the traversal found them. The retained set is therefore the first ten routes in traversal order — the same set, and the same order, that the old accumulate-then-slice produced. What FA-08 changed is that the array never exceeds the bound while the traversal runs.
+>
+> **The control now says WHICH order.** The fan's hub used to list its links in alphabetical order, which made the traversal order and the lexicographic order the same list — so no control could tell them apart, and the count was not pinned either (`toBeLessThanOrEqual(10)` accepts nine). The hub now lists its links in REVERSE alphabetical order, and the control pins the ten retained midpoints by name. A lexicographic order would list them the other way round, so the control now distinguishes the two, and it pins the count as well.
+>
+> **Bounded claim.** No production code changes: the comparator, the insertion and the bound are exactly as FA-08 left them. One control in `tests/v16.test.ts` changes — the hub's link order and the added expectation — and the CHANGELOG sentence is corrected. The claim is corrected rather than the code changed, because the code is the honest one: the order was never lexicographic, and the old code's order was the traversal order too.
+>
+> **Method note:** the order was re-derived from the source before anything was changed — the comparator is `a.length - b.length || a[0].path.localeCompare(b[0].path)`, and the retained trails all share the hub as their first step, so the second term is always 0. Under D-45 no local test or build was run; hosted CI is the validation authority.
+
+### The Unicode-alias lease controls now assert the host's own semantics instead of skipping (FA-16)
+
+> **TL;DR:** **FA-02's entry said that four of its five controls "on such a host assert the host's own semantics rather than passing on a fact they never checked". They did not: each one returned before its first assertion when the probe found a normalization-insensitive filesystem, so on macOS APFS — where the NFD and NFC spellings are one file — those four controls asserted NOTHING. They now assert the host's semantics, so the claim is true instead of aspirational.**
+>
+> **What the host's semantics are.** On a normalization-insensitive filesystem the two spellings are one file, and the host maps both onto the same on-disk name (measured on this machine: `realpath` of the NFD spelling returns the NFC name, and `lstat` of the NFD path finds the file). So the selection is not absent, it names the file that is really there, and the two spellings share one lease because the digest folds the name. Each of the four controls now asserts exactly that on such a host, and the byte-exact branch keeps asserting the distinct-file facts where the distinction exists.
+>
+> **One control needed no host at all.** The cross-alias mutual-exclusion control is about the DIGEST, and the digest folds the name on every filesystem — so that control now runs everywhere. It used to return early on a normalization-insensitive host, which meant the macOS lane asserted nothing about mutual exclusion either.
+>
+> **Bounded claim.** No production code changes: the lease scope, the exact-name rule, the fold and the digest are exactly as FA-02 left them. Four controls in `tests/persistence-lease.test.ts` change — three gain a host-semantics branch, one loses a guard it never needed — and the CHANGELOG sentence is corrected. The host semantics were measured on this machine with a stdlib probe before anything was changed, so the branches assert what the host does rather than what it is assumed to do.
+>
+> **Method note:** the probe was run before the branches were written: on this filesystem `realpath(NFD)` returns the NFC basename, `lstat(NFD)` finds the file, and the repo's own byte-exact probe reports false. Under D-45 no local test or build was run; hosted CI is the validation authority.
+
 ### The open-question candidate budget charges every inspected line, and that is now stated (FA-14)
 
 > **TL;DR:** **FA-09's entry said "a note whose headings match nothing costs nothing". Read as a statement about the BUDGET, that is not what the code does and never was: since FA-09 every non-fenced line — a heading or not — is charged as a candidate BEFORE the matcher runs. A heading that matches nothing still costs a candidate; what it costs nothing in is the RESULT. The sentence is corrected here.**

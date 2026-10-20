@@ -59,11 +59,12 @@ export const MAX_EMBED_CHARS = 8000;
  *  untouched and only pathologically large ones are bounded.
  *
  *  Sized against `MAX_CHUNK_CHARS` (4096) rather than picked: a chunk is at
- *  most 4096 characters, so as long as the per-chunk share stays above that,
- *  no real chunk text is ever truncated and the budget only bounds how many
- *  chunks are in flight at once. `512_000 / 8000 = 64`, so a note of up to 64
- *  chunks keeps the full budget, and chunk text itself only starts being
- *  trimmed past ~125 chunks (~512 KB of note). */
+ *  most 4096 characters, so a per-chunk share above that leaves the chunk's
+ *  own text whole — as long as the breadcrumb and the separator fit into it
+ *  too. `512_000 / 8000 = 64`, so a note of up to 64 chunks keeps the full
+ *  budget; the chunk text itself starts being trimmed once the share falls
+ *  below 4096 **plus** the breadcrumb and the two separator newlines, which
+ *  for an ordinary breadcrumb is past ~125 chunks (~512 KB of note). */
 export const MAX_EMBED_NOTE_CHARS = 512_000;
 
 /** Floor on a single chunk's share of the note budget. A budget that reached
@@ -108,8 +109,7 @@ export function buildEmbedText(
   // default and the contextual path. Previously the default path returned
   // `breadcrumb + text` with no limit at all: `MAX_EMBED_CHARS` was only ever
   // reached from the contextual overflow branch below. `budgetChars` lets the
-  // caller impose a per-note aggregate budget; at its default the contextual
-  // branch behaves exactly as it did before.
+  // caller impose a per-note aggregate budget.
   const budget = opts.budgetChars ?? MAX_EMBED_CHARS;
   // Clamp BEFORE concatenation, and cap the breadcrumb at half the budget: the
   // breadcrumb is navigable context, the chunk text is the signal being
@@ -117,7 +117,16 @@ export function buildEmbedText(
   // breadcrumb (deeply nested headings) consume the whole budget and push the
   // chunk text out entirely — the chunk would then be embedded as pure
   // heading noise.
-  const crumbCap = Math.max(MIN_EMBED_CHARS, Math.floor(budget / 2));
+  //
+  // FA-12 — and the cap must never be able to take the WHOLE budget. It used
+  // to be `max(MIN_EMBED_CHARS, floor(budget / 2))`, and that floor defeated
+  // the rule exactly where it mattered: at the budget floor (512, i.e. a note
+  // of ≥ 1000 chunks) the cap WAS the budget, so a pathological breadcrumb
+  // pushed the chunk text out entirely — the very outcome the comment above
+  // promises to prevent. The breadcrumb is context, the chunk text is the
+  // signal: the cap is half the budget, with no floor. At the default budget
+  // (8000) the cap is 4000, exactly as before.
+  const crumbCap = Math.floor(budget / 2);
   const crumb = c.breadcrumb && c.breadcrumb.length > crumbCap ? c.breadcrumb.slice(0, crumbCap) : c.breadcrumb;
   const core = crumb ? `${crumb}\n\n${c.text}` : c.text;
   if (opts.contextChars <= 0) {

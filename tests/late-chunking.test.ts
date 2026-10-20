@@ -185,4 +185,52 @@ describe("buildEmbedText (v2.15.0 late-chunking context windowing)", () => {
       expect(ordinary.length).toBeGreaterThan(900);
     });
   });
+
+  // FA-12 — FA-04's own comment promised that a pathological breadcrumb cannot
+  // push the chunk text out entirely ("the chunk would then be embedded as pure
+  // heading noise"). The cap that enforced it was `max(MIN_EMBED_CHARS,
+  // floor(budget / 2))` — and that floor defeated the rule exactly where it
+  // mattered: at the budget floor the cap WAS the budget, so a note of ≥ 1000
+  // chunks lost its text entirely and was embedded as pure heading noise.
+  describe("FA-12: the breadcrumb can never take the whole budget", () => {
+    const PATHOLOGICAL = "H".repeat(600);
+    const SIGNAL = "CHUNK-SIGNAL";
+
+    it("keeps the chunk text when the budget is at its floor", () => {
+      // The floor a note of ≥ 1000 chunks reaches: 512_000 / 1000 = 512.
+      const budget = embedChunkBudget(1_000);
+      expect(budget).toBe(MIN_EMBED_CHARS);
+      const out = buildEmbedText([{ text: SIGNAL, breadcrumb: PATHOLOGICAL }], 0, {
+        contextChars: 0,
+        budgetChars: budget
+      });
+      // Pre-fix the cap was the whole 512, so the breadcrumb filled the budget
+      // and the text was gone.
+      expect(out).toContain(SIGNAL);
+    });
+
+    it("keeps the chunk text at EVERY budget the aggregate can produce", () => {
+      // The property, not one point: whatever the share, the signal survives.
+      for (const budget of [512, 513, 600, 800, 1_000, 1_023, 1_024, 2_000, 4_096, 8_000]) {
+        const out = buildEmbedText([{ text: SIGNAL, breadcrumb: PATHOLOGICAL }], 0, {
+          contextChars: 0,
+          budgetChars: budget
+        });
+        expect(out, `budget ${budget} lost the chunk text`).toContain(SIGNAL);
+      }
+    });
+
+    it("leaves the ordinary default path byte-identical", () => {
+      // The fix must not move the common case: the cap at the default budget is
+      // still half of it.
+      const out = buildEmbedText([{ text: "core body", breadcrumb: "H".repeat(6_000) }], 0, { contextChars: 0 });
+      expect(out.split("\n\n")[0]).toHaveLength(MAX_EMBED_CHARS / 2);
+      expect(out).toContain("core body");
+    });
+
+    it("does not raise the budget floor", () => {
+      // The floor is a property of the BUDGET, not of the breadcrumb cap.
+      expect(embedChunkBudget(10_000)).toBe(MIN_EMBED_CHARS);
+    });
+  });
 });

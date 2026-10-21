@@ -335,7 +335,7 @@ const EXPECTED_REPOSITORY_MUTATION_HELPER_CALL_ENTRIES = [
   ],
   [
     "no-internal-imports.test.ts",
-    { count: 79, sha256: "c3413880df2aa51c216f7f3cf73f609cce0405cbf4f03f8cfb97a72e6a232b7e" }
+    { count: 79, sha256: "6a207ab49021de0d767c6b10ddec45801dc18294760af481c4e3a929519e0b75" }
   ],
   ["ocr-admission.test.ts", { count: 2, sha256: "90087510a75587d7bc1e3f94812692b128d5466f4aba05638305fa2815809faa" }],
   ["pages.test.ts", { count: 53, sha256: "bce9e4ba732c418f8f9779814cb9febc937844730cb224933b931df6bed8f21e" }],

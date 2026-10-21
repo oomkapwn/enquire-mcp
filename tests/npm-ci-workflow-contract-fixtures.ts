@@ -154,20 +154,20 @@ export const NPM_CI_SETUP_INPUTS = new Map<string, Readonly<Record<string, unkno
  * preinstall bytes remain part of this digest.
  */
 export const NPM_CI_PREINSTALL_DIGESTS = new Map<string, string>([
-  ["ci.yml#lint", "0acf2d9e58fa56c861244b4bfb0de4a2276e26c7bcca9603dd601d5eb5b98e90"],
-  ["ci.yml#test", "0b00c055e9a2707a37043a75423ce6b68004d5750b872ce6cf40e3dcadd1c4db"],
-  ["ci.yml#test-windows", "da943043234f9a375c085802079dc10cf411019cbc03b4747de9af178dc6a9ca"],
-  ["ci.yml#test-macos", "bad0645f602426986294fd032eac707a60440bd897f27a5105c05d54f054cc4e"],
-  ["ci.yml#coverage", "559a7e13a198905e6ac358a1914d6e9fa087ad055f55b27c380ae171424f3d6b"],
-  ["ci.yml#docs", "559a7e13a198905e6ac358a1914d6e9fa087ad055f55b27c380ae171424f3d6b"],
-  ["ci.yml#oia", "559a7e13a198905e6ac358a1914d6e9fa087ad055f55b27c380ae171424f3d6b"],
-  ["ci.yml#smoke", "44d845e567d5c3e9e38e265a970b7d2cbce33377b7ba78137effe85ca99e9110"],
-  ["ci.yml#protocol-conformance-matrix", "7ec0b012fca4c5f77005997e6e4c43ce04b44e55dbf1d1f7ffcc313d1d3c552f"],
-  ["ci.yml#npm-package", "7ec0b012fca4c5f77005997e6e4c43ce04b44e55dbf1d1f7ffcc313d1d3c552f"],
-  ["ci.yml#package-consumer-matrix", "7ec0b012fca4c5f77005997e6e4c43ce04b44e55dbf1d1f7ffcc313d1d3c552f"],
-  ["ci.yml#mcpb-basic-package", "7ec0b012fca4c5f77005997e6e4c43ce04b44e55dbf1d1f7ffcc313d1d3c552f"],
-  ["ci.yml#mcpb-basic-matrix", "7ec0b012fca4c5f77005997e6e4c43ce04b44e55dbf1d1f7ffcc313d1d3c552f"],
-  ["ci.yml#audit", "559a7e13a198905e6ac358a1914d6e9fa087ad055f55b27c380ae171424f3d6b"],
+  ["ci.yml#lint", "ec3fec0aec99d9e7e5a9cc1e3a8e90128df239ae429eb9b61a720b8a867d2e35"],
+  ["ci.yml#test", "cf5ff1a72d718f5e9574500631eeef5356530b5ebda34f8442667ab391980f09"],
+  ["ci.yml#test-windows", "e04a5000b7dacfc4b3dc597e1fe5f4ea9b64a1a31dd6bc56389438865e68bd2e"],
+  ["ci.yml#test-macos", "32b63906ae9321ffc9a1fa96ff89761b8da8a6b3901511b2ba0ea35e7b9175e3"],
+  ["ci.yml#coverage", "d6d9a6ab99423dc354d027dbb535c854e9e95836acb250c1f4bfa21d28a7d302"],
+  ["ci.yml#docs", "d6d9a6ab99423dc354d027dbb535c854e9e95836acb250c1f4bfa21d28a7d302"],
+  ["ci.yml#oia", "d6d9a6ab99423dc354d027dbb535c854e9e95836acb250c1f4bfa21d28a7d302"],
+  ["ci.yml#smoke", "854dc220dca10222c3dd36804b5bbca0162b26d346fc71209639772e6d4e5c47"],
+  ["ci.yml#protocol-conformance-matrix", "3650b210c4943cfbc7725e381fa4ab4c0ad72c4d5e3303d2f502b63bcebf56b6"],
+  ["ci.yml#npm-package", "3650b210c4943cfbc7725e381fa4ab4c0ad72c4d5e3303d2f502b63bcebf56b6"],
+  ["ci.yml#package-consumer-matrix", "3650b210c4943cfbc7725e381fa4ab4c0ad72c4d5e3303d2f502b63bcebf56b6"],
+  ["ci.yml#mcpb-basic-package", "3650b210c4943cfbc7725e381fa4ab4c0ad72c4d5e3303d2f502b63bcebf56b6"],
+  ["ci.yml#mcpb-basic-matrix", "3650b210c4943cfbc7725e381fa4ab4c0ad72c4d5e3303d2f502b63bcebf56b6"],
+  ["ci.yml#audit", "d6d9a6ab99423dc354d027dbb535c854e9e95836acb250c1f4bfa21d28a7d302"],
   ["publish-docs.yml#build", "d6d9a6ab99423dc354d027dbb535c854e9e95836acb250c1f4bfa21d28a7d302"],
   ["release.yml#verify", "add39e96ceac3beefa408d899638c13ef462ee9a85ca184bfb7a9a48c0a95144"]
 ]);
@@ -199,7 +199,7 @@ export const NPM_CI_COMMAND_DIGESTS = new Map<string, string>([
 
 /** Reviewed semantic digests of every step before each bounded dependency audit. */
 export const NPM_CI_PREAUDIT_DIGESTS = new Map<string, string>([
-  ["ci.yml#audit", "877eb535025aaf14a917f52fd1a871e38a2c26836a6df19f5cc42a31f32eb6f6"],
+  ["ci.yml#audit", "4df5b579cbd641a18492f14c12acf4c35174769e8646f1ed6de027eca130e9a3"],
   ["release.yml#verify", "cc04209af39705adeddc6e5eaa10f53a6a259bd0b84efefb2dd5d5c0471f31c7"]
 ]);
 

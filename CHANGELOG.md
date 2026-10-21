@@ -4,6 +4,41 @@ All notable changes to this project will be documented here. The format follows 
 
 ## [4.0.0-rc.7] — 2026-08-31
 
+### The retained alternatives are the first ten routes in traversal order (FA-15)
+
+> **TL;DR:** **FA-08's entry said "the final sort selects `path` and the retained set lexicographically, not in traversal order". The sort key is degenerate for the trails it compares — every accepted trail has the same length and the same first step, so the comparator returns 0 for every pair and the retained set comes out in TRAVERSAL order, not a lexicographic one. The set and the order are unchanged by FA-08, as that entry also said; only the word "lexicographically" was wrong.**
+>
+> **What the order actually is.** The alternatives are inserted at their sorted position in a bounded array, and the worst is dropped when it overflows. With a comparator that cannot distinguish two same-length trails, the binary search converges on the end of the array, so the array holds the routes in the order the traversal found them. The retained set is therefore the first ten routes in traversal order — the same set, and the same order, that the old accumulate-then-slice produced. What FA-08 changed is that the array never exceeds the bound while the traversal runs.
+>
+> **The control now says WHICH order.** The fan's hub used to list its links in alphabetical order, which made the traversal order and the lexicographic order the same list — so no control could tell them apart, and the count was not pinned either (`toBeLessThanOrEqual(10)` accepts nine). The hub now lists its links in REVERSE alphabetical order, and the control pins the ten retained midpoints by name. A lexicographic order would list them the other way round, so the control now distinguishes the two, and it pins the count as well.
+>
+> **Bounded claim.** No production code changes: the comparator, the insertion and the bound are exactly as FA-08 left them. One control in `tests/v16.test.ts` changes — the hub's link order and the added expectation — and the CHANGELOG sentence is corrected. The claim is corrected rather than the code changed, because the code is the honest one: the order was never lexicographic, and the old code's order was the traversal order too.
+>
+> **Method note:** the order was re-derived from the source before anything was changed — the comparator is `a.length - b.length || a[0].path.localeCompare(b[0].path)`, and the retained trails all share the hub as their first step, so the second term is always 0. Under D-45 no local test or build was run; hosted CI is the validation authority.
+
+### The Unicode-alias lease controls now assert the host's own semantics instead of skipping (FA-16)
+
+> **TL;DR:** **FA-02's entry said that four of its five controls "on such a host assert the host's own semantics rather than passing on a fact they never checked". They did not: each one returned before its first assertion when the probe found a normalization-insensitive filesystem, so on macOS APFS — where the NFD and NFC spellings are one file — those four controls asserted NOTHING. They now assert the host's semantics, so the claim is true instead of aspirational.**
+>
+> **What the host's semantics are.** On a normalization-insensitive filesystem the two spellings are one file, and the host maps both onto the same on-disk name (measured on this machine: `realpath` of the NFD spelling returns the NFC name, and `lstat` of the NFD path finds the file). So the selection is not absent, it names the file that is really there, and the two spellings share one lease because the digest folds the name. Each of the four controls now asserts exactly that on such a host, and the byte-exact branch keeps asserting the distinct-file facts where the distinction exists.
+>
+> **One control needed no host at all.** The cross-alias mutual-exclusion control is about the DIGEST, and the digest folds the name on every filesystem — so that control now runs everywhere. It used to return early on a normalization-insensitive host, which meant the macOS lane asserted nothing about mutual exclusion either.
+>
+> **Bounded claim.** No production code changes: the lease scope, the exact-name rule, the fold and the digest are exactly as FA-02 left them. Four controls in `tests/persistence-lease.test.ts` change — three gain a host-semantics branch, one loses a guard it never needed — and the CHANGELOG sentence is corrected. The host semantics were measured on this machine with a stdlib probe before anything was changed, so the branches assert what the host does rather than what it is assumed to do.
+>
+> **Method note:** the probe was run before the branches were written: on this filesystem `realpath(NFD)` returns the NFC basename, `lstat(NFD)` finds the file, and the repo's own byte-exact probe reports false. Under D-45 no local test or build was run; hosted CI is the validation authority.
+
+### The open-question candidate budget charges every inspected line, and that is now stated (FA-14)
+
+> **TL;DR:** **FA-09's entry said "a note whose headings match nothing costs nothing". Read as a statement about the BUDGET, that is not what the code does and never was: since FA-09 every non-fenced line — a heading or not — is charged as a candidate BEFORE the matcher runs. A heading that matches nothing still costs a candidate; what it costs nothing in is the RESULT. The sentence is corrected here.**
+>
+> **What the accounting actually is.** The scan inspects every body line, and `maxCandidates` (1 000 000) is what bounds it: the charge happens before the line is matched, because a line that might match has to be a candidate before anyone knows whether it does. `maxLines` (2 000 000) bounds the lines visited, and `maxCandidateUtf8Bytes` (256 MiB) bounds the metadata carried with them. The budget is charged on inspection, not on success — that is the point of a bound on work.
+>
+> **The consequence, stated rather than left for a reader to infer.** Before FA-09 a heading was skipped before the accounting, so a heading-heavy vault cost almost nothing. Now it costs one candidate per heading, and for a vault whose lines are mostly headings the **candidate** cap (1 000 000) is the binding bound where the **line** cap (2 000 000) used to be. Such a vault now gets `obsidian_open_questions: candidate count exceeds the complete-scan limit of 1000000` — a loud, named refusal, narrowable with `folder`, instead of a quiet empty result. Raising that cap is an owner policy call, not a defect: the bound exists to cap the scan, and this card states the bound instead of moving it.
+>
+> **Bounded claim.** No production code changes: the accounting, the limits and the error are exactly as FA-09 left them. Three controls in `tests/open-questions-admission.test.ts` pin the behaviour the sentence used to misdescribe — a non-marker heading IS charged against the candidate budget (and the refusal names the budget), it yields no question, and a marker heading is charged the same way and still answers. The claim is corrected rather than the code changed, because the code is the honest one: the scan really does inspect every line.
+>
+> **Method note:** the accounting was re-derived from the source before anything was changed — the pre-FA-09 code skipped headings with `continue` BEFORE the candidate charge, and FA-09 removed that skip, so the charge now covers every non-fenced line. The card came out of the bounded-claims audit of the merged window. Under D-45 no local test or build was run; hosted CI is the validation authority.
 ### The breadcrumb can no longer take the whole budget — the chunk text survives at the floor (FA-12)
 
 > **TL;DR:** **FA-04's own comment promised that a pathological breadcrumb "cannot push the chunk text out entirely — the chunk would then be embedded as pure heading noise". The cap that enforced it could do exactly that. `crumbCap` was `max(MIN_EMBED_CHARS, floor(budget / 2))`, and that floor defeated the rule exactly where it mattered: at the budget floor (512, i.e. a note of ≥ 1000 chunks) the cap WAS the budget. A note of ≥ 1000 chunks with a breadcrumb longer than ~510 characters was embedded as pure heading noise — the chunk text was not merely trimmed, it was gone. The cap is now half the budget, with no floor.**
@@ -527,9 +562,9 @@ hosted CI is the validation authority.
 
 - FTS5 schema **v7**: a sibling FTS5 table `chunk_parts` carries, for every identifier-bearing chunk, the words each compound identifier is spelled from (camelCase, upper-case runs, digit edges; NFC; bounded by truncation) next to a copy of that chunk's text. A search runs `chunks` exactly as v6 did and appends `chunk_parts`-only hits after every ranked hit with score 0 — found, never ranked — so `poolDayData` becomes reachable by "pool day data" while no rank moves for any query. (A weight-0 column inside `chunks` was measured on CI to move ranks: FTS5's bm25() normalises by the whole row's length.) An existing persistent index rebuilds once on first open; both schema admission maps admit v7.
 
-### Tests (2353)
+### Tests (2356)
 
-**2228 → 2353 source tests.** Sixty-one new causal contracts cover the audit closures and staged embedding replacement above; table-driven phases additionally exercise rollback, authority ordering, fail-fast sync operations, clear/replacement interlocks, and promotion refusal without inflating the declared `it()` count.
+**2228 → 2356 source tests.** Sixty-one new causal contracts cover the audit closures and staged embedding replacement above; table-driven phases additionally exercise rollback, authority ordering, fail-fast sync operations, clear/replacement interlocks, and promotion refusal without inflating the declared `it()` count.
 ### Maintainer handoff reflects the post-AH-4 repository state
 
 > **TL;DR:** **The agent handoff now starts from the shipped AH-4 boundary instead of the earlier rc.6 release attempt.** `CLAUDE.md` records that PR #565 completed staged embedding replacement, that its candidate and squash-main checks passed, that no product implementation is currently in flight, and that distribution remains deferred. The next bounded action is a read-only AH-4 sibling sweep before one backlog card is selected.

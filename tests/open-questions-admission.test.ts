@@ -327,3 +327,40 @@ describe("getOpenQuestions heading-prefixed markers", () => {
     expect(out.map((question) => question.context_heading)).toEqual(["Decision needed", "Decision needed"]);
   });
 });
+
+// FA-14 — FA-09's entry said "a note whose headings match nothing costs
+// nothing". Read as a statement about the BUDGET it is not what the code
+// does: since FA-09 every non-fenced line — a heading or not — is charged as
+// a candidate BEFORE the matcher runs, so a heading that matches nothing
+// still costs a candidate (what it costs nothing in is the RESULT).
+//
+// The accounting is the honest one: the scan inspects every line, and the
+// candidate budget is what bounds that scan. The claim was the defect; this
+// describes it.
+describe("FA-14: a heading that matches nothing is still a candidate", () => {
+  it("charges a non-marker heading against the candidate budget", async () => {
+    const { vault } = await fixture({ "h.md": ["# Design notes", "# Background", "# More notes"].join("\n") });
+    // Three headings, three candidates, and the cap is two: the third charge
+    // trips it. The error names the budget, so the cause is not guesswork.
+    await expect(getOpenQuestions(vault, {}, { limits: { maxCandidates: 2 } })).rejects.toThrow(
+      /candidate count exceeds the complete-scan limit of 2/
+    );
+  });
+
+  it("NEGATIVE: a note whose headings match nothing yields no question", async () => {
+    const { vault } = await fixture({ "h.md": ["# Design notes", "# Background"].join("\n") });
+    const out = await getOpenQuestions(vault, {});
+    expect(out).toEqual([]);
+  });
+
+  it("a marker heading is charged the same way and still answers", async () => {
+    const { vault } = await fixture({ "h.md": ["# Q: real one", "# Design notes"].join("\n") });
+    const out = await getOpenQuestions(vault, {});
+    expect(out.map((question) => question.question)).toEqual(["real one"]);
+    // The charge is identical: a marker heading is a candidate before it is a
+    // match, exactly like a non-marker one.
+    await expect(getOpenQuestions(vault, {}, { limits: { maxCandidates: 1 } })).rejects.toThrow(
+      /candidate count exceeds the complete-scan limit of 1/
+    );
+  });
+});

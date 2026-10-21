@@ -20,12 +20,6 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Verify trusted Vitest bootstrap
-        # A12-8-N2 — what this gate proves, stated exactly: the bootstrap
-        # manifest and the workflow that carries it are pinned to each other,
-        # so a coordinated rewrite of BOTH passes. That makes these pins an
-        # INTEGRITY RECEIPT, not a signature: the protection against a
-        # malicious change is the review of the change itself, not this gate.
-        # The gate's real job is catching an accidental, uncoordinated drift.
         shell: /bin/bash --noprofile --norc -p -e -o pipefail {0}
         working-directory: ${{ github.workspace }}
         env:
@@ -36,7 +30,7 @@ jobs:
         run: |
           set -u
           manifest=.github/trusted-vitest-bootstrap.sha256
-          expected_manifest_sha=f35bce79810daea705d8df34d5d8b716ec66db9599a0308607e4010286f7e526
+          expected_manifest_sha=c1de87db03dba18f937649c082d1793155580196408a9b1d61a6195f101b5796
           expected_path_sha=5581eea048d9360a3fff43c79e1d55d40492a082ee468ee74c3738f60c2f82f9
           workflow=.github/workflows/ci.yml
           [[ -d .github && ! -L .github ]]

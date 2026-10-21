@@ -1007,6 +1007,30 @@ const TRANSACTION_PROBLEM_RUNS: ReadonlyArray<readonly [problem: string, count: 
   ["GitHub Release recovery must expose no delete, clobber, or transport-replay path", 7]
 ];
 
+/**
+ * Rewrite one release root id into its case id.
+ *
+ * A12-6-N3 brought this file under the source-reader census: it reads
+ * `src/cli.ts`, `src/cli-help.ts` and `src/server.ts`, so the raw-mutation
+ * oracle now audits every `.replace` here. These rewrites touch IDENTIFIERS,
+ * never source text, so each one lives in its own named helper — that keeps
+ * each rewrite a single reviewed ordinary transform instead of an
+ * indistinguishable group of identical call sites.
+ */
+function releaseCaseId(root: string): string {
+  return root.replace("release.", "release.case.");
+}
+
+/** Rewrite one release root id into its expectation id. */
+function releaseExpectationId(root: string): string {
+  return root.replace("release.", "release.expectation.");
+}
+
+/** Rewrite one release case id back into its root id. */
+function releaseRootId(caseId: string): string {
+  return caseId.replace("release.case.", "release.");
+}
+
 function sha256(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("hex");
 }
@@ -3102,20 +3126,20 @@ function scanHybridDeclarativeMatrix(matrix: MatrixScan, problems: string[]): Hy
     "source:script.release-integrity:releaseIntegritySource",
     ...MIGRATED_REGISTRY_EVALUATOR_IDS.flatMap((id) => [
       `mutation:${id}`,
-      `case:${id.replace("release.", "release.case.")}`
+      `case:${releaseCaseId(id)}`
     ]),
     "source:workflow.registry-publish-step:registryPublishStepSource",
     "mutation:release.m108",
     ...[...MIGRATED_REGISTRY_RUN_IDS, ...MIGRATED_REGISTRY_STEP_INTEGRITY_IDS].flatMap((id) => [
       `mutation:${id}`,
-      `case:${id.replace("release.", "release.case.")}`
+      `case:${releaseCaseId(id)}`
     ]),
     "source:fixture.release-workflow:releaseWorkflowFixtureSource",
     ...[
       ...MIGRATED_NPM_CONTRACT_RELEASE_IDS,
       ...MIGRATED_NPM_CONTRACT_INTEGRITY_IDS,
       ...MIGRATED_NPM_WORKFLOW_PREFIX_IDS
-    ].flatMap((id) => [`mutation:${id}`, `case:${id.replace("release.", "release.case.")}`]),
+    ].flatMap((id) => [`mutation:${id}`, `case:${releaseCaseId(id)}`]),
     "source:fragment.npm-provenance-audit-command:npmProvenanceAuditCommandSource",
     "mutation:release.m140",
     "mutation:release.m139",
@@ -5150,7 +5174,7 @@ function validateCases(manifest: IdentityManifest, matrixSource: string, matrix:
       problems.push(`manifest case order must be contiguous; index ${index} declares ${identityCase.order}`);
     }
     if (!CASE_ID_PATTERN.test(identityCase.id)) problems.push(`manifest case ${identityCase.id} has invalid identity`);
-    const expectedCaseId = identityCase.root.replace("release.", "release.case.");
+    const expectedCaseId = releaseCaseId(identityCase.root);
     if (identityCase.id !== expectedCaseId) {
       problems.push(`manifest case for ${identityCase.root} must use exact identity ${expectedCaseId}`);
     }
@@ -5164,7 +5188,7 @@ function validateCases(manifest: IdentityManifest, matrixSource: string, matrix:
     for (let checkIndex = 0; checkIndex < identityCase.checks.length; checkIndex++) {
       const check = identityCase.checks[checkIndex];
       if (check === undefined) continue;
-      const expectedExpectationId = `${identityCase.root.replace("release.", "release.expectation.")}.${
+      const expectedExpectationId = `${releaseExpectationId(identityCase.root)}.${
         checkIndex === 0 ? "primary" : "composition"
       }`;
       if (check.expectation.id !== expectedExpectationId) {
@@ -5731,7 +5755,7 @@ function validateFrozenCaseTopology(manifest: IdentityManifest, problems: string
     if (identityCase.order !== caseIndex + 1) {
       problems.push(`manifest case order must be contiguous; index ${caseIndex} declares ${identityCase.order}`);
     }
-    const expectedCaseId = identityCase.root.replace("release.", "release.case.");
+    const expectedCaseId = releaseCaseId(identityCase.root);
     if (!CASE_ID_PATTERN.test(identityCase.id) || identityCase.id !== expectedCaseId) {
       problems.push(`manifest case for ${identityCase.root} must use exact identity ${expectedCaseId}`);
     }
@@ -5745,7 +5769,7 @@ function validateFrozenCaseTopology(manifest: IdentityManifest, problems: string
     for (let checkIndex = 0; checkIndex < identityCase.checks.length; checkIndex++) {
       const check = identityCase.checks[checkIndex];
       if (check === undefined) continue;
-      const expectedExpectationId = `${identityCase.root.replace("release.", "release.expectation.")}.${
+      const expectedExpectationId = `${releaseExpectationId(identityCase.root)}.${
         checkIndex === 0 ? "primary" : "composition"
       }`;
       if (check.expectation.id !== expectedExpectationId) {
@@ -6937,7 +6961,7 @@ function validateHybridPartition(
   }
 
   const observedCaseIds = declarative.cases.map((identityCase) => identityCase.id);
-  const expectedCaseIds = MIGRATED_DECLARATIVE_ROOT_IDS.map((id) => id.replace("release.", "release.case."));
+  const expectedCaseIds = MIGRATED_DECLARATIVE_ROOT_IDS.map((id) => releaseCaseId(id));
   if (JSON.stringify(observedCaseIds) !== JSON.stringify(expectedCaseIds)) {
     problems.push(
       `release mutation hybrid case allowlist must be exact ${expectedCaseIds.join(", ")}; ` +
@@ -8262,7 +8286,7 @@ function validateTransitionCaseExecutionOrder(
     recordObserved({
       anchor: executionAnchor.anchor,
       caseId,
-      rootId: caseId.replace("release.case.", "release."),
+      rootId: releaseRootId(caseId),
       tieBreaker: executionAnchor.rootAnchor
     });
   }

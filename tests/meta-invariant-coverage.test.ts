@@ -195,13 +195,14 @@ const EXPECTED_SOURCE_READER_CANDIDATE_FILES = [
   "peek-meta.test.ts",
   "prepare-deps-failfast.test.ts",
   "redos-trailing-strip.test.ts",
+  "release-mutation-identity-audit.ts",
   "resource-list-admission.test.ts",
   "tool-input-admission.test.ts",
   "watcher-startup-order.test.ts",
   "wikilink-scan.test.ts"
 ] as const;
 const EXPECTED_SOURCE_READER_CANDIDATE_MEMBERSHIP_SHA256 =
-  "fe6385f42afce1fbdf84749f0b502d8e7b2d8e8cff7ce5448b94cfa924b0bbed";
+  "24f188eef46e26a440a1751f5b6cea3575a2c2473097bd1cf1c7872add4c87d0";
 
 // The raw-mutation inventory is the union of convention/curated structural
 // tests and the independently derived source-reader candidate class. The shared helper
@@ -963,6 +964,38 @@ const REVIEWED_ORDINARY_TRANSFORMS = [
     pattern: String.raw`/\s+/g`,
     receiverRoot: "node",
     replacement: '""'
+  },
+  {
+    // A12-6-N3 — the source-reader census now enumerates every TypeScript
+    // file under `tests/`, and this audit module reads `src/cli.ts`,
+    // `src/cli-help.ts` and `src/server.ts`. Its three identifier rewrites
+    // never touch source text, so each one is reviewed as an ordinary
+    // transform in its own named helper.
+    filename: "release-mutation-identity-audit.ts",
+    id: "release case-id normalization",
+    method: "replace",
+    owner: "function:releaseCaseId",
+    pattern: '"release."',
+    receiverRoot: "root",
+    replacement: '"release.case."'
+  },
+  {
+    filename: "release-mutation-identity-audit.ts",
+    id: "release expectation-id normalization",
+    method: "replace",
+    owner: "function:releaseExpectationId",
+    pattern: '"release."',
+    receiverRoot: "root",
+    replacement: '"release.expectation."'
+  },
+  {
+    filename: "release-mutation-identity-audit.ts",
+    id: "release root-id normalization",
+    method: "replace",
+    owner: "function:releaseRootId",
+    pattern: '"release.case."',
+    receiverRoot: "caseId",
+    replacement: '"release."'
   }
 ] as const;
 
@@ -1039,7 +1072,16 @@ const EXPECTED_REVIEWED_ORDINARY_OWNER_SHA256_ENTRIES = [
   [
     "watcher startup validation whitespace normalization",
     "cc3b4b08d762b89edf67eb7bd624c03c6935f8e965808fe4d8aa53e531380ede"
-  ]
+  ],
+  [
+    "release case-id normalization",
+    "0bb8a0fab52a096ba559d28c55a21a8383598b3eb07aba58ead150614db8ac7e"
+  ],
+  [
+    "release expectation-id normalization",
+    "d03b0ff5a801d5346e9df613da83423805cdb4de83beee4aa9e8447130f9257c"
+  ],
+  ["release root-id normalization", "6318b2d00c58b897c55d7d4ae59d52212729dcb9b261ba3b8a0ba7f867abc67a"]
 ] as const satisfies readonly (readonly [ReviewedOrdinaryTransformId, string])[];
 const EXPECTED_REVIEWED_ORDINARY_OWNER_SHA256 = new Map<ReviewedOrdinaryTransformId, string>(
   EXPECTED_REVIEWED_ORDINARY_OWNER_SHA256_ENTRIES
@@ -4780,8 +4822,12 @@ async function collectSourceReaderCandidateFiles(): Promise<string[]> {
         // `src/**` by itself) was enumerated by nothing: it would join no
         // inventory and be checked by no oracle. Every TypeScript file under
         // `tests/` is now enumerated, and the curated structural files are
-        // still skipped below — so the derived set is unchanged today, while
-        // a future helper can no longer appear without being noticed.
+        // still skipped below. The derived set DID grow when this landed:
+        // `release-mutation-identity-audit.ts` reads `src/cli.ts`,
+        // `src/cli-help.ts` and `src/server.ts`, so it joined the inventory
+        // and its three identifier rewrites became reviewed ordinary
+        // transforms. A future helper can no longer appear without being
+        // noticed.
         const relative = path.relative(testsRoot, full).split(path.sep).join("/");
         if (structuralFiles.has(relative)) continue;
         const source = await fs.readFile(full, "utf8");

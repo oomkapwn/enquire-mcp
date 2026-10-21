@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
 import { load } from "js-yaml";
+import { describe, expect, it } from "vitest";
 import { REQUIRED_RELEASE_CHECKS } from "../scripts/check-release-integrity.mjs";
 
 // A8-1 — the required-check contexts live in FOUR places: the classic branch
@@ -40,6 +40,14 @@ const repoRoot = path.resolve(__dirname, "..");
 const REPO = "oomkapwn/enquire-mcp";
 const RULESET_NAME = "main-protection";
 const API_ROOT = "https://api.github.com";
+
+/**
+ * The GitHub expression a matrix job uses for its display label.
+ *
+ * The escaped dollar keeps it a literal: a regular string would be read as a
+ * template placeholder, and an unescaped template literal would interpolate.
+ */
+const MATRIX_LABEL_EXPRESSION = `\${{ matrix.label }}`;
 
 /** What this gate can and cannot see. The CHANGELOG claim is checked against it. */
 const PROBE_COVERAGE = Object.freeze({
@@ -86,7 +94,7 @@ function workflowContexts(source: string): string[] {
       continue;
     }
     for (const entry of include) {
-      contexts.push(template.replaceAll("${{ matrix.label }}", String(entry.label ?? "")));
+      contexts.push(template.replaceAll(MATRIX_LABEL_EXPRESSION, String(entry.label ?? "")));
     }
   }
   return contexts.sort();
@@ -169,7 +177,7 @@ describe("live required-checks lists against the canonical release gate (A8-1)",
     const missing = REQUIRED_RELEASE_CHECKS.filter((context) => !contexts.includes(context));
     expect(
       missing,
-      "ci.yml must define every context the merge requires: " + JSON.stringify(missing)
+      `ci.yml must define every context the merge requires: ${JSON.stringify(missing)}`
     ).toEqual([]);
   });
 
@@ -192,8 +200,7 @@ describe("live required-checks lists against the canonical release gate (A8-1)",
     const drift = findRequiredChecksDrift(await liveRulesetContextsOnce(), REQUIRED_RELEASE_CHECKS);
     expect(
       drift,
-      "the main-protection ruleset and the release gate's canonical list must be the same set: " +
-        `missing ${JSON.stringify(drift.missing)}, unexpected ${JSON.stringify(drift.unexpected)}`
+      `the main-protection ruleset and the release gate's canonical list must be the same set: missing ${JSON.stringify(drift.missing)}, unexpected ${JSON.stringify(drift.unexpected)}`
     ).toEqual({ missing: [], unexpected: [] });
   });
 
@@ -238,9 +245,18 @@ describe("live required-checks lists against the canonical release gate (A8-1)",
 
   it("NEGATIVE: a workflow job renamed away from the canon is reported missing", () => {
     const contexts = workflowContexts(
-      ["jobs:", "  lint:", "    name: lint", "  test:", "    name: test (${{ matrix.label }})", "    strategy:", "      matrix:", "        include:", "          - label: \"22\"", "          - label: \"24\""].join(
-        "\n"
-      )
+      [
+        "jobs:",
+        "  lint:",
+        "    name: lint",
+        "  test:",
+        `    name: test (${MATRIX_LABEL_EXPRESSION})`,
+        "    strategy:",
+        "      matrix:",
+        "        include:",
+        "          - label: 22",
+        "          - label: 24"
+      ].join("\n")
     );
     expect(contexts).toEqual(["lint", "test (22)", "test (24)"]);
     const drift = findRequiredChecksDrift(contexts, ["lint", "test (22)", "test (24)", "smoke"]);

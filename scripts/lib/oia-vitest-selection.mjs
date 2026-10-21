@@ -55,7 +55,10 @@ const FORBIDDEN_NPM_PROJECT_ENTRIES = Object.freeze([".npmrc", "binding.gyp", "n
 const EXPECTED_CHECKOUT_ACTION = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1";
 const EXPECTED_SETUP_NODE_ACTION = "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020";
 const EXPECTED_TEST_STEP_FINGERPRINTS = [
-  "3ef4af68ef144f12dd555f182fb78c286413a5c20503a3491c8a1a7ea3554af7",
+  // A11-1a — the reviewed checkout step now carries the credential-hygiene
+  // block (`persist-credentials: false`). The step is still pinned byte-exactly:
+  // the fingerprint covers the whole step, hygiene included.
+  "69983d424f70d56e16aca2c5bc441464578ac832b548ce342069dd3e5a1ca9e1",
   "edca7cfed3ff243cb4a555e1d498c0aaf00c3beea661e07b0a4b29201526d909",
   "d6afccf6f68cf1593c09c268ca358cc0def948d0f8b14ee047128a5a6e366627",
   "338e29c470a015d92698b8184b65ee481976a1a24ad813eab912c20460a2a937",
@@ -303,8 +306,12 @@ export function ciTestSelectionProblems(source) {
   const checkoutStep = steps?.[0];
   if (
     checkoutStep === undefined ||
-    !recordHasExactKeys(checkoutStep, ["uses"]) ||
-    checkoutStep.uses !== EXPECTED_CHECKOUT_ACTION
+    // A11-1a — the checkout step is pinned whole: the pinned action, and the
+    // credential-hygiene block that keeps the job's token out of `.git/config`.
+    // A step that drops the hygiene, or adds any other key, is a violation.
+    !recordHasExactKeys(checkoutStep, ["uses", "with"]) ||
+    checkoutStep.uses !== EXPECTED_CHECKOUT_ACTION ||
+    !isDeepStrictEqual(asRecord(checkoutStep.with), { "persist-credentials": false })
   ) {
     problems.push("CI test matrix must begin with the exact pinned checkout step");
   }

@@ -292,7 +292,7 @@ const EXPECTED_REPOSITORY_MUTATION_HELPER_CALL_ENTRIES = [
   ],
   [
     "docs-consistency.test.ts",
-    { count: 53, sha256: "c61844c9bebcc22f828bd6a52a2aae0ce23939c30dd8d607afa57961da64bd92" }
+    { count: 53, sha256: "b14dc8b822e263dbfd02bcd73eb1a6a302ca4c2ab0dafac48a83ee5a1359fb3d" }
   ],
   [
     "enforcement-guard-invariant.test.ts",

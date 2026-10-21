@@ -1073,15 +1073,9 @@ const EXPECTED_REVIEWED_ORDINARY_OWNER_SHA256_ENTRIES = [
     "watcher startup validation whitespace normalization",
     "cc3b4b08d762b89edf67eb7bd624c03c6935f8e965808fe4d8aa53e531380ede"
   ],
-  [
-    "release case-id normalization",
-    "0bb8a0fab52a096ba559d28c55a21a8383598b3eb07aba58ead150614db8ac7e"
-  ],
-  [
-    "release expectation-id normalization",
-    "d03b0ff5a801d5346e9df613da83423805cdb4de83beee4aa9e8447130f9257c"
-  ],
-  ["release root-id normalization", "6318b2d00c58b897c55d7d4ae59d52212729dcb9b261ba3b8a0ba7f867abc67a"]
+  ["release case-id normalization", "b3fbdb04690e62aeae4d111fc59913fe58b584a46b8521e59ba14070403f5746"],
+  ["release expectation-id normalization", "69d64103c61df979bf58745b37b0d7d00ac87d584f73cb2cd96d1c90b9915586"],
+  ["release root-id normalization", "f91af7a99664b951d1483bcc2412a176f212a1f1fea1efa2b099f34734ddc4b1"]
 ] as const satisfies readonly (readonly [ReviewedOrdinaryTransformId, string])[];
 const EXPECTED_REVIEWED_ORDINARY_OWNER_SHA256 = new Map<ReviewedOrdinaryTransformId, string>(
   EXPECTED_REVIEWED_ORDINARY_OWNER_SHA256_ENTRIES

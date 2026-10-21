@@ -3124,10 +3124,7 @@ function scanHybridDeclarativeMatrix(matrix: MatrixScan, problems: string[]): Hy
   }
   const expectedRegistrationSequence = [
     "source:script.release-integrity:releaseIntegritySource",
-    ...MIGRATED_REGISTRY_EVALUATOR_IDS.flatMap((id) => [
-      `mutation:${id}`,
-      `case:${releaseCaseId(id)}`
-    ]),
+    ...MIGRATED_REGISTRY_EVALUATOR_IDS.flatMap((id) => [`mutation:${id}`, `case:${releaseCaseId(id)}`]),
     "source:workflow.registry-publish-step:registryPublishStepSource",
     "mutation:release.m108",
     ...[...MIGRATED_REGISTRY_RUN_IDS, ...MIGRATED_REGISTRY_STEP_INTEGRITY_IDS].flatMap((id) => [

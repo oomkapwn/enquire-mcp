@@ -12,7 +12,9 @@ All notable changes to this project will be documented here. The format follows 
 >
 > **The count follows the same rule.** `scripts/bump-test-count.mjs` and `tests/docs-consistency.test.ts` counted `it(` registrations only, while `test("…")` is a vitest registration exactly like `it("…")`. A new file written with `test(` would have run its tests and silently stayed invisible to the declared number. All three sites now count both spellings.
 >
-> **What the bootstrap pins actually prove.** They are an INTEGRITY RECEIPT, not a signature: the manifest and the workflow that carries it are pinned to each other, so a coordinated rewrite of both passes. The protection against a malicious change is the review of that change; the gate's job is catching an accidental, uncoordinated drift. The workflow now says so instead of implying more.
+> **What the bootstrap pins actually prove.** They are an INTEGRITY RECEIPT, not a signature: the manifest and the workflow that carries it are pinned to each other, so a coordinated rewrite of both passes. The protection against a malicious change is the review of that change; the gate's job is catching an accidental, uncoordinated drift.
+>
+> **Why the note lives here and not in the workflow.** The bootstrap chain in `.github/workflows/ci.yml` is byte-canonical — a gate pins its exact shape, so even a comment in it is a violation. The note is therefore stated here rather than at the gate, which is the only place it can be said without breaking the thing it describes.
 >
 > **Bounded claim.** The census classifier in `tests/meta-invariant-coverage.test.ts`, the registration counter in `scripts/bump-test-count.mjs` and `tests/docs-consistency.test.ts`, and two comments. No tool behaviour, no public surface and no dependency changes. The derived candidate set is unchanged today — the one non-test helper that reads `src/**` is a curated structural file and was already skipped by the walk — so the census's membership seal does not move; what changes is that a FUTURE helper can no longer appear unnoticed.
 >

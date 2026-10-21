@@ -4213,6 +4213,15 @@ function sourceReaderCandidateFacts(filename: string, source: string): SourceRea
   const fsContainers = new Set<ts.Symbol>();
   const createRequireFactories = new Set<ts.Symbol>();
   const nodeModuleContainers = new Set<ts.Symbol>();
+  // A12-6-N2 — `fs` and `fs/promises` are the legacy spellings of the same two
+  // modules, and the census must not be blind to them. `node:fs` is the
+  // callback API and `node:fs/promises` the promise API; `fs` and
+  // `fs/promises` are the same two under their pre-`node:` names.
+  const fsCallbackModules: readonly string[] = ["node:fs", "fs"];
+  const fsPromiseModules: readonly string[] = ["node:fs/promises", "fs/promises"];
+  // A12-6-N4 — the read surface was `readFile`/`readFileSync` only, so
+  // `readSync` and `createReadStream` read files without being recognised.
+  const fsReaderMembers: readonly string[] = ["readFile", "readFileSync", "readSync", "createReadStream"];
   const assignmentSources = new Map<ts.Symbol, ts.Expression[]>();
   const destructuringSources = new Map<
     ts.Symbol,
@@ -4299,7 +4308,8 @@ function sourceReaderCandidateFacts(filename: string, source: string): SourceRea
       }
       continue;
     }
-    if (moduleName !== "node:fs" && moduleName !== "node:fs/promises") continue;
+    const isFsCallbackModule = fsCallbackModules.includes(moduleName);
+    if (!isFsCallbackModule && !fsPromiseModules.includes(moduleName)) continue;
     if (clause.name !== undefined) addSymbol(fsContainers, clause.name);
     const bindings = clause.namedBindings;
     if (bindings === undefined) continue;
@@ -4310,9 +4320,9 @@ function sourceReaderCandidateFacts(filename: string, source: string): SourceRea
     for (const element of bindings.elements) {
       if (element.isTypeOnly) continue;
       const importedName = element.propertyName?.text ?? element.name.text;
-      if (importedName === "readFile" || importedName === "readFileSync") {
+      if (fsReaderMembers.includes(importedName)) {
         addSymbol(directReaders, element.name);
-      } else if (moduleName === "node:fs" && importedName === "promises") {
+      } else if (isFsCallbackModule && importedName === "promises") {
         addSymbol(fsContainers, element.name);
       }
     }
@@ -4524,7 +4534,11 @@ function sourceReaderCandidateFacts(filename: string, source: string): SourceRea
       moduleArgument !== undefined &&
       ts.isStringLiteral(moduleArgument) &&
       moduleArgument.text === moduleName &&
-      (isNodeRequireFunction(call.expression) || isGetBuiltinModuleFunction(call.expression))
+      (isNodeRequireFunction(call.expression) ||
+        isGetBuiltinModuleFunction(call.expression) ||
+        // A12-6-N1 — `await import("node:fs")` acquires the module just as
+        // authentically as `require` does; the classifier only knew the latter.
+        call.expression.kind === ts.SyntaxKind.ImportKeyword)
     );
   };
   const isFsContainer = (expression: ts.Expression, resolving = new Set<ts.Symbol>()): boolean => {

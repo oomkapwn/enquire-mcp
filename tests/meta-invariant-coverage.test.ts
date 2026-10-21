@@ -973,10 +973,10 @@ type ReviewedOrdinaryTransformId = (typeof REVIEWED_ORDINARY_TRANSFORMS)[number]
 // the complete source file, so a reachable decoy, relocated clone, or severed
 // helper consumer cannot inherit authority from the same filename/title/count.
 const EXPECTED_REVIEWED_ORDINARY_OWNER_SHA256_ENTRIES = [
-  ["pdf OCR quote normalization", "f263ff5abfb450dc69c3c38babc4d3fec97d504eebfe5b1adb8c38da4c95433c"],
-  ["pdf OCR whitespace normalization", "f263ff5abfb450dc69c3c38babc4d3fec97d504eebfe5b1adb8c38da4c95433c"],
-  ["lifecycle whitespace normalization", "75e8a2471e27ad3f24e3fc1535e866f13f98900e4dcd71a9ca1f42594fa30223"],
-  ["release gate parenthesis unescape", "283599de342dcd0e162a045dc3779c36ab76a9d24cf801065cc38e488de3c635"],
+  ["pdf OCR quote normalization", "eec278c582ebb03cfbf0b4d8a6d087c5f380b519d8b0fa22dd769f3801790f00"],
+  ["pdf OCR whitespace normalization", "eec278c582ebb03cfbf0b4d8a6d087c5f380b519d8b0fa22dd769f3801790f00"],
+  ["lifecycle whitespace normalization", "ec0bf535e444e6141228295dad593f24e783a9b9ec79e9a4687f5b4319e18ea3"],
+  ["release gate parenthesis unescape", "41e176394d4beb7b0b0ec68c89a0e05cd811c498374c72a5a822d0500ac1ae11"],
   ["entrypoint block-comment stripping", "319def01444e238d986cd6674091a75f17ce843b71ac7e74e2c1aeba07741b0a"],
   ["entrypoint line-comment stripping", "319def01444e238d986cd6674091a75f17ce843b71ac7e74e2c1aeba07741b0a"],
   ["release-check open-parenthesis unescape", "e12c9f3c715151d4535e1531ca2c067e426973eae147b325fbac7b990bd36108"],

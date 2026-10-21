@@ -100,10 +100,14 @@ const AUDIT_RETRY_BACKOFF_MS = 5_000;
  *  plus backoff is 135 s per scope; the entrypoint runs THREE scopes
  *  (source-prod, source-dev and published-consumer), so the audit bound alone
  *  is 405 s — plus the consumer scope's `npm pack` and
- *  `npm install --package-lock-only`. The outer bound is therefore 600 s, not
- *  300 s: at 300 s the third scope was killed by the outer timeout with a bare
- *  exit 124, which is exactly the "indistinguishable from a broken audit"
- *  ambiguity the per-attempt bound exists to remove. */
+ *  `npm install --package-lock-only`.
+ *
+ *  A11-3a — the three scopes do NOT fit under the outer 300 s bound, so when
+ *  the registry hangs (the 2026-09-03 incident) the third scope is killed by
+ *  the outer timeout with a bare exit 124 — exactly the "indistinguishable
+ *  from a broken audit" ambiguity the per-attempt bound exists to remove. The
+ *  outer bound is a REVIEWED literal npm command in both workflows, so raising
+ *  it is a reviewed-inventory change (a card of its own), not a comment away. */
 const AUDIT_ATTEMPT_TIMEOUT_MS = 40_000;
 const AUDIT_ATTEMPT_TIMEOUT_SOURCE = "check-audit-attempt-timeout";
 const RETRYABLE_AUDIT_CODES = new Set([

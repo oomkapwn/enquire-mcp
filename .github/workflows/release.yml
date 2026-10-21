@@ -297,16 +297,7 @@ jobs:
       # registry consumer resolves without root-only overrides. New and stale advisories
       # fail closed; any scope-specific exception needs a rationale + removal tracker.
       - name: Audit source and published-consumer dependency graphs
-        # A11-3a — the outer bound was 300 s, but the audit runs THREE scopes
-        # (source-prod, source-dev, published-consumer), each bounded at
-        # 40 s × 3 attempts + backoff = 135 s. Three scopes need 405 s of
-        # audit bound alone, plus the consumer scope's `npm pack` and
-        # `npm install --package-lock-only`, so the third scope was killed by
-        # the outer timeout with a bare exit 124 — the "indistinguishable
-        # from a broken audit" ambiguity the per-attempt bound exists to
-        # remove. 600 s leaves room for all three scopes to reach their own
-        # named diagnostic.
-        run: /usr/bin/timeout --kill-after=10s 600s npm run check:audit
+        run: /usr/bin/timeout --kill-after=10s 300s npm run check:audit
       - name: JSON-RPC smoke test against synthetic vault (scan + FTS5 paths)
         run: |
           VAULT="$(node scripts/synthetic-vault.mjs)"

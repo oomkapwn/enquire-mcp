@@ -57,7 +57,7 @@ function liveContexts(list: "classic" | "ruleset"): string[] {
  * The contexts the live list is missing from the canon, and the ones it
  * demands that the canon does not.
  */
-export function findRequiredChecksDrift(
+function findRequiredChecksDrift(
   live: readonly string[],
   canon: readonly string[]
 ): { missing: string[]; unexpected: string[] } {

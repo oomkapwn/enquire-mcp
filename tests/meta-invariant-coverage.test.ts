@@ -34,7 +34,7 @@ import { releaseMutationVersionedTransitionAuditProblems } from "./release-mutat
 
 const repoRoot = path.resolve(__dirname, "..");
 const RELEASE_MUTATION_IDENTITY_FIXTURE_SHA256 = "8205d24e6d42dd4cb8986368611514131abe701434beb30150e33ea08f4b1288";
-const RELEASE_MUTATION_TRANSITION_FIXTURE_SHA256 = "8fb55b5eb32e0d45dbac989da0703b0ff1b17b41d69d27e6e825a160197424e1";
+const RELEASE_MUTATION_TRANSITION_FIXTURE_SHA256 = "2c4189a96734e7b021fc1ee6da58508b977386d876042c02a000b95fd42acb4c";
 const releaseMutationIdentityFixturePath = path.join(repoRoot, "tests/fixtures/release-mutation-identity.v2.json");
 const releaseMutationTransitionFixturePath = path.join(repoRoot, "tests/fixtures/release-mutation-transition.v3.json");
 const releaseIntegritySourcePath = path.join(repoRoot, "tests/release-integrity.test.ts");
@@ -1073,9 +1073,9 @@ const EXPECTED_REVIEWED_ORDINARY_OWNER_SHA256_ENTRIES = [
     "watcher startup validation whitespace normalization",
     "cc3b4b08d762b89edf67eb7bd624c03c6935f8e965808fe4d8aa53e531380ede"
   ],
-  ["release case-id normalization", "b3fbdb04690e62aeae4d111fc59913fe58b584a46b8521e59ba14070403f5746"],
-  ["release expectation-id normalization", "69d64103c61df979bf58745b37b0d7d00ac87d584f73cb2cd96d1c90b9915586"],
-  ["release root-id normalization", "f91af7a99664b951d1483bcc2412a176f212a1f1fea1efa2b099f34734ddc4b1"]
+  ["release case-id normalization", "1ffa4bbc7e3d71517e1e6537089f33058fd55e2b01294b30cf79630780121598"],
+  ["release expectation-id normalization", "9b1fc33ae39c00a82213ab4a98488123ff4cc2c653dffd7147ccd172bfc432df"],
+  ["release root-id normalization", "e83dbf80d3b888371ce4aad427bfd5ae4cc298f7318d1295e31184cfa4a358bc"]
 ] as const satisfies readonly (readonly [ReviewedOrdinaryTransformId, string])[];
 const EXPECTED_REVIEWED_ORDINARY_OWNER_SHA256 = new Map<ReviewedOrdinaryTransformId, string>(
   EXPECTED_REVIEWED_ORDINARY_OWNER_SHA256_ENTRIES

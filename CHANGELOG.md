@@ -4,6 +4,33 @@ All notable changes to this project will be documented here. The format follows 
 
 ## [4.0.0-rc.7] — 2026-08-31
 
+### The advisory wave of 2026-10-20 is closed — markdown-it 14.3.3, MCP server 2.3.1, MCP client 2.3.0, vite 8.3.4 (DEP-02)
+
+> **TL;DR:** **Ten advisories landed on npm on 2026-10-20, and the `audit` gate — which fails closed on anything new — was red against the pinned versions. All of them are closed here, by bumps: `markdown-it` 14.3.2 → 14.3.3, `@modelcontextprotocol/server` 2.0.0 → 2.3.1 (with its `core` 2.0.0 → 2.3.1), `@modelcontextprotocol/client` 2.2.0 → 2.3.0, and `vite` 8.2.2 → 8.3.4.**
+>
+> **What could happen before.** Nothing changed in the code. The `audit` gate simply started reporting advisories against the pinned versions, and it fails closed on anything new. The wave, all published on 2026-10-20:
+>
+> | Advisory | Severity | Package | Patched in |
+> |---|---|---|---|
+> | `GHSA-r7fv-28h4-cvq7` (smartquotes, quadratic) | high | `markdown-it` | 14.3.2 |
+> | `GHSA-vfgh-jcmw-g37q` (inline HTML, quadratic) | low | `markdown-it` | 14.3.3 |
+> | `GHSA-gfr2-rv44-r23c` (multi-line link reference, quadratic) | high | `markdown-it` | 14.3.3 |
+> | `GHSA-jm63-cq47-j5jp` (shared transport/server instances) | high | `@modelcontextprotocol/server` | 2.3.0 |
+> | `GHSA-46jr-4wx8-v453` (HTTP request within the size limit) | high | `@modelcontextprotocol/server` | 2.3.0 |
+> | `GHSA-rvq5-wwqv-78pq` (bearer authentication accepts issued tokens) | medium | `@modelcontextprotocol/server` | 2.3.0 |
+> | `GHSA-6prh-2h8m-c8cw` (HTTP client transports and OAuth requests) | medium | `@modelcontextprotocol/client` | 2.3.0 |
+> | `GHSA-587h-7wmj-h5pm` (existence check bypass) | high | `vite` (8.2.x line) | 8.2.4 |
+> | `GHSA-r825-w8mm-5pxw` (editor CLI flag misinterpretation) | medium | `vite` | 8.2.4 |
+> | `GHSA-698v-4r3x-3vcv` (`escapeCmdArgs` omits % escaping) | medium | `vite` | 8.2.4 |
+>
+> **Why bumps and not waivers.** The allowlist in `scripts/check-audit.mjs` exists for advisories that declare NO patched version — its one live entry (node-forge) says exactly that. Every advisory above declares one, so a waiver would be the wrong instrument. Two of the bumps go slightly beyond the gate: a medium advisory in a DEV dependency does not trip the dev threshold (high) — but a patch exists and the tree should not carry a known advisory when the fix is one line away.
+>
+> **What changes.** `package.json`: `@modelcontextprotocol/server` 2.0.0 → 2.3.1 and `@modelcontextprotocol/client` 2.2.0 → 2.3.0 (both are exact pins). `package-lock.json`: the matching entries, plus `@modelcontextprotocol/core` 2.0.0 → 2.3.1 (the server's own dependency), `markdown-it` 14.3.2 → 14.3.3 and `vite` 8.2.2 → 8.3.4. The upstream `core` and `server` packages also changed their licence field from `MIT` to `Apache-2.0` in 2.3.x — that is the registry's metadata for the new versions, not a choice made here. `@modelcontextprotocol/node` (also production) has no advisory and is untouched; the 1.x `@modelcontextprotocol/sdk` is not in the tree at all, so the advisories against it do not apply; `hono` 4.13.11 is already at its patched version.
+>
+> **Bounded claim.** Two direct dependency pins and the lockfile entries they carry, plus the bootstrap manifest digest that covers them. No source, no tool behaviour, no public surface and no declared-range changes; the allowlist and the scope rules are untouched.
+>
+> **Method note:** every advisory was read from the GitHub advisory API (`GET /advisories?ecosystem=npm&affects=<package>`), not from the CI log text, and the patched versions were taken from there. The whole tree was then checked version-aware against the 300 most recent npm advisories — every installed version against every vulnerable range — and the result is zero hits. The integrity hashes and the resolved URLs are the ones the registry's own Dependabot PRs (#659, #660, #661, #662) prepared, applied verbatim so the lockfile is the registry's own resolution. Under D-45 no local install was run; `npm ci` in CI installs exactly what the lockfile pins.
+
 ### markdown-it is bumped to 14.3.2 — the advisory published today is closed (DEP-01)
 
 > **TL;DR:** **GHSA-r7fv-28h4-cvq7 (high) — "markdown-it: Quadratic complexity in smartquotes with unmatched closing quotes" — was published on 2026-10-20 at 14:34 UTC, hours after this window's last green run, and turned the `audit` gate RED on every branch: the advisory was not in the allowlist, and that gate fails closed on anything new. The fix is a patch release, so this is a bump and not a waiver: `markdown-it` 14.3.0 → 14.3.2 in `package-lock.json`.**

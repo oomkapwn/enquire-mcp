@@ -4,6 +4,18 @@ All notable changes to this project will be documented here. The format follows 
 
 ## [4.0.0-rc.7] — 2026-08-31
 
+### A qualified wikilink whose extension is written in another case now finds its exact path (FA-13)
+
+> **TL;DR:** **FA-07's exact-path branch was the only place in the tree that checked the `.md` extension case-sensitively — all fourteen other `.md` checks are case-insensitive. A note named `Folder2/Sub.MD` was therefore never found by its exact path: the resolver appended `.md`, got `Folder2/Sub.MD.md`, missed, and fell back to the basename index — so `[[Folder2/Sub.MD]]` pointed the link at the unrelated `Folder1/Sub.md`. The check now folds case, exactly like the other thirteen.**
+>
+> **What could happen before.** The vault lists `.MD` as markdown — the inventory matches extensions with `path.extname(...).toLowerCase()` — so such a note is real, reachable and part of the graph; only the resolver could not name it. This is the same shape FA-07 fixed (a qualified link captured by an unrelated note that merely shares its basename), reached through the extension instead of the path. A bare target keeps its documented first-wins ambiguity unchanged.
+>
+> **The claim that was too wide.** FA-07's entry said the resolver "tries its exact path first and falls back to the basename **when that path does not exist**". For an extension in another case the exact path DID exist and was never tried. The claim is corrected here rather than in the FA-07 entry, which stays as the record of what was said.
+>
+> **Bounded claim.** One expression in `src/communities.ts` and two controls. The path matching stays exact — a qualified target is still resolved by its own path, never by a case-folded one; the basename index, the first-wins rule, the budgets and every other resolver are untouched. Two controls: one negative (the exact path wins for an uppercase extension, and the shadow note gets no edge) and one positive (a qualified link without an extension still resolves to the `.md` file, so the fix did not narrow the exact-path branch to names that already carry an extension).
+>
+> **Method note:** the defect was re-derived from the source before anything was changed: the extension check was compared against all fourteen other `.md` checks in `src/`, and this was the only case-sensitive one. Under D-45 no local test or build was run; hosted CI is the validation authority.
+
 ### The retained alternatives are the first ten routes in traversal order (FA-15)
 
 > **TL;DR:** **FA-08's entry said "the final sort selects `path` and the retained set lexicographically, not in traversal order". The sort key is degenerate for the trails it compares — every accepted trail has the same length and the same first step, so the comparator returns 0 for every pair and the retained set comes out in TRAVERSAL order, not a lexicographic one. The set and the order are unchanged by FA-08, as that entry also said; only the word "lexicographically" was wrong.**
@@ -562,9 +574,9 @@ hosted CI is the validation authority.
 
 - FTS5 schema **v7**: a sibling FTS5 table `chunk_parts` carries, for every identifier-bearing chunk, the words each compound identifier is spelled from (camelCase, upper-case runs, digit edges; NFC; bounded by truncation) next to a copy of that chunk's text. A search runs `chunks` exactly as v6 did and appends `chunk_parts`-only hits after every ranked hit with score 0 — found, never ranked — so `poolDayData` becomes reachable by "pool day data" while no rank moves for any query. (A weight-0 column inside `chunks` was measured on CI to move ranks: FTS5's bm25() normalises by the whole row's length.) An existing persistent index rebuilds once on first open; both schema admission maps admit v7.
 
-### Tests (2356)
+### Tests (2358)
 
-**2228 → 2356 source tests.** Sixty-one new causal contracts cover the audit closures and staged embedding replacement above; table-driven phases additionally exercise rollback, authority ordering, fail-fast sync operations, clear/replacement interlocks, and promotion refusal without inflating the declared `it()` count.
+**2228 → 2358 source tests.** Sixty-one new causal contracts cover the audit closures and staged embedding replacement above; table-driven phases additionally exercise rollback, authority ordering, fail-fast sync operations, clear/replacement interlocks, and promotion refusal without inflating the declared `it()` count.
 ### Maintainer handoff reflects the post-AH-4 repository state
 
 > **TL;DR:** **The agent handoff now starts from the shipped AH-4 boundary instead of the earlier rc.6 release attempt.** `CLAUDE.md` records that PR #565 completed staged embedding replacement, that its candidate and squash-main checks passed, that no product implementation is currently in flight, and that distribution remains deferred. The next bounded action is a read-only AH-4 sibling sweep before one backlog card is selected.

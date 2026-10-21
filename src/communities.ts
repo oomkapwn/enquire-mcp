@@ -281,7 +281,15 @@ export async function buildWikilinkGraph(
       // ambiguity unchanged — that behaviour is intentional, not an oversight.
       let toPath: string | undefined;
       if (target.includes("/")) {
-        const candidate = target.endsWith(".md") ? target : `${target}.md`;
+        // FA-13 — the extension check here was the only case-SENSITIVE one in
+        // the tree (all fourteen other `.md` checks are case-insensitive), so a
+        // note whose extension is written in another case was never found by
+        // its exact path: the resolver appended `.md` to `Folder2/Sub.MD`,
+        // missed, and fell back to the basename index — pointing the link at
+        // the shadow note `Folder1/Sub.md` that happens to share the basename.
+        // The vault lists `.MD` as markdown (the inventory matches extensions
+        // with `toLowerCase()`), so such a note is real and reachable.
+        const candidate = target.toLowerCase().endsWith(".md") ? target : `${target}.md`;
         const normalized = toVaultSlashPath(candidate);
         if (adj.has(normalized)) toPath = normalized;
       }

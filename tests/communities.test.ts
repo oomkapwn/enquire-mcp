@@ -292,6 +292,39 @@ describe("buildWikilinkGraph — resolution edge cases (v3.6.2 branches)", () =>
     expect(g.adjacency.get("A.md")?.size).toBe(1);
   });
 
+  // FA-13 — the extension check was the only case-SENSITIVE one in the tree,
+  // so a note whose extension is written in another case was never found by
+  // its exact path: the resolver appended `.md` to `Folder2/Sub.MD`, missed,
+  // and fell back to the basename index — pointing the link at the shadow note
+  // `Folder1/Sub.md`. The vault lists `.MD` as markdown, so such a note is
+  // real and reachable, not a hypothetical.
+  it("a qualified link whose extension is written in another case still resolves to its exact path", async () => {
+    const v = await vaultWith({
+      "A.md": "[[Folder2/Sub.MD]]",
+      "Folder1/Sub.md": "shadow",
+      "Folder2/Sub.MD": "real"
+    });
+    const g = await buildWikilinkGraph(v);
+    expect(g.adjacency.get("A.md")?.get("Folder2/Sub.MD")).toBe(1);
+    // The shadow note must not receive an edge it was never linked to.
+    expect(g.adjacency.get("A.md")?.get("Folder1/Sub.md")).toBeUndefined();
+    expect(g.adjacency.get("A.md")?.size).toBe(1);
+  });
+
+  // The companion: the same note, addressed WITHOUT its extension, still
+  // resolves to the `.md` file — the fix must not make the exact-path branch
+  // reachable only for names that already carry an extension.
+  it("a qualified link without an extension still resolves to the .md file", async () => {
+    const v = await vaultWith({
+      "A.md": "[[Folder2/Sub]]",
+      "Folder1/Sub.md": "shadow",
+      "Folder2/Sub.md": "real"
+    });
+    const g = await buildWikilinkGraph(v);
+    expect(g.adjacency.get("A.md")?.get("Folder2/Sub.md")).toBe(1);
+    expect(g.adjacency.get("A.md")?.get("Folder1/Sub.md")).toBeUndefined();
+  });
+
   it("ignores wikilinks whose target trims to empty (e.g. [[#section-only]])", async () => {
     const v = await vaultWith({
       "A.md": "ref to section: [[#orphan]] and [[B]]",

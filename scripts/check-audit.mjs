@@ -97,7 +97,13 @@ const AUDIT_RETRY_BACKOFF_MS = 5_000;
  *  bare exit 124 — indistinguishable from a broken audit. With a per-attempt
  *  bound the hang becomes a recognized transient: it is retried like a 503, and
  *  when the retries run out the failure names the endpoint. 40 s × 3 attempts
- *  plus backoff is 135 s per scope; two scopes stay under the outer 300 s. */
+ *  plus backoff is 135 s per scope; the entrypoint runs THREE scopes
+ *  (source-prod, source-dev and published-consumer), so the audit bound alone
+ *  is 405 s — plus the consumer scope's `npm pack` and
+ *  `npm install --package-lock-only`. The outer bound is therefore 600 s, not
+ *  300 s: at 300 s the third scope was killed by the outer timeout with a bare
+ *  exit 124, which is exactly the "indistinguishable from a broken audit"
+ *  ambiguity the per-attempt bound exists to remove. */
 const AUDIT_ATTEMPT_TIMEOUT_MS = 40_000;
 const AUDIT_ATTEMPT_TIMEOUT_SOURCE = "check-audit-attempt-timeout";
 const RETRYABLE_AUDIT_CODES = new Set([

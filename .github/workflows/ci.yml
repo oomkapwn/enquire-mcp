@@ -19,6 +19,8 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - name: Verify trusted Vitest bootstrap
         shell: /bin/bash --noprofile --norc -p -e -o pipefail {0}
         working-directory: ${{ github.workspace }}
@@ -124,6 +126,8 @@ jobs:
             floor: false
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: ${{ matrix.node-version }}
@@ -187,6 +191,8 @@ jobs:
       NPM_CONFIG_SCRIPT_SHELL: 'C:\Program Files\Git\bin\bash.exe'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: "22.13.0"
@@ -247,6 +253,8 @@ jobs:
     continue-on-error: true
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: 22
@@ -280,6 +288,8 @@ jobs:
     needs: test
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: 22
@@ -324,6 +334,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: 22
@@ -433,6 +445,8 @@ jobs:
     needs: coverage
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: 22
@@ -472,6 +486,8 @@ jobs:
             exit 1
           fi
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           # v3.12.0-rc.22 — run the MCP/FTS smoke at the literal public floor.
@@ -518,6 +534,8 @@ jobs:
             script_shell: 'C:\Program Files\Git\bin\bash.exe'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: "22.13.0"
@@ -565,6 +583,8 @@ jobs:
       producer_attempt: ${{ steps.artifact_identity.outputs.run_attempt }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: "22.13.0"
@@ -653,6 +673,8 @@ jobs:
             script_shell: /bin/bash
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: "22.13.0"
@@ -726,6 +748,8 @@ jobs:
       NPM_CONFIG_SCRIPT_SHELL: /bin/bash
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: "22.13.0"
@@ -832,6 +856,8 @@ jobs:
             script_shell: /bin/bash
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: "22.13.0"
@@ -887,6 +913,8 @@ jobs:
     timeout-minutes: 12
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           # v3.5.11 — bumped from 20 → 22 because pdfjs v5+ requires it.
@@ -901,13 +929,24 @@ jobs:
       # consumer resolves without our root-only overrides. Scope-specific exceptions must
       # carry a rationale + removal tracker; new or stale advisories fail closed.
       - name: Audit source and published-consumer dependency graphs
-        run: /usr/bin/timeout --kill-after=10s 300s npm run check:audit
+        # A11-3a — the outer bound was 300 s, but the audit runs THREE scopes
+        # (source-prod, source-dev, published-consumer), each bounded at
+        # 40 s × 3 attempts + backoff = 135 s. Three scopes need 405 s of
+        # audit bound alone, plus the consumer scope's `npm pack` and
+        # `npm install --package-lock-only`, so the third scope was killed by
+        # the outer timeout with a bare exit 124 — the "indistinguishable
+        # from a broken audit" ambiguity the per-attempt bound exists to
+        # remove. 600 s leaves room for all three scopes to reach their own
+        # named diagnostic, and stays inside this job's 12-minute limit.
+        run: /usr/bin/timeout --kill-after=10s 600s npm run check:audit
 
   version-consistency:
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: 22
@@ -928,6 +967,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - name: Build the introspection image
         run: docker build -t enquire-mcp:ci .
       - name: CLI smoke — the bin runs inside the image

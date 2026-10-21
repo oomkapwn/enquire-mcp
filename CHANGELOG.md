@@ -128,6 +128,18 @@ All notable changes to this project will be documented here. The format follows 
 >
 > **Method note:** the advisory was read from the GitHub advisory API (`GET /advisories/GHSA-r7fv-28h4-cvq7`), not from the CI log text: published 2026-10-20T14:34:50Z, severity high, patched `14.3.2` for the 14.x line and `15.0.2` for 15.0.0–15.0.1. The integrity hash and the resolved URL are the ones the registry's own Dependabot PR (#620) prepared. Under D-45 no local install was run; `npm ci` in CI installs exactly what the lockfile pins.
 
+### The live required-check lists are compared with the release gate's canonical list (A8-1)
+
+> **TL;DR:** **The required-check contexts lived in FOUR places — the classic branch protection, the `main-protection` ruleset, `REQUIRED_RELEASE_CHECKS` (the release gate's canon) and the mirror in `release.yml`. The two in-repo copies were pinned by tests; the two LIVE copies were pinned by NOTHING. A job renamed in `ci.yml`, with the in-repo lists updated, would leave the live list demanding a context that no longer exists — a merge blocked forever — and the other way round, a live list that quietly dropped a context would stop protecting the merge. A new gate compares the live lists with the canon, in both directions.**
+>
+> **What the gate does.** It reads both live lists through `gh api` and compares them with `REQUIRED_RELEASE_CHECKS` — the list the RELEASE gate waits for, because a context the merge requires but the release does not is a context the release can pass without. The two directions are reported separately: `missing` (the canon demands a context the live list does not — a permanent merge block) and `unexpected` (the live list demands a context the release gate does not wait for — a merge protection the release can pass without). The comparison is a set comparison, so the order of the live list is not drift.
+>
+> **Where it runs.** In the one CI job that carries a GitHub token (`test (24)`), alongside the existing live-metadata invariant, and it is skipped without a token so a local run never becomes network-dependent. A CI GUARD tripwire asserts the live probe SUCCEEDS there: a probe that failed silently would turn the two gates into no-ops, which is the exact failure this card is about.
+>
+> **Bounded claim.** One new test file, `tests/required-checks-live.test.ts`: a live comparison against the existing canon, a CI GUARD tripwire, and three unit controls (a renamed job is reported missing, a dropped context is reported unexpected, the same set in any order is no drift). No workflow, no protection setting, no release gate and no required context is changed by this card — it only reads them. The live lists are left exactly as they are: today all four agree on the same 13 contexts.
+>
+> **Method note:** the live JSON shapes were read from the API before the parser was written — `required_status_checks.checks[].context` for the classic layer and `rules[?(@.type=="required_status_checks")].parameters.required_status_checks[].context` for the ruleset — and both currently list the same 13 contexts as the canon. Under D-45 no local test or build was run; hosted CI is the validation authority.
+
 ### A write can no longer land on a different file than the one it read (FA-11)
 
 > **TL;DR:** **`writeNoteContent` trimmed the relative path it was given, while the read side did not.** `resolveInside` and `toRel` keep a name exactly as it is, so a target called ` Dest.md` was READ through that name and WRITTEN through the trimmed one — `Dest.md`, a different file. `obsidian_frontmatter_set({ path: " Dest.md", set: { … } })` replaced the content of the unrelated `Dest.md` and answered with the padded name it never wrote. The write path now refuses a name it cannot address.**

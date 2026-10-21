@@ -35,8 +35,11 @@ import { isEntrypoint } from "./lib/entrypoint.mjs";
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
 const DEFAULT_REPO_ROOT = path.resolve(path.dirname(SCRIPT_PATH), "..");
 
-/** The exact census `countActualTests()` performs; changing it would desynchronise the invariant. */
-const IT_REGISTRATION = /^\s*it\s*[(]/gm;
+/** The exact census `countActualTests()` performs; changing it would desynchronise the invariant.
+ * A12-8-N1 — `test("…")` is a vitest registration exactly like `it("…")`, and
+ * counting only the latter let a new file's registrations stay invisible: the
+ * declared number would silently under-report while the tests really ran. */
+const IT_REGISTRATION = /^\s*(?:it|test)\s*[(]/gm;
 
 const TESTS_DIR = "tests";
 const TEST_FILE_SUFFIX = ".test.ts";

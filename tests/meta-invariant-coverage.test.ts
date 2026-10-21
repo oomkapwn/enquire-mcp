@@ -195,13 +195,14 @@ const EXPECTED_SOURCE_READER_CANDIDATE_FILES = [
   "peek-meta.test.ts",
   "prepare-deps-failfast.test.ts",
   "redos-trailing-strip.test.ts",
+  "release-mutation-identity-audit.ts",
   "resource-list-admission.test.ts",
   "tool-input-admission.test.ts",
   "watcher-startup-order.test.ts",
   "wikilink-scan.test.ts"
 ] as const;
 const EXPECTED_SOURCE_READER_CANDIDATE_MEMBERSHIP_SHA256 =
-  "fe6385f42afce1fbdf84749f0b502d8e7b2d8e8cff7ce5448b94cfa924b0bbed";
+  "24f188eef46e26a440a1751f5b6cea3575a2c2473097bd1cf1c7872add4c87d0";
 
 // The raw-mutation inventory is the union of convention/curated structural
 // tests and the independently derived source-reader candidate class. The shared helper
@@ -291,7 +292,7 @@ const EXPECTED_REPOSITORY_MUTATION_HELPER_CALL_ENTRIES = [
   ],
   [
     "docs-consistency.test.ts",
-    { count: 53, sha256: "c61844c9bebcc22f828bd6a52a2aae0ce23939c30dd8d607afa57961da64bd92" }
+    { count: 53, sha256: "b14dc8b822e263dbfd02bcd73eb1a6a302ca4c2ab0dafac48a83ee5a1359fb3d" }
   ],
   [
     "enforcement-guard-invariant.test.ts",
@@ -330,7 +331,7 @@ const EXPECTED_REPOSITORY_MUTATION_HELPER_CALL_ENTRIES = [
   ["jsonld.test.ts", { count: 11, sha256: "3595b905b156414aca69c02ca6e4ca1968b256095b233348842cdc9dbba749e4" }],
   [
     "meta-invariant-coverage.test.ts",
-    { count: 246, sha256: "a9837f7f193d9248be3d9c78fa525ff5e0391af7d59db1559f0e72ae6864c88d" }
+    { count: 246, sha256: "9a00abdb671e86fa467e2c0acc185543ee1fe69257403896bd927c60f0b68a8d" }
   ],
   [
     "no-internal-imports.test.ts",
@@ -963,6 +964,38 @@ const REVIEWED_ORDINARY_TRANSFORMS = [
     pattern: String.raw`/\s+/g`,
     receiverRoot: "node",
     replacement: '""'
+  },
+  {
+    // A12-6-N3 — the source-reader census now enumerates every TypeScript
+    // file under `tests/`, and this audit module reads `src/cli.ts`,
+    // `src/cli-help.ts` and `src/server.ts`. Its three identifier rewrites
+    // never touch source text, so each one is reviewed as an ordinary
+    // transform in its own named helper.
+    filename: "release-mutation-identity-audit.ts",
+    id: "release case-id normalization",
+    method: "replace",
+    owner: "function:releaseCaseId",
+    pattern: '"release."',
+    receiverRoot: "root",
+    replacement: '"release.case."'
+  },
+  {
+    filename: "release-mutation-identity-audit.ts",
+    id: "release expectation-id normalization",
+    method: "replace",
+    owner: "function:releaseExpectationId",
+    pattern: '"release."',
+    receiverRoot: "root",
+    replacement: '"release.expectation."'
+  },
+  {
+    filename: "release-mutation-identity-audit.ts",
+    id: "release root-id normalization",
+    method: "replace",
+    owner: "function:releaseRootId",
+    pattern: '"release.case."',
+    receiverRoot: "caseId",
+    replacement: '"release."'
   }
 ] as const;
 
@@ -973,10 +1006,10 @@ type ReviewedOrdinaryTransformId = (typeof REVIEWED_ORDINARY_TRANSFORMS)[number]
 // the complete source file, so a reachable decoy, relocated clone, or severed
 // helper consumer cannot inherit authority from the same filename/title/count.
 const EXPECTED_REVIEWED_ORDINARY_OWNER_SHA256_ENTRIES = [
-  ["pdf OCR quote normalization", "f263ff5abfb450dc69c3c38babc4d3fec97d504eebfe5b1adb8c38da4c95433c"],
-  ["pdf OCR whitespace normalization", "f263ff5abfb450dc69c3c38babc4d3fec97d504eebfe5b1adb8c38da4c95433c"],
-  ["lifecycle whitespace normalization", "75e8a2471e27ad3f24e3fc1535e866f13f98900e4dcd71a9ca1f42594fa30223"],
-  ["release gate parenthesis unescape", "283599de342dcd0e162a045dc3779c36ab76a9d24cf801065cc38e488de3c635"],
+  ["pdf OCR quote normalization", "eec278c582ebb03cfbf0b4d8a6d087c5f380b519d8b0fa22dd769f3801790f00"],
+  ["pdf OCR whitespace normalization", "eec278c582ebb03cfbf0b4d8a6d087c5f380b519d8b0fa22dd769f3801790f00"],
+  ["lifecycle whitespace normalization", "ec0bf535e444e6141228295dad593f24e783a9b9ec79e9a4687f5b4319e18ea3"],
+  ["release gate parenthesis unescape", "41e176394d4beb7b0b0ec68c89a0e05cd811c498374c72a5a822d0500ac1ae11"],
   ["entrypoint block-comment stripping", "319def01444e238d986cd6674091a75f17ce843b71ac7e74e2c1aeba07741b0a"],
   ["entrypoint line-comment stripping", "319def01444e238d986cd6674091a75f17ce843b71ac7e74e2c1aeba07741b0a"],
   ["release-check open-parenthesis unescape", "e12c9f3c715151d4535e1531ca2c067e426973eae147b325fbac7b990bd36108"],
@@ -1039,7 +1072,10 @@ const EXPECTED_REVIEWED_ORDINARY_OWNER_SHA256_ENTRIES = [
   [
     "watcher startup validation whitespace normalization",
     "cc3b4b08d762b89edf67eb7bd624c03c6935f8e965808fe4d8aa53e531380ede"
-  ]
+  ],
+  ["release case-id normalization", "b3fbdb04690e62aeae4d111fc59913fe58b584a46b8521e59ba14070403f5746"],
+  ["release expectation-id normalization", "69d64103c61df979bf58745b37b0d7d00ac87d584f73cb2cd96d1c90b9915586"],
+  ["release root-id normalization", "f91af7a99664b951d1483bcc2412a176f212a1f1fea1efa2b099f34734ddc4b1"]
 ] as const satisfies readonly (readonly [ReviewedOrdinaryTransformId, string])[];
 const EXPECTED_REVIEWED_ORDINARY_OWNER_SHA256 = new Map<ReviewedOrdinaryTransformId, string>(
   EXPECTED_REVIEWED_ORDINARY_OWNER_SHA256_ENTRIES
@@ -4213,6 +4249,15 @@ function sourceReaderCandidateFacts(filename: string, source: string): SourceRea
   const fsContainers = new Set<ts.Symbol>();
   const createRequireFactories = new Set<ts.Symbol>();
   const nodeModuleContainers = new Set<ts.Symbol>();
+  // A12-6-N2 — `fs` and `fs/promises` are the legacy spellings of the same two
+  // modules, and the census must not be blind to them. `node:fs` is the
+  // callback API and `node:fs/promises` the promise API; `fs` and
+  // `fs/promises` are the same two under their pre-`node:` names.
+  const fsCallbackModules: readonly string[] = ["node:fs", "fs"];
+  const fsPromiseModules: readonly string[] = ["node:fs/promises", "fs/promises"];
+  // A12-6-N4 — the read surface was `readFile`/`readFileSync` only, so
+  // `readSync` and `createReadStream` read files without being recognised.
+  const fsReaderMembers: readonly string[] = ["readFile", "readFileSync", "readSync", "createReadStream"];
   const assignmentSources = new Map<ts.Symbol, ts.Expression[]>();
   const destructuringSources = new Map<
     ts.Symbol,
@@ -4299,7 +4344,8 @@ function sourceReaderCandidateFacts(filename: string, source: string): SourceRea
       }
       continue;
     }
-    if (moduleName !== "node:fs" && moduleName !== "node:fs/promises") continue;
+    const isFsCallbackModule = fsCallbackModules.includes(moduleName);
+    if (!isFsCallbackModule && !fsPromiseModules.includes(moduleName)) continue;
     if (clause.name !== undefined) addSymbol(fsContainers, clause.name);
     const bindings = clause.namedBindings;
     if (bindings === undefined) continue;
@@ -4310,9 +4356,9 @@ function sourceReaderCandidateFacts(filename: string, source: string): SourceRea
     for (const element of bindings.elements) {
       if (element.isTypeOnly) continue;
       const importedName = element.propertyName?.text ?? element.name.text;
-      if (importedName === "readFile" || importedName === "readFileSync") {
+      if (fsReaderMembers.includes(importedName)) {
         addSymbol(directReaders, element.name);
-      } else if (moduleName === "node:fs" && importedName === "promises") {
+      } else if (isFsCallbackModule && importedName === "promises") {
         addSymbol(fsContainers, element.name);
       }
     }
@@ -4524,7 +4570,11 @@ function sourceReaderCandidateFacts(filename: string, source: string): SourceRea
       moduleArgument !== undefined &&
       ts.isStringLiteral(moduleArgument) &&
       moduleArgument.text === moduleName &&
-      (isNodeRequireFunction(call.expression) || isGetBuiltinModuleFunction(call.expression))
+      (isNodeRequireFunction(call.expression) ||
+        isGetBuiltinModuleFunction(call.expression) ||
+        // A12-6-N1 — `await import("node:fs")` acquires the module just as
+        // authentically as `require` does; the classifier only knew the latter.
+        call.expression.kind === ts.SyntaxKind.ImportKeyword)
     );
   };
   const isFsContainer = (expression: ts.Expression, resolving = new Set<ts.Symbol>()): boolean => {
@@ -4760,7 +4810,18 @@ async function collectSourceReaderCandidateFiles(): Promise<string[]> {
       const full = path.join(dir, entry.name);
       if (entry.isDirectory()) {
         await walk(full);
-      } else if (entry.name.endsWith(".test.ts")) {
+      } else if (entry.name.endsWith(".ts")) {
+        // A12-6-N3 — the walk used to consider only `*.test.ts`, so a NEW
+        // non-test helper under `tests/**` (a helper that reads and writes
+        // `src/**` by itself) was enumerated by nothing: it would join no
+        // inventory and be checked by no oracle. Every TypeScript file under
+        // `tests/` is now enumerated, and the curated structural files are
+        // still skipped below. The derived set DID grow when this landed:
+        // `release-mutation-identity-audit.ts` reads `src/cli.ts`,
+        // `src/cli-help.ts` and `src/server.ts`, so it joined the inventory
+        // and its three identifier rewrites became reviewed ordinary
+        // transforms. A future helper can no longer appear without being
+        // noticed.
         const relative = path.relative(testsRoot, full).split(path.sep).join("/");
         if (structuralFiles.has(relative)) continue;
         const source = await fs.readFile(full, "utf8");

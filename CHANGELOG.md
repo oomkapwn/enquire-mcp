@@ -4,6 +4,19 @@ All notable changes to this project will be documented here. The format follows 
 
 ## [4.0.0-rc.7] — 2026-08-31
 
+### The census of source readers stops being blind to four spellings (A12)
+
+> **TL;DR:** **The meta-gate that decides which test files may read `src/**` recognised exactly two spellings of the `fs` module, two member functions, and no dynamic import at all. A new helper under `tests/**` that read and wrote `src/**` through any other spelling was enumerated by nothing — it joined no inventory and was checked by no oracle. The classifier now recognises the unprefixed `fs`/`fs/promises`, the dynamic `await import("node:fs")`, the `readSync`/`createReadStream` readers, and every TypeScript file under `tests/`.**
+>
+> **The four gaps.** *A12-6-N1:* `await import("node:fs")` is an authentic module acquisition exactly like `require`, and the classifier only knew the latter. *A12-6-N2:* `fs` and `fs/promises` are the legacy spellings of the same two modules, and the classifier knew only the `node:`-prefixed ones. *A12-6-N3:* the walk that derives the candidate set considered only `*.test.ts`, so a NEW non-test helper under `tests/**` was enumerated by nothing — and the census's own `helpers/exact-source-mutation.ts` is only inventoried because it was curated by hand. *A12-6-N4:* the read surface was `readFile`/`readFileSync` only, so `readSync` and `createReadStream` read files without being recognised.
+>
+> **The count follows the same rule.** `scripts/bump-test-count.mjs` and `tests/docs-consistency.test.ts` counted `it(` registrations only, while `test("…")` is a vitest registration exactly like `it("…")`. A new file written with `test(` would have run its tests and silently stayed invisible to the declared number. All three sites now count both spellings.
+>
+> **What the bootstrap pins actually prove.** They are an INTEGRITY RECEIPT, not a signature: the manifest and the workflow that carries it are pinned to each other, so a coordinated rewrite of both passes. The protection against a malicious change is the review of that change; the gate's job is catching an accidental, uncoordinated drift. The workflow now says so instead of implying more.
+>
+> **Bounded claim.** The census classifier in `tests/meta-invariant-coverage.test.ts`, the registration counter in `scripts/bump-test-count.mjs` and `tests/docs-consistency.test.ts`, and two comments. No tool behaviour, no public surface and no dependency changes. The derived candidate set is unchanged today — the one non-test helper that reads `src/**` is a curated structural file and was already skipped by the walk — so the census's membership seal does not move; what changes is that a FUTURE helper can no longer appear unnoticed.
+>
+> **Method note:** every gap was re-derived from the source before anything was changed — the module check at `tests/meta-invariant-coverage.test.ts:4302`, the acquisition check at `:4521` and the reader check at `:4313`, the walk at `:4763`, and the counters at `scripts/bump-test-count.mjs:39` and `tests/docs-consistency.test.ts:2336,4852`. Under D-45 no local test or build was run; hosted CI is the validation authority.
 ### A qualified wikilink whose extension is written in another case now finds its exact path (FA-13)
 
 > **TL;DR:** **FA-07's exact-path branch was the only place in the tree that checked the `.md` extension case-sensitively — all fourteen other `.md` checks are case-insensitive. A note named `Folder2/Sub.MD` was therefore never found by its exact path: the resolver appended `.md`, got `Folder2/Sub.MD.md`, missed, and fell back to the basename index — so `[[Folder2/Sub.MD]]` pointed the link at the unrelated `Folder1/Sub.md`. The check now folds case, exactly like the other thirteen.**

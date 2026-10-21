@@ -2333,7 +2333,7 @@ describe("docs/code consistency — numeric claims (v3.5.1 audit-driven)", () =>
     for (const f of files) {
       const body = await fs.readFile(f, "utf8");
       // Match `it("..."` or `it(\n  "...` — both common formatter shapes.
-      const matches = [...body.matchAll(/^\s*it\s*[(]/gm)];
+      const matches = [...body.matchAll(/^\s*(?:it|test)\s*[(]/gm)];
       count += matches.length;
     }
     return count;
@@ -4849,7 +4849,7 @@ describe("docs/code consistency — AI-agent text surfaces + AGENTS.md numeric c
     let count = 0;
     for (const f of files) {
       const body = await fs.readFile(f, "utf8");
-      const matches = [...body.matchAll(/^\s*it\s*[(]/gm)];
+      const matches = [...body.matchAll(/^\s*(?:it|test)\s*[(]/gm)];
       count += matches.length;
     }
     return count;

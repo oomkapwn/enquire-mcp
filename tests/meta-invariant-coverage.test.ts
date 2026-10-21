@@ -4760,7 +4760,14 @@ async function collectSourceReaderCandidateFiles(): Promise<string[]> {
       const full = path.join(dir, entry.name);
       if (entry.isDirectory()) {
         await walk(full);
-      } else if (entry.name.endsWith(".test.ts")) {
+      } else if (entry.name.endsWith(".ts")) {
+        // A12-6-N3 — the walk used to consider only `*.test.ts`, so a NEW
+        // non-test helper under `tests/**` (a helper that reads and writes
+        // `src/**` by itself) was enumerated by nothing: it would join no
+        // inventory and be checked by no oracle. Every TypeScript file under
+        // `tests/` is now enumerated, and the curated structural files are
+        // still skipped below — so the derived set is unchanged today, while
+        // a future helper can no longer appear without being noticed.
         const relative = path.relative(testsRoot, full).split(path.sep).join("/");
         if (structuralFiles.has(relative)) continue;
         const source = await fs.readFile(full, "utf8");

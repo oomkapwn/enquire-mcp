@@ -175,19 +175,15 @@ describe("live required-checks lists against the canonical release gate (A8-1)",
   it("the ci.yml job inventory defines every canonical context", () => {
     const contexts = workflowContexts(readFileSync(path.join(repoRoot, ".github/workflows/ci.yml"), "utf8"));
     const missing = REQUIRED_RELEASE_CHECKS.filter((context) => !contexts.includes(context));
-    expect(
-      missing,
-      `ci.yml must define every context the merge requires: ${JSON.stringify(missing)}`
-    ).toEqual([]);
+    expect(missing, `ci.yml must define every context the merge requires: ${JSON.stringify(missing)}`).toEqual([]);
   });
 
   it("the workflow defines no context beyond the canon and the recorded extras", () => {
     const contexts = workflowContexts(readFileSync(path.join(repoRoot, ".github/workflows/ci.yml"), "utf8"));
     const extras = contexts.filter((context) => !REQUIRED_RELEASE_CHECKS.includes(context));
-    expect(
-      extras,
-      "every context beyond the canon must be a recorded, deliberate extra"
-    ).toEqual([...ALLOWED_EXTRA_CONTEXTS]);
+    expect(extras, "every context beyond the canon must be a recorded, deliberate extra").toEqual([
+      ...ALLOWED_EXTRA_CONTEXTS
+    ]);
   });
 
   it("the main-protection ruleset requires exactly the canonical contexts", async () => {

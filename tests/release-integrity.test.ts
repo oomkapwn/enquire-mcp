@@ -5893,8 +5893,13 @@ function nodeFloorCiProblems(workflow: string, enginesNode: unknown): string[] {
       dockerJob["runs-on"] !== "ubuntu-latest" ||
       dockerJob["timeout-minutes"] !== 10 ||
       dockerSteps.length !== 4 ||
-      JSON.stringify(Object.keys(dockerCheckoutStep ?? {}).sort()) !== JSON.stringify(["uses"]) ||
+      JSON.stringify(Object.keys(dockerCheckoutStep ?? {}).sort()) !== JSON.stringify(["uses", "with"]) ||
       dockerCheckoutStep?.uses !== "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1" ||
+      // A11-1a — the docker job's checkout carries the credential hygiene, and
+      // the block is pinned exactly like the pinned action above it.
+      JSON.stringify(Object.keys(yamlRecord(dockerCheckoutStep?.with) ?? {}).sort()) !==
+        JSON.stringify(["persist-credentials"]) ||
+      yamlRecord(dockerCheckoutStep?.with)?.["persist-credentials"] !== false ||
       JSON.stringify(Object.keys(dockerBuildStep ?? {}).sort()) !== JSON.stringify(["name", "run"]) ||
       dockerBuildStep?.name !== "Build the introspection image" ||
       dockerBuildStep?.run !== "docker build -t enquire-mcp:ci ." ||

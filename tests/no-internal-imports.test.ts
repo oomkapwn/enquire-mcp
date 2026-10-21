@@ -238,7 +238,7 @@ const PROCESS_RUNTIME_LOADER_MEMBERS = new Set(["getBuiltinModule", "mainModule"
 // Canonical JSON SHA-256 pins keep every reviewed step exact without copying
 // multiline shell bodies into this invariant a second time.
 const EXPECTED_COVERAGE_STEP_FINGERPRINTS = [
-  "3ef4af68ef144f12dd555f182fb78c286413a5c20503a3491c8a1a7ea3554af7",
+  "69983d424f70d56e16aca2c5bc441464578ac832b548ce342069dd3e5a1ca9e1",
   "2873c30795c24c8e23b779c04f85e269a194d6d7f89baddd3888d1f619855563",
   "338e29c470a015d92698b8184b65ee481976a1a24ad813eab912c20460a2a937",
   "44d96178c110e1ceeaa809d554c1bc392079517800a7a155792ee34206ef2c0e",
@@ -248,7 +248,7 @@ const EXPECTED_COVERAGE_STEP_FINGERPRINTS = [
   "3cf86138c09850122bcbb0ecd64eedbc3f69b03dbd552b6ee7ac16f6974cc875"
 ] as const;
 const EXPECTED_OIA_STEP_FINGERPRINTS = [
-  "3ef4af68ef144f12dd555f182fb78c286413a5c20503a3491c8a1a7ea3554af7",
+  "69983d424f70d56e16aca2c5bc441464578ac832b548ce342069dd3e5a1ca9e1",
   "2873c30795c24c8e23b779c04f85e269a194d6d7f89baddd3888d1f619855563",
   "338e29c470a015d92698b8184b65ee481976a1a24ad813eab912c20460a2a937",
   "1b0717ee04319d167e0837f827d565e709c377f5f7f126c52e74eb84391653ff",
@@ -393,8 +393,9 @@ function ciCoverageProblems(source: string): string[] {
     const checkoutStep = steps?.[0];
     if (
       checkoutStep === undefined ||
-      !recordHasExactKeys(checkoutStep, ["uses"]) ||
-      checkoutStep.uses !== EXPECTED_CHECKOUT_ACTION
+      !recordHasExactKeys(checkoutStep, ["uses", "with"]) ||
+      checkoutStep.uses !== EXPECTED_CHECKOUT_ACTION ||
+      !isDeepStrictEqual(asRecord(checkoutStep.with), { "persist-credentials": false })
     ) {
       problems.push("CI coverage must begin with the exact pinned checkout step");
     }

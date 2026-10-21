@@ -4,6 +4,17 @@ All notable changes to this project will be documented here. The format follows 
 
 ## [4.0.0-rc.7] — 2026-08-31
 
+### The breadcrumb can no longer take the whole budget — the chunk text survives at the floor (FA-12)
+
+> **TL;DR:** **FA-04's own comment promised that a pathological breadcrumb "cannot push the chunk text out entirely — the chunk would then be embedded as pure heading noise". The cap that enforced it could do exactly that. `crumbCap` was `max(MIN_EMBED_CHARS, floor(budget / 2))`, and that floor defeated the rule exactly where it mattered: at the budget floor (512, i.e. a note of ≥ 1000 chunks) the cap WAS the budget. A note of ≥ 1000 chunks with a breadcrumb longer than ~510 characters was embedded as pure heading noise — the chunk text was not merely trimmed, it was gone. The cap is now half the budget, with no floor.**
+>
+> **What could happen before.** The floor belongs to the BUDGET, not to the breadcrumb cap: `MIN_EMBED_CHARS` exists so that a share which reached zero would not turn an embedding into a meaningless fragment. Copied onto the cap, it did the opposite — it guaranteed the breadcrumb could take everything. Measured on stdlib before the commit: at a note of 1000 chunks the budget is 512, the cap was 512, and the chunk text kept **0 characters**; at 999 chunks the text was still kept. The default budget (8000) caps the breadcrumb at 4000 exactly as before, so no ordinary note moves.
+>
+> **The two claims that were too wide (FA-04's, now corrected).** *One:* "as long as the share stays above 4096, no real chunk text is ever trimmed" was false — the breadcrumb and the two separator newlines are concatenated **inside** the budget, so the text starts being trimmed once the share falls below 4096 **plus** the breadcrumb (at 123 chunks the share is 4162 and the text still loses 36 characters). *Two:* "the contextual path at its default behaves exactly as before" was false for a breadcrumb longer than 4000 characters, which the default path now caps too. The claim is corrected here rather than in the FA-04 entry, which stays as the record of what was said.
+>
+> **Bounded claim.** One expression in `buildEmbedText` (`src/embed-pipeline.ts`) and three comment corrections. The budget floor is untouched (`embedChunkBudget(10_000)` is still 512), the default path is byte-identical for an ordinary note, the `.md` chunking, the embedder, the vector store and everything persisted are untouched, and no existing control changed behaviour. Four controls: two negative (the text survives at the budget floor, and at every budget the aggregate can produce) and two positive (the ordinary default path is byte-identical, the floor did not move).
+>
+> **Method note:** the premise was mirrored on stdlib before the commit — the old cap lost the text at ≥ 1000 chunks and kept it at 999, the new cap keeps it at every budget, and the default path is identical under both. The card came out of the bounded-claims audit of the merged window; its counter-example was re-derived from the source before anything was changed. Under D-45 no local test or build was run; hosted CI is the validation authority.
 ### The advisory wave of 2026-10-20 is closed — markdown-it 14.3.3, MCP server 2.3.1, MCP client 2.3.0, vite 8.3.4 (DEP-02)
 
 > **TL;DR:** **Ten advisories landed on npm on 2026-10-20, and the `audit` gate — which fails closed on anything new — was red against the pinned versions. All of them are closed here, by bumps: `markdown-it` 14.3.2 → 14.3.3, `@modelcontextprotocol/server` 2.0.0 → 2.3.1 (with its `core` 2.0.0 → 2.3.1), `@modelcontextprotocol/client` 2.2.0 → 2.3.0, and `vite` 8.2.2 → 8.3.4.**
@@ -516,9 +527,9 @@ hosted CI is the validation authority.
 
 - FTS5 schema **v7**: a sibling FTS5 table `chunk_parts` carries, for every identifier-bearing chunk, the words each compound identifier is spelled from (camelCase, upper-case runs, digit edges; NFC; bounded by truncation) next to a copy of that chunk's text. A search runs `chunks` exactly as v6 did and appends `chunk_parts`-only hits after every ranked hit with score 0 — found, never ranked — so `poolDayData` becomes reachable by "pool day data" while no rank moves for any query. (A weight-0 column inside `chunks` was measured on CI to move ranks: FTS5's bm25() normalises by the whole row's length.) An existing persistent index rebuilds once on first open; both schema admission maps admit v7.
 
-### Tests (2349)
+### Tests (2353)
 
-**2228 → 2349 source tests.** Sixty-one new causal contracts cover the audit closures and staged embedding replacement above; table-driven phases additionally exercise rollback, authority ordering, fail-fast sync operations, clear/replacement interlocks, and promotion refusal without inflating the declared `it()` count.
+**2228 → 2353 source tests.** Sixty-one new causal contracts cover the audit closures and staged embedding replacement above; table-driven phases additionally exercise rollback, authority ordering, fail-fast sync operations, clear/replacement interlocks, and promotion refusal without inflating the declared `it()` count.
 ### Maintainer handoff reflects the post-AH-4 repository state
 
 > **TL;DR:** **The agent handoff now starts from the shipped AH-4 boundary instead of the earlier rc.6 release attempt.** `CLAUDE.md` records that PR #565 completed staged embedding replacement, that its candidate and squash-main checks passed, that no product implementation is currently in flight, and that distribution remains deferred. The next bounded action is a read-only AH-4 sibling sweep before one backlog card is selected.

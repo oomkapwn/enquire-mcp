@@ -2,9 +2,15 @@ name: Scorecard
 
 # OpenSSF Scorecard: an external, reproducible read of this repository's supply-chain
 # posture (pinned dependencies, token permissions, branch protection, SAST…). Results
-# go to the code-scanning tab as SARIF and to the public Scorecard API, which is what
-# the README badge and directory listings read. Weekly plus every push to main, which
-# is the cadence the Scorecard project itself recommends.
+# go to the code-scanning tab as SARIF and to the public Scorecard API. Weekly plus
+# every push to main, which is the cadence the Scorecard project itself recommends.
+#
+# That API result is the public surface. This repository has NO Scorecard badge in
+# its README, and the comment that used to claim one described a consumer that
+# does not exist. The Branch-Protection score the API reports reflects the two
+# protection layers this repository runs (the classic branch protection and the
+# `main-protection` ruleset) and the fact that a one-person repository cannot
+# require a second approver.
 #
 # Every action below is SHA-pinned with a trailing `# vN` comment — OIA Check 9 fails
 # the repository otherwise, and "Pinned-Dependencies" is one of the checks this very

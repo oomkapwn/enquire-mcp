@@ -5,8 +5,22 @@ name: Cleanup stale npm dist-tags
 # `beta → 2.0.0-beta.4`). After v2.0.0 stable shipped, these channels stopped
 # moving — the maintainer doesn't ship from prerelease tracks anymore.
 #
-# Trigger manually via the Actions tab from `main`. The protected
-# `npm-maintenance` environment is the authorization boundary for NPM_TOKEN.
+# Trigger manually via the Actions tab from `main`. The `npm-maintenance`
+# environment is a REVIEWER gate on this workflow, and it is the only gate.
+#
+# C-A9-1 — the comment here used to claim that the environment "is the
+# authorization boundary for NPM_TOKEN". It was not: `NPM_TOKEN` is a
+# REPOSITORY-level secret (the live API reports
+# `GET /environments/npm-maintenance/secrets` → 0 secrets, and
+# `GET /actions/secrets` → NPM_TOKEN), so the environment gated the REVIEWER,
+# not the token. A repository-level secret is readable by every workflow in
+# this repository, so a write actor who dispatches a modified copy of a
+# workflow on their own ref would have the token injected without the
+# environment's protection. Moving the secret into the environment needs a
+# FRESH npm token (a secret's value cannot be read back), so until that
+# happens the honest statement is the one above: the environment is a
+# reviewer gate, and the token is repository-wide.
+#
 # A strict preflight makes an already-absent tag idempotent without masking a
 # failed registry mutation, and a fresh parsed observation gates completion.
 

@@ -214,6 +214,12 @@ function expectedCiPrefix(manifestDigest) {
     "    timeout-minutes: 5",
     "    steps:",
     "      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7",
+    // A11-1a — the lint job's checkout is the first link of the byte-canonical
+    // chain, so `persist-credentials: false` cannot be added to it without
+    // changing what the chain IS. The reviewed chain now carries the
+    // credential-hygiene block: the hygiene is pinned, not merely allowed.
+    "        with:",
+    "          persist-credentials: false",
     "      - name: Verify trusted Vitest bootstrap",
     "        shell: /bin/bash --noprofile --norc -p -e -o pipefail {0}",
     `        working-directory: ${literalDollarBraces("{ github.workspace }")}`,

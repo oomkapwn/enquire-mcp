@@ -84,7 +84,7 @@ import {
 
 const SPLIT_FIXTURE_SHA256 = "5f3c26b9d873d327b3ebb6f266e67321c2713601c4c31c4efbae71f2893fdf8d";
 const SPLIT_PROJECTION_SHA256 = "48bea443396c0cf4190e1cb1871d854f20dfde6242b148dffb09b870c2d82aa4";
-const NPM_CI_CONTRACT_FIXTURE_SHA256 = "a837afc19a3fb93a636c505bd3caa1429b3182ac0d65a0ef18607b10ef8393ef";
+const NPM_CI_CONTRACT_FIXTURE_SHA256 = "f61f952f97e46b1c3a0fd077dbd95a4c6be1a5b62653e9b699031e44cca1dbd5";
 
 interface WorkflowJob {
   id: number;
@@ -5893,8 +5893,13 @@ function nodeFloorCiProblems(workflow: string, enginesNode: unknown): string[] {
       dockerJob["runs-on"] !== "ubuntu-latest" ||
       dockerJob["timeout-minutes"] !== 10 ||
       dockerSteps.length !== 4 ||
-      JSON.stringify(Object.keys(dockerCheckoutStep ?? {}).sort()) !== JSON.stringify(["uses"]) ||
+      JSON.stringify(Object.keys(dockerCheckoutStep ?? {}).sort()) !== JSON.stringify(["uses", "with"]) ||
       dockerCheckoutStep?.uses !== "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1" ||
+      // A11-1a — the docker job's checkout carries the credential hygiene, and
+      // the block is pinned exactly like the pinned action above it.
+      JSON.stringify(Object.keys(yamlRecord(dockerCheckoutStep?.with) ?? {}).sort()) !==
+        JSON.stringify(["persist-credentials"]) ||
+      yamlRecord(dockerCheckoutStep?.with)?.["persist-credentials"] !== false ||
       JSON.stringify(Object.keys(dockerBuildStep ?? {}).sort()) !== JSON.stringify(["name", "run"]) ||
       dockerBuildStep?.name !== "Build the introspection image" ||
       dockerBuildStep?.run !== "docker build -t enquire-mcp:ci ." ||

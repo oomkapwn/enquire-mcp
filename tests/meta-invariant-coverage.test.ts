@@ -34,7 +34,7 @@ import { releaseMutationVersionedTransitionAuditProblems } from "./release-mutat
 
 const repoRoot = path.resolve(__dirname, "..");
 const RELEASE_MUTATION_IDENTITY_FIXTURE_SHA256 = "8205d24e6d42dd4cb8986368611514131abe701434beb30150e33ea08f4b1288";
-const RELEASE_MUTATION_TRANSITION_FIXTURE_SHA256 = "3631f8ec08ca07dd1f7ab8521d51f43a184059efa7b20ea627f123cfe668922c";
+const RELEASE_MUTATION_TRANSITION_FIXTURE_SHA256 = "f14069da05f0cda97081e38ca33d4132c1f09baebb0d048fef91dda59a2c76ee";
 const releaseMutationIdentityFixturePath = path.join(repoRoot, "tests/fixtures/release-mutation-identity.v2.json");
 const releaseMutationTransitionFixturePath = path.join(repoRoot, "tests/fixtures/release-mutation-transition.v3.json");
 const releaseIntegritySourcePath = path.join(repoRoot, "tests/release-integrity.test.ts");
@@ -335,7 +335,7 @@ const EXPECTED_REPOSITORY_MUTATION_HELPER_CALL_ENTRIES = [
   ],
   [
     "no-internal-imports.test.ts",
-    { count: 79, sha256: "c3413880df2aa51c216f7f3cf73f609cce0405cbf4f03f8cfb97a72e6a232b7e" }
+    { count: 79, sha256: "6a207ab49021de0d767c6b10ddec45801dc18294760af481c4e3a929519e0b75" }
   ],
   ["ocr-admission.test.ts", { count: 2, sha256: "90087510a75587d7bc1e3f94812692b128d5466f4aba05638305fa2815809faa" }],
   ["pages.test.ts", { count: 53, sha256: "bce9e4ba732c418f8f9779814cb9febc937844730cb224933b931df6bed8f21e" }],
@@ -1073,9 +1073,9 @@ const EXPECTED_REVIEWED_ORDINARY_OWNER_SHA256_ENTRIES = [
     "watcher startup validation whitespace normalization",
     "cc3b4b08d762b89edf67eb7bd624c03c6935f8e965808fe4d8aa53e531380ede"
   ],
-  ["release case-id normalization", "b3fbdb04690e62aeae4d111fc59913fe58b584a46b8521e59ba14070403f5746"],
-  ["release expectation-id normalization", "69d64103c61df979bf58745b37b0d7d00ac87d584f73cb2cd96d1c90b9915586"],
-  ["release root-id normalization", "f91af7a99664b951d1483bcc2412a176f212a1f1fea1efa2b099f34734ddc4b1"]
+  ["release case-id normalization", "496b85afb27eec8d8fc77d18610ef766d417bce2177bad6c7a881b1ade693145"],
+  ["release expectation-id normalization", "d1421538fa234f8a9be43b4876fbbb7cef676113348418838c79038799d292fc"],
+  ["release root-id normalization", "007bbaf2f4a231db3717a03e986855f11711199793e071e627a5147236b0fbb8"]
 ] as const satisfies readonly (readonly [ReviewedOrdinaryTransformId, string])[];
 const EXPECTED_REVIEWED_ORDINARY_OWNER_SHA256 = new Map<ReviewedOrdinaryTransformId, string>(
   EXPECTED_REVIEWED_ORDINARY_OWNER_SHA256_ENTRIES

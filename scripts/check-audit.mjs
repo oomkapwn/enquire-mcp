@@ -246,7 +246,18 @@ function sleepMs(ms) {
 }
 
 function advisoryTraceRank(packageName, vulnerabilities, visiting = new Set()) {
-  if (visiting.has(packageName)) return undefined;
+  if (visiting.has(packageName)) {
+    // A CYCLE is not an incomplete trace. npm reports a package and the
+    // sub-package that depends on it as each other's `via` (vitest and
+    // @vitest/coverage-v8, for one), and the severity of such a pair is its
+    // fixed point — the severity the pair itself declares. Returning the
+    // revisited member's DECLARED severity resolves the cycle without
+    // inventing one: every other branch of the trace still has to agree
+    // with the declared severity, so a report whose advisory chain really
+    // disagrees still fails closed.
+    const revisited = vulnerabilities[packageName];
+    return isRecord(revisited) ? SEV_RANK[revisited.severity] : undefined;
+  }
   const vulnerability = vulnerabilities[packageName];
   if (!isRecord(vulnerability) || !Array.isArray(vulnerability.via) || vulnerability.via.length === 0) {
     return undefined;

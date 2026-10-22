@@ -206,6 +206,41 @@ describe("check-audit scoped gate (rc.50)", () => {
       })
     ).toThrow(/incomplete advisory trace/);
 
+    // npm reports a package and the sub-package that depends on it as each
+    // other's `via` (vitest and @vitest/coverage-v8, for one). That CYCLE is
+    // a fixed point, not an incomplete trace: the report must be accepted
+    // when every other branch of the chain agrees with the declared severity.
+    expect(
+      validateAuditReport({
+        auditReportVersion: 2,
+        vulnerabilities: {
+          "@vitest/coverage-v8": { severity: "moderate", via: ["vitest"] },
+          "@vitest/mocker": {
+            severity: "moderate",
+            via: [{ source: 1, severity: "moderate", title: "mock registration advisory" }]
+          },
+          vitest: { severity: "moderate", via: ["@vitest/coverage-v8", "@vitest/mocker"] }
+        },
+        metadata: { vulnerabilities: { info: 0, low: 0, moderate: 3, high: 0, critical: 0, total: 3 } }
+      })
+    ).toHaveProperty("auditReportVersion", 2);
+    // NEGATIVE: the cycle resolves, but the OTHER branch of the chain
+    // disagrees with the declared severity — the report must still fail closed.
+    expect(() =>
+      validateAuditReport({
+        auditReportVersion: 2,
+        vulnerabilities: {
+          "@vitest/coverage-v8": { severity: "moderate", via: ["vitest"] },
+          "@vitest/mocker": {
+            severity: "high",
+            via: [{ source: 1, severity: "high", title: "mock registration advisory" }]
+          },
+          vitest: { severity: "moderate", via: ["@vitest/coverage-v8", "@vitest/mocker"] }
+        },
+        metadata: { vulnerabilities: { info: 0, low: 0, moderate: 2, high: 1, critical: 0, total: 3 } }
+      })
+    ).toThrow(/incomplete advisory trace/);
+
     const cleanAuditReport = {
       auditReportVersion: 2,
       vulnerabilities: {},

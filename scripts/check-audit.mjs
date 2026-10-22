@@ -245,18 +245,23 @@ function sleepMs(ms) {
   if (ms > 0) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
-function advisoryTraceRank(packageName, vulnerabilities, visiting = new Set()) {
+function advisoryTraceRank(packageName, vulnerabilities, visiting = new Set(), referrerSeverity = undefined) {
   if (visiting.has(packageName)) {
     // A CYCLE is not an incomplete trace. npm reports a package and the
     // sub-package that depends on it as each other's `via` (vitest and
-    // @vitest/coverage-v8, for one), and the severity of such a pair is its
-    // fixed point — the severity the pair itself declares. Returning the
-    // revisited member's DECLARED severity resolves the cycle without
-    // inventing one: every other branch of the trace still has to agree
-    // with the declared severity, so a report whose advisory chain really
-    // disagrees still fails closed.
+    // @vitest/coverage-v8, for one), and every package of such a pair
+    // carries the severity of the advisory that reaches them.
+    //
+    // The revisited member and the member that points at it must therefore
+    // DECLARE THE SAME severity. Without that comparison the consistency
+    // check would be a tautology for exactly the members it exists to
+    // judge: the derived rank would contain the declared severity and
+    // could never disagree with it. A cycle whose members disagree is not a
+    // graph npm produces, so it is refused like any other inconsistency.
     const revisited = vulnerabilities[packageName];
-    return isRecord(revisited) ? SEV_RANK[revisited.severity] : undefined;
+    const revisitedRank = isRecord(revisited) ? SEV_RANK[revisited.severity] : undefined;
+    if (revisitedRank === undefined || referrerSeverity === undefined) return undefined;
+    return revisitedRank === referrerSeverity ? revisitedRank : undefined;
   }
   const vulnerability = vulnerabilities[packageName];
   if (!isRecord(vulnerability) || !Array.isArray(vulnerability.via) || vulnerability.via.length === 0) {
@@ -268,7 +273,7 @@ function advisoryTraceRank(packageName, vulnerabilities, visiting = new Set()) {
     const rank = isRecord(via)
       ? SEV_RANK[via.severity]
       : typeof via === "string" && Object.hasOwn(vulnerabilities, via)
-        ? advisoryTraceRank(via, vulnerabilities, nextVisiting)
+        ? advisoryTraceRank(via, vulnerabilities, nextVisiting, SEV_RANK[vulnerability.severity])
         : undefined;
     if (rank === undefined) return undefined;
     maximum = Math.max(maximum, rank);

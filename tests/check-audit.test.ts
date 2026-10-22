@@ -225,9 +225,11 @@ describe("check-audit scoped gate (rc.50)", () => {
     expect(validateAuditReport(cyclicReport)).toHaveProperty("auditReportVersion", 2);
     // The cycle is accepted, and the gate still COUNTS the advisory it
     // carries: accepting the graph never lowers the severity bar.
-    expect(offendingAdvisories(cyclicReport, { minSeverity: "moderate", allowlist: {} })).toEqual([
-      ["npm:1", "moderate"]
-    ]);
+    expect(
+      offendingAdvisories(cyclicReport, { minSeverity: "moderate", allowlist: {} }).map(
+        (offender: { id: string; severity: string }) => [offender.id, offender.severity]
+      )
+    ).toEqual([["npm:1", "moderate"]]);
     // NEGATIVE: the cycle resolves, but the OTHER branch of the chain
     // disagrees with the declared severity — the report must still fail closed.
     expect(() =>

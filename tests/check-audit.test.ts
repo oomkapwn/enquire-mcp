@@ -206,6 +206,88 @@ describe("check-audit scoped gate (rc.50)", () => {
       })
     ).toThrow(/incomplete advisory trace/);
 
+    // npm reports a package and the sub-package that depends on it as each
+    // other's `via` (vitest and @vitest/coverage-v8, for one). That CYCLE is
+    // a fixed point, not an incomplete trace: the report must be accepted
+    // when every other branch of the chain agrees with the declared severity.
+    const cyclicReport = {
+      auditReportVersion: 2,
+      vulnerabilities: {
+        "@vitest/coverage-v8": { severity: "moderate", via: ["vitest"] },
+        "@vitest/mocker": {
+          severity: "moderate",
+          via: [{ source: 1, severity: "moderate", title: "mock registration advisory" }]
+        },
+        vitest: { severity: "moderate", via: ["@vitest/coverage-v8", "@vitest/mocker"] }
+      },
+      metadata: { vulnerabilities: { info: 0, low: 0, moderate: 3, high: 0, critical: 0, total: 3 } }
+    };
+    expect(validateAuditReport(cyclicReport)).toHaveProperty("auditReportVersion", 2);
+    // The cycle is accepted, and the gate still COUNTS the advisory it
+    // carries: accepting the graph never lowers the severity bar.
+    expect(
+      offendingAdvisories(cyclicReport, { minSeverity: "moderate", allowlist: {} }).map(
+        (offender: { id: string; severity: string }) => [offender.id, offender.severity]
+      )
+    ).toEqual([["npm:1", "moderate"]]);
+    // NEGATIVE: the cycle resolves, but the OTHER branch of the chain
+    // disagrees with the declared severity — the report must still fail closed.
+    expect(() =>
+      validateAuditReport({
+        auditReportVersion: 2,
+        vulnerabilities: {
+          "@vitest/coverage-v8": { severity: "moderate", via: ["vitest"] },
+          "@vitest/mocker": {
+            severity: "high",
+            via: [{ source: 1, severity: "high", title: "mock registration advisory" }]
+          },
+          vitest: { severity: "moderate", via: ["@vitest/coverage-v8", "@vitest/mocker"] }
+        },
+        metadata: { vulnerabilities: { info: 0, low: 0, moderate: 2, high: 1, critical: 0, total: 3 } }
+      })
+    ).toThrow(/incomplete advisory trace/);
+
+    // A cycle whose members DECLARE DIFFERENT severities is not a graph npm
+    // produces, so it is refused like any other inconsistency — without that
+    // comparison the check would be a tautology for the cycle's own members.
+    expect(() =>
+      validateAuditReport({
+        auditReportVersion: 2,
+        vulnerabilities: {
+          "@vitest/coverage-v8": { severity: "high", via: ["vitest"] },
+          vitest: { severity: "moderate", via: ["@vitest/coverage-v8"] }
+        },
+        metadata: { vulnerabilities: { info: 0, low: 0, moderate: 1, high: 1, critical: 0, total: 2 } }
+      })
+    ).toThrow(/incomplete advisory trace/);
+
+    // A cycle with no advisory object in its closure carries no severity of
+    // its own; it is accepted as a consistent graph, and it stays that way
+    // only because the members agree.
+    expect(
+      validateAuditReport({
+        auditReportVersion: 2,
+        vulnerabilities: {
+          "@vitest/coverage-v8": { severity: "moderate", via: ["vitest"] },
+          vitest: { severity: "moderate", via: ["@vitest/coverage-v8"] }
+        },
+        metadata: { vulnerabilities: { info: 0, low: 0, moderate: 2, high: 0, critical: 0, total: 2 } }
+      })
+    ).toHaveProperty("auditReportVersion", 2);
+
+    // A package that points at itself is the degenerate cycle; it resolves to
+    // its own declared severity and is accepted, and it carries no advisory
+    // object of its own.
+    const selfViaReport = {
+      auditReportVersion: 2,
+      vulnerabilities: {
+        vitest: { severity: "critical", via: ["vitest"] }
+      },
+      metadata: { vulnerabilities: { info: 0, low: 0, moderate: 0, high: 0, critical: 1, total: 1 } }
+    };
+    expect(validateAuditReport(selfViaReport)).toHaveProperty("auditReportVersion", 2);
+    expect(reportedAdvisories(selfViaReport)).toEqual([]);
+
     const cleanAuditReport = {
       auditReportVersion: 2,
       vulnerabilities: {},

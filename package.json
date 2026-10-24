@@ -215,8 +215,8 @@
     "@modelcontextprotocol/server": "2.3.1",
     "chokidar": "^5.0.0",
     "commander": "^15.0.0",
-    "js-yaml": "^5.4.2",
-    "zod": "^4.6.5"
+    "js-yaml": "^5.4.1",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@anthropic-ai/mcpb": "2.1.2",
@@ -224,7 +224,7 @@
     "@modelcontextprotocol/client": "2.3.1",
     "@resvg/resvg-wasm": "2.6.2",
     "@types/better-sqlite3": "^7.6.13",
-    "@types/node": "^26.6.5",
+    "@types/node": "^26.4.0",
     "@vitest/coverage-v8": "^4.1.12",
     "fflate": "0.8.3",
     "github-slugger": "^2.0.0",
@@ -240,7 +240,7 @@
     "@napi-rs/canvas": "^1.0.8",
     "better-sqlite3": "^12.11.1",
     "hnswlib-node": "^3.0.0",
-    "pdfjs-dist": "^6.3.289",
+    "pdfjs-dist": "^6.2.108",
     "tesseract.js": "^7.0.0"
   },
   "overrides": {

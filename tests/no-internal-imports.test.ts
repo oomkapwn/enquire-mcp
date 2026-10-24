@@ -127,7 +127,7 @@ const EXPECTED_PREPUBLISH_ONLY_SCRIPT =
   "node scripts/check-changelog-coverage.mjs && node scripts/check-per-file-coverage.mjs";
 const EXPECTED_CHECKOUT_ACTION = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1";
 const EXPECTED_SETUP_NODE_ACTION = "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020";
-const EXPECTED_UPLOAD_ARTIFACT_ACTION = "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a";
+const EXPECTED_UPLOAD_ARTIFACT_ACTION = "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9";
 const EXPECTED_DOWNLOAD_ARTIFACT_ACTION = "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c";
 const EXPECTED_COVERAGE_CLOSURE_FILES = [
   "scripts/check-release-integrity.mjs",

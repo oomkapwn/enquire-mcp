@@ -5535,7 +5535,7 @@ function nodeFloorCiProblems(workflow: string, enginesNode: unknown): string[] {
       "if" in schemaCapture ||
       "continue-on-error" in schemaCapture ||
       schemaArtifact?.id !== "schema_inventory_artifact" ||
-      schemaArtifact?.uses !== "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a" ||
+      schemaArtifact?.uses !== "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9" ||
       schemaArtifactWith?.name !== "emitted-mcp-schema-inventory" ||
       schemaArtifactWith?.path !== "tests/fixtures/mcp-schema-inventory.v1.json" ||
       schemaArtifactWith?.["if-no-files-found"] !== "error" ||
@@ -5566,7 +5566,7 @@ function nodeFloorCiProblems(workflow: string, enginesNode: unknown): string[] {
     }
     if (
       previewArtifact?.id !== "preview_artifact" ||
-      previewArtifact?.uses !== "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a" ||
+      previewArtifact?.uses !== "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9" ||
       previewArtifactWith?.name !== "rendered-social-preview" ||
       previewArtifactWith?.path !== "assets/social-preview.png" ||
       previewArtifactWith?.["if-no-files-found"] !== "error" ||
@@ -5729,7 +5729,7 @@ function nodeFloorCiProblems(workflow: string, enginesNode: unknown): string[] {
       !packageSteps.some((step) => step.run === "npm run mcpb:build") ||
       !packageSteps.some((step) => step.run === "npm run mcpb:verify") ||
       packageSteps.some((step) => "if" in step || "continue-on-error" in step) ||
-      exportStep?.uses !== "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a" ||
+      exportStep?.uses !== "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9" ||
       exportWith?.name !== `\${{ steps.artifact_identity.outputs.name }}` ||
       !exportPath.includes("artifacts/enquire-mcp-basic-*.mcpb") ||
       !exportPath.includes("artifacts/enquire-mcp-basic-*.content-manifest.json") ||
@@ -10018,7 +10018,7 @@ function mcpbSplitReleaseProblems(inputs: {
     !handoffRun.includes("xargs -0 sha256sum > release-files.sha256") ||
     !handoffRun.includes("sha256sum -c release-files.sha256") ||
     handoffUpload?.id !== "handoff_upload" ||
-    handoffUpload?.uses !== "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a" ||
+    handoffUpload?.uses !== "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9" ||
     handoffUploadWith?.name !== `release-handoff-\${{ github.sha }}-\${{ github.run_attempt }}` ||
     handoffUploadWith?.path !== `\${{ runner.temp }}/release-handoff` ||
     handoffUploadWith?.["if-no-files-found"] !== "error" ||
@@ -22567,7 +22567,7 @@ done`;
     const previewExportBlock =
       "      - name: Export remotely rendered social preview\n" +
       "        id: preview_artifact\n" +
-      "        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7\n" +
+      "        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7\n" +
       "        with:\n" +
       "          name: rendered-social-preview\n" +
       "          path: assets/social-preview.png\n" +
@@ -22710,7 +22710,7 @@ done`;
           ci,
           "      - name: Export inspectable canonical MCPB candidate and transparency records\n" +
             "        id: mcpb_export\n" +
-            "        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7",
+            "        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7",
           "      - name: Export inspectable canonical MCPB candidate and transparency records\n" +
             "        id: mcpb_export\n" +
             "        uses: actions/upload-artifact@v7"
@@ -22789,8 +22789,8 @@ done`;
         replaceExactly(
           ci,
           "        id: mcpb_export\n" +
-            "        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7",
-          "        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7"
+            "        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7",
+          "        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7"
         ),
         pkg.engines?.node
       )

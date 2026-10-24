@@ -1076,7 +1076,7 @@ function coverageOiaWorkflowProblems(source: string): string[] {
   const coverageSteps = workflowSteps(coverage);
   const uploadIndexes = coverageSteps
     .map((step, index) =>
-      step.uses === "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a" ? index : -1
+      step.uses === "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9" ? index : -1
     )
     .filter((index) => index >= 0);
   const upload = uploadIndexes.length === 1 ? coverageSteps[uploadIndexes[0] ?? -1] : undefined;

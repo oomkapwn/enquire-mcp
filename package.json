@@ -244,7 +244,7 @@
     "tesseract.js": "^7.0.0"
   },
   "overrides": {
-    "hono": "^4.13.11",
+    "hono": "^4.13.18",
     "protobufjs": "^7.6.5",
     "adm-zip": "^0.6.1",
     "brace-expansion": "^5.0.12",
